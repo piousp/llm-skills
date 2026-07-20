@@ -2,21 +2,22 @@
 name: refactor-identification
 description: >
   Evidence-based detection of structural refactor candidates within the current branch's diff
-  (Java/MDS, Scala/MDOM/MDOD). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
+  (Java, Scala). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
   duplication), (A2) weak encapsulation, (A3) poor data types (primitives, clumps, null-checks
   instead of Option/Either/ADT), (A4) flags/switch where a sealed ADT fits. Findings need
   file:line evidence + a When-NOT-to-report (YAGNI/KISS) gate; rejects listed too. Identifies
   direction only, defers how to gof-design-patterns/functional-programming. TRIGGER: deciding
-  if a refactor belongs in this branch, "refactor candidates" requests, or as code-review-
-  checklist's deep-dive. SKIP: renames, trivial extraction, executing fixes, whole-repo scans,
-  merge gating.
+  if a refactor belongs in this branch, "refactor candidates" requests, or as the deep-dive
+  behind a broader code-review pass. SKIP: renames, trivial extraction, executing fixes,
+  whole-repo scans, merge gating.
 ---
 
 # Refactor Identification — Branch-Scoped Structural Candidates
 
-This skill is a specialized zoom-in, not a replacement for `code-review-checklist`. That agent
-already touches two of these categories superficially (its "Abstractions" and "Structural Code
-Smells" checklist sections) as part of a broad, fast merge gate. This skill goes deeper on exactly
+This skill is a specialized zoom-in, not a replacement for a broader code-review checklist pass.
+Such a pass typically already touches two of these categories superficially (its "Abstractions"
+and "Structural Code Smells" sections) as part of a broad, fast merge gate. This skill goes deeper
+on exactly
 4 structural categories, with quantified evidence, and answers a different question: not "does
 this diff pass review" but "is there a structural refactor worth investing in here". It
 identifies candidates only — it never executes a refactor and never explains *how* to apply a
@@ -28,7 +29,7 @@ pattern once one is chosen. The "how" lives in `gof-design-patterns` (pattern ca
 
 This skill never scans a whole repository. It only looks at what the current branch changed.
 
-1. **Derive the diff** — identical to `code-review-checklist`'s step 1:
+1. **Derive the diff** — the same first step as any diff-scoped review:
    - If the caller's prompt already hands you a diff (a path, a commit range, or diff content),
      use exactly that. Do not go looking for a different diff and do not ask anything.
    - Otherwise, derive it yourself: `git diff` (unstaged), `git diff --cached` (staged),
@@ -37,8 +38,8 @@ This skill never scans a whole repository. It only looks at what the current bra
 2. **Anchoring rule**: every finding needs at least one `file:line` inside a changed hunk, or on
    a symbol the branch changed. A finding with no such anchor does not exist for this skill.
 3. **1-hop context rule**: you may read (a) the full contents of every changed file, and (b)
-   files that directly define or use a symbol the branch changed (use `codegraph node <symbol>`
-   if `.codegraph/` exists in the repo, otherwise grep). Do not expand further than one hop.
+   files that directly define or use a symbol the branch changed (a code-navigation/indexing
+   tool if the repo has one, otherwise grep). Do not expand further than one hop.
 4. **Occurrence-counting exception**: once a candidate is anchored inside the branch's diff, a
    repo-wide grep is allowed *solely* to count how many total occurrences exist, because the DRY
    thresholds below (2 for structural duplication, 3 for business duplication) count all
@@ -146,8 +147,8 @@ Assign strictly by this table — no judgment outside it.
    line ranges.
    Verify: row count == changed-file count.
 3. Expand context, 1 hop max: for each changed symbol you may read (a) its full containing
-   file, (b) files that directly define or use it (`codegraph node <symbol>` if .codegraph/
-   exists, else grep). Never expand further.
+   file, (b) files that directly define or use it (a code-navigation/indexing tool if the repo
+   has one, else grep). Never expand further.
    Verify: every context file read maps to a named changed symbol.
 4. Detection pass A1 over changed hunks + context, using the A1 table and the language cues
    in references/. Record raw candidates: category, smell row, file:line list, measure.
@@ -211,10 +212,8 @@ implementer reads the recipe from its source of truth.
 
 ## Per-language detection cues
 
-- **Java (MDS, and the Java modules of MDOD)** → `references/java.md` — grep-able cues per
-  category.
-- **Scala (MDOM, and the Scala modules of MDOD)** → `references/scala.md` — grep-able cues per
-  category.
+- **Java** → `references/java.md` — grep-able cues per category.
+- **Scala** → `references/scala.md` — grep-able cues per category.
 
 ## Worked examples
 
@@ -228,11 +227,11 @@ block) plus 1 rejected-by-gate example. Read it before your first run.
 - Executing the refactor or giving implementation steps — `gof-design-patterns` and
   `functional-programming` own the "how".
 - Whole-repo scanning, or any finding not anchored in the branch's diff.
-- Merge verdicts or review severities — `code-review-checklist` owns the pass/FAIL gate. Some
-  overlap with its checklist is intentional and expected: a boolean parameter or an
+- Merge verdicts or review severities — a broader code-review pass owns the pass/FAIL gate. Some
+  overlap with such a checklist is intentional and expected: a boolean parameter or an
   exception-as-control-flow smell may appear in both outputs — the checklist reports the
   symptom as a gate item, this skill decides whether a refactor behind it is worth doing.
-- Smells outside the 4 categories that `code-review-checklist` already checks (circular
-  dependency, constant interface, sequential coupling, generic god object) — those stay in the
-  checklist only; A1 here only deepens SRP/OCP for classes the branch touches.
+- Smells outside the 4 categories that a broader code-review pass already checks (circular
+  dependency, constant interface, sequential coupling, generic god object) — those stay in that
+  broader pass only; A1 here only deepens SRP/OCP for classes the branch touches.
 - Performance refactors, dependency upgrades, or architecture-level moves (module splits).

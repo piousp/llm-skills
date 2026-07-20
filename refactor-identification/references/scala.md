@@ -1,4 +1,4 @@
-# Detection Cues — Scala (MDOM, Scala modules of MDOD)
+# Detection Cues — Scala
 
 Grep-able starting points per category. These narrow where to look; every candidate must still
 be anchored per the Scope law (branch diff / 1-hop context) and pass the gate before being
