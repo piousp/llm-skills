@@ -20,9 +20,9 @@ harder; this skill does a brief scan and hands back a precise, portable prompt.
 
 ## How to run
 
-1. Do a **fast** context scan only — no spec, no code, no full investigation. Read
-   `~/repos/Wiki/index.md`, use CodeGraph if the repo is indexed, and open the obvious
-   files the prompt names.
+1. Do a **fast** context scan only — no spec, no code, no full investigation. Read any
+   project-level index or knowledge base the repo maintains, use a code-navigation/indexing
+   tool if the repo has one set up, and open the obvious files the prompt names.
 2. Identify what makes the prompt weak: ambiguous terms, missing context, unstated
    scope, undefined success criteria, unverified assumptions baked into the wording.
 3. Propose a **reformulated prompt** back — tighter, gaps filled or flagged as open

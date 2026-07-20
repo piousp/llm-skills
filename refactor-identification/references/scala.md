@@ -1,4 +1,4 @@
-# Detection Cues — Scala (service-b, Scala modules of service-c)
+# Detection Cues — Scala
 
 Grep-able starting points per category. These narrow where to look; every candidate must still
 be anchored per the Scope law (branch diff / 1-hop context) and pass the gate before being
