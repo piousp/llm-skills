@@ -5,6 +5,7 @@ All notable changes to this repository are documented here.
 ## [Unreleased]
 
 ### Added
+- `pi-themes/monokai-soda.json` — Monokai-inspired dark theme for pi's interactive TUI.
 - `README.md` describing repo layout and skill/agent index.
 - `agents/code-review-checklist/AGENT.md` — read-only reviewer agent (checklist-based).
 - `agents/qa-adversary/AGENT.md` — read-only adversarial QA critic agent.
