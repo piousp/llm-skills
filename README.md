@@ -23,14 +23,19 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 
 | Agent | Purpose |
 |---|---|
+| [`pablo-planner`](agents/pablo-planner/AGENT.md) | Read-only design subagent for `iterative-design` Phase 2: explores the codebase and returns a two-section design (Plan / Technical) through the `pablo-code-philosophy` lens. Never implements. |
+| [`pablo-implementer`](agents/pablo-implementer/AGENT.md) | Code-writing subagent for `iterative-design` Phases 3–4: TDD mode (one failing test, then minimal code, per seam), repair mode, and refactor mode. Never runs builds, tests, or subagents. |
 | [`code-review-checklist`](agents/code-review-checklist/AGENT.md) | Read-only reviewer: runs a strict checklist (red flags, data shape, complexity, boundaries, abstractions, structural smells, tests) against a diff and reports coverage gaps. |
 | [`qa-adversary`](agents/qa-adversary/AGENT.md) | Read-only adversarial QA critic: hunts correctness bugs, regressions, and business-rule violations via a 7-lens process; never judges style, never runs tests. Complements `code-review-checklist`. |
 
-Both agents are self-contained prompt targets for `iterative-design`'s refactor/QA phases, but also
-work standalone in chat.
+All four agents are self-contained prompt targets for `iterative-design`'s phases, but `code-review-checklist`
+and `qa-adversary` also work standalone in chat.
 
 ## Using these files
 
 Frontmatter (`tools`, `model`, turn limits, etc.) is harness-specific — the files here use a
 generic placeholder and a portability note. Adjust to your harness's conventions when you copy or
 symlink them in.
+
+`pi-themes/monokai-soda.json` is the one exception to the harness-agnostic rule above — it's a
+pi-specific interactive-TUI theme, not a skill or agent.
