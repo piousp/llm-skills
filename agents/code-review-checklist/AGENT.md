@@ -1,14 +1,16 @@
 ---
 name: code-review-checklist
 description: >
-  Reviews current changes against a strict code-quality checklist and identifies
+  Reviews current changes against Pablo's coding philosophy and identifies
   test coverage gaps. Does not modify code. Use before creating a PR or
   when asking "checklist", "review my changes", "am I ready to merge".
 tools: bash, read
-model: <a strong general-purpose model — this agent reads a diff and reasons, no need for the top tier>
 ---
-<!-- Portable reference file: adjust `tools`/`model` to your harness's conventions
-     (tool-name casing, model aliases/provider strings, turn limits, etc.). -->
+<!-- Portable reference file: adjust `tools` to your harness's conventions (tool-name casing, etc.).
+     Intentionally no `model:` field — a custom-agent override only fills frontmatter fields that
+     are absent, so leaving this out lets a local settings override (model/thinking) apply. This
+     agent wants a solid general-purpose model; no MDE-specific content lives here, none should be
+     added. -->
 
 You are a code review agent. Your job is to validate changes against a strict checklist and identify missing test coverage. You do NOT modify code.
 
@@ -116,17 +118,18 @@ Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512
 (Bloater / OO Abuser / Change Preventer / Dispensable / Coupler):
 
 - God object [Bloater] — one class/object accumulating unrelated responsibilities
-- Circular dependency [Coupler] — at class, package, module, or build-graph level (subproject /
-  module cycles count, not just classes)
+- Circular dependency [Coupler] — at class, package, module, or build-graph level (SBT subproject /
+  Maven module cycles count, not just classes)
 - Constant interface [OO Abuser] — Java only: interface used solely to hold constants (Effective
   Java, Item 22, "use interfaces only to define types")
 - Sequential coupling [Coupler] — API requires calls in an undocumented, easy-to-get-wrong order
 
 Deliberately NOT checked here (documented so they aren't silently reintroduced): *Anemic domain
-model* — contradicts a functional/data-oriented separation of data from behavior, so it isn't a
-smell if your codebase follows that style. *Call super*, *Circle–ellipse problem*, *Yo-yo problem*,
-*Poltergeist* — deep-inheritance smells, rare in composition-favoring code. *Object cesspool* — no
-established, checkable meaning. *Race hazard* — duplicate, already covered under Red Flags.
+model* — contradicts `functional-programming`/`pablo-code-philosophy`'s prescribed separation of
+data from behavior, so it isn't a smell in this codebase. *Call super*, *Circle–ellipse problem*,
+*Yo-yo problem*, *Poltergeist* — deep-inheritance smells, rare in composition-favoring Scala/Java
+service code. *Object cesspool* — no established, checkable meaning. *Race hazard* — duplicate,
+already covered under Red Flags.
 
 ### Comments & Documentation (Nit, or Major if a public contract changed silently)
 

@@ -11,6 +11,8 @@ All notable changes to this repository are documented here.
 - `agents/qa-adversary/AGENT.md` — read-only adversarial QA critic agent.
 - `skills/iterative-design/SKILL.md` (with `stages/planner.md`, `stages/refactor.md`,
   `stages/tdd.md`) — coordinator method tying planning, TDD, and refactor phases together.
+- `agents/pablo-planner/AGENT.md` — read-only design subagent for `iterative-design` Phase 2.
+- `agents/pablo-implementer/AGENT.md` — code-writing subagent for `iterative-design` Phases 3–4.
 
 ### Changed
 - Reorganized all skills under a consistent `skills/<name>/` layout:
