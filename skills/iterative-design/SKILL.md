@@ -32,8 +32,16 @@ distinction — it's ownership of shared durable state. Subagents run forked/iso
 of the full thread or prior-phase decisions; they return proposals in text, never truth. The
 coordinator is the only party with the global view, so it is the single writer that serializes
 writes, validates a subagent's output (e.g. the planner's markers) before persisting it, and
-appends to `decisions.md` as the one durable, auditable log. The carve-out also covers checkpoint
-tags/commits (e.g. `phase3-green`) — not code, a build, or a test.
+appends to `decisions.md` as the one durable, auditable log. The carve-out also covers recording
+the checkpoint hash (e.g. the Phase 3 freeze) into `decisions.md` — not code, a build, or a test.
+
+**The coordinator never runs a git command that mutates repo state** — no `git commit`, `git add`,
+`git tag`, `git stash`, `git reset`, `git checkout -b`, or any other write. It may only use
+read-only git (`git rev-parse HEAD`, `git diff`, `git log`, `git merge-base`) to *read* the hash
+the user's own workflow already produced. Checkpoints are recorded as **hashes read from existing
+HEAD**, never created by tagging or committing on the coordinator's behalf. If HEAD has
+uncommitted changes at a checkpoint, the coordinator tells the user and asks them to commit (or
+confirms proceeding uncommitted) — it never commits for them.
 
 If marker-parsing fidelity from a subagent's text response ever proves fragile in practice, the
 established alternative is role-scoped staging (e.g. `.design/.staging/planner/`) that the
@@ -134,7 +142,8 @@ stage file).
 Read [stages/tdd.md](stages/tdd.md)
 
 One vertical TDD loop over the Phase 2 design (details in the stage file). Freezes tests and
-tags `phase3-green` at the end. **Mandatory** — never skipped.
+records the Phase 3 checkpoint hash (`phase3-green`, read-only via `git rev-parse HEAD` — never a
+git tag/commit) at the end. **Mandatory** — never skipped.
 
 ## Optional phases — the gate
 
@@ -144,10 +153,12 @@ spec, and the frozen tests; it is the mandatory core of the method and is never 
 On reaching each optional phase, the coordinator stops and asks the user, using exactly this
 shape, and does nothing until answered:
 
-- **Phase 4 gate** — immediately after Phase 3's freeze and the `phase3-green` tag:
+- **Phase 4 gate** — immediately after Phase 3's freeze and recording the `phase3-green` checkpoint
+  hash:
 
-  > Phase 3 is green, frozen, and tagged `phase3-green`. Phase 4 (refactor + one
-  > `code-review-checklist` pass) is optional. Run Phase 4, or skip to Phase 5? [run / skip]
+  > Phase 3 is green, frozen, and checkpointed at `phase3-green` (commit `<hash>`). Phase 4
+  > (refactor + one `code-review-checklist` pass) is optional. Run Phase 4, or skip to Phase 5?
+  > [run / skip]
 
 - **Phase 5 gate** — after Phase 4 completes, or immediately after a Phase 4 skip:
 
@@ -160,7 +171,8 @@ reply is not unambiguously "run" or "skip"/"finish" (e.g. a conditional or parti
 re-ask for a clear choice — never infer skip from an ambiguous reply. Skipping
 Phase 4 also skips its `code-review-checklist` — do not run the checklist standalone; in that
 case Phase 5's `qa-adversary` is the first and only reviewer of the implementation. If both
-optional phases are skipped, the run ends at the `phase3-green` state; the Handoff reflects that.
+optional phases are skipped, the run ends at the `phase3-green` checkpoint; the Handoff reflects
+that.
 
 ## Phase 4 — Refactor (candidates, apply, simplify, one combined review)
 
@@ -179,7 +191,7 @@ prompt; pick the variant matching the Phase 4 gate decision:
 **If Phase 4 ran:**
 
 > Frozen tests (Phase 3 artifact): <selector>. Current implementation (after Phase 4's refactor):
-> <path>. Diff since the `phase3-green` tag (cumulative Phase 4 diff — the same diff
+> <path>. Diff since the `phase3-green` checkpoint hash (cumulative Phase 4 diff — the same diff
 > `code-review-checklist` reviewed): <diff or commit range>. QA this change: hunt for correctness
 > bugs, data-handling mistakes, business-rule violations, regressions, and check integration test
 > coverage. Give your PASS or BLOCK verdict with findings.
@@ -188,9 +200,11 @@ prompt; pick the variant matching the Phase 4 gate decision:
 
 > Frozen tests (Phase 3 artifact): <selector>. Current implementation (Phase 3 output — Phase 4
 > was skipped): <path>. Implementation diff, anchored on the full change since before Phase 3
-> began: `<base>..phase3-green`, where `<base>` is the pre-work baseline recorded in
+> began: `<base>..<phase3-green hash>`, where `<base>` is the pre-work baseline recorded in
 > `.design/decisions.md` at the Phase 3 freeze (merge-base with the main branch; if unavailable,
-> the commit before Phase 3 began) — not `phase3-green..HEAD`, which would be empty. This code
+> the commit before Phase 3 began) — both read-only via `git rev-parse`/`git merge-base`, never a
+> tag or commit created for this purpose — not `<phase3-green hash>..HEAD`, which would be empty.
+> This code
 > has NOT been through `code-review-checklist` — you are its first reviewer. QA
 > this change: hunt for correctness bugs, data-handling mistakes, business-rule violations,
 > regressions, and check integration test coverage. Give your PASS or BLOCK verdict with
@@ -238,7 +252,8 @@ it directly.
 
 TODO list (Phase 0) → confirmed goal + `.design/goal.md` (Phase 1) → `.design/plan.md` +
 `.design/technical.md` (Phase 2, split by the coordinator from the planner's single document) →
-`.design/spec.md` + frozen tests + green implementation + `phase3-green` tag (Phase 3, mandatory,
+`.design/spec.md` + frozen tests + green implementation + `phase3-green` checkpoint hash (Phase 3,
+mandatory,
 one vertical TDD loop) → [gate] candidates applied + simplification + combined review (Phase 4,
 optional) → [gate] `qa-adversary` verdict reported verbatim (Phase 5, optional) — every gate
 answer and load-bearing decision appended to `.design/decisions.md`.
