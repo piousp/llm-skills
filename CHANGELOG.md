@@ -5,6 +5,14 @@ All notable changes to this repository are documented here.
 ## [Unreleased]
 
 ### Added
+- `pi-simple-agents/` — minimal Claude-Code-compatible subagent delegation tool for pi
+  (`subagent` tool: single/parallel invocation, agent frontmatter parsing/validation,
+  output parsing, result formatting), with unit tests.
+- `skills/iterative-design/scripts/state.py` — advisory, read-only script deriving pipeline
+  phase/gate status/checkpoint from `.design/*.md` and git HEAD; used at phase boundaries
+  instead of re-deriving state from context.
+- `skills/iterative-design/stages/goal-discovery.md` — Phase 1 extracted into its own stage file.
+- `skills/iterative-design/stages/qa.md` — Phase 5 extracted into its own stage file.
 - `pi-themes/monokai-soda.json` — Monokai-inspired dark theme for pi's interactive TUI.
 - `README.md` describing repo layout and skill/agent index.
 - `agents/code-review-checklist/AGENT.md` — read-only reviewer agent (checklist-based).
@@ -17,6 +25,15 @@ All notable changes to this repository are documented here.
   subagent, ported from `pi-subagents`' `oracle`.
 
 ### Changed
+- `skills/iterative-design/SKILL.md` — Phases 1 and 5 moved out into `stages/goal-discovery.md`
+  and `stages/qa.md` for consistency with Phases 2–4; phase sequencing/gate logic now delegates
+  to `scripts/state.py` instead of being re-derived from context each turn; documents the
+  `decisions.md` marker contract (`phase3-green`, gate headers, Phase 4/5 completion markers)
+  that `state.py` parses; dropped the now-redundant "resist the urge to start coding" line.
+- `skills/iterative-design/stages/refactor.md`, `stages/qa.md` — require an explicit completion
+  marker in `.design/decisions.md` (`## Phase 4 — complete`, `## Phase 5 — complete` on PASS) so
+  `state.py` can detect phase completion.
+- `.gitignore` — added `.design/` and `node_modules/`.
 - `skills/iterative-design/SKILL.md`, `stages/refactor.md`, `stages/tdd.md` — coordinator no
   longer mutates git; captures read-only checkpoint hashes instead of tagging/committing on the
   user's behalf, and asks the user to commit if HEAD is dirty at freeze time.
