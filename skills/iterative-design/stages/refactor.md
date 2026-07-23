@@ -59,3 +59,9 @@ Refactored implementation: evidence-backed candidates applied, simplified, `pabl
 conformant, behavior unchanged. Frozen tests still green and `code-review-checklist` passes (or its
 violations are addressed, with a re-run confirming green per step 3 above) for the combined diff —
 a single gate before Phase 5. Accepted/rejected candidates are logged in `.design/decisions.md`.
+
+Before moving to Phase 5, append a completion entry to `.design/decisions.md`: `## Phase 4 —
+complete (<date>)` with a one-line `Decision:` summarizing what was applied. This is not a
+routine per-seam confirmation (the kind `decisions.md` otherwise discourages) — it's the single
+signal `scripts/state.py` reads to know Phase 4 is done rather than still in progress; omitting
+it leaves the pipeline reporting Phase 4 as active indefinitely.

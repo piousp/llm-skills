@@ -15,7 +15,6 @@ Always invoked by name (no auto-trigger).
 # *CRITICAL*
 
 **Never advance to the next phase until the user confirms so**
-**ALWAYS resist the urge to start coding; value precision and good software development practices over speed**
 
 ## The coordinator rule
 
@@ -78,6 +77,37 @@ available, fall back to the generic role description and delegate however your h
 - **`qa-adversary`** — a concrete subagent, not a generic role. Invoke it by name in Phase 5:
   read-only, never runs tests, never edits.
 
+## Control flow: `scripts/state.py`
+
+Phase sequencing, gate status, and checkpoint bookkeeping are mechanical — a
+pure function of what's on disk in `.design/` and git HEAD, not a judgment
+call. Rather than re-deriving "what phase are we in" from context every turn,
+run `python3 <skill-dir>/scripts/state.py next --dir <repo-root>` at phase
+boundaries (after closing a phase, or when unsure what comes next). It reads
+`.design/*.md` and git HEAD **read-only** and prints JSON: `phase`,
+`next_action`, `actor`, `required_inputs`, `gate_status`, `blocked_reason`.
+
+This script is advisory, not enforcing: it never prompts the user, never
+writes anything, and never invokes a subagent itself — it only reports what
+the artifacts already say. The coordinator remains the sole executor and
+sole writer of `.design/`.
+
+It also returns `stage_file`: an absolute path to the `stages/*.md` file for
+the reported phase, or `null` when there's nothing to execute (an unanswered
+gate, or `phase: "done"`). Run the loop:
+
+1. Run `state.py next`.
+2. If `gate_status: "unanswered"` — ask the user the gate question (wording
+   in "Optional phases — the gate" below), do nothing until answered
+   unambiguously, append the answer to `.design/decisions.md`, go to 1.
+3. Elif `stage_file` is non-null — `read` it and execute it (its own
+   user-confirmation points still apply), go to 1.
+4. Elif `phase: "done"` — do the handoff (below) and stop.
+
+Phases 1–3 are mandatory (the script always reports them while their
+artifacts are missing, never gates them); phases 4–5 are gated per "Optional
+phases — the gate" below.
+
 ## Phase 0 — TODO list
 
 Before anything else, set up a durable task list for the phases ahead (Phase 1 through 5, plus
@@ -111,110 +141,42 @@ user's call — the coordinator never edits `.gitignore`.
 `.design/` must be able to tell which phases ran, which were skipped and why, and what was
 deliberately not done.
 
-## Phase 1 — Goal discovery
-
-Interview the user relentlessly about every aspect of this until we reach a shared understanding for
-the goal (the decision this work drives, not the task named). Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
-
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
-
-If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking the user. The *decisions*, though, are the user's — put each one to them and wait for their answer.
-
-Do not act on it until the user confirms we have reached a shared understanding.
-
-The exit condition: Goal is discovered and 100% understood and unambiguous.
-
-On confirmation, the coordinator writes `.design/goal.md` — the original prompt verbatim plus
-the discovery outcome — and seeds `.design/decisions.md` with its first entry (goal confirmed,
-plus any load-bearing decisions taken during discovery). Phase 2 must not start before
-`goal.md` exists.
-
-## Phase 2 — Planner
-
-Read [stages/planner.md](stages/planner.md)
-
-Delegate to the **planner** subagent for the design (seams, interfaces, sequencing, tradeoffs) —
-read-only, no implementation. Produces `.design/plan.md` + `.design/technical.md` (details in the
-stage file).
-
-## Phase 3 — TDD (spec, RED, GREEN)
-
-Read [stages/tdd.md](stages/tdd.md)
-
-One vertical TDD loop over the Phase 2 design (details in the stage file). Freezes tests and
-records the Phase 3 checkpoint hash (`phase3-green`, read-only via `git rev-parse HEAD` — never a
-git tag/commit) at the end. **Mandatory** — never skipped.
+`scripts/state.py` also parses `decisions.md` (and `phase3-green` in particular) to derive
+pipeline state mechanically — this makes three specific strings a **contract**, not just
+audit-trail prose, and drifting from them silently breaks phase detection rather than just the
+record: (1) the `phase3-green` token recorded at the Phase 3 freeze; (2) a gate entry's `## `
+header must contain both the phase label ("Phase 4" / "Phase 5") and the word "gate" — e.g.
+`## Phase 4 — gate: skip (<date>)`, fitting the general format above; (3) Phase 4's completion
+entry must contain "Phase 4" and either "complete" or "combined review" in its header (see
+`stages/refactor.md`'s exit criteria); (4) Phase 5's completion entry must contain "Phase 5" and
+"complete" in its header, written only on a PASS verdict (see `stages/qa.md`'s exit criteria).
 
 ## Optional phases — the gate
 
 Phases 4 (refactor) and 5 (QA) are **optional**. Phase 3 is **not** — it produces the code, the
 spec, and the frozen tests; it is the mandatory core of the method and is never skipped.
 
-On reaching each optional phase, the coordinator stops and asks the user, using exactly this
-shape, and does nothing until answered:
+When `scripts/state.py next` reports `gate_status: "unanswered"` for a phase, stop and ask the
+user, using exactly this shape, and do nothing until answered:
 
-- **Phase 4 gate** — immediately after Phase 3's freeze and recording the `phase3-green` checkpoint
-  hash:
+- **Phase 4 gate**:
 
   > Phase 3 is green, frozen, and checkpointed at `phase3-green` (commit `<hash>`). Phase 4
   > (refactor + one `code-review-checklist` pass) is optional. Run Phase 4, or skip to Phase 5?
   > [run / skip]
 
-- **Phase 5 gate** — after Phase 4 completes, or immediately after a Phase 4 skip:
+- **Phase 5 gate**:
 
   > Phase 5 (`qa-adversary` final QA gate) is optional. Run Phase 5, or finish here?
   > [run / finish]
 
 Append the answer (and the user's reason, when given) to `.design/decisions.md` **before** acting
-on it. Skipping is never the coordinator's own call: no explicit gate answer, no skip. If the
+on it, using the gate-header contract above. Skipping is never the coordinator's own call: no
+explicit gate answer, no skip. If the
 reply is not unambiguously "run" or "skip"/"finish" (e.g. a conditional or partial answer),
 re-ask for a clear choice — never infer skip from an ambiguous reply. Skipping
 Phase 4 also skips its `code-review-checklist` — do not run the checklist standalone; in that
-case Phase 5's `qa-adversary` is the first and only reviewer of the implementation. If both
-optional phases are skipped, the run ends at the `phase3-green` checkpoint; the Handoff reflects
-that.
-
-## Phase 4 — Refactor (candidates, apply, simplify, one combined review)
-
-Read [stages/refactor.md](stages/refactor.md)
-
-Enter only on an explicit "run" at the Phase 4 gate above (details in the stage file).
-
-## Phase 5 — QA (final gate)
-
-Optional — enter only on an explicit "run" at the Phase 5 gate, already recorded in
-`.design/decisions.md`.
-
-Delegate to `qa-adversary` by name — read-only, never runs tests, never edits. Self-contained
-prompt; pick the variant matching the Phase 4 gate decision:
-
-**If Phase 4 ran:**
-
-> Frozen tests (Phase 3 artifact): <selector>. Current implementation (after Phase 4's refactor):
-> <path>. Diff since the `phase3-green` checkpoint hash (cumulative Phase 4 diff — the same diff
-> `code-review-checklist` reviewed): <diff or commit range>. QA this change: hunt for correctness
-> bugs, data-handling mistakes, business-rule violations, regressions, and check integration test
-> coverage. Give your PASS or BLOCK verdict with findings.
-
-**If Phase 4 was skipped:**
-
-> Frozen tests (Phase 3 artifact): <selector>. Current implementation (Phase 3 output — Phase 4
-> was skipped): <path>. Implementation diff, anchored on the full change since before Phase 3
-> began: `<base>..<phase3-green hash>`, where `<base>` is the pre-work baseline recorded in
-> `.design/decisions.md` at the Phase 3 freeze (merge-base with the main branch; if unavailable,
-> the commit before Phase 3 began) — both read-only via `git rev-parse`/`git merge-base`, never a
-> tag or commit created for this purpose — not `<phase3-green hash>..HEAD`, which would be empty.
-> This code
-> has NOT been through `code-review-checklist` — you are its first reviewer. QA
-> this change: hunt for correctness bugs, data-handling mistakes, business-rule violations,
-> regressions, and check integration test coverage. Give your PASS or BLOCK verdict with
-> findings.
-
-Report its verdict **verbatim** to the user first, then your own comments. A BLOCK is not "done" —
-fix and re-run from the relevant phase; do not silently patch past its objection. If Phase 4 was
-skipped and the BLOCK findings are refactor-shaped, reopening Phase 4 is allowed — append the
-reversal to `.design/decisions.md`. Counts toward the shared iteration budget below — do not
-cycle Phase 3/4 → 5 → 3/4 indefinitely.
+case Phase 5's `qa-adversary` is the first and only reviewer of the implementation.
 
 ## Iteration budget & escalation
 
@@ -250,10 +212,8 @@ it directly.
 
 ## Handoff
 
-TODO list (Phase 0) → confirmed goal + `.design/goal.md` (Phase 1) → `.design/plan.md` +
-`.design/technical.md` (Phase 2, split by the coordinator from the planner's single document) →
-`.design/spec.md` + frozen tests + green implementation + `phase3-green` checkpoint hash (Phase 3,
-mandatory,
-one vertical TDD loop) → [gate] candidates applied + simplification + combined review (Phase 4,
-optional) → [gate] `qa-adversary` verdict reported verbatim (Phase 5, optional) — every gate
-answer and load-bearing decision appended to `.design/decisions.md`.
+Run `scripts/state.py next` at any point for the current pipeline position — it derives the
+phase sequence from `.design/` directly, so it isn't restated here. When the run reaches its end
+(Phase 5 complete, or an earlier phase skipped to completion), report to the user: the final
+`.design/` artifacts produced, every gate answer and load-bearing decision from `decisions.md`,
+and — if Phase 5 ran — its verdict reported verbatim.
