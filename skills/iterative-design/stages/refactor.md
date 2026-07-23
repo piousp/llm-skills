@@ -23,8 +23,8 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 
    > Base method: this code passes its frozen tests (Phase 3) and follows the Phase 2 design
    > (`.design/plan.md` + `.design/technical.md`). Apply `refactor-identification` to the diff
-   > `<base>..phase3-green` (same `<base>` recorded in `.design/decisions.md` at the Phase 3
-   > freeze): missing/misplaced abstractions, weak encapsulation, poor data types, flag/enum-
+   > `<base>..<phase3-green hash>` (same `<base>` and hash recorded in `.design/decisions.md` at
+   > the Phase 3 freeze): missing/misplaced abstractions, weak encapsulation, poor data types, flag/enum-
    > modeled variants that a sealed alternative fits better. File:line evidence required for
    > every candidate. Do not edit anything.
 
@@ -48,7 +48,7 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 1. Delegate the frozen-test selector (Phase 3 artifact) to your build/test subagent — a regression
    here must be fixed before moving to Phase 5.
 2. Run `code-review-checklist` **once**, against the cumulative diff since the `phase3-green`
-   tag — the single combined review covering both the applied candidates and the
+   checkpoint hash — the single combined review covering both the applied candidates and the
    simplification pass together. Do not run it twice.
 3. If `code-review-checklist` findings are addressed with further edits, re-run the frozen tests
    again before Phase 5 — do not carry forward a green status from before those edits.
