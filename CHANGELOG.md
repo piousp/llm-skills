@@ -13,6 +13,10 @@ All notable changes to this repository are documented here.
   instead of re-deriving state from context.
 - `skills/iterative-design/stages/goal-discovery.md` — Phase 1 extracted into its own stage file.
 - `skills/iterative-design/stages/qa.md` — Phase 5 extracted into its own stage file.
+- `skills/logical-fallacies-analysis/SKILL.md` (EN) and `SKILL.es.md` (ES) — bilingual skill
+  for detecting logical fallacies in text: 20-fallacy catalog with detection signals, 5-step
+  analysis procedure, severity classification, and argumentative soundness verdict. First
+  non-coding skill and first bilingual (`.es.md`) skill in the repo.
 - `pi-themes/monokai-soda.json` — Monokai-inspired dark theme for pi's interactive TUI.
 - `README.md` describing repo layout and skill/agent index.
 - `agents/code-review-checklist/AGENT.md` — read-only reviewer agent (checklist-based).
