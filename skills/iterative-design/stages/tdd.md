@@ -60,12 +60,16 @@ correct, minimal, green implementation of agreed seams that already conforms to
 ## Freeze
 
 Freeze the test set and persist the test selector in `.design/spec.md` (append a "Frozen tests"
-section) — it travels to Phase 4 and Phase 5 as a file, not a chat message. Tag the checkpoint
-exactly `phase3-green`, and append the tag's commit and the pre-work base commit (merge-base with
-the main branch, or the commit before Phase 3 began) to `.design/decisions.md` — Phase 4 and
-Phase 5 diffs are defined relative to these refs.
+section) — it travels to Phase 4 and Phase 5 as a file, not a chat message. Record the checkpoint
+named `phase3-green` as a **hash read from the existing HEAD** — read-only via `git rev-parse
+HEAD`; never `git commit` or `git tag`. Append that hash and the pre-work base commit (merge-base
+with the main branch, or the commit before Phase 3 began, also read-only) to
+`.design/decisions.md` — Phase 4 and Phase 5 diffs are defined relative to these recorded hashes.
+If HEAD has uncommitted changes when freezing, tell the user and ask them to commit or explicitly
+confirm proceeding with an uncommitted checkpoint — never commit on their behalf.
 
-After tagging `phase3-green`, apply the **Phase 4 gate** from `SKILL.md` — Phase 4 is optional.
+After recording the `phase3-green` checkpoint hash, apply the **Phase 4 gate** from `SKILL.md` —
+Phase 4 is optional.
 Do not open `stages/refactor.md` without the user's explicit gate answer, recorded in
 `.design/decisions.md`.
 

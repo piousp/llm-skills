@@ -17,6 +17,9 @@ All notable changes to this repository are documented here.
   subagent, ported from `pi-subagents`' `oracle`.
 
 ### Changed
+- `skills/iterative-design/SKILL.md`, `stages/refactor.md`, `stages/tdd.md` — coordinator no
+  longer mutates git; captures read-only checkpoint hashes instead of tagging/committing on the
+  user's behalf, and asks the user to commit if HEAD is dirty at freeze time.
 - Reorganized all skills under a consistent `skills/<name>/` layout:
   `functional-programming`, `gof-design-patterns`, `pablo-code-philosophy`,
   `prompt-generator`, `refactor-identification`, `tdd` moved from repo root into `skills/`.
