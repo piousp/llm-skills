@@ -18,6 +18,7 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 | [`tdd`](skills/tdd/SKILL.md) | Reference for the red → green loop: what a good test is, where tests go, anti-patterns. |
 | [`iterative-design`](skills/iterative-design/SKILL.md) | Coordinator method tying the above together: TODO list → goal discovery → planner (`plan.md`) → one vertical TDD loop → one combined refactor phase → `qa-adversary` gate. The lead agent only delegates, never implements. |
 | [`prompt-generator`](skills/prompt-generator/SKILL.md) | Sharpens a vague ask into a precise, portable prompt before any exploration or spec work begins. |
+| [`logical-fallacies-analysis`](skills/logical-fallacies-analysis/SKILL.md) | Detects logical fallacies in text (20-fallacy catalog, severity classification, soundness verdict). Bilingual: EN (`SKILL.md`) and ES (`SKILL.es.md`). |
 
 ## Agents
 
