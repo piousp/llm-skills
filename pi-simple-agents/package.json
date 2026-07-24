@@ -1,8 +1,11 @@
 {
   "name": "pi-simple-agents",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions"]
+  },
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/unit/*.test.ts"

@@ -108,6 +108,11 @@ Override per-agent fields from `settings.json` without editing the `.md`:
 
 ## Changelog
 
+### 0.1.2 — 2025-07-23
+
+- Fix: add `pi` manifest to `package.json` and move extension to `extensions/`
+  so pi detects and loads the `subagent` tool on install.
+
 ### 0.1.1  — 2025-07-23
 
 - Update README.md
