@@ -1,23 +1,68 @@
 # pi-simple-agents
 
 Minimal subagent delegation for pi. Spawns Claude-Code-compatible agent `.md`
-files as subagent processes, in single or parallel mode, and blocks until
-their result is ready. No chains, no coordinators, no TUI-heavy
-orchestration — just run agents and get their results back.
+files as subprocesses, in single or parallel mode, and blocks until results
+are ready. No chains, no coordinators, no TUI-heavy orchestration — just run
+agents and get their answers back.
+
+## Installation
+
+```sh
+pi install npm:pi-simple-agents
+```
+
+## Capabilities
+
+- **`subagent` tool** — extension tool that registers automatically in pi.
+  Runs agent `.md` files as subprocesses.
+
+- **Single / Parallel** — one agent at a time (`{ agent, task }`) or multiple
+  in parallel (`{ tasks: [{ agent, task }, ...] }`). In parallel mode, all
+  agents run concurrently and results are returned together.
+
+- **Streaming progress** — in parallel mode, each agent's text output is
+  streamed as real-time partial progress of the tool.
+
+- **Claude Code compatible agent format** — `name`, `description`, `tools`,
+  `model` work as-is. Optional pi-simple-agents extensions:
+  `systemPromptMode`, `inheritProjectContext`, `defaultReads`.
+
+- **Agent overrides** — override `model` or other fields per agent from
+  `settings.json` without editing the `.md` file.
+
+- **Validation** — parses and validates frontmatter, input parameters, and
+  agent resolution before execution.
 
 ## Tools
 
-- **`subagent`** — run one or more subagents and wait for their results.
-  - Single: `{ agent: string, task: string }` — blocks until the agent
-    finishes and returns its final answer.
-  - Parallel: `{ tasks: [{ agent: string, task: string }, ...] }` — runs all
-    tasks concurrently and blocks until every task finishes, returning all
-    results together.
+### `subagent`
+
+Tool registered by the extension. Two modes:
+
+**Single:**
+
+```json
+{
+  "agent": "scout",
+  "task": "Find documentation for the payment API"
+}
+```
+
+**Parallel:**
+
+```json
+{
+  "tasks": [
+    { "agent": "scout", "task": "Find payment API docs" },
+    { "agent": "worker", "task": "Implement auth stub" }
+  ]
+}
+```
 
 ## Agent file format
 
-Agent `.md` files live in `~/.pi/agent/agents/` and use YAML frontmatter plus
-a body that becomes the agent's system prompt:
+Agents live in `~/.pi/agent/agents/` and use YAML frontmatter plus a body
+that becomes the system prompt:
 
 ```yaml
 ---
@@ -32,26 +77,21 @@ defaultReads: path/one, path/two # optional, comma-separated
 Body text becomes the system prompt.
 ```
 
-`name`, `description`, `tools`, and `model` are Claude Code compatible — an
-unmodified Claude Code agent file works as-is. `systemPromptMode`,
-`inheritProjectContext`, and `defaultReads` are pi-simple-agents extensions;
-they're optional and ignored by plain Claude Code.
+`name`, `description`, `tools`, `model` are Claude Code compatible. The rest
+are pi-simple-agents extensions, ignored by plain Claude Code.
 
 See `agents-examples/scout.md` and `agents-examples/worker.md` for working
 examples.
 
 ## Installing an example agent
 
-Copy or symlink an example into your agents directory:
-
 ```sh
 ln -sf "$(pwd)/agents-examples/scout.md" ~/.pi/agent/agents/scout.md
 ```
 
-## Overriding agent config
+## Agent overrides
 
-Override any agent field per-user or per-project without editing the `.md`
-file, via `settings.json`:
+Override per-agent fields from `settings.json` without editing the `.md`:
 
 ```json
 {
@@ -66,10 +106,19 @@ file, via `settings.json`:
 - User-level: `~/.pi/agent/settings.json`
 - Project-level: `<project>/.pi/settings.json` (wins over user-level)
 
-## Installing the package
+## Changelog
 
-Two options, either works:
+### 0.1.1  — 2025-07-23
 
-- Reference this directory from your `packages` array in `settings.json`
-  using a `file:` path.
-- Symlink this directory into `~/.pi/agent/npm/node_modules/pi-simple-agents/`.
+- Update README.md
+
+### 0.1.0 — 2025-07-23
+
+- Initial npm release as `pi-simple-agents`.
+- `subagent` tool with single and parallel modes.
+- YAML frontmatter parsing and validation for agent files.
+- Claude Code compatible agent format + pi-simple-agents extensions
+  (`systemPromptMode`, `inheritProjectContext`, `defaultReads`).
+- Agent overrides from `settings.json`.
+- Streaming progress for parallel execution.
+- Unit tests.
