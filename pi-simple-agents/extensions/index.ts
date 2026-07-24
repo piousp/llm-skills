@@ -3,10 +3,10 @@ import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { AgentToolUpdateCallback, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig } from "./src/agents.ts";
-import { runAgent } from "./src/run.ts";
-import { formatRunResults } from "./src/format-results.ts";
-import { validateSubagentParams, resolveAgents } from "./src/validate.ts";
+import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig } from "../src/agents.ts";
+import { runAgent } from "../src/run.ts";
+import { formatRunResults } from "../src/format-results.ts";
+import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
 
