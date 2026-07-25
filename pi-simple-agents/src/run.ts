@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentConfig } from "./agents.ts";
-import { parseAgentOutput } from "./parse-output.ts";
+import { createIncrementalParser, parseAgentOutput, parseAgentOutputIncremental } from "./parse-output.ts";
 
 // Exported for the seam that verifies --append-system-prompt is wired through
 // without spawning a real child process or a fake-child-process harness.
@@ -114,25 +114,27 @@ function errorResult(ctx: AgentRunContext, error: string): AgentRunResult {
   };
 }
 
-// Wires stdout (progress parsing) and stderr (buffering for failureMessage)
-// data handlers onto the child. Reparses the whole accumulated stdout buffer
-// on every chunk rather than just the new slice: --mode json events can be
-// split across chunk boundaries, mirroring spawn.ts's stdout handler.
+// Wires stdout (incremental progress parsing) and stderr (buffering for
+// failureMessage) data handlers onto the child. Uses an incremental parser
+// to avoid O(n²) re-parsing of the accumulated buffer on every chunk.
+// The incremental parser only advances past complete \n-delimited lines,
+// retaining partial trailing text for the next chunk.
 function wireOutputHandlers(
   child: ChildLike,
   onProgress: ((text: string) => void) | undefined,
 ): { getOutput: () => string; getStderr: () => string } {
   let output = "";
   let stderrOutput = "";
-  let lastProgress: string | undefined;
+  let lastEmittedProgress: string | undefined;
+  const parser = createIncrementalParser();
 
   child.stdout?.on("data", (chunk: Buffer) => {
     output += chunk.toString("utf8");
 
-    const { lastProgress: progress } = parseAgentOutput(output);
-    if (progress !== undefined && progress !== lastProgress) {
-      lastProgress = progress;
-      onProgress?.(lastProgress);
+    const result = parseAgentOutputIncremental(output, parser);
+    if (result?.lastProgress !== undefined && result.lastProgress !== lastEmittedProgress) {
+      lastEmittedProgress = result.lastProgress;
+      onProgress?.(result.lastProgress);
     }
   });
   child.stderr?.on("data", (chunk: Buffer) => {
