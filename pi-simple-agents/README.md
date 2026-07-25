@@ -108,6 +108,20 @@ Override per-agent fields from `settings.json` without editing the `.md`:
 
 ## Changelog
 
+### 0.2.0 — 2025-07-25
+
+- **Performance: incremental stdout parsing** (`src/parse-output.ts`).
+  `parseAgentOutputIncremental()` only processes new lines since the last
+  complete `\n`, eliminating the O(n²) behavior that progressively slowed
+  the UI as agent output grew.
+- **100ms throttle on `onUpdate`** (`extensions/index.ts`). Progress updates
+  are batched with a 100ms throttle (matching the built-in `bash` tool),
+  drastically reducing TUI re-renders.
+- **Custom `renderResult` that reuses `Text`** (`extensions/index.ts`).
+  The result component is updated in-place, avoiding render tree rebuilds
+  on every progress update.
+- **Existing tests intact**: 54/54 pass.
+
 ### 0.1.2 — 2025-07-23
 
 - Fix: add `pi` manifest to `package.json` and move extension to `extensions/`

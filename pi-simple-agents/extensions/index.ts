@@ -9,6 +9,7 @@ import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
+const PROGRESS_THROTTLE_MS = 100;
 
 function loadAvailableAgents(cwd: string): AgentConfig[] {
   const agents = discoverAgents(AGENTS_DIR);
@@ -79,8 +80,8 @@ function normalizeTasks(params: { agent?: string; task?: string; tasks?: TaskEnt
 }
 
 // Runs every task in parallel, reporting incremental progress per index via
-// onUpdate as each agent streams text, and returns the settled results in
-// the same order as `tasks`.
+// onUpdate (throttled to 100ms) as each agent streams text, and returns the
+// settled results in the same order as `tasks`.
 function runTasks(
   tasks: TaskEntry[],
   resolvedAgents: AgentConfig[],
@@ -89,6 +90,8 @@ function runTasks(
   onUpdate: AgentToolUpdateCallback<unknown> | undefined,
 ) {
   const progressByIndex: string[] = tasks.map(() => "");
+  const throttledUpdate = createThrottledUpdate(onUpdate, progressByIndex);
+
   return Promise.all(
     tasks.map((t, index) => {
       const agent = resolvedAgents[index];
@@ -97,14 +100,50 @@ function runTasks(
         signal,
         onProgress: (text) => {
           progressByIndex[index] = `${t.agent}: ${text}`;
-          onUpdate?.({
-            content: [{ type: "text", text: progressByIndex.filter(Boolean).join("\n") }],
-            details: { progress: [...progressByIndex] },
-          });
+          throttledUpdate(progressByIndex);
         },
       });
     }),
   );
+}
+
+function createThrottledUpdate(
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
+  progressByIndex: string[],
+): (pb: string[]) => void {
+  if (!onUpdate) return () => {};
+  let lastUpdateAt = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const emit = () => {
+    lastUpdateAt = Date.now();
+    timer = undefined;
+    onUpdate!({
+      content: [{ type: "text", text: progressByIndex.filter(Boolean).join("\n") }],
+      details: { progress: [...progressByIndex] },
+    });
+  };
+  return (_pb: string[]) => {
+    const now = Date.now();
+    const delay = PROGRESS_THROTTLE_MS - (now - lastUpdateAt);
+    if (delay <= 0) {
+      if (timer) { clearTimeout(timer); timer = undefined; }
+      emit();
+    } else if (!timer) {
+      timer = setTimeout(emit, delay);
+    }
+  };
+}
+
+function renderSubagentResult(
+  result: { content: Array<{ type: string; text?: string }>; details?: Record<string, unknown> },
+  _options: { expanded: boolean; isPartial: boolean },
+  theme: Theme,
+  context: { lastComponent?: Text },
+): Text {
+  const text = context.lastComponent ?? new Text("", 0, 0);
+  const content = result.content.map((c) => c.text ?? "").join("\n");
+  text.setText(content ? theme.fg("toolOutput", content) : "");
+  return text;
 }
 
 export default function (pi: ExtensionAPI) {
@@ -114,6 +153,7 @@ export default function (pi: ExtensionAPI) {
     description: "Run one or more subagents and wait for their results",
     parameters: SubagentParams,
     renderCall: renderSubagentCall,
+    renderResult: renderSubagentResult,
     execute: async (_toolCallId, rawParams, signal, onUpdate, ctx) => {
       const parsedParams = validateSubagentParams(rawParams);
       if (!parsedParams.ok) {
