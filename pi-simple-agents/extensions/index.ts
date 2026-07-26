@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { Type, type Static } from "typebox";
-import type { AgentToolUpdateCallback, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig } from "../src/agents.ts";
 import { runAgent } from "../src/run.ts";
@@ -9,7 +9,6 @@ import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
-const PROGRESS_THROTTLE_MS = 100;
 
 function loadAvailableAgents(cwd: string): AgentConfig[] {
   const agents = discoverAgents(AGENTS_DIR);
@@ -79,80 +78,40 @@ function normalizeTasks(params: { agent?: string; task?: string; tasks?: TaskEnt
   return params.tasks === undefined ? [{ agent: params.agent!, task: params.task! }] : params.tasks;
 }
 
-// Runs every task in parallel, reporting incremental progress per index via
-// onUpdate (throttled to 100ms) as each agent streams text, and returns the
-// settled results in the same order as `tasks`.
+// Runs every task in parallel. Returns settled results in the same order as `tasks`.
+// No onUpdate calls during progress — the TUI renders a lightweight "Running..."
+// indicator by default, avoiding the cost of repeated full re-renders.
 function runTasks(
   tasks: TaskEntry[],
   resolvedAgents: AgentConfig[],
   cwd: string,
   signal: AbortSignal | undefined,
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
 ) {
-  const progressByIndex: string[] = tasks.map(() => "");
-  const throttledUpdate = createThrottledUpdate(onUpdate, progressByIndex);
-
   return Promise.all(
     tasks.map((t, index) => {
       const agent = resolvedAgents[index];
       return runAgent(agent, t.task, {
         cwd,
         signal,
-        onProgress: (text) => {
-          progressByIndex[index] = `${t.agent}: ${text}`;
-          throttledUpdate(progressByIndex);
-        },
+        // No onProgress — only the final result matters for the TUI.
       });
     }),
   );
-}
-
-function createThrottledUpdate(
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined,
-  progressByIndex: string[],
-): (pb: string[]) => void {
-  if (!onUpdate) return () => {};
-  let lastUpdateAt = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const emit = () => {
-    lastUpdateAt = Date.now();
-    timer = undefined;
-    onUpdate!({
-      content: [{ type: "text", text: progressByIndex.filter(Boolean).join("\n") }],
-      details: { progress: [...progressByIndex] },
-    });
-  };
-  return (_pb: string[]) => {
-    const now = Date.now();
-    const delay = PROGRESS_THROTTLE_MS - (now - lastUpdateAt);
-    if (delay <= 0) {
-      if (timer) { clearTimeout(timer); timer = undefined; }
-      emit();
-    } else if (!timer) {
-      timer = setTimeout(emit, delay);
-    }
-  };
 }
 
 function renderSubagentResult(
   result: { content: Array<{ type: string; text?: string }>; details?: Record<string, unknown> },
   options: { expanded: boolean; isPartial: boolean },
   theme: Theme,
-  context: { lastComponent?: Text },
+  _context: { lastComponent?: Text },
 ): Text {
-  const text = context.lastComponent ?? new Text("", 0, 0);
+  // During progress, return empty text — the TUI already shows a generic
+  // "Running..." indicator. No setText, no re-render for incremental updates.
+  if (options.isPartial) return new Text("", 0, 0);
+
+  // Final result: show the full content.
   const content = result.content.map((c) => c.text ?? "").join("\n");
-
-  // During progress updates (isPartial=true), truncate to avoid
-  // freezing the TUI with large tool_execution_end payloads.
-  const displayText = content
-    ? options.isPartial && content.length > 500
-      ? content.slice(0, 500) + "… (truncado)"
-      : content
-    : "";
-
-  text.setText(displayText ? theme.fg("toolOutput", displayText) : "");
-  return text;
+  return new Text(content ? theme.fg("toolOutput", content) : "", 0, 0);
 }
 
 export default function (pi: ExtensionAPI) {
@@ -177,7 +136,7 @@ export default function (pi: ExtensionAPI) {
         return errorResult(resolved.error);
       }
 
-      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal, onUpdate);
+      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal);
 
       const formatted = formatRunResults(results);
       return {
