@@ -23,6 +23,11 @@ function joinTextParts(content: unknown): string | undefined {
   return texts.length > 0 ? texts.join("\n") : undefined;
 }
 
+// Maximum length for progress display text sent to the TUI.
+// Longer text (e.g. file content from tool_execution_end) is truncated
+// to avoid freezing the TUI with large re-renders.
+const MAX_PROGRESS_CHARS = 500;
+
 export interface ParsedAgentOutput {
   finalText?: string;
   lastProgress?: string;
@@ -75,7 +80,9 @@ export function parseAgentOutputIncremental(
         const text = joinTextParts(message.content);
         if (text !== undefined) {
           parser.finalText = text;
-          parser.lastProgress = text;
+          parser.lastProgress = text.length > MAX_PROGRESS_CHARS
+            ? text.slice(0, MAX_PROGRESS_CHARS) + "… (truncado)"
+            : text;
           changed = true;
         }
       }
@@ -86,7 +93,9 @@ export function parseAgentOutputIncremental(
       const result = record.result as { content?: unknown } | undefined;
       const text = joinTextParts(result?.content);
       if (text !== undefined) {
-        parser.lastProgress = text;
+        parser.lastProgress = text.length > MAX_PROGRESS_CHARS
+          ? text.slice(0, MAX_PROGRESS_CHARS) + "… (truncado)"
+          : text;
         changed = true;
       }
     }
