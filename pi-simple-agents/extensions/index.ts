@@ -136,13 +136,22 @@ function createThrottledUpdate(
 
 function renderSubagentResult(
   result: { content: Array<{ type: string; text?: string }>; details?: Record<string, unknown> },
-  _options: { expanded: boolean; isPartial: boolean },
+  options: { expanded: boolean; isPartial: boolean },
   theme: Theme,
   context: { lastComponent?: Text },
 ): Text {
   const text = context.lastComponent ?? new Text("", 0, 0);
   const content = result.content.map((c) => c.text ?? "").join("\n");
-  text.setText(content ? theme.fg("toolOutput", content) : "");
+
+  // During progress updates (isPartial=true), truncate to avoid
+  // freezing the TUI with large tool_execution_end payloads.
+  const displayText = content
+    ? options.isPartial && content.length > 500
+      ? content.slice(0, 500) + "… (truncado)"
+      : content
+    : "";
+
+  text.setText(displayText ? theme.fg("toolOutput", displayText) : "");
   return text;
 }
 

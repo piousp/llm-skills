@@ -108,6 +108,19 @@ Override per-agent fields from `settings.json` without editing the `.md`:
 
 ## Changelog
 
+### 0.2.1 — 2025-07-27
+
+- **Fix: TUI freeze on large tool output** (`src/parse-output.ts`, `extensions/index.ts`).
+  `tool_execution_end` events carrying large payloads (e.g. file read results) were
+  forwarded verbatim as progress text, causing the TUI to freeze while rendering
+  multi-kilobyte `Text` nodes at ~60fps. Two-layer fix:
+  - `parse-output.ts`: `lastProgress` is now truncated to 500 characters at the
+    parser level, before `onUpdate` ever fires.
+  - `extensions/index.ts`: `renderSubagentResult` also truncates when
+    `isPartial === true`, as a defense-in-depth measure.
+  `finalText` (the agent's actual answer) remains untouched — only the progress
+  display text is capped.
+
 ### 0.2.0 — 2025-07-25
 
 - **Performance: incremental stdout parsing** (`src/parse-output.ts`).
