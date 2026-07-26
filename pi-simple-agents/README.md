@@ -108,6 +108,20 @@ Override per-agent fields from `settings.json` without editing the `.md`:
 
 ## Changelog
 
+### 0.2.2 — 2025-07-27
+
+- **Perf: eliminate TUI re-renders during subagent execution** (`extensions/index.ts`).
+  Removed all `onUpdate` calls during progress — the `subagent` tool no longer
+  calls `onUpdate` incrementally. The TUI shows a lightweight "Running..."
+  indicator by default, avoiding the cost of repeated full re-renders (was
+  consuming ~82% CPU).
+- **Perf: skip incremental JSON parsing when no progress listener** (`src/run.ts`).
+  `wireOutputHandlers` now skips `parseAgentOutputIncremental` entirely when
+  `onProgress` is undefined. This eliminates `JSON.parse` on every stdout chunk
+  (including large `tool_execution_end` lines) when nobody consumes the result.
+- **Simplify `renderSubagentResult`** (`extensions/index.ts`). Returns empty
+  `Text` for partial updates; only renders content on the final result.
+
 ### 0.2.1 — 2025-07-27
 
 - **Fix: TUI freeze on large tool output** (`src/parse-output.ts`, `extensions/index.ts`).

@@ -131,10 +131,15 @@ function wireOutputHandlers(
   child.stdout?.on("data", (chunk: Buffer) => {
     output += chunk.toString("utf8");
 
-    const result = parseAgentOutputIncremental(output, parser);
-    if (result?.lastProgress !== undefined && result.lastProgress !== lastEmittedProgress) {
-      lastEmittedProgress = result.lastProgress;
-      onProgress?.(result.lastProgress);
+    // Only parse progress when someone is listening — avoids wasting CPU
+    // on JSON.parse of every tool_execution_end line (including large file
+    // contents) when the TUI doesn't need incremental updates.
+    if (onProgress) {
+      const result = parseAgentOutputIncremental(output, parser);
+      if (result?.lastProgress !== undefined && result.lastProgress !== lastEmittedProgress) {
+        lastEmittedProgress = result.lastProgress;
+        onProgress(result.lastProgress);
+      }
     }
   });
   child.stderr?.on("data", (chunk: Buffer) => {
