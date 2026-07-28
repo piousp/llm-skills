@@ -4,7 +4,7 @@ description: >
   Reviews current changes against Pablo's coding philosophy and identifies
   test coverage gaps. Does not modify code. Use before creating a PR or
   when asking "checklist", "review my changes", "am I ready to merge".
-tools: bash, read
+tools: bash, read, subagent
 ---
 <!-- Portable reference file: adjust `tools` to your harness's conventions (tool-name casing, etc.).
      Intentionally no `model:` field — a custom-agent override only fills frontmatter fields that

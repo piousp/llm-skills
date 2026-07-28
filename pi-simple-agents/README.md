@@ -1,170 +1,143 @@
 # pi-simple-agents
 
-Minimal subagent delegation for pi. Spawns Claude-Code-compatible agent `.md`
-files as subprocesses, in single or parallel mode, and blocks until results
-are ready. No chains, no coordinators, no TUI-heavy orchestration — just run
-agents and get their answers back.
+[![npm version](https://badge.fury.io/js/pi-simple-agents.svg)](https://badge.fury.io/js/pi-simple-agents)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Simple agent system for pi-coding-agent. Provides agent discovery, configuration
+overrides, and SDK-based agent execution for the pi ecosystem.
 
 ## Installation
 
-```sh
-pi install npm:pi-simple-agents
+```bash
+npm install pi-simple-agents
 ```
 
-## Capabilities
+## Usage
 
-- **`subagent` tool** — extension tool that registers automatically in pi.
-  Runs agent `.md` files as subprocesses.
+```typescript
+import {
+  createAgent,
+  loadOverrides,
+  applyOverrides,
+  readOverridesFile,
+  discoverAgents,
+  type AgentConfig,
+} from "pi-simple-agents";
+```
 
-- **Single / Parallel** — one agent at a time (`{ agent, task }`) or multiple
-  in parallel (`{ tasks: [{ agent, task }, ...] }`). In parallel mode, all
-  agents run concurrently and results are returned together.
+## API
 
-- **Streaming progress** — in parallel mode, each agent's text output is
-  streamed as real-time partial progress of the tool.
+### `AgentConfig`
 
-- **Claude Code compatible agent format** — `name`, `description`, `tools`,
-  `model` work as-is. Optional pi-simple-agents extensions:
-  `systemPromptMode`, `inheritProjectContext`, `defaultReads`.
-
-- **Agent overrides** — override `model` or other fields per agent from
-  `settings.json` without editing the `.md` file.
-
-- **Validation** — parses and validates frontmatter, input parameters, and
-  agent resolution before execution.
-
-## Tools
-
-### `subagent`
-
-Tool registered by the extension. Two modes:
-
-**Single:**
-
-```json
-{
-  "agent": "scout",
-  "task": "Find documentation for the payment API"
+```typescript
+interface AgentConfig {
+  name: string;
+  description: string;
+  tools: string[];
+  model?: string;
+  systemPrompt?: string;
+  systemPromptMode?: "append" | "replace";
+  inheritProjectContext?: boolean;
+  defaultReads?: string[];
+  source: "user";
+  filePath: string;
+  thinking?: string;
+  inheritSkills?: boolean;
+  defaultContext?: "forked" | "fresh";
+  skills?: string[];
 }
 ```
 
-**Parallel:**
+### `discoverAgents(agentsDir: string, cache?: Map<string, CacheEntry<AgentConfig[]>>): AgentConfig[]`
 
-```json
-{
-  "tasks": [
-    { "agent": "scout", "task": "Find payment API docs" },
-    { "agent": "worker", "task": "Implement auth stub" }
-  ]
-}
-```
+Scans a directory for agent `.md` files with YAML frontmatter. Supports an
+optional in-memory cache (TTL: 5s) to avoid redundant filesystem reads.
 
-## Agent file format
+### `loadOverrides(userSettingsPath: string, projectSettingsPath?: string, cache?: Map<string, CacheEntry<AgentOverrides>>): AgentOverrides`
 
-Agents live in `~/.pi/agent/agents/` and use YAML frontmatter plus a body
-that becomes the system prompt:
+Loads agent overrides from `settings.json`. Supports both `pi-simple-agents`
+and `subagents` config keys. Project-level overrides take precedence over
+user-level.
 
-```yaml
----
-name: scout                    # required
-description: ...                # required
-tools: read, grep, find, ls     # optional, comma-separated
-model: claude-haiku-4-5         # optional
-systemPromptMode: append        # optional: "append" | "replace" (default: append)
-inheritProjectContext: true     # optional: boolean (default: true)
-defaultReads: path/one, path/two # optional, comma-separated
----
-Body text becomes the system prompt.
-```
+### `applyOverrides(base: AgentConfig[], overrides: AgentOverrides): AgentConfig[]`
 
-`name`, `description`, `tools`, `model` are Claude Code compatible. The rest
-are pi-simple-agents extensions, ignored by plain Claude Code.
+Merges per-agent overrides into the base agent configurations.
 
-See `agents-examples/scout.md` and `agents-examples/worker.md` for working
-examples.
+### `readOverridesFile(configPath: string): AgentConfig`
 
-## Installing an example agent
+Reads a single settings file and extracts agent overrides.
 
-```sh
-ln -sf "$(pwd)/agents-examples/scout.md" ~/.pi/agent/agents/scout.md
-```
+### `createAgent(name: string, config: Partial<AgentConfig>): AgentConfig`
 
-## Agent overrides
-
-Override per-agent fields from `settings.json` without editing the `.md`:
-
-```json
-{
-  "pi-simple-agents": {
-    "agentOverrides": {
-      "scout": { "model": "claude-sonnet-5" }
-    }
-  }
-}
-```
-
-- User-level: `~/.pi/agent/settings.json`
-- Project-level: `<project>/.pi/settings.json` (wins over user-level)
+Creates a new agent configuration with defaults.
 
 ## Changelog
 
+### 0.3.0 — 2025-07-31
+
+- **SDK-based execution.** Replaced child-process spawning (`runAgent`) with
+  SDK-based runner (`runAgentViaSdk`). Agent sessions now run through the pi
+  SDK with proper resource loading, skill inheritance, and context management.
+- **Caching.** `discoverAgents` and `loadOverrides` now accept an optional
+  cache (TTL: 5s) to avoid redundant filesystem reads on repeated calls.
+- **New agent fields.** Added `thinking` (thinking budget level), `inheritSkills`
+  (control skill inheritance), `defaultContext` (`"forked"` | `"fresh"`), and
+  `skills` (explicit skill list) to `AgentConfig`.
+- **`subagents` config key.** `settings.json` now accepts a `subagents` key as
+  an alias for `pi-simple-agents` for agent overrides.
+- **Concurrency control.** Parallel task execution is now capped at 4 concurrent
+  agents via `mapWithConcurrencyLimit`.
+- **Removed `parse-output.ts`.** Incremental stdout parsing is no longer needed
+  with the SDK runner.
+- **Dependency changes.** Dropped `@earendil-works/pi-coding-agent` and
+  `@earendil-works/pi-tui` peer dependencies. Now a standalone library with
+  `glob` and `zod` as runtime dependencies.
+
 ### 0.2.2 — 2025-07-27
 
-- **Perf: eliminate TUI re-renders during subagent execution** (`extensions/index.ts`).
-  Removed all `onUpdate` calls during progress — the `subagent` tool no longer
-  calls `onUpdate` incrementally. The TUI shows a lightweight "Running..."
-  indicator by default, avoiding the cost of repeated full re-renders (was
-  consuming ~82% CPU).
-- **Perf: skip incremental JSON parsing when no progress listener** (`src/run.ts`).
+- **Perf: eliminate TUI re-renders during subagent execution.** Removed all
+  `onUpdate` calls during progress — the `subagent` tool no longer calls
+  `onUpdate` incrementally. The TUI shows a lightweight "Running..." indicator
+  by default.
+- **Perf: skip incremental JSON parsing when no progress listener.**
   `wireOutputHandlers` now skips `parseAgentOutputIncremental` entirely when
-  `onProgress` is undefined. This eliminates `JSON.parse` on every stdout chunk
-  (including large `tool_execution_end` lines) when nobody consumes the result.
-- **Simplify `renderSubagentResult`** (`extensions/index.ts`). Returns empty
-  `Text` for partial updates; only renders content on the final result.
+  `onProgress` is undefined.
+- **Simplify `renderSubagentResult`.** Returns empty `Text` for partial updates;
+  only renders content on the final result.
 
 ### 0.2.1 — 2025-07-27
 
-- **Fix: TUI freeze on large tool output** (`src/parse-output.ts`, `extensions/index.ts`).
-  `tool_execution_end` events carrying large payloads (e.g. file read results) were
-  forwarded verbatim as progress text, causing the TUI to freeze while rendering
-  multi-kilobyte `Text` nodes at ~60fps. Two-layer fix:
-  - `parse-output.ts`: `lastProgress` is now truncated to 500 characters at the
-    parser level, before `onUpdate` ever fires.
-  - `extensions/index.ts`: `renderSubagentResult` also truncates when
-    `isPartial === true`, as a defense-in-depth measure.
-  `finalText` (the agent's actual answer) remains untouched — only the progress
-  display text is capped.
+- **Fix: TUI freeze on large tool output.** Two-layer fix:
+  `lastProgress` truncated to 500 characters at the parser level, and
+  `renderSubagentResult` also truncates when `isPartial === true`.
 
 ### 0.2.0 — 2025-07-25
 
-- **Performance: incremental stdout parsing** (`src/parse-output.ts`).
-  `parseAgentOutputIncremental()` only processes new lines since the last
-  complete `\n`, eliminating the O(n²) behavior that progressively slowed
-  the UI as agent output grew.
-- **100ms throttle on `onUpdate`** (`extensions/index.ts`). Progress updates
-  are batched with a 100ms throttle (matching the built-in `bash` tool),
-  drastically reducing TUI re-renders.
-- **Custom `renderResult` that reuses `Text`** (`extensions/index.ts`).
-  The result component is updated in-place, avoiding render tree rebuilds
-  on every progress update.
-- **Existing tests intact**: 54/54 pass.
+- **Performance: incremental stdout parsing.** `parseAgentOutputIncremental()`
+  only processes new lines since the last complete `\n`.
+- **100ms throttle on `onUpdate`.** Progress updates are batched with a 100ms
+  throttle.
+- **Custom `renderResult` that reuses `Text`.** Avoids render tree rebuilds on
+  every progress update.
 
 ### 0.1.2 — 2025-07-23
 
-- Fix: add `pi` manifest to `package.json` and move extension to `extensions/`
-  so pi detects and loads the `subagent` tool on install.
+- Fix: add `pi` manifest to `package.json` and move extension to `extensions/`.
 
-### 0.1.1  — 2025-07-23
+### 0.1.1 — 2025-07-23
 
-- Update README.md
+- Update README.md.
 
 ### 0.1.0 — 2025-07-23
 
 - Initial npm release as `pi-simple-agents`.
 - `subagent` tool with single and parallel modes.
-- YAML frontmatter parsing and validation for agent files.
-- Claude Code compatible agent format + pi-simple-agents extensions
-  (`systemPromptMode`, `inheritProjectContext`, `defaultReads`).
+- YAML frontmatter parsing and validation.
+- Claude Code compatible agent format + pi-simple-agents extensions.
 - Agent overrides from `settings.json`.
 - Streaming progress for parallel execution.
 - Unit tests.
+
+## License
+
+MIT

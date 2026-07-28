@@ -5,7 +5,7 @@ description: >
   and returns a two-section design (Plan / Technical) through the
   pablo-code-philosophy lens. Never implements. Use for the design phase of
   the `iterative-design` method, before any TDD or refactor work starts.
-tools: read, grep, find, ls
+tools: read, grep, find, ls, subagent
 ---
 <!-- Portable reference file: adjust `tools` to your harness's conventions (tool-name casing, etc.).
      Intentionally no `model:` field — a custom-agent override only fills frontmatter fields that are

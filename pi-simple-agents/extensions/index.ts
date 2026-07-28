@@ -3,18 +3,22 @@ import path from "node:path";
 import { Type, type Static } from "typebox";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig } from "../src/agents.ts";
-import { runAgent } from "../src/run.ts";
+import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig, type AgentOverrides, type CacheEntry } from "../src/agents.ts";
+import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
 
+const agentCache = new Map<string, CacheEntry<AgentConfig[]>>();
+const overridesCache = new Map<string, CacheEntry<AgentOverrides>>();
+
 function loadAvailableAgents(cwd: string): AgentConfig[] {
-  const agents = discoverAgents(AGENTS_DIR);
+  const agents = discoverAgents(AGENTS_DIR, agentCache);
   const userSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
   const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-  const overrides = loadOverrides(userSettingsPath, projectSettingsPath);
+  const overrides = loadOverrides(userSettingsPath, projectSettingsPath, overridesCache);
   return applyOverrides(agents, overrides);
 }
 
@@ -78,25 +82,50 @@ function normalizeTasks(params: { agent?: string; task?: string; tasks?: TaskEnt
   return params.tasks === undefined ? [{ agent: params.agent!, task: params.task! }] : params.tasks;
 }
 
-// Runs every task in parallel. Returns settled results in the same order as `tasks`.
+function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
+  return new DefaultResourceLoader({
+    cwd,
+    agentDir: path.join(os.homedir(), ".pi", "agent"),
+    noExtensions: true,
+    noSkills: agent.inheritSkills === false,
+    noContextFiles: agent.inheritProjectContext === false,
+    systemPromptOverride:
+      agent.systemPromptMode === "replace" && agent.systemPrompt
+        ? () => agent.systemPrompt
+        : undefined,
+    appendSystemPromptOverride:
+      agent.systemPromptMode === "append" && agent.systemPrompt
+        ? (base) => [...base, agent.systemPrompt]
+        : undefined,
+  });
+}
+
+// Runs every task with concurrency limit (4) via the SDK runner.
+// Returns settled results in the same order as `tasks`.
 // No onUpdate calls during progress — the TUI renders a lightweight "Running..."
 // indicator by default, avoiding the cost of repeated full re-renders.
-function runTasks(
+async function runTasks(
   tasks: TaskEntry[],
   resolvedAgents: AgentConfig[],
   cwd: string,
   signal: AbortSignal | undefined,
-) {
-  return Promise.all(
-    tasks.map((t, index) => {
-      const agent = resolvedAgents[index];
-      return runAgent(agent, t.task, {
-        cwd,
-        signal,
-        // No onProgress — only the final result matters for the TUI.
-      });
-    }),
-  );
+  modelRuntime: ModelRuntime,
+): Promise<AgentRunResult[]> {
+  return mapWithConcurrencyLimit(tasks, 4, async (t, index) => {
+    const agent = resolvedAgents[index];
+
+    const resourceLoader = createMinimalResourceLoader(agent, cwd);
+    await resourceLoader.reload();
+
+    return runAgentViaSdk(agent, t.task, {
+      modelRuntime,
+      signal,
+      createSession: createAgentSession as any,
+      resourceLoader,
+      sessionManager: SessionManager.inMemory(),
+      getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
+    });
+  });
 }
 
 function renderSubagentResult(
@@ -136,7 +165,8 @@ export default function (pi: ExtensionAPI) {
         return errorResult(resolved.error);
       }
 
-      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal);
+      const modelRuntime = (ctx.modelRegistry as any).runtime as ModelRuntime;
+      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal, modelRuntime);
 
       const formatted = formatRunResults(results);
       return {

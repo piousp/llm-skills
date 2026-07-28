@@ -8,7 +8,7 @@ description: >
   it does NOT judge code quality/style. Does NOT modify code and NEVER runs or
   delegates tests. Use before merge, alongside code-review, when asking "QA this",
   "will this break anything", "find bugs in my change", "is this covered".
-tools: bash, read
+tools: bash, read, subagent
 ---
 <!-- Portable reference file: adjust `tools` to your harness's conventions (tool-name casing, etc.).
      Intentionally no `model:` field — a custom-agent override only fills frontmatter fields that
