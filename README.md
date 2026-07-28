@@ -20,6 +20,7 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 | [`prompt-generator`](skills/prompt-generator/SKILL.md) | Sharpens a vague ask into a precise, portable prompt before any exploration or spec work begins. |
 | [`logical-fallacies-analysis`](skills/logical-fallacies-analysis/SKILL.md) | Detects logical fallacies in text (20-fallacy catalog, severity classification, soundness verdict). Bilingual: EN (`SKILL.md`) and ES (`SKILL.es.md`). |
 | [`writing-agent-skills`](skills/writing-agent-skills/SKILL.md) | Authoring, reviewing, or refactoring an agent Skill's `SKILL.md` and supporting files, adapted from Philipp Schmid's "8 Tips for Writing Agent Skills", with an `evals/` suite. |
+| [`evaluating-agent-skills`](skills/evaluating-agent-skills/SKILL.md) | Building an eval suite for an existing skill — success criteria, prompt set, and layered checks (offline tests, live CLI trajectory probes, LLM-as-judge). Expansion of `writing-agent-skills`' "test it before you ship it" step. |
 
 ## Agents
 
@@ -29,9 +30,15 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 | [`pablo-implementer`](agents/pablo-implementer/AGENT.md) | Code-writing subagent for `iterative-design` Phases 3–4: TDD mode (one failing test, then minimal code, per seam), repair mode, and refactor mode. Never runs builds, tests, or subagents. |
 | [`code-review-checklist`](agents/code-review-checklist/AGENT.md) | Read-only reviewer: runs a strict checklist (red flags, data shape, complexity, boundaries, abstractions, structural smells, tests) against a diff and reports coverage gaps. |
 | [`qa-adversary`](agents/qa-adversary/AGENT.md) | Read-only adversarial QA critic: hunts correctness bugs, regressions, and business-rule violations via a 7-lens process; never judges style, never runs tests. Complements `code-review-checklist`. |
+| [`pablo-oracle`](agents/pablo-oracle/AGENT.md) | High-context, forked-context decision-consistency oracle: protects inherited state and catches drift against earlier decisions. Ported from `pi-subagents`' `oracle`. |
 
-All four agents are self-contained prompt targets for `iterative-design`'s phases, but `code-review-checklist`
-and `qa-adversary` also work standalone in chat.
+All five agents are self-contained prompt targets for `iterative-design`'s phases, but `code-review-checklist`,
+`qa-adversary`, and `pablo-oracle` also work standalone in chat.
+
+## Other
+
+`pi-simple-agents/` is a standalone npm package (Claude-Code-compatible subagent delegation tool for
+pi) with its own `README.md`/`CHANGELOG.md` — not a skill or agent file.
 
 ## Using these files
 
