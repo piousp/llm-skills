@@ -15,6 +15,7 @@ export interface AgentConfig {
   systemPrompt: string;
   thinking?: string;
   inheritSkills?: boolean;
+  inheritExtensions?: boolean;
   defaultContext?: "forked" | "fresh";
   skills?: string[];
 }

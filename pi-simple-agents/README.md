@@ -3,8 +3,7 @@
 [![npm version](https://badge.fury.io/js/pi-simple-agents.svg)](https://badge.fury.io/js/pi-simple-agents)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Simple agent system for pi-coding-agent. Provides agent discovery, configuration
-overrides, and SDK-based agent execution for the pi ecosystem.
+**pi-simple-agents** is a sub-agent system for [pi-coding-agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). It lets you define reusable agents as `.md` files and run them from any pi skill or session via the `subagent` tool.
 
 ## Installation
 
@@ -12,131 +11,225 @@ overrides, and SDK-based agent execution for the pi ecosystem.
 npm install pi-simple-agents
 ```
 
-## Usage
+Once installed, pi automatically loads the extension and registers the `subagent` tool. No additional configuration is required.
 
-```typescript
-import {
-  createAgent,
-  loadOverrides,
-  applyOverrides,
-  readOverridesFile,
-  discoverAgents,
-  type AgentConfig,
-} from "pi-simple-agents";
+## How it works
+
+Agents are defined as Markdown files with YAML frontmatter. Each file describes an agent: its name, which tools it can use, which model runs it, and the system prompt that defines its behavior.
+
+pi-simple-agents looks for these files in `~/.pi/agent/agents/` and exposes them as the `subagent` tool.
+
+## Defining agents
+
+Create a `.md` file in `~/.pi/agent/agents/`. The YAML frontmatter defines the configuration, and the body is the system prompt.
+
+### Example: scout agent (`~/.pi/agent/agents/scout.md`)
+
+```markdown
+---
+name: scout
+description: Fast codebase recon — finds files, symbols, and patterns
+tools: read, grep, find, ls
+model: claude-haiku-4-5
+thinking: low
+---
+
+You are a fast recon scout. Search the codebase efficiently to answer the
+question you were given — prefer grep/find over reading whole files, and
+read only the specific lines or sections you need. Report compressed
+findings: file paths, line numbers, and short excerpts, not full file
+dumps. Do not implement or edit anything; your job is to locate and
+summarize, then hand the findings back.
 ```
 
-## API
+### Example: worker agent (`~/.pi/agent/agents/worker.md`)
 
-### `AgentConfig`
+```markdown
+---
+name: worker
+description: General-purpose implementation agent
+tools: read, bash, edit, write, grep, find, ls
+model: claude-sonnet-5
+---
 
-```typescript
-interface AgentConfig {
-  name: string;
-  description: string;
-  tools: string[];
-  model?: string;
-  systemPrompt?: string;
-  systemPromptMode?: "append" | "replace";
-  inheritProjectContext?: boolean;
-  defaultReads?: string[];
-  source: "user";
-  filePath: string;
-  thinking?: string;
-  inheritSkills?: boolean;
-  defaultContext?: "forked" | "fresh";
-  skills?: string[];
+You are a general-purpose implementation agent. Given a task, implement it
+directly: read the relevant code first, make the necessary edits, and run
+whatever commands are needed to verify your change. When done, report
+exactly what you changed and why, referencing the files touched.
+```
+
+## Using the `subagent` tool
+
+Once installed and your agents are defined, you can invoke them from any pi session.
+
+### Single mode — one agent, one task
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/"
+```
+
+The `scout` agent runs, does its work, and returns the result.
+
+### Parallel mode — multiple agents simultaneously
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/"
+  agent: "worker", task: "Add tests for the auth module"
+]
+```
+
+pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all results.
+
+## Frontmatter fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | — **(required)** | Agent name. Used to reference it in `subagent`. |
+| `description` | string | — **(required)** | Short description visible in the UI. |
+| `tools` | list | `[]` | Tools the agent is allowed to use. Comma-separated in YAML. |
+| `model` | string | *inherited from parent session* | Model to use. E.g. `claude-sonnet-4-20250514`, `openrouter/gpt-4o`. |
+| `systemPromptMode` | `append` or `replace` | `append` | `append`: the agent's system prompt is added to the parent session context. `replace`: replaces the entire system context. |
+| `inheritProjectContext` | boolean | `true` | If `false`, the agent starts without loading project context files (AGENTS.md, CLAUDE.md, etc.). |
+| `inheritSkills` | boolean | `true` | If `false`, the agent does not inherit the parent's active skills. |
+| `inheritExtensions` | boolean | `true` | If `false`, the agent starts without loading pi extensions. |
+| `defaultReads` | list | `[]` | Files to pre-load into the agent's context on startup. |
+| `defaultContext` | `forked` or `fresh` | `forked` | `forked`: copies the parent session's conversation history. `fresh`: starts with an empty conversation. |
+| `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
+| `skills` | list | *inherited* | Explicit list of skills to load. When set, overrides automatic inheritance. |
+
+## Overriding agent configuration (overrides)
+
+You can change any agent field from `settings.json` without modifying the original `.md` file. This is useful for, say, using a more powerful model in a specific project without altering the shared agent definition.
+
+### Configuration files
+
+pi-simple-agents looks for overrides at two levels, merging them:
+
+1. **User level:** `~/.pi/agent/settings.json`
+2. **Project level:** `{project-folder}/.pi/settings.json`
+
+Project values take precedence over user values.
+
+### Format
+
+Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` key (both work):
+
+```json
+{
+  "pi-simple-agents": {
+    "agentOverrides": {
+      "scout": {
+        "model": "claude-sonnet-4-20250514",
+        "thinking": "high"
+      }
+    }
+  }
 }
 ```
 
-### `discoverAgents(agentsDir: string, cache?: Map<string, CacheEntry<AgentConfig[]>>): AgentConfig[]`
+### Precedence rules
 
-Scans a directory for agent `.md` files with YAML frontmatter. Supports an
-optional in-memory cache (TTL: 5s) to avoid redundant filesystem reads.
+```
+Project  >  User  >  Frontmatter (.md file)
+```
 
-### `loadOverrides(userSettingsPath: string, projectSettingsPath?: string, cache?: Map<string, CacheEntry<AgentOverrides>>): AgentOverrides`
+Merge is field-level. If the project override only changes `model`, the rest of the fields defined in the user override or frontmatter are preserved.
 
-Loads agent overrides from `settings.json`. Supports both `pi-simple-agents`
-and `subagents` config keys. Project-level overrides take precedence over
-user-level.
+### Complete example
 
-### `applyOverrides(base: AgentConfig[], overrides: AgentOverrides): AgentConfig[]`
+**Base definition** (`~/.pi/agent/agents/scout.md`):
 
-Merges per-agent overrides into the base agent configurations.
+```markdown
+---
+name: scout
+description: Code explorer
+tools: read, grep, find, ls
+model: claude-haiku-4-5
+---
+...
+```
 
-### `readOverridesFile(configPath: string): AgentConfig`
+**User override** (`~/.pi/agent/settings.json`):
 
-Reads a single settings file and extracts agent overrides.
+```json
+{
+  "pi-simple-agents": {
+    "agentOverrides": {
+      "scout": {
+        "model": "claude-sonnet-4-20250514",
+        "thinking": "low"
+      }
+    }
+  }
+}
+```
 
-### `createAgent(name: string, config: Partial<AgentConfig>): AgentConfig`
+**Project override** (`{project}/.pi/settings.json`):
 
-Creates a new agent configuration with defaults.
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "scout": {
+        "model": "openrouter/gpt-4o"
+      }
+    }
+  }
+}
+```
 
-## Changelog
+**Final result for scout:**
+- `model` → `openrouter/gpt-4o` (from project, wins by precedence)
+- `thinking` → `low` (from user, project didn't touch it)
+- `tools`, `description`, etc. → from frontmatter (no override modified them)
 
-### 0.3.0 — 2025-07-31
+## Example agents
 
-- **SDK-based execution.** Replaced child-process spawning (`runAgent`) with
-  SDK-based runner (`runAgentViaSdk`). Agent sessions now run through the pi
-  SDK with proper resource loading, skill inheritance, and context management.
-- **Caching.** `discoverAgents` and `loadOverrides` now accept an optional
-  cache (TTL: 5s) to avoid redundant filesystem reads on repeated calls.
-- **New agent fields.** Added `thinking` (thinking budget level), `inheritSkills`
-  (control skill inheritance), `defaultContext` (`"forked"` | `"fresh"`), and
-  `skills` (explicit skill list) to `AgentConfig`.
-- **`subagents` config key.** `settings.json` now accepts a `subagents` key as
-  an alias for `pi-simple-agents` for agent overrides.
-- **Concurrency control.** Parallel task execution is now capped at 4 concurrent
-  agents via `mapWithConcurrencyLimit`.
-- **Removed `parse-output.ts`.** Incremental stdout parsing is no longer needed
-  with the SDK runner.
-- **Dependency changes.** Dropped `@earendil-works/pi-coding-agent` and
-  `@earendil-works/pi-tui` peer dependencies. Now a standalone library with
-  `glob` and `zod` as runtime dependencies.
+### Code reviewer agent
 
-### 0.2.2 — 2025-07-27
+```markdown
+---
+name: reviewer
+description: Reviews code for quality, security, and performance issues
+tools: read, grep, find
+model: claude-sonnet-4-20250514
+thinking: high
+---
 
-- **Perf: eliminate TUI re-renders during subagent execution.** Removed all
-  `onUpdate` calls during progress — the `subagent` tool no longer calls
-  `onUpdate` incrementally. The TUI shows a lightweight "Running..." indicator
-  by default.
-- **Perf: skip incremental JSON parsing when no progress listener.**
-  `wireOutputHandlers` now skips `parseAgentOutputIncremental` entirely when
-  `onProgress` is undefined.
-- **Simplify `renderSubagentResult`.** Returns empty `Text` for partial updates;
-  only renders content on the final result.
+You are a thorough code reviewer. Examine the code for:
+1. Security issues (SQL injection, XSS, hardcoded credentials)
+2. Performance problems (N+1 queries, unnecessary loops)
+3. Code quality (cyclomatic complexity, dead code, naming)
+4. Missing tests
 
-### 0.2.1 — 2025-07-27
+Be specific: point out the file, line, and why it's a problem. Do not
+suggest implementations, only flag what needs fixing.
+```
 
-- **Fix: TUI freeze on large tool output.** Two-layer fix:
-  `lastProgress` truncated to 500 characters at the parser level, and
-  `renderSubagentResult` also truncates when `isPartial === true`.
+### Documentation writer agent
 
-### 0.2.0 — 2025-07-25
+```markdown
+---
+name: docwriter
+description: Writes and updates technical documentation
+tools: read, write, grep, find
+model: claude-sonnet-4-20250514
+systemPromptMode: replace
+inheritProjectContext: false
+---
 
-- **Performance: incremental stdout parsing.** `parseAgentOutputIncremental()`
-  only processes new lines since the last complete `\n`.
-- **100ms throttle on `onUpdate`.** Progress updates are batched with a 100ms
-  throttle.
-- **Custom `renderResult` that reuses `Text`.** Avoids render tree rebuilds on
-  every progress update.
+You are a technical writer. Your task is to create clear, useful
+documentation. Focus on: what each module does, how to use it, code
+examples, and edge case warnings. Use a professional but accessible
+tone. Do not document trivial or self-evident code.
+```
 
-### 0.1.2 — 2025-07-23
+## Limits
 
-- Fix: add `pi` manifest to `package.json` and move extension to `extensions/`.
-
-### 0.1.1 — 2025-07-23
-
-- Update README.md.
-
-### 0.1.0 — 2025-07-23
-
-- Initial npm release as `pi-simple-agents`.
-- `subagent` tool with single and parallel modes.
-- YAML frontmatter parsing and validation.
-- Claude Code compatible agent format + pi-simple-agents extensions.
-- Agent overrides from `settings.json`.
-- Streaming progress for parallel execution.
-- Unit tests.
+- **Maximum 8 tasks** per call in parallel mode.
+- **Maximum 4 agents** running concurrently.
+- Agents run inside a pi SDK session with proper resource handling, context management, and cleanup.
 
 ## License
 
