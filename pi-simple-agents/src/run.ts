@@ -1,4 +1,5 @@
 import type { AgentConfig } from "./agents.ts";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 
 interface AgentRunResultBase {
   agent: string;
@@ -32,8 +33,10 @@ const VALID_THINKING_LEVELS = [
   "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ] as const;
 
-export function clampThinkingLevel(level: string): string | undefined {
-  if ((VALID_THINKING_LEVELS as readonly string[]).includes(level)) return level;
+type ThinkingLevel = (typeof VALID_THINKING_LEVELS)[number];
+
+export function clampThinkingLevel(level: string): ThinkingLevel | undefined {
+  if ((VALID_THINKING_LEVELS as readonly string[]).includes(level)) return level as ThinkingLevel;
   console.warn(`pi-simple-agents: invalid thinking level "${level}", falling back to default`);
   return undefined;
 }
@@ -59,27 +62,19 @@ export function mapWithConcurrencyLimit<TIn, TOut>(
   return Promise.all(workers).then(() => results);
 }
 
+type CreateSessionOpts = Pick<
+  CreateAgentSessionOptions,
+  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "resourceLoader" | "sessionManager"
+>;
+
 export interface RunAgentViaSdkOptions {
-  modelRuntime: unknown;
-  createSession: (opts: {
-    modelRuntime: unknown;
-    model?: unknown;
-    thinkingLevel?: string;
-    tools?: string[];
-    resourceLoader?: unknown;
-    sessionManager?: unknown;
-  }) => Promise<{ session: {
-    prompt(text: string): Promise<void>;
-    subscribe(listener: (event: any) => void): () => void;
-    getLastAssistantText(): string;
-    dispose(): void;
-    abort(): void;
-  } }>;
-  resourceLoader: unknown;
-  sessionManager: unknown;
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"];
+  createSession: (opts: CreateSessionOpts) => Promise<Pick<CreateAgentSessionResult, "session">>;
+  resourceLoader: CreateAgentSessionOptions["resourceLoader"];
+  sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
-  getModel?: (provider: string, modelId: string) => unknown;
+  getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
 }
 
 export function runAgentViaSdk(
@@ -102,7 +97,7 @@ export function runAgentViaSdk(
 
     (async () => {
       try {
-        let model: unknown = undefined;
+        let model: CreateAgentSessionOptions["model"] = undefined;
         if (agent.model && options.getModel) {
           const parts = agent.model.split("/");
           if (parts.length >= 2) {
@@ -115,7 +110,7 @@ export function runAgentViaSdk(
           : undefined;
 
         const { session: agentSession } = await options.createSession({
-          modelRuntime: options.modelRuntime,
+          modelRegistry: options.modelRegistry,
           model,
           thinkingLevel,
           tools: agent.tools,

@@ -50,6 +50,7 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     defaultReads: [],
     source: "user",
     filePath: "/agents/scout.md",
+    systemPrompt: "",
     ...overrides,
   };
 }
@@ -106,7 +107,7 @@ test("runAgentViaSdk: resolves success with finalText from session", async () =>
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
@@ -121,7 +122,7 @@ test("runAgentViaSdk: resolves error when session.prompt throws", async () => {
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "error");
@@ -138,7 +139,7 @@ test("runAgentViaSdk: dispose called in finally even on error", async () => {
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(disposed, true);
@@ -151,7 +152,7 @@ test("runAgentViaSdk: resolves abort-named error when signal is already aborted"
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRuntime: {}, createSession: async () => ({ session: new FakeAgentSession("x") as any }), resourceLoader: {}, sessionManager: {}, signal: controller.signal } as any,
+    { modelRegistry: {} as any, createSession: async () => ({ session: new FakeAgentSession("x") as any }), resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
   );
 
   assert.equal(result.status, "error");
@@ -166,7 +167,7 @@ test("runAgentViaSdk: calls onProgress with text deltas", async () => {
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, onProgress: (t) => progressCalls.push(t) } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onProgress: (t) => progressCalls.push(t) },
   );
 
   assert.ok(progressCalls.length > 0);
@@ -180,15 +181,51 @@ test("runAgentViaSdk: resolves model from getModel when agent.model is set", asy
     capturedModel = opts.model;
     return { session: fakeSession as any };
   };
-  const getModel = (provider: string, modelId: string) => `${provider}/${modelId}`;
+  const getModel = ((provider: string, modelId: string) => `${provider}/${modelId}`) as any;
 
   await runAgentViaSdk(
     makeAgent({ model: "openrouter/gpt-4" }),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, getModel } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
+});
+
+test("runAgentViaSdk: calls getModel with provider and modelId split from agent.model", async () => {
+  const calls: Array<[string, string]> = [];
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async () => ({ session: fakeSession as any });
+  const getModel = ((provider: string, modelId: string) => {
+    calls.push([provider, modelId]);
+    return `${provider}/${modelId}`;
+  }) as any;
+
+  await runAgentViaSdk(
+    makeAgent({ model: "anthropic/claude-fable-5" }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+  );
+
+  assert.deepEqual(calls, [["anthropic", "claude-fable-5"]]);
+});
+
+test("runAgentViaSdk: forwards modelRegistry through to createSession unchanged", async () => {
+  const registryMarker = { find: () => undefined } as any;
+  let capturedRegistry: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedRegistry = opts.modelRegistry;
+    return { session: fakeSession as any };
+  };
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: registryMarker, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(capturedRegistry, registryMarker);
 });
 
 test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
@@ -202,7 +239,7 @@ test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
   await runAgentViaSdk(
     makeAgent({ thinking: "high" } as any),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(capturedThinkingLevel, "high");
@@ -219,7 +256,7 @@ test("runAgentViaSdk: passes tools from agent.tools", async () => {
   await runAgentViaSdk(
     makeAgent({ tools: ["read", "write"] }),
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.deepEqual(capturedTools, ["read", "write"]);
@@ -251,12 +288,12 @@ test("runAgentViaSdk: model override via applyOverrides flows through getModel",
     capturedModel = opts.model;
     return { session: fakeSession as any };
   };
-  const getModel = (provider: string, modelId: string) => `${provider}/${modelId}`;
+  const getModel = ((provider: string, modelId: string) => `${provider}/${modelId}`) as any;
 
   await runAgentViaSdk(
     overridden!,
     "find things",
-    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, getModel } as any,
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");

@@ -1,8 +1,8 @@
 # Planner — Design, No Implementation
 
-Anchors on the confirmed goal (`.design/goal.md`, Phase 1). The planner returns ONE document
-with two delimited sections; the **coordinator** splits it and persists `.design/plan.md` (the
-logistical plan Phase 3 sequences work from) and `.design/technical.md` (the contracts the
+Anchors on the confirmed goal (`$DESIGN_DIR/goal.md`, Phase 1). The planner returns ONE document
+with two delimited sections; the **coordinator** splits it and persists `$DESIGN_DIR/plan.md` (the
+logistical plan Phase 3 sequences work from) and `$DESIGN_DIR/technical.md` (the contracts the
 implementer builds against). The planner subagent is read-only end to end — it never writes or
 edits code.
 
@@ -22,7 +22,7 @@ edits code.
    duplicate what it already has. Only the generic **planner** fallback needs the skill pasted in
    full (or an accessible file path), since it has no built-in lens.
 
-   > Confirmed goal (Phase 1): <paste `.design/goal.md` verbatim — original prompt + discovery
+   > Confirmed goal (Phase 1): <paste `$DESIGN_DIR/goal.md` verbatim — original prompt + discovery
    > outcome, every constraint and decision>. Explore the existing codebase relevant to this goal
    > and design a solution: public interfaces, seams (what needs a test boundary), sequencing of
    > work, data structures, and tradeoffs between viable approaches. [Generic planner fallback
@@ -54,26 +54,26 @@ edits code.
       (`BEGIN PLAN` < `END PLAN` < `BEGIN TECHNICAL` < `END TECHNICAL`). Also verify the plan
       section groups work into explicit numbered buckets — if it doesn't, re-delegate once with
       "re-emit the plan section grouped into explicit numbered buckets" (same budget as 3c).
-   b. Write `.design/plan.md` = the lines strictly between `<!-- BEGIN PLAN -->` and
-      `<!-- END PLAN -->`; write `.design/technical.md` = the lines strictly between
+   b. Write `$DESIGN_DIR/plan.md` = the lines strictly between `<!-- BEGIN PLAN -->` and
+      `<!-- END PLAN -->`; write `$DESIGN_DIR/technical.md` = the lines strictly between
       `<!-- BEGIN TECHNICAL -->` and `<!-- END TECHNICAL -->`. Trim leading/trailing blank
       lines; otherwise persist verbatim — no summarizing, no rewriting.
    c. Malformed markers (missing, duplicated, out of order): re-delegate once — "re-emit the
       exact same design with the four markers, all content inside them" (counts toward the
       iteration budget: max 2 attempts). If still malformed but `<!-- BEGIN TECHNICAL -->`
       exists, split at that marker (before = plan, after = technical), strip marker lines, and
-      note the anomaly in `.design/decisions.md`. Otherwise escalate to the user.
+      note the anomaly in `$DESIGN_DIR/decisions.md`. Otherwise escalate to the user.
 4. Review both files with the user: surface every load-bearing decision (seam boundaries, chosen
    approach where multiple were viable, sequencing) and get explicit confirmation before Phase 3
    starts building against them. Append the chosen approach and rejected alternatives to
-   `.design/decisions.md`. User-requested amendments may be applied by the coordinator directly
+   `$DESIGN_DIR/decisions.md`. User-requested amendments may be applied by the coordinator directly
    to the two files (they are design docs) or re-delegated if substantial.
 5. If the design reveals the goal (Phase 1) was underspecified, stop and go back to Phase 1 rather
    than letting the planner guess.
 
 ## Exit criteria
 
-`.design/plan.md` and `.design/technical.md` exist, are confirmed by the user, and are specific
+`$DESIGN_DIR/plan.md` and `$DESIGN_DIR/technical.md` exist, are confirmed by the user, and are specific
 enough for Phase 3 to derive seams and tests without re-deriving the design: `plan.md` gives the
-work order, `technical.md` the contracts. The chosen approach is logged in `.design/decisions.md`.
+work order, `technical.md` the contracts. The chosen approach is logged in `$DESIGN_DIR/decisions.md`.
 No code or tests have been written yet.

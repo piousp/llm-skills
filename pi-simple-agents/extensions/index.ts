@@ -1,9 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 import { Type, type Static } from "typebox";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
-import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme, ToolRenderResultOptions, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { Text, type Component } from "@earendil-works/pi-tui";
+import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig, type AgentOverrides, type CacheEntry } from "../src/agents.ts";
 import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { formatRunResults } from "../src/format-results.ts";
@@ -109,7 +109,7 @@ async function runTasks(
   resolvedAgents: AgentConfig[],
   cwd: string,
   signal: AbortSignal | undefined,
-  modelRuntime: ModelRuntime,
+  modelRegistry: ModelRegistry,
 ): Promise<AgentRunResult[]> {
   return mapWithConcurrencyLimit(tasks, 4, async (t, index) => {
     const agent = resolvedAgents[index];
@@ -118,28 +118,30 @@ async function runTasks(
     await resourceLoader.reload();
 
     return runAgentViaSdk(agent, t.task, {
-      modelRuntime,
+      modelRegistry,
       signal,
-      createSession: createAgentSession as any,
+      createSession: createAgentSession,
       resourceLoader,
       sessionManager: SessionManager.inMemory(),
-      getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
+      getModel: (provider, modelId) => modelRegistry.find(provider, modelId),
     });
   });
 }
 
 function renderSubagentResult(
-  result: { content: Array<{ type: string; text?: string }>; details?: Record<string, unknown> },
-  options: { expanded: boolean; isPartial: boolean },
+  result: AgentToolResult<Record<string, unknown> | undefined>,
+  options: ToolRenderResultOptions,
   theme: Theme,
-  _context: { lastComponent?: Text },
+  _context: { lastComponent?: Component },
 ): Text {
   // During progress, return empty text — the TUI already shows a generic
   // "Running..." indicator. No setText, no re-render for incremental updates.
   if (options.isPartial) return new Text("", 0, 0);
 
   // Final result: show the full content.
-  const content = result.content.map((c) => c.text ?? "").join("\n");
+  const content = result.content
+    .map((c) => (c.type === "text" ? c.text : ""))
+    .join("\n");
   return new Text(content ? theme.fg("toolOutput", content) : "", 0, 0);
 }
 
@@ -165,8 +167,7 @@ export default function (pi: ExtensionAPI) {
         return errorResult(resolved.error);
       }
 
-      const modelRuntime = (ctx.modelRegistry as any).runtime as ModelRuntime;
-      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal, modelRuntime);
+      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal, ctx.modelRegistry);
 
       const formatted = formatRunResults(results);
       return {

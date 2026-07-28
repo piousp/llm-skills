@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.3 — 2026-07-28
+
+- **`modelRuntime` → `modelRegistry` migration.** The extension now passes `ctx.modelRegistry`
+  straight through to `runAgentViaSdk` instead of reaching into `(ctx.modelRegistry as any).runtime`.
+  Model resolution uses `modelRegistry.find(provider, modelId)` in place of `modelRuntime.getModel`.
+- **Typed SDK option surfaces.** `RunAgentViaSdkOptions` now derives its `modelRegistry`,
+  `resourceLoader`, `sessionManager`, and `getModel` return type from the SDK's
+  `CreateAgentSessionOptions`/`CreateAgentSessionResult`, replacing the previous `unknown` and
+  hand-rolled inline session-shape types. `clampThinkingLevel` returns a typed
+  `ThinkingLevel | undefined` instead of `string | undefined`.
+- **Live e2e smoke test.** `test/e2e/subagent.e2e.test.ts` spawns real `pi` with the extension
+  loaded from this repo and drives the `subagent` tool end-to-end against a real model. Opt-in
+  only: `PI_LIVE_E2E=1 npm run test:e2e` (skipped otherwise; not part of `npm test`).
+- **New scripts.** `test:types` (`tsc --noEmit`) and `test:e2e`.
+- **Dependency changes.** Restored `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
+  and `typebox` as `peerDependencies`, with matching `devDependencies` pinned for local
+  development/type-checking.
+- **tsconfig.** `noEmit: true`; `include` now covers `extensions/**/*` and `test/**/*` in addition
+  to `src/**/*`; added `allowImportingTsExtensions`; dropped `rootDir`.
+
 ## 0.3.2 — 2025-07-27
 
 - **New `inheritExtensions` field.** `AgentConfig` now supports `inheritExtensions` (boolean, default `true`). When `false`, the agent starts without loading pi extensions. The extension previously hardcoded `noExtensions: true`; it now respects the agent's field.
