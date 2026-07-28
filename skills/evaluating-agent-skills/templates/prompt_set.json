@@ -1,0 +1,20 @@
+[
+  {
+    "id": "example_should_trigger",
+    "prompt": "Replace this with a prompt that should exercise the target skill's main path.",
+    "should_trigger": true,
+    "expected_checks": ["example_check_id"]
+  },
+  {
+    "id": "example_negative_control",
+    "prompt": "Replace this with an unrelated prompt the skill must NOT fire on. Omit this case entirely for a preference skill invoked only by explicit name (see SKILL.md step 1).",
+    "should_trigger": false,
+    "expected_checks": []
+  },
+  {
+    "id": "example_edge_case",
+    "prompt": "Replace this with a prompt exercising an edge case the skill explicitly calls out (a degraded environment, a missing dependency, a deprecated API).",
+    "should_trigger": true,
+    "expected_checks": ["example_check_id"]
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "positive_build_evals_for_target",
+    "prompt": "What eval layers and success criteria would you use for the skill at {FIXTURE_SKILL_DIR}? Just outline the plan in your response, don't write any files yet.",
+    "should_trigger": true,
+    "expected_checks": ["reads_evaluating_agent_skills_skill_md"]
+  },
+  {
+    "id": "negative_write_a_skill",
+    "prompt": "Write a new SKILL.md at {FIXTURE_WRITE_TARGET}/SKILL.md for a skill that helps format currency values in Python.",
+    "should_trigger": false,
+    "expected_checks": ["does_not_read_evaluating_agent_skills_skill_md"]
+  },
+  {
+    "id": "negative_general_product_eval",
+    "prompt": "I want to evaluate my app's LLM-based recommendation feature for relevance and latency \u2014 where do I start?",
+    "should_trigger": false,
+    "expected_checks": ["does_not_read_evaluating_agent_skills_skill_md"]
+  }
+]
