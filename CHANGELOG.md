@@ -29,6 +29,13 @@ All notable changes to this repository are documented here.
   subagent, ported from `pi-subagents`' `oracle`.
 
 ### Changed
+- `pi-simple-agents/` — version bumped to 0.3.0. Migrated from child-process-based subagent
+  spawning to SDK-based execution (`runAgentViaSdk`). Added caching with TTL for agent discovery
+  and overrides (`discoverAgents`, `loadOverrides`). New agent fields: `thinking`, `inheritSkills`,
+  `defaultContext`, `skills`. Support for `subagents` config key as alias for `pi-simple-agents`.
+  Concurrency limit (4) via `mapWithConcurrencyLimit`. Removed `src/parse-output.ts` (no longer
+  needed with SDK runner). Dropped pi extension manifest and peerDependencies; now a standalone
+  library with `glob` and `zod` as dependencies.
 - `skills/iterative-design/SKILL.md` — Phases 1 and 5 moved out into `stages/goal-discovery.md`
   and `stages/qa.md` for consistency with Phases 2–4; phase sequencing/gate logic now delegates
   to `scripts/state.py` instead of being re-derived from context each turn; documents the

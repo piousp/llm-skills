@@ -13,13 +13,34 @@ export interface AgentConfig {
   source: "user";
   filePath: string;
   systemPrompt: string;
+  thinking?: string;
+  inheritSkills?: boolean;
+  defaultContext?: "forked" | "fresh";
+  skills?: string[];
 }
 
 export interface AgentOverrides {
   [agentName: string]: Partial<AgentConfig>;
 }
 
-export function discoverAgents(agentsDir: string): AgentConfig[] {
+export interface CacheEntry<T> {
+  timestamp: number;
+  data: T;
+}
+
+const CACHE_TTL_MS = 5_000;
+
+export function discoverAgents(
+  agentsDir: string,
+  cache?: Map<string, CacheEntry<AgentConfig[]>>,
+): AgentConfig[] {
+  if (cache) {
+    const cached = cache.get(agentsDir);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.data;
+    }
+  }
+
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(agentsDir, { withFileTypes: true });
@@ -74,6 +95,10 @@ export function discoverAgents(agentsDir: string): AgentConfig[] {
     });
   }
 
+  if (cache) {
+    cache.set(agentsDir, { timestamp: Date.now(), data: agents });
+  }
+
   return agents;
 }
 
@@ -87,7 +112,9 @@ function readOverridesFile(settingsPath: string): AgentOverrides {
 
   try {
     const parsed = JSON.parse(raw);
-    return parsed?.["pi-simple-agents"]?.agentOverrides ?? {};
+    return parsed?.["pi-simple-agents"]?.agentOverrides
+      ?? parsed?.["subagents"]?.agentOverrides
+      ?? {};
   } catch {
     console.warn(`pi-simple-agents: failed to parse settings file ${settingsPath}`);
     return {};
@@ -105,12 +132,32 @@ function mergeOverrides(base: AgentOverrides, top: AgentOverrides): AgentOverrid
 export function loadOverrides(
   userSettingsPath: string,
   projectSettingsPath?: string,
+  cache?: Map<string, CacheEntry<AgentOverrides>>,
 ): AgentOverrides {
+  const cacheKey = `${userSettingsPath}::${projectSettingsPath ?? ""}`;
+  if (cache) {
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+      return cached.data;
+    }
+  }
+
   const userOverrides = readOverridesFile(userSettingsPath);
-  if (!projectSettingsPath) return userOverrides;
+  if (!projectSettingsPath) {
+    if (cache) {
+      cache.set(cacheKey, { timestamp: Date.now(), data: userOverrides });
+    }
+    return userOverrides;
+  }
 
   const projectOverrides = readOverridesFile(projectSettingsPath);
-  return mergeOverrides(userOverrides, projectOverrides);
+  const merged = mergeOverrides(userOverrides, projectOverrides);
+
+  if (cache) {
+    cache.set(cacheKey, { timestamp: Date.now(), data: merged });
+  }
+
+  return merged;
 }
 
 export function applyOverrides(

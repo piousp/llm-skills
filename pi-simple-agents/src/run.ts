@@ -1,64 +1,4 @@
-import { spawn as nodeSpawn } from "node:child_process";
-import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentConfig } from "./agents.ts";
-import { createIncrementalParser, parseAgentOutput, parseAgentOutputIncremental } from "./parse-output.ts";
-
-// Exported for the seam that verifies --append-system-prompt is wired through
-// without spawning a real child process or a fake-child-process harness.
-export function buildPiInvocation(
-  agent: AgentConfig,
-  task: string,
-  runId: string,
-): { command: string; args: string[]; promptPath?: string } {
-  const args = ["--mode", "json", "-p", "--no-session"];
-
-  let promptPath: string | undefined;
-  if (agent.systemPrompt?.trim()) {
-    promptPath = path.join(os.tmpdir(), `pi-simple-agents-prompt-${runId}.md`);
-    fs.writeFileSync(promptPath, agent.systemPrompt, { mode: 0o600 });
-    const flag = agent.systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
-    args.push(flag, promptPath);
-  }
-
-  if (agent.tools?.length) args.push("--tools", agent.tools.join(","));
-  if (agent.inheritProjectContext === false) args.push("--no-context-files");
-  if (agent.model) args.push("--model", agent.model);
-
-  const taskWithReads = agent.defaultReads?.length
-    ? `Read these files first: ${agent.defaultReads.join(", ")}\n\n${task}`
-    : task;
-  args.push(`Task: ${taskWithReads}`);
-  return { command: "pi", args, promptPath };
-}
-
-function cleanupPromptFile(promptPath: string | undefined): void {
-  if (!promptPath) return;
-  try {
-    fs.unlinkSync(promptPath);
-  } catch {
-    // Best-effort cleanup: the file may not have been written, or may
-    // already be gone. Never let cleanup mask the original result.
-  }
-}
-
-// Pure priority-ordered decision: aborted > stderr text > exit code > signal.
-// Extracted from the close handler so each branch is independently testable
-// without driving a fake child process through every case.
-export function failureMessage(
-  code: number | null,
-  killSignal: NodeJS.Signals | null,
-  stderrText: string,
-  aborted: boolean,
-): string {
-  if (aborted) return "run was aborted";
-  if (stderrText) return stderrText;
-  if (code !== null) return `process exited with code ${code}`;
-  if (killSignal) return `killed by signal ${killSignal}`;
-  return "process was killed (unknown signal)";
-}
 
 interface AgentRunResultBase {
   agent: string;
@@ -69,32 +9,6 @@ interface AgentRunResultBase {
 export type AgentRunResult =
   | (AgentRunResultBase & { status: "success"; finalText?: string })
   | (AgentRunResultBase & { status: "error"; error: string });
-
-// Minimal structural surface runAgent actually drives on the child process:
-// stdout/stderr "data", "error"/"close" on the process itself, and kill().
-// Narrower than Node's full ChildProcess so test fakes don't need to satisfy
-// the entire real spawn() surface.
-interface ChildLike {
-  stdout?: { on(event: "data", listener: (chunk: Buffer) => void): void } | null;
-  stderr?: { on(event: "data", listener: (chunk: Buffer) => void): void } | null;
-  on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
-  on(event: "error", listener: (err: Error) => void): void;
-  kill(signal?: NodeJS.Signals | number): boolean;
-}
-
-export type SpawnLike = (
-  command: string,
-  args: string[],
-  options: { cwd: string; stdio: Array<"ignore" | "pipe"> },
-) => ChildLike;
-
-export interface RunAgentOptions {
-  cwd: string;
-  signal?: AbortSignal;
-  onProgress?: (text: string) => void;
-  spawnFn?: SpawnLike;
-  killGraceMs?: number;
-}
 
 type SettleFn = (result: AgentRunResult) => void;
 
@@ -114,143 +28,143 @@ function errorResult(ctx: AgentRunContext, error: string): AgentRunResult {
   };
 }
 
-// Wires stdout (incremental progress parsing) and stderr (buffering for
-// failureMessage) data handlers onto the child. Uses an incremental parser
-// to avoid O(n²) re-parsing of the accumulated buffer on every chunk.
-// The incremental parser only advances past complete \n-delimited lines,
-// retaining partial trailing text for the next chunk.
-function wireOutputHandlers(
-  child: ChildLike,
-  onProgress: ((text: string) => void) | undefined,
-): { getOutput: () => string; getStderr: () => string } {
-  let output = "";
-  let stderrOutput = "";
-  let lastEmittedProgress: string | undefined;
-  const parser = createIncrementalParser();
+const VALID_THINKING_LEVELS = [
+  "off", "minimal", "low", "medium", "high", "xhigh", "max",
+] as const;
 
-  child.stdout?.on("data", (chunk: Buffer) => {
-    output += chunk.toString("utf8");
+export function clampThinkingLevel(level: string): string | undefined {
+  if ((VALID_THINKING_LEVELS as readonly string[]).includes(level)) return level;
+  console.warn(`pi-simple-agents: invalid thinking level "${level}", falling back to default`);
+  return undefined;
+}
 
-    // Only parse progress when someone is listening — avoids wasting CPU
-    // on JSON.parse of every tool_execution_end line (including large file
-    // contents) when the TUI doesn't need incremental updates.
-    if (onProgress) {
-      const result = parseAgentOutputIncremental(output, parser);
-      if (result?.lastProgress !== undefined && result.lastProgress !== lastEmittedProgress) {
-        lastEmittedProgress = result.lastProgress;
-        onProgress(result.lastProgress);
-      }
+export function mapWithConcurrencyLimit<TIn, TOut>(
+  items: TIn[],
+  concurrency: number,
+  fn: (item: TIn, index: number) => Promise<TOut>,
+): Promise<TOut[]> {
+  if (items.length === 0) return Promise.resolve([]);
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results: TOut[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (true) {
+      const current = nextIndex++;
+      if (current >= items.length) return;
+      results[current] = await fn(items[current], current);
     }
   });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrOutput += chunk.toString("utf8");
-  });
 
-  return { getOutput: () => output, getStderr: () => stderrOutput };
+  return Promise.all(workers).then(() => results);
 }
 
-// Wires the child's "error" event (spawn-time or runtime process errors) to
-// the shared settle path.
-function wireErrorHandler(child: ChildLike, ctx: AgentRunContext, settleOnce: SettleFn): void {
-  child.on("error", (err: Error) => {
-    settleOnce(errorResult(ctx, err.message));
-  });
+export interface RunAgentViaSdkOptions {
+  modelRuntime: unknown;
+  createSession: (opts: {
+    modelRuntime: unknown;
+    model?: unknown;
+    thinkingLevel?: string;
+    tools?: string[];
+    resourceLoader?: unknown;
+    sessionManager?: unknown;
+  }) => Promise<{ session: {
+    prompt(text: string): Promise<void>;
+    subscribe(listener: (event: any) => void): () => void;
+    getLastAssistantText(): string;
+    dispose(): void;
+    abort(): void;
+  } }>;
+  resourceLoader: unknown;
+  sessionManager: unknown;
+  signal?: AbortSignal;
+  onProgress?: (text: string) => void;
+  getModel?: (provider: string, modelId: string) => unknown;
 }
 
-// Wires the child's "close" event: success (exit code 0) parses the final
-// answer out of the accumulated stdout; any other outcome is resolved via
-// failureMessage's aborted > stderr > code > signal priority.
-function wireCloseHandler(
-  child: ChildLike,
-  ctx: AgentRunContext,
-  settleOnce: SettleFn,
-  getOutput: () => string,
-  getStderr: () => string,
-  isAborted: () => boolean,
-): void {
-  child.on("close", (code: number | null, killSignal: NodeJS.Signals | null) => {
-    if (code === 0) {
-      const { finalText } = parseAgentOutput(getOutput());
-      settleOnce({
-        agent: ctx.agent.name,
-        task: ctx.task,
-        status: "success",
-        finalText,
-        durationMs: Date.now() - ctx.startedAt,
-      });
-      return;
-    }
-
-    const stderrText = getStderr().trim();
-    const error = failureMessage(code, killSignal, stderrText, isAborted());
-    settleOnce(errorResult(ctx, error));
-  });
-}
-
-export function runAgent(
+export function runAgentViaSdk(
   agent: AgentConfig,
   task: string,
-  options: RunAgentOptions,
+  options: RunAgentViaSdkOptions,
 ): Promise<AgentRunResult> {
-  const { cwd, spawnFn = nodeSpawn, onProgress, signal, killGraceMs = 3000 } = options;
   const startedAt = Date.now();
   const ctx: AgentRunContext = { agent, task, startedAt };
 
   return new Promise((resolve) => {
     let settled = false;
-    let promptPath: string | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
-    let child: ChildLike;
+    let session: any = null;
 
-    const clearKillTimer = () => {
-      if (killTimer !== undefined) {
-        clearTimeout(killTimer);
-        killTimer = undefined;
-      }
-    };
-
-    const onAbort = () => {
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
-      }, killGraceMs);
-      killTimer.unref?.();
-    };
-
-    // Single settle path shared by every resolve site (pre-aborted-at-entry,
-    // spawn-throw, the child's "error" event, and "close") so none of them can
-    // skip the kill-timer/abort-listener teardown or the prompt file cleanup.
     const settleOnce: SettleFn = (result) => {
       if (settled) return;
       settled = true;
-      clearKillTimer();
-      signal?.removeEventListener("abort", onAbort);
-      cleanupPromptFile(promptPath);
       resolve(result);
     };
 
-    if (signal?.aborted) {
-      settleOnce(errorResult(ctx, "run was aborted"));
-      return;
-    }
+    (async () => {
+      try {
+        let model: unknown = undefined;
+        if (agent.model && options.getModel) {
+          const parts = agent.model.split("/");
+          if (parts.length >= 2) {
+            model = options.getModel(parts[0], parts.slice(1).join("/"));
+          }
+        }
 
-    const invocation = buildPiInvocation(agent, task, crypto.randomUUID());
-    promptPath = invocation.promptPath;
+        const thinkingLevel = agent.thinking
+          ? clampThinkingLevel(agent.thinking)
+          : undefined;
 
-    try {
-      child = spawnFn(invocation.command, invocation.args, {
-        cwd,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (err) {
-      settleOnce(errorResult(ctx, err instanceof Error ? err.message : String(err)));
-      return;
-    }
+        const { session: agentSession } = await options.createSession({
+          modelRuntime: options.modelRuntime,
+          model,
+          thinkingLevel,
+          tools: agent.tools,
+          resourceLoader: options.resourceLoader,
+          sessionManager: options.sessionManager,
+        });
+        session = agentSession;
 
-    signal?.addEventListener("abort", onAbort);
+        if (options.signal?.aborted) {
+          settleOnce(errorResult(ctx, "run was aborted"));
+          return;
+        }
 
-    const { getOutput, getStderr } = wireOutputHandlers(child, onProgress);
-    wireErrorHandler(child, ctx, settleOnce);
-    wireCloseHandler(child, ctx, settleOnce, getOutput, getStderr, () => signal?.aborted ?? false);
+        const abortHandler = () => { agentSession.abort(); };
+        options.signal?.addEventListener("abort", abortHandler, { once: true });
+
+        if (options.onProgress) {
+          agentSession.subscribe((event: any) => {
+            if (
+              event.type === "message_update" &&
+              event.assistantMessageEvent?.type === "text_delta"
+            ) {
+              options.onProgress!(event.assistantMessageEvent.delta);
+            }
+          });
+        }
+
+        await agentSession.prompt(task);
+
+        options.signal?.removeEventListener("abort", abortHandler);
+        const finalText = agentSession.getLastAssistantText() ?? undefined;
+
+        settleOnce({
+          agent: ctx.agent.name,
+          task: ctx.task,
+          status: "success" as const,
+          finalText,
+          durationMs: Date.now() - ctx.startedAt,
+        });
+      } catch (err) {
+        settleOnce(errorResult(
+          ctx,
+          err instanceof Error ? err.message : String(err),
+        ));
+      } finally {
+        if (session) {
+          try { session.dispose(); } catch { /* ignore */ }
+        }
+      }
+    })();
   });
 }

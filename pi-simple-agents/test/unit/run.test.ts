@@ -1,25 +1,44 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import { EventEmitter } from "node:events";
-import { buildPiInvocation, runAgent, failureMessage } from "../../src/run.ts";
-import type { AgentConfig } from "../../src/agents.ts";
-import type { SpawnLike } from "../../src/run.ts";
+import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit } from "../../src/run.ts";
+import { applyOverrides, type AgentConfig } from "../../src/agents.ts";
 
-// Minimal fake ChildProcess: an EventEmitter with EventEmitter stdout/stderr,
-// enough to drive "data" on stdout and "close" on the process itself.
-// Cast via `as unknown as SpawnLike` when injected — its kill()/on() shapes
-// are looser than SpawnLike's, and node:child_process types are not checked
-// at test-run time anyway (--experimental-strip-types only strips types).
-class FakeChildProcess extends EventEmitter {
-  stdout = new EventEmitter();
-  stderr = new EventEmitter();
-  pid = 4242;
-  killCalls: string[] = [];
-  unref(): void {}
-  kill(signal: string): void {
-    this.killCalls.push(signal);
+class FakeAgentSession {
+  private _lastAssistantText: string;
+  private _listeners: Array<(event: any) => void> = [];
+  shouldThrow = false;
+  _dispose?: () => void;
+
+  constructor(text: string) {
+    this._lastAssistantText = text;
   }
+
+  subscribe(listener: (event: any) => void): () => void {
+    this._listeners.push(listener);
+    return () => {};
+  }
+
+  async prompt(_text: string): Promise<void> {
+    if (this.shouldThrow) throw new Error("prompt failed");
+    for (const char of this._lastAssistantText) {
+      this._listeners.forEach((l) =>
+        l({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", delta: char },
+        }),
+      );
+    }
+  }
+
+  getLastAssistantText(): string {
+    return this._lastAssistantText;
+  }
+
+  dispose(): void {
+    this._dispose?.();
+  }
+
+  abort(): void {}
 }
 
 function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -35,320 +54,210 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
-test("failureMessage: aborted takes priority over stderr, exit code, and signal", () => {
-  const message = failureMessage(1, "SIGTERM", "boom", true);
-
-  assert.equal(message, "run was aborted");
+test("clampThinkingLevel: valid level passes through", () => {
+  assert.equal(clampThinkingLevel("high"), "high");
+  assert.equal(clampThinkingLevel("off"), "off");
+  assert.equal(clampThinkingLevel("max"), "max");
 });
 
-test("failureMessage: non-empty stderr wins over exit code and signal when not aborted", () => {
-  const message = failureMessage(2, "SIGTERM", "boom", false);
-
-  assert.equal(message, "boom");
+test("clampThinkingLevel: invalid level returns undefined with warning", () => {
+  const result = clampThinkingLevel("adaptative");
+  assert.equal(result, undefined);
 });
 
-test("failureMessage: a non-null exit code names the code when stderr is empty and not aborted", () => {
-  const message = failureMessage(2, null, "", false);
-
-  assert.equal(message, "process exited with code 2");
+test("mapWithConcurrencyLimit: empty input returns empty array", async () => {
+  const result = await mapWithConcurrencyLimit([], 4, async () => "x");
+  assert.deepEqual(result, []);
 });
 
-test("failureMessage: a null code with a signal names the signal", () => {
-  const message = failureMessage(null, "SIGKILL", "", false);
-
-  assert.equal(message, "killed by signal SIGKILL");
-});
-
-test("failureMessage: a null code with no signal falls back to the unknown-signal message", () => {
-  const message = failureMessage(null, null, "", false);
-
-  assert.equal(message, "process was killed (unknown signal)");
-});
-
-test("buildPiInvocation: non-empty systemPrompt writes a temp file and passes --append-system-prompt pointing at it", () => {
-  const agent = makeAgent({ systemPrompt: "You are a helpful scout." });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  const flagIndex = args.indexOf("--append-system-prompt");
-  assert.notEqual(flagIndex, -1);
-  const promptPath = args[flagIndex + 1]!;
-  const content = fs.readFileSync(promptPath, "utf8");
-  assert.equal(content, agent.systemPrompt);
-});
-
-test("buildPiInvocation: agent.tools is passed through as --tools", () => {
-  const agent = makeAgent({ tools: ["read", "grep"] });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  const flagIndex = args.indexOf("--tools");
-  assert.notEqual(flagIndex, -1);
-  assert.equal(args[flagIndex + 1], "read,grep");
-});
-
-test("buildPiInvocation: empty/absent agent.tools omits --tools entirely", () => {
-  const agent = makeAgent({ tools: [] });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  assert.equal(args.includes("--tools"), false);
-});
-
-test("buildPiInvocation: systemPromptMode 'replace' uses --system-prompt instead of --append-system-prompt", () => {
-  const agent = makeAgent({
-    systemPromptMode: "replace",
-    systemPrompt: "You are a helpful scout.",
-  });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  assert.equal(args.includes("--append-system-prompt"), false);
-  const flagIndex = args.indexOf("--system-prompt");
-  assert.notEqual(flagIndex, -1);
-  const promptPath = args[flagIndex + 1]!;
-  assert.equal(fs.readFileSync(promptPath, "utf8"), agent.systemPrompt);
-});
-
-test("buildPiInvocation: inheritProjectContext false passes --no-context-files", () => {
-  const agent = makeAgent({ inheritProjectContext: false });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  assert.ok(args.includes("--no-context-files"));
-});
-
-test("buildPiInvocation: inheritProjectContext true (default) omits --no-context-files", () => {
-  const agent = makeAgent({ inheritProjectContext: true });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  assert.equal(args.includes("--no-context-files"), false);
-});
-
-test("buildPiInvocation: non-empty defaultReads prefixes the task text with a read-these-first line", () => {
-  const agent = makeAgent({ defaultReads: ["src/a.ts", "src/b.ts"] });
-
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  const taskArg = args[args.length - 1]!;
-  assert.equal(
-    taskArg,
-    "Task: Read these files first: src/a.ts, src/b.ts\n\nfind things",
+test("mapWithConcurrencyLimit: processes all items in order", async () => {
+  const result = await mapWithConcurrencyLimit(
+    [1, 2, 3, 4, 5],
+    2,
+    async (n) => n * 2,
   );
+  assert.deepEqual(result, [2, 4, 6, 8, 10]);
 });
 
-test("buildPiInvocation: empty defaultReads leaves task text unprefixed", () => {
-  const agent = makeAgent({ defaultReads: [] });
+test("mapWithConcurrencyLimit: respects concurrency limit", async () => {
+  let concurrent = 0;
+  let maxConcurrent = 0;
 
-  const { args } = buildPiInvocation(agent, "find things", "test-run-id");
-
-  const taskArg = args[args.length - 1]!;
-  assert.equal(taskArg, "Task: find things");
-});
-
-test("runAgent resolves success with finalText once the child emits a message_end chunk then closes with code 0", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
-
-  const resultPromise = runAgent(makeAgent(), "find things", { cwd: "/cwd", spawnFn });
-
-  fakeChild.stdout.emit(
-    "data",
-    Buffer.from(
-      `${JSON.stringify({
-        type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text: "found the thing" }] },
-      })}\n`,
-    ),
+  const result = await mapWithConcurrencyLimit(
+    [1, 2, 3, 4, 5, 6],
+    3,
+    async (n) => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((r) => setTimeout(r, 5));
+      concurrent--;
+      return n;
+    },
   );
-  fakeChild.emit("close", 0);
 
-  const result = await resultPromise;
+  assert.equal(maxConcurrent, 3);
+  assert.deepEqual(result, [1, 2, 3, 4, 5, 6]);
+});
+
+test("runAgentViaSdk: resolves success with finalText from session", async () => {
+  const fakeSession = new FakeAgentSession("found it");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+  );
 
   assert.equal(result.status, "success");
-  assert.equal(result.finalText, "found the thing");
-  assert.equal(typeof result.durationMs, "number");
-  assert.equal("error" in result, false);
+  assert.equal(result.finalText, "found it");
 });
 
-test("runAgent resolves error with the accumulated stderr text once the child emits a stderr chunk then closes with a non-zero code", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
+test("runAgentViaSdk: resolves error when session.prompt throws", async () => {
+  const fakeSession = new FakeAgentSession("ignored");
+  fakeSession.shouldThrow = true;
+  const createSession = async () => ({ session: fakeSession as any });
 
-  const resultPromise = runAgent(makeAgent(), "find things", { cwd: "/cwd", spawnFn });
-
-  fakeChild.stderr.emit("data", Buffer.from("boom"));
-  fakeChild.emit("close", 2);
-
-  const result = await resultPromise;
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+  );
 
   assert.equal(result.status, "error");
-  assert.equal(result.error, "boom");
+  assert.ok((result as any).error);
 });
 
-test("runAgent resolves error naming the signal/unknown-exit case (not literally 'code null') when the child closes with a null code and no stderr", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
+test("runAgentViaSdk: dispose called in finally even on error", async () => {
+  let disposed = false;
+  const fakeSession = new FakeAgentSession("ignored");
+  fakeSession.shouldThrow = true;
+  fakeSession._dispose = () => { disposed = true; };
+  const createSession = async () => ({ session: fakeSession as any });
 
-  const resultPromise = runAgent(makeAgent(), "find things", { cwd: "/cwd", spawnFn });
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+  );
 
-  fakeChild.emit("close", null);
+  assert.equal(disposed, true);
+});
 
-  const result = await resultPromise;
+test("runAgentViaSdk: resolves abort-named error when signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRuntime: {}, createSession: async () => ({ session: new FakeAgentSession("x") as any }), resourceLoader: {}, sessionManager: {}, signal: controller.signal } as any,
+  );
 
   assert.equal(result.status, "error");
-  assert.equal(typeof result.error, "string");
-  assert.equal(/code null/.test(result.error ?? ""), false);
+  assert.match((result as any).error ?? "", /abort/i);
 });
 
-test("runAgent resolves exactly once from the error event when the child emits 'error' immediately followed by 'close', with the trailing close as a no-op", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
-
-  const resultPromise = runAgent(makeAgent(), "find things", { cwd: "/cwd", spawnFn });
-
-  fakeChild.emit("error", new Error("spawn ENOENT"));
-  fakeChild.emit("close", 1);
-
-  const result = await resultPromise;
-
-  assert.equal(result.status, "error");
-  assert.equal(result.error, "spawn ENOENT");
-});
-
-test("runAgent calls onProgress once per distinct progress text, deduping a repeated chunk", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
+test("runAgentViaSdk: calls onProgress with text deltas", async () => {
   const progressCalls: string[] = [];
+  const fakeSession = new FakeAgentSession("hello world");
+  const createSession = async () => ({ session: fakeSession as any });
 
-  const resultPromise = runAgent(makeAgent(), "find things", {
-    cwd: "/cwd",
-    spawnFn,
-    onProgress: (text) => progressCalls.push(text),
-  });
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, onProgress: (t) => progressCalls.push(t) } as any,
+  );
 
-  const toolExecutionEnd = (text: string) =>
-    Buffer.from(
-      `${JSON.stringify({
-        type: "tool_execution_end",
-        result: { content: [{ type: "text", text }] },
-      })}\n`,
-    );
-
-  fakeChild.stdout.emit("data", toolExecutionEnd("reading files"));
-  fakeChild.stdout.emit("data", toolExecutionEnd("reading files"));
-  fakeChild.stdout.emit("data", toolExecutionEnd("writing output"));
-  fakeChild.emit("close", 0);
-
-  await resultPromise;
-
-  assert.deepEqual(progressCalls, ["reading files", "writing output"]);
+  assert.ok(progressCalls.length > 0);
+  assert.equal(progressCalls.join(""), "hello world");
 });
 
-test("runAgent resolves { status: 'error', error: <thrown message> } (never rejects) when spawnFn throws synchronously, and deletes the temp prompt file buildPiInvocation wrote", async () => {
-  const agent = makeAgent({ systemPrompt: "You are a helpful scout." });
-  let capturedPromptPath: string | undefined;
-  const spawnFn = ((_command: string, args: string[]) => {
-    const flagIndex = args.indexOf("--append-system-prompt");
-    capturedPromptPath = args[flagIndex + 1];
-    throw new Error("spawn ENOENT");
-  }) as unknown as SpawnLike;
+test("runAgentViaSdk: resolves model from getModel when agent.model is set", async () => {
+  let capturedModel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = (provider: string, modelId: string) => `${provider}/${modelId}`;
 
-  const result = await runAgent(agent, "find things", { cwd: "/cwd", spawnFn });
+  await runAgentViaSdk(
+    makeAgent({ model: "openrouter/gpt-4" }),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, getModel } as any,
+  );
 
-  assert.equal(result.status, "error");
-  assert.equal(result.error, "spawn ENOENT");
-  assert.ok(capturedPromptPath, "expected buildPiInvocation to have written a temp prompt file");
-  assert.equal(fs.existsSync(capturedPromptPath!), false);
+  assert.equal(capturedModel, "openrouter/gpt-4");
 });
 
-test("runAgent kills the child with SIGTERM on abort, escalates to SIGKILL after killGraceMs if still open, and resolves an abort-named error once close fires", async () => {
-  const fakeChild = new FakeChildProcess();
-  const spawnFn = (() => fakeChild) as unknown as SpawnLike;
-  const controller = new AbortController();
+test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
+  let capturedThinkingLevel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedThinkingLevel = opts.thinkingLevel;
+    return { session: fakeSession as any };
+  };
 
-  const resultPromise = runAgent(makeAgent(), "find things", {
-    cwd: "/cwd",
-    spawnFn,
-    signal: controller.signal,
-    killGraceMs: 10,
-  });
+  await runAgentViaSdk(
+    makeAgent({ thinking: "high" } as any),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+  );
 
-  controller.abort();
-
-  assert.deepEqual(fakeChild.killCalls, ["SIGTERM"]);
-
-  // Real small delay past killGraceMs (10ms) so the escalation timer fires.
-  await new Promise((r) => setTimeout(r, 30));
-
-  assert.deepEqual(fakeChild.killCalls, ["SIGTERM", "SIGKILL"]);
-
-  fakeChild.emit("close", null, "SIGKILL");
-  const result = await resultPromise;
-
-  assert.equal(result.status, "error");
-  assert.match(result.error ?? "", /abort/i);
+  assert.equal(capturedThinkingLevel, "high");
 });
 
-test("runAgent deletes the temp prompt file once the child closes with code 0, when agent.systemPrompt is set", async () => {
-  const agent = makeAgent({ systemPrompt: "You are a helpful scout." });
-  const fakeChild = new FakeChildProcess();
-  let capturedPromptPath: string | undefined;
-  const spawnFn = ((_command: string, args: string[]) => {
-    const flagIndex = args.indexOf("--append-system-prompt");
-    capturedPromptPath = args[flagIndex + 1];
-    return fakeChild;
-  }) as unknown as SpawnLike;
+test("runAgentViaSdk: passes tools from agent.tools", async () => {
+  let capturedTools: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedTools = opts.tools;
+    return { session: fakeSession as any };
+  };
 
-  const resultPromise = runAgent(agent, "find things", { cwd: "/cwd", spawnFn });
+  await runAgentViaSdk(
+    makeAgent({ tools: ["read", "write"] }),
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {} } as any,
+  );
 
-  fakeChild.emit("close", 0);
-
-  const result = await resultPromise;
-
-  assert.equal(result.status, "success");
-  assert.ok(capturedPromptPath, "expected buildPiInvocation to have written a temp prompt file");
-  assert.equal(fs.existsSync(capturedPromptPath!), false);
+  assert.deepEqual(capturedTools, ["read", "write"]);
 });
 
-test("runAgent cleans up the temp prompt file on the child-'error' settle path when agent.systemPrompt is set", async () => {
-  const agent = makeAgent({ systemPrompt: "You are a helpful scout." });
-  const fakeChild = new FakeChildProcess();
-  let capturedPromptPath: string | undefined;
-  const spawnFn = ((_command: string, args: string[]) => {
-    const flagIndex = args.indexOf("--append-system-prompt");
-    capturedPromptPath = args[flagIndex + 1];
-    return fakeChild;
-  }) as unknown as SpawnLike;
+test("runAgentViaSdk: model override via applyOverrides flows through getModel", async () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "test",
+    tools: ["read"],
+    model: "default-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "body",
+  };
 
-  const resultPromise = runAgent(agent, "find things", { cwd: "/cwd", spawnFn });
+  const overrides = {
+    scout: { model: "openrouter/gpt-4" },
+  };
 
-  fakeChild.emit("error", new Error("spawn ENOENT"));
+  const [overridden] = applyOverrides([baseAgent], overrides);
 
-  const result = await resultPromise;
+  let capturedModel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = (provider: string, modelId: string) => `${provider}/${modelId}`;
 
-  assert.equal(result.status, "error");
-  assert.ok(capturedPromptPath, "expected buildPiInvocation to have written a temp prompt file");
-  assert.equal(fs.existsSync(capturedPromptPath!), false);
-});
+  await runAgentViaSdk(
+    overridden!,
+    "find things",
+    { modelRuntime: {}, createSession, resourceLoader: {}, sessionManager: {}, getModel } as any,
+  );
 
-test("runAgent resolves an abort-named error immediately without calling spawnFn when options.signal is already aborted", async () => {
-  let spawnCalls = 0;
-  const spawnFn = (() => {
-    spawnCalls += 1;
-    return new FakeChildProcess();
-  }) as unknown as SpawnLike;
-  const controller = new AbortController();
-  controller.abort();
-
-  const result = await runAgent(makeAgent(), "find things", {
-    cwd: "/cwd",
-    spawnFn,
-    signal: controller.signal,
-  });
-
-  assert.equal(spawnCalls, 0);
-  assert.equal(result.status, "error");
-  assert.match(result.error ?? "", /abort/i);
+  assert.equal(capturedModel, "openrouter/gpt-4");
 });
