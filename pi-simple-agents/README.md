@@ -8,7 +8,7 @@
 ## Installation
 
 ```bash
-npm install pi-simple-agents
+pi install npm:pi-simple-agents
 ```
 
 Once installed, pi automatically loads the extension and registers the `subagent` tool. No additional configuration is required.
