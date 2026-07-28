@@ -86,7 +86,7 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
   return new DefaultResourceLoader({
     cwd,
     agentDir: path.join(os.homedir(), ".pi", "agent"),
-    noExtensions: true,
+    noExtensions: agent.inheritExtensions === false,
     noSkills: agent.inheritSkills === false,
     noContextFiles: agent.inheritProjectContext === false,
     systemPromptOverride:
