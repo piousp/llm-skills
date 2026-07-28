@@ -1,0 +1,80 @@
+[
+  {
+    "id": "author_new_skill",
+    "prompt": "Help me write a new agent skill for calling our internal deploy API correctly — the base model keeps getting the auth header format wrong.",
+    "should_trigger": true,
+    "expected_checks": ["creates_skill_md", "frontmatter_valid", "description_has_what_and_when"]
+  },
+  {
+    "id": "review_vague_description",
+    "prompt": "Here's my SKILL.md frontmatter:\n---\nname: doc-helper\ndescription: Helps with documents\n---\nWill this trigger reliably?",
+    "should_trigger": true,
+    "expected_checks": ["flags_vague_description"]
+  },
+  {
+    "id": "refactor_oversized_skill",
+    "prompt": "My SKILL.md is 800 lines covering five unrelated topics crammed into one file. Help me restructure it.",
+    "should_trigger": true,
+    "expected_checks": ["recommends_reference_split"]
+  },
+  {
+    "id": "tighten_vague_description",
+    "prompt": "My skill's description is just 'API helper' and nobody's description-matching triggers it correctly. Fix it.",
+    "should_trigger": true,
+    "expected_checks": ["improves_vague_description"]
+  },
+  {
+    "id": "missing_negative_case",
+    "prompt": "I wrote a skill about filling PDF forms but never said what it should NOT be used for. Is that a problem?",
+    "should_trigger": true,
+    "expected_checks": ["flags_missing_negative_case"]
+  },
+  {
+    "id": "rigid_step_sequence",
+    "prompt": "My skill body says: 'Step 1: read the file. Step 2: parse JSON. Step 3: update the port. Step 4: write it back.' Is this the right style for a skill?",
+    "should_trigger": true,
+    "expected_checks": ["recommends_freedom_over_steps"]
+  },
+  {
+    "id": "name_only_invoked_skill",
+    "prompt": "This skill is only ever invoked by an explicit slash-command name, never auto-triggered from a description match. Do I still need to optimize the description wording and add negative-trigger cases?",
+    "should_trigger": true,
+    "expected_checks": ["correctly_relaxes_description_requirement"]
+  },
+  {
+    "id": "retire_capability_skill",
+    "prompt": "We have a skill for writing regex that was written a year ago, before the base model got much better at regex. How do I know if I should delete it?",
+    "should_trigger": true,
+    "expected_checks": ["mentions_retirement_process"]
+  },
+  {
+    "id": "defer_full_eval_suite",
+    "prompt": "How do I build a full eval suite with LLM-as-judge and live trajectory probes for the skill I just wrote?",
+    "should_trigger": true,
+    "expected_checks": ["defers_to_evaluating_agent_skills"]
+  },
+  {
+    "id": "negative_generic_code",
+    "prompt": "Write a Python function that reverses a singly linked list.",
+    "should_trigger": false,
+    "expected_checks": ["no_skill_authoring_artifact"]
+  },
+  {
+    "id": "negative_prose_writing",
+    "prompt": "Help me write a short story about a robot who learns to paint.",
+    "should_trigger": false,
+    "expected_checks": ["no_skill_authoring_artifact"]
+  },
+  {
+    "id": "negative_general_docs",
+    "prompt": "Write API documentation for our REST endpoints in a docs.md file.",
+    "should_trigger": false,
+    "expected_checks": ["no_skill_authoring_artifact"]
+  },
+  {
+    "id": "negative_adjacent_readme",
+    "prompt": "Write a README.md for my new npm package explaining installation and usage.",
+    "should_trigger": false,
+    "expected_checks": ["no_skill_authoring_artifact"]
+  }
+]

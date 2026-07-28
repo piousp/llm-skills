@@ -1,7 +1,7 @@
 # Refactor — Candidates, Apply, Simplify, One Combined Review
 
 Optional phase — enter only on an explicit "run" at the Phase 4 gate (`SKILL.md`), with the
-answer already recorded in `.design/decisions.md`. If the user chose "skip", none of this file
+answer already recorded in `$DESIGN_DIR/decisions.md`. If the user chose "skip", none of this file
 runs: no candidates, no simplification, no `code-review-checklist` — Phase 5 (if run) diffs
 directly from the `phase3-green` tag.
 
@@ -22,8 +22,8 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
    Self-contained prompt:
 
    > Base method: this code passes its frozen tests (Phase 3) and follows the Phase 2 design
-   > (`.design/plan.md` + `.design/technical.md`). Apply `refactor-identification` to the diff
-   > `<base>..<phase3-green hash>` (same `<base>` and hash recorded in `.design/decisions.md` at
+   > (`$DESIGN_DIR/plan.md` + `$DESIGN_DIR/technical.md`). Apply `refactor-identification` to the diff
+   > `<base>..<phase3-green hash>` (same `<base>` and hash recorded in `$DESIGN_DIR/decisions.md` at
    > the Phase 3 freeze): missing/misplaced abstractions, weak encapsulation, poor data types, flag/enum-
    > modeled variants that a sealed alternative fits better. File:line evidence required for
    > every candidate. Do not edit anything.
@@ -31,7 +31,7 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 2. **Decide.** Review the candidates with the user. Each needs file:line evidence and a case for why
    it isn't over-engineering (YAGNI/KISS gate) — reject speculative ones. Surface every load-bearing
    decision explicitly. Append every rejected candidate (and why — YAGNI/KISS, out of scope, too
-   risky) to `.design/decisions.md`: the record of what was deliberately not refactored is
+   risky) to `$DESIGN_DIR/decisions.md`: the record of what was deliberately not refactored is
    load-bearing for QA and for resuming the session.
 3. **Apply.** Delegate to the **implementer** (refactor mode) to apply the accepted candidates
    only, re-validating each against `pablo-code-philosophy` (data-structures-first, composition
@@ -58,9 +58,9 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 Refactored implementation: evidence-backed candidates applied, simplified, `pablo-code-philosophy`
 conformant, behavior unchanged. Frozen tests still green and `code-review-checklist` passes (or its
 violations are addressed, with a re-run confirming green per step 3 above) for the combined diff —
-a single gate before Phase 5. Accepted/rejected candidates are logged in `.design/decisions.md`.
+a single gate before Phase 5. Accepted/rejected candidates are logged in `$DESIGN_DIR/decisions.md`.
 
-Before moving to Phase 5, append a completion entry to `.design/decisions.md`: `## Phase 4 —
+Before moving to Phase 5, append a completion entry to `$DESIGN_DIR/decisions.md`: `## Phase 4 —
 complete (<date>)` with a one-line `Decision:` summarizing what was applied. This is not a
 routine per-seam confirmation (the kind `decisions.md` otherwise discourages) — it's the single
 signal `scripts/state.py` reads to know Phase 4 is done rather than still in progress; omitting

@@ -19,6 +19,7 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 | [`iterative-design`](skills/iterative-design/SKILL.md) | Coordinator method tying the above together: TODO list → goal discovery → planner (`plan.md`) → one vertical TDD loop → one combined refactor phase → `qa-adversary` gate. The lead agent only delegates, never implements. |
 | [`prompt-generator`](skills/prompt-generator/SKILL.md) | Sharpens a vague ask into a precise, portable prompt before any exploration or spec work begins. |
 | [`logical-fallacies-analysis`](skills/logical-fallacies-analysis/SKILL.md) | Detects logical fallacies in text (20-fallacy catalog, severity classification, soundness verdict). Bilingual: EN (`SKILL.md`) and ES (`SKILL.es.md`). |
+| [`writing-agent-skills`](skills/writing-agent-skills/SKILL.md) | Authoring, reviewing, or refactoring an agent Skill's `SKILL.md` and supporting files, adapted from Philipp Schmid's "8 Tips for Writing Agent Skills", with an `evals/` suite. |
 
 ## Agents
 

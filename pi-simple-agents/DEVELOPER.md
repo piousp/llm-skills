@@ -141,34 +141,29 @@ function runAgentViaSdk(
 ### RunAgentViaSdkOptions
 
 ```typescript
+type CreateSessionOpts = Pick<
+  CreateAgentSessionOptions,
+  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "resourceLoader" | "sessionManager"
+>;
+
 interface RunAgentViaSdkOptions {
-  modelRuntime: unknown;
-  createSession: (opts: {
-    modelRuntime: unknown;
-    model?: unknown;
-    thinkingLevel?: string;
-    tools?: string[];
-    resourceLoader?: unknown;
-    sessionManager?: unknown;
-  }) => Promise<{
-    session: {
-      prompt(text: string): Promise<void>;
-      subscribe(listener: (event: any) => void): () => void;
-      getLastAssistantText(): string;
-      dispose(): void;
-      abort(): void;
-    };
-  }>;
-  resourceLoader: unknown;
-  sessionManager: unknown;
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"];
+  createSession: (opts: CreateSessionOpts) => Promise<Pick<CreateAgentSessionResult, "session">>;
+  resourceLoader: CreateAgentSessionOptions["resourceLoader"];
+  sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
   onProgress?: (text: string) => void;
-  getModel?: (provider: string, modelId: string) => unknown;
+  getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
 }
 ```
 
+`CreateAgentSessionOptions`/`CreateAgentSessionResult` come from
+`@earendil-works/pi-coding-agent`, so `session` (`prompt`, `subscribe`, `getLastAssistantText`,
+`dispose`, `abort`) is typed against the real SDK shape rather than a hand-rolled inline type.
+
 - `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, and tools.
 - `getModel` — resolver for `provider/modelId` syntax. Called when `agent.model` contains a `/`.
+  In the extension, this is `(provider, modelId) => modelRegistry.find(provider, modelId)`.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onProgress` — receives text delta events from the session's subscription mechanism.
 
@@ -201,7 +196,9 @@ The concurrency value is clamped to `[1, items.length]`. Empty input returns an 
 Validates a thinking budget level against the allowed set.
 
 ```typescript
-function clampThinkingLevel(level: string): string | undefined;
+type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+function clampThinkingLevel(level: string): ThinkingLevel | undefined;
 ```
 
 Valid levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`. Returns `undefined` with a `console.warn` for invalid values.
@@ -316,16 +313,31 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 }
 ```
 
-6. Runs agents via `runAgentViaSdk` with concurrency cap of 4 via `mapWithConcurrencyLimit`.
+6. Resolves models via `ctx.modelRegistry.find(provider, modelId)` (passed through as `getModel`)
+   and runs agents via `runAgentViaSdk` with concurrency cap of 4 via `mapWithConcurrencyLimit`.
+   `ctx.modelRegistry` is forwarded to `runAgentViaSdk` unchanged as `modelRegistry`.
 7. Formats results via `formatRunResults`.
 
 ## Running tests
 
 ```bash
-npm test
+npm test          # unit tests (node:test)
+npm run test:types # tsc --noEmit type check
 ```
 
 Tests use Node's built-in test runner (`node:test`) with `node --experimental-strip-types`.
+
+### Live e2e smoke test
+
+`test/e2e/subagent.e2e.test.ts` spawns a real `pi` process with the extension loaded straight
+from this repo's `extensions/` directory and drives the actual `subagent` tool against a real
+model. It's slow, costs tokens, is non-deterministic, and depends on a machine-local
+`~/.pi/agent/agents` config (an agent named `pablo-planner` with a model override). It is **not**
+part of `npm test` and must be opted into explicitly:
+
+```bash
+PI_LIVE_E2E=1 npm run test:e2e
+```
 
 ## License
 

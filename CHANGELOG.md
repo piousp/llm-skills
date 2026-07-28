@@ -27,6 +27,11 @@ All notable changes to this repository are documented here.
 - `agents/pablo-implementer/AGENT.md` — code-writing subagent for `iterative-design` Phases 3–4.
 - `agents/pablo-oracle/AGENT.md` — high-context, forked-context decision-consistency oracle
   subagent, ported from `pi-subagents`' `oracle`.
+- `skills/writing-agent-skills/SKILL.md` — authoring/reviewing/refactoring guidance for agent
+  Skills, adapted from Philipp Schmid's "8 Tips for Writing Agent Skills"; includes an `evals/`
+  suite (`judge.py`, `prompt_set.json`, `run_layer2_probes.py`, `README.md`).
+- `skills/iterative-design/evals/` — eval suite for the coordinator skill: `judge.py`,
+  `run_layer2_probes.py`, `run_layer2b_pipeline.py`, `test_state.py`, `README.md`.
 
 ### Changed
 - `pi-simple-agents/` — version bumped to 0.3.0. Migrated from child-process-based subagent
@@ -53,6 +58,21 @@ All notable changes to this repository are documented here.
   `prompt-generator`, `refactor-identification`, `tdd` moved from repo root into `skills/`.
 - `agents/pablo-planner/AGENT.md`, `agents/pablo-implementer/AGENT.md` — added attribution notes
   crediting the `pi-subagents` package (`planner`/`worker`) they were adapted from.
+- `skills/iterative-design/` — durable design artifacts moved from repo-root `.design/` to a
+  per-launch temp dir (`$DESIGN_DIR`, under `${TMPDIR}/iterative-design/<basename(cwd)>/<PPID>`),
+  never committed to the repo. `scripts/state.py` gained `--design-dir` and a `sessions`
+  subcommand; Phase 0 now resolves `$DESIGN_DIR` and offers prior sessions to resume instead of
+  auto-resuming; `stages/*.md` updated accordingly.
+- `pi-simple-agents/` — version bumped to 0.3.3. Migrated `modelRuntime` → `modelRegistry`
+  throughout (`RunAgentViaSdkOptions`, the extension, and the `subagent` tool), using the SDK's
+  typed `CreateAgentSessionOptions`/`CreateAgentSessionResult` instead of `unknown`/hand-rolled
+  inline types; `clampThinkingLevel` now returns a typed `ThinkingLevel | undefined`. Restored
+  `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` as peerDependencies
+  (with matching devDependencies). Added `test:types` and `test:e2e` scripts, plus a live,
+  opt-in end-to-end smoke test (`PI_LIVE_E2E=1 npm run test:e2e`) that drives the real `subagent`
+  tool through `pi`.
+- `.gitignore` — removed `.design/` and `.pi-subagents/` (no longer created inside the repo now
+  that `iterative-design` writes to `$DESIGN_DIR`); added `__pycache__/`.
 
 ## [0.1.0] - Initial skills
 

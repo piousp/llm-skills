@@ -2,12 +2,23 @@
 """
 Deterministic control-flow reader for the iterative-design skill.
 
-Read-only over .design/ and git HEAD. Derives the current phase from the
-existing artifacts on every invocation — never maintains its own state file,
-so it cannot desync from .design/decisions.md (the coordinator's
-single-writer log), and resuming is just re-running this script: a brand
-new coordinator session with zero prior context gets the correct phase back
-from the artifacts alone.
+Read-only over the design dir and git HEAD. Derives the current phase from
+the existing artifacts on every invocation — never maintains its own state
+file, so it cannot desync from <design_dir>/decisions.md (the coordinator's
+single-writer log), and resuming within one session is just re-running this
+script.
+
+Design artifacts live in a per-launch temp directory, not in the repo:
+${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/<PPID>/ — no nested
+`.design/` subdir, the PID dir itself holds goal.md/plan.md/technical.md/
+spec.md/decisions.md directly. `--dir` (repo root) is used only for git HEAD
+reads and stays independent of `--design-dir`. Because the temp dir is keyed
+by the PID of the parent `pi` process, a *new launch* cannot rediscover a
+prior session's temp dir on its own — that's what the `sessions` subcommand
+is for: it lists candidate `<PID>/` dirs under the same repo-basename key
+(mtime + derived phase each), purely so the coordinator can offer the user
+a resume-or-fresh choice. This script never prompts, never decides, never
+writes — listing is as far as its authority goes.
 
 Granularity: phase-level only. It resolves *which phase* the pipeline is
 in, not progress *within* a phase (e.g. which seam of Phase 3, or which
@@ -19,17 +30,22 @@ re-derives that finer progress from the frozen tests and the code itself.
 This script is advisory: it tells the coordinator what phase/action comes
 next given the artifacts on disk. It never prompts the user, never writes
 anything, and never invokes subagents itself — the coordinator remains the
-sole executor and the sole writer of .design/.
+sole executor and the sole writer of the design dir.
 
 Usage:
-    python3 state.py next          # JSON: current state + next action
-    python3 state.py next --dir .  # explicit repo root (default: cwd)
+    python3 state.py next --dir <repo-root> --design-dir <tmp-dir>
+    python3 state.py sessions --dir <repo-root>
+        # lists candidate <PID>/ dirs under the repo-basename key, for the
+        # coordinator's Phase 0 resume-or-fresh prompt (this script never
+        # prompts itself)
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -90,6 +106,50 @@ def gate_answer(decisions_text: str, gate_label: str) -> str | None:
 SKILL_DIR = Path(__file__).resolve().parent.parent
 
 
+def sessions_base_dir() -> Path:
+    """${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/ — the parent of all
+    per-launch <PID>/ design dirs for this repo (keyed by basename of the
+    current working directory ONLY — never by --dir/repo_root, so this must
+    match exactly how the coordinator derives $DESIGN_DIR in SKILL.md Phase
+    0. Two repos sharing a basename collide on purpose, an accepted
+    tradeoff favoring a readable path over uniqueness)."""
+    tmp_root = Path(os.environ.get("TMPDIR", "/tmp"))
+    return tmp_root / "iterative-design" / Path.cwd().name
+
+
+def list_sessions(repo_root: Path) -> list[dict]:
+    """List candidate <PID>/ design dirs under this repo's sessions base,
+    newest-modified first. Each entry carries enough for the coordinator to
+    present a resume-or-fresh choice to the user — this function only reads
+    and reports, it never prompts or writes. repo_root is passed through to
+    derive_state only for git HEAD reads; it plays no part in the base-dir
+    key (see sessions_base_dir)."""
+    base = sessions_base_dir()
+    if not base.is_dir():
+        return []
+
+    candidates = []
+    for entry in base.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        state = derive_state(repo_root, entry)
+        candidates.append({
+            "pid": entry.name,
+            "design_dir": str(entry),
+            "mtime": mtime,
+            "mtime_iso": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
+            "phase": state["phase"],
+            "phase_name": state["phase_name"],
+        })
+
+    candidates.sort(key=lambda c: c["mtime"], reverse=True)
+    return candidates
+
+
 def stage_path(name: str) -> str:
     """Absolute path to a stages/*.md file, resolved against the skill's own
     directory (not the caller's cwd/repo_root) so it works regardless of
@@ -97,13 +157,16 @@ def stage_path(name: str) -> str:
     return str(SKILL_DIR / "stages" / name)
 
 
-def derive_state(repo_root: Path) -> dict:
-    design = repo_root / ".design"
-    goal = design / "goal.md"
-    plan = design / "plan.md"
-    technical = design / "technical.md"
-    spec = design / "spec.md"
-    decisions = design / "decisions.md"
+def derive_state(repo_root: Path, design_dir: Path) -> dict:
+    """repo_root is used only for git HEAD reads (checkpoints always read the
+    real repo, never the temp design dir). design_dir is the per-launch
+    <PID>/ directory holding goal.md/plan.md/technical.md/spec.md/
+    decisions.md directly — no nested .design/ subdir."""
+    goal = design_dir / "goal.md"
+    plan = design_dir / "plan.md"
+    technical = design_dir / "technical.md"
+    spec = design_dir / "spec.md"
+    decisions = design_dir / "decisions.md"
 
     decisions_text = read_text(decisions)
     head = git_head(repo_root)
@@ -127,7 +190,7 @@ def derive_state(repo_root: Path) -> dict:
             "next_action": "delegate to pablo-planner for design; split its "
                             "returned document into plan.md + technical.md",
             "actor": "pablo-planner",
-            "required_inputs": [".design/goal.md"],
+            "required_inputs": ["$DESIGN_DIR/goal.md"],
             "gate_status": None,
             "blocked_reason": None,
             "stage_file": stage_path("planner.md"),
@@ -142,7 +205,7 @@ def derive_state(repo_root: Path) -> dict:
                             "over the Phase 2 design; freeze and record phase3-green "
                             "checkpoint hash on completion",
             "actor": "pablo-implementer",
-            "required_inputs": [".design/plan.md", ".design/technical.md"],
+            "required_inputs": ["$DESIGN_DIR/plan.md", "$DESIGN_DIR/technical.md"],
             "gate_status": None,
             "blocked_reason": None,
             "git_head": head,
@@ -161,7 +224,7 @@ def derive_state(repo_root: Path) -> dict:
             "required_inputs": [],
             "gate_status": "unanswered",
             "blocked_reason": "Phase 4 gate has no recorded run/skip decision "
-                               "in .design/decisions.md",
+                               "in $DESIGN_DIR/decisions.md",
             "stage_file": None,  # gate question wording lives in SKILL.md, not a stage to execute
         }
 
@@ -178,7 +241,7 @@ def derive_state(repo_root: Path) -> dict:
                                 "simplification pass, one combined "
                                 "code-review-checklist pass",
                 "actor": "pablo-implementer / code-review-checklist",
-                "required_inputs": [".design/plan.md", ".design/technical.md"],
+                "required_inputs": ["$DESIGN_DIR/plan.md", "$DESIGN_DIR/technical.md"],
                 "gate_status": "run",
                 "blocked_reason": None,
                 "stage_file": stage_path("refactor.md"),
@@ -196,7 +259,7 @@ def derive_state(repo_root: Path) -> dict:
             "required_inputs": [],
             "gate_status": "unanswered",
             "blocked_reason": "Phase 5 gate has no recorded run/finish decision "
-                               "in .design/decisions.md",
+                               "in $DESIGN_DIR/decisions.md",
             "stage_file": None,  # gate question wording lives in SKILL.md, not a stage to execute
         }
 
@@ -213,7 +276,7 @@ def derive_state(repo_root: Path) -> dict:
                 "next_action": "delegate to qa-adversary for final QA verdict "
                                 "(select prompt variant per Phase 4 gate outcome)",
                 "actor": "qa-adversary",
-                "required_inputs": [".design/spec.md", "frozen tests", "implementation diff"],
+                "required_inputs": ["$DESIGN_DIR/spec.md", "frozen tests", "implementation diff"],
                 "gate_status": "run",
                 "blocked_reason": None,
                 "stage_file": stage_path("qa.md"),
@@ -234,14 +297,30 @@ def derive_state(repo_root: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+
     next_cmd = sub.add_parser("next", help="Report current phase and next action")
-    next_cmd.add_argument("--dir", default=".", help="Repo root (default: cwd)")
+    next_cmd.add_argument("--dir", default=".", help="Repo root, for git HEAD only (default: cwd)")
+    next_cmd.add_argument("--design-dir", required=True,
+                           help="Per-launch design dir (the <PID>/ dir holding goal.md etc.)")
+
+    sessions_cmd = sub.add_parser(
+        "sessions",
+        help="List candidate prior <PID>/ design dirs for this repo's basename key",
+    )
+    sessions_cmd.add_argument("--dir", default=".", help="Repo root (default: cwd)")
+
     args = parser.parse_args()
 
     if args.command == "next":
         repo_root = Path(args.dir).resolve()
-        state = derive_state(repo_root)
+        design_dir = Path(args.design_dir).resolve()
+        state = derive_state(repo_root, design_dir)
         print(json.dumps(state, indent=2))
+        return 0
+
+    if args.command == "sessions":
+        repo_root = Path(args.dir).resolve()
+        print(json.dumps(list_sessions(repo_root), indent=2))
         return 0
 
     return 1
