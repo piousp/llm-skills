@@ -298,6 +298,175 @@ Body`,
   }
 });
 
+test("discoverAgents: maps Claude tool names onto tools/disallowedTools and does not skip the agent for inert fields", () => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "scout-tools.md",
+      `---
+name: scout-tools
+description: Tools mapping test
+tools: Read, Glob
+disallowedTools: Bash
+model: sonnet
+permissionMode: default
+maxTurns: 5
+---
+Body.
+`,
+    );
+
+    const agents = discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    const agent = agents[0]!;
+    assert.deepEqual(agent.tools, ["read", "find"]);
+    assert.deepEqual(agent.disallowedTools, ["bash"]);
+    assert.equal(agent.model, "sonnet");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: aggregates inert-field warnings across the whole pass into exactly one console.warn call", (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "agent-a.md",
+      `---
+name: agent-a
+description: First agent
+permissionMode: default
+---
+Body A.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "agent-b.md",
+      `---
+name: agent-b
+description: Second agent
+permissionMode: default
+---
+Body B.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+    const warnRegistry = new Map<string, number>();
+
+    const agents = discoverAgents(dir, undefined, warnRegistry);
+
+    assert.equal(agents.length, 2);
+
+    const inertSummaryCalls = warnSpy.mock.calls.filter(
+      (call) =>
+        typeof call.arguments[0] === "string" &&
+        (call.arguments[0] as string).includes("accepted but inert in pi"),
+    );
+
+    assert.equal(inertSummaryCalls.length, 1);
+    assert.match(inertSummaryCalls[0]!.arguments[0] as string, /fields: permissionMode/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: model alias (e.g. opus) end-to-end produces exactly one console.warn matching 'model aliases: opus'", (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "aliased.md",
+      `---
+name: aliased
+description: Uses a Claude model alias
+model: opus
+---
+Body.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+    const warnRegistry = new Map<string, number>();
+
+    const agents = discoverAgents(dir, undefined, warnRegistry);
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.model, "opus");
+    assert.equal(warnSpy.mock.calls.length, 1);
+    assert.match(warnSpy.mock.calls[0]!.arguments[0] as string, /model aliases: opus/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: populates thinking, inheritSkills, inheritExtensions, defaultContext, skills from frontmatter", () => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "thinker.md",
+      `---
+name: thinker
+description: Uses extended fields
+thinking: high
+inheritSkills: true
+inheritExtensions: false
+defaultContext: fresh
+skills: [code-review]
+---
+Body.
+`,
+    );
+
+    const agents = discoverAgents(dir);
+
+    assert.equal(agents.length, 1);
+    const agent = agents[0]!;
+    assert.equal(agent.thinking, "high");
+    assert.equal(agent.inheritSkills, true);
+    assert.equal(agent.inheritExtensions, false);
+    assert.equal(agent.defaultContext, "fresh");
+    assert.deepEqual(agent.skills, ["code-review"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: golden-file backward-compat gate — agents-examples/scout.md and web-scout.md (S16)", (t) => {
+  const agentsDir = path.join(import.meta.dirname, "../../agents-examples");
+  const warnSpy = t.mock.method(console, "warn");
+
+  const agents = discoverAgents(agentsDir);
+
+  assert.equal(agents.length, 2);
+
+  const scout = agents.find((agent) => agent.name === "scout")!;
+  assert.ok(scout, "scout agent should be discovered");
+  assert.equal(
+    scout.description,
+    "Fast codebase recon — finds files, symbols, patterns, and references. "
+      + "No analysis, no evaluation, no implementation. Returns compressed "
+      + "findings (file paths, line numbers, excerpts) to the caller.\n",
+  );
+  assert.deepEqual(scout.tools, ["read", "grep", "find", "ls"]);
+  assert.equal(scout.systemPromptMode, "append");
+  assert.equal(scout.inheritProjectContext, false);
+
+  const webScout = agents.find((agent) => agent.name === "web-scout")!;
+  assert.ok(webScout, "web-scout agent should be discovered");
+  assert.deepEqual(webScout.tools, ["web_search", "web_read"]);
+  assert.equal(webScout.systemPromptMode, "replace");
+  assert.equal(webScout.inheritProjectContext, false);
+
+  // Zero warnings/inert findings for either golden file.
+  assert.equal(warnSpy.mock.calls.length, 0);
+});
+
 test("loadOverrides: cache returns cached data on second call", () => {
   const dir = makeTmpDir();
   try {

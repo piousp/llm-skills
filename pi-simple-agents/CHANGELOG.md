@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.0 — 2026-07-28
+
+- **Real YAML frontmatter parsing.** `src/frontmatter.ts` now parses frontmatter with the `yaml`
+  package instead of a hand-rolled line-by-line parser. New runtime dependency: `yaml` (`^2.9.0`).
+- **New `disallowedTools` field.** Denylist counterpart to `tools`, applied after it. Comma string
+  or YAML list, same Claude Code tool-name compatibility as `tools`. Forwarded to the SDK's
+  `createSession` as `excludeTools`.
+- **Claude Code frontmatter compatibility.** `.claude/agents/*.md` files now load and run unchanged
+  as pi-simple-agents agents (Claude → pi only):
+  - `tools`/`disallowedTools` accept Claude Code's capitalized tool names (`Read`, `Grep`, `Glob`,
+    `Bash`, `Write`, `Edit`, `MultiEdit`, `LS`, `WebSearch`, `WebFetch`) and map them to pi's tool
+    names (`src/claude-compat.ts`, `CLAUDE_TOOL_MAP`); unrecognized/already-lowercase names pass
+    through unchanged; duplicates after mapping are deduped.
+  - Claude-only tool names with no pi equivalent (`Task`, `TodoWrite`, `NotebookEdit`,
+    `SlashCommand`, `KillShell`, `BashOutput`, `ExitPlanMode`, `AskUserQuestion`) pass through
+    harmlessly and are reported once per 60 seconds via an aggregated `console.warn`.
+  - `model` accepts Claude Code's model aliases (`sonnet`, `opus`, `haiku`, `fable`) and `inherit`.
+    Aliases are not resolved to a real model ID; they pass through as literal strings, which
+    degrade gracefully to the session's default model since model resolution only acts on values
+    containing a `/`. Documented limitation: use pi's `provider/modelId` form to force a specific
+    model.
+  - Claude fields with no functional effect in pi (`permissionMode`, `maxTurns`, `mcpServers`,
+    `hooks`, `memory`, `background`, `isolation`, `color`, `effort`, `initialPrompt`) are accepted
+    without error, values preserved but inert, and reported once per 60 seconds via one aggregated
+    `console.warn` grouped with inert tool names and model aliases.
+- **Newly wired pi-native fields.** `thinking`, `inheritSkills`, `inheritExtensions`,
+  `defaultContext`, and `skills` were previously declared on `AgentConfig` but silently dropped
+  during frontmatter parsing; they are now actually parsed and populated. `skills` is parsed and
+  stored but still not wired to preload skill content into the subagent's context — a known
+  limitation for both pi-native and Claude-imported agent files.
+- **Fix: invalid `systemPromptMode`/`defaultContext` normalize to the default instead of breaking
+  silently.** An invalid `systemPromptMode` previously dropped the entire system prompt silently;
+  it and an invalid `defaultContext` now fall back to their default value with a per-file warning.
+- **Backward compatible.** Existing pi-native agent files, including `agents-examples/scout.md` and
+  `web-scout.md`, parse and behave identically to before (covered by a golden-file regression test).
+- **Fix: an unquoted `": "` in a scalar frontmatter value (e.g. `description: Use when: X`) used to
+  fail strict YAML parsing, silently emptying the frontmatter and dropping the agent from discovery
+  entirely — no `name`/`description` means the file is skipped.** This regression was introduced (and
+  caught) by this same real-YAML-parsing change above, during its own QA pass, not a pre-existing
+  issue. `parseFrontmatter` now retries once with a failure-scoped lenient recovery pass: unindented
+  plain-scalar lines containing `": "` are auto-quoted and reparsed; on success the agent loads
+  normally with one warning naming the recovered field(s) (quote the value in the source file to
+  silence it). If recovery also fails, prior behavior (empty frontmatter, warning, file skipped)
+  applies unchanged. Never triggered for frontmatter that already parses on the first try.
+- **Warn-only: unquoted `#` in a scalar value.** A `#` following whitespace inside a scalar value is
+  valid YAML for "start of comment," silently truncating the value. This is now detected (not
+  auto-repaired — a `#` may be intentional) and reported with a per-file warning.
+
 ## 0.3.3 — 2026-07-28
 
 - **`modelRuntime` → `modelRegistry` migration.** The extension now passes `ctx.modelRegistry`

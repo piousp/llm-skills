@@ -46,6 +46,7 @@ interface AgentConfig {
   name: string;
   description: string;
   tools?: string[];
+  disallowedTools?: string[];
   model?: string;
   systemPromptMode: "append" | "replace";
   inheritProjectContext: boolean;
@@ -63,6 +64,81 @@ interface AgentConfig {
 
 Fields are resolved from YAML frontmatter with defaults filled in by `discoverAgents`, then merged with overrides via `applyOverrides`.
 
+- `disallowedTools` — denylist, forwarded to the SDK's `createSession` as `excludeTools`, applied
+  after `tools`. Accepts the same Claude Code tool-name compatibility as `tools` (see
+  `src/claude-compat.ts` below).
+- `thinking`, `inheritSkills`, `inheritExtensions`, `defaultContext`, `skills` are parsed from
+  frontmatter and populated onto `AgentConfig` by `discoverAgents` (previously declared on the
+  type but silently dropped during parsing).
+- `skills` is populated but **not consumed**: nothing in this repo preloads the named skills'
+  content into the subagent's context yet.
+
+## parseFrontmatter
+
+Internal to `src/frontmatter.ts` (not exported from the package entry point, but documented here
+since `discoverAgents` is a thin wrapper over it). Parses a `.md` file's YAML frontmatter block
+using the `yaml` package (replacing the previous hand-rolled line-by-line parser) and normalizes
+fields, applying Claude Code compatibility mapping along the way.
+
+```typescript
+function parseFrontmatter(content: string): FrontmatterResult;
+
+interface FrontmatterResult {
+  frontmatter: ParsedFrontmatter;
+  body: string;
+  inertFields: string[];
+  inertTools: string[];
+  modelAlias?: string;
+  warnings: string[];
+}
+```
+
+- `frontmatter` — the normalized field map. `tools`/`disallowedTools` have Claude Code tool names
+  already mapped to pi names (via `mapClaudeTools`); `model` has Claude Code aliases/`inherit`
+  normalized (via `normalizeClaudeModel`); enums (`systemPromptMode`, `defaultContext`) and
+  booleans are validated, falling back to `undefined` (and thus to `discoverAgents`'s defaults) on
+  an invalid value rather than silently corrupting the whole frontmatter.
+- `inertFields` — Claude Code fields present in this file's frontmatter that have no functional
+  effect in pi (`CLAUDE_INERT_FIELDS`).
+- `inertTools` — Claude Code tool names present in `tools`/`disallowedTools` that have no pi
+  equivalent (`CLAUDE_INERT_TOOLS`); they still pass through unchanged in the returned array.
+- `modelAlias` — set when `model` was a recognized Claude Code alias (`sonnet`, `opus`, `haiku`,
+  `fable`); the normalized `frontmatter.model` still holds the literal alias string (or
+  `undefined` for `inherit`).
+- `warnings` — per-file messages (invalid enum/boolean/scalar values, YAML parse failures) that
+  `discoverAgents` prefixes with the file path and forwards to `console.warn`.
+- The initial `yaml.parse` call is wrapped in try/catch with a second-chance retry, not a straight
+  catch-and-empty: on failure, `attemptLenientRecovery` auto-quotes unindented plain-scalar lines
+  containing an unquoted `": "` and reparses once; only if that also throws does
+  `parseFrontmatter` fall back to `emptyResult` (empty frontmatter, warning, file skipped). This
+  path is never entered when the first `yaml.parse` succeeds. A separate warn-only check
+  (`detectCommentTruncation`), run only on first-try successes, flags an unquoted `#` inside a
+  scalar value (YAML comment truncation) without rewriting anything.
+
+`discoverAgents` aggregates `inertFields`/`inertTools`/`modelAlias` across all files in a directory
+and reports them via one `console.warn`, throttled to once per 60 seconds by `claimUnwarned`
+(`src/claude-compat.ts`) — see [Claude Code compatibility](./README.md#claude-code-compatibility)
+in the README for the user-facing behavior and warning format.
+
+## src/claude-compat.ts
+
+Internal module (not part of the package's public exports) holding the Claude Code compatibility
+data and helpers used by `parseFrontmatter` and `discoverAgents`:
+
+- `CLAUDE_TOOL_MAP` — capitalized Claude Code tool name → lowercase pi tool name.
+- `CLAUDE_INERT_TOOLS` — Claude Code tool names with no pi equivalent.
+- `CLAUDE_INERT_FIELDS` — Claude Code frontmatter fields with no functional effect in pi.
+- `CLAUDE_MODEL_ALIASES` — recognized Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`).
+- `mapClaudeTools(names): { tools, inert }` — maps a tool-name list through `CLAUDE_TOOL_MAP`,
+  dedupes the result, and separately reports which input names were inert.
+- `normalizeClaudeModel(model): { model?, alias? }` — turns `"inherit"` into `undefined`; tags
+  recognized aliases with `alias` while passing the literal string through as `model`.
+- `claimUnwarned(keys, registry?, ttlMs = 60_000): string[]` — generic once-per-TTL dedup: given a
+  list of keys, returns only the ones not "claimed" (warned about) within the last `ttlMs`
+  milliseconds, recording a claim timestamp for each returned key. Used to throttle the aggregated
+  inert-fields/tools/model-alias warning to once per 60 seconds across an entire `discoverAgents`
+  call, independent of how many files triggered it.
+
 ## discoverAgents
 
 Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig[]`.
@@ -71,12 +147,20 @@ Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig
 function discoverAgents(
   agentsDir: string,
   cache?: Map<string, CacheEntry<AgentConfig[]>>,
+  warnRegistry?: Map<string, number>,
 ): AgentConfig[];
 ```
 
 - Skips files missing `name` or `description` (logs a warning).
 - Symlinks are supported.
 - Defaults: `systemPromptMode: "append"`, `inheritProjectContext: true`, `defaultReads: []`.
+- An invalid `systemPromptMode` or `defaultContext` value normalizes to that field's default (with
+  a per-file `console.warn`) instead of silently breaking the rest of the config — previously an
+  invalid `systemPromptMode` silently dropped the entire system prompt.
+- `warnRegistry` — optional override for the `Map<string, number>` used by `claimUnwarned` to
+  throttle the aggregated Claude-compatibility warning (inert fields/tools/model aliases) to once
+  per 60 seconds. Defaults to a module-level registry shared across calls; pass your own `Map` to
+  isolate throttling (e.g. per test).
 
 ### Cache
 
@@ -143,7 +227,7 @@ function runAgentViaSdk(
 ```typescript
 type CreateSessionOpts = Pick<
   CreateAgentSessionOptions,
-  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "resourceLoader" | "sessionManager"
+  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
 >;
 
 interface RunAgentViaSdkOptions {
@@ -161,7 +245,7 @@ interface RunAgentViaSdkOptions {
 `@earendil-works/pi-coding-agent`, so `session` (`prompt`, `subscribe`, `getLastAssistantText`,
 `dispose`, `abort`) is typed against the real SDK shape rather than a hand-rolled inline type.
 
-- `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, and tools.
+- `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, `tools`, and `excludeTools` (from `agent.disallowedTools`).
 - `getModel` — resolver for `provider/modelId` syntax. Called when `agent.model` contains a `/`.
   In the extension, this is `(provider, modelId) => modelRegistry.find(provider, modelId)`.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.

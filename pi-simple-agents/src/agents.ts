@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, type FrontmatterResult } from "./frontmatter.ts";
+import { reportInertUsage } from "./claude-compat.ts";
 
 export interface AgentConfig {
   name: string;
   description: string;
   tools?: string[];
+  disallowedTools?: string[];
   model?: string;
   systemPromptMode: "append" | "replace";
   inheritProjectContext: boolean;
@@ -31,9 +33,26 @@ export interface CacheEntry<T> {
 
 const CACHE_TTL_MS = 5_000;
 
+function aggregateInertUsage(
+  perFileResults: Array<Pick<FrontmatterResult, "inertFields" | "inertTools" | "modelAlias">>,
+): { fields: Set<string>; tools: Set<string>; models: Set<string> } {
+  const fields = new Set<string>();
+  const tools = new Set<string>();
+  const models = new Set<string>();
+
+  for (const result of perFileResults) {
+    for (const name of result.inertFields) fields.add(name);
+    for (const name of result.inertTools) tools.add(name);
+    if (result.modelAlias) models.add(result.modelAlias);
+  }
+
+  return { fields, tools, models };
+}
+
 export function discoverAgents(
   agentsDir: string,
   cache?: Map<string, CacheEntry<AgentConfig[]>>,
+  warnRegistry?: Map<string, number>,
 ): AgentConfig[] {
   if (cache) {
     const cached = cache.get(agentsDir);
@@ -50,6 +69,7 @@ export function discoverAgents(
   }
 
   const agents: AgentConfig[] = [];
+  const perFileResults: FrontmatterResult[] = [];
 
   for (const entry of entries) {
     if (!entry.name.endsWith(".md")) continue;
@@ -73,7 +93,13 @@ export function discoverAgents(
       continue;
     }
 
-    const { frontmatter, body } = parseFrontmatter(content);
+    const result = parseFrontmatter(content);
+    const { frontmatter, body, warnings } = result;
+    perFileResults.push(result);
+
+    for (const warning of warnings) {
+      console.warn(`pi-simple-agents: ${filePath}: ${warning}`);
+    }
 
     if (!frontmatter.name || !frontmatter.description) {
       console.warn(
@@ -86,6 +112,7 @@ export function discoverAgents(
       name: frontmatter.name,
       description: frontmatter.description,
       tools: frontmatter.tools,
+      disallowedTools: frontmatter.disallowedTools,
       model: frontmatter.model,
       systemPromptMode: frontmatter.systemPromptMode ?? "append",
       inheritProjectContext: frontmatter.inheritProjectContext ?? true,
@@ -93,8 +120,16 @@ export function discoverAgents(
       source: "user",
       filePath,
       systemPrompt: body.trim(),
+      thinking: frontmatter.thinking,
+      inheritSkills: frontmatter.inheritSkills,
+      inheritExtensions: frontmatter.inheritExtensions,
+      defaultContext: frontmatter.defaultContext,
+      skills: frontmatter.skills,
     });
   }
+
+  const warning = reportInertUsage(aggregateInertUsage(perFileResults), warnRegistry);
+  if (warning) console.warn(warning);
 
   if (cache) {
     cache.set(agentsDir, { timestamp: Date.now(), data: agents });

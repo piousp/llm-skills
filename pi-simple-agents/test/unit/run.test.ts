@@ -262,6 +262,40 @@ test("runAgentViaSdk: passes tools from agent.tools", async () => {
   assert.deepEqual(capturedTools, ["read", "write"]);
 });
 
+test("runAgentViaSdk: forwards agent.disallowedTools as excludeTools", async () => {
+  let capturedExcludeTools: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedExcludeTools = opts.excludeTools;
+    return { session: fakeSession as any };
+  };
+
+  await runAgentViaSdk(
+    makeAgent({ disallowedTools: ["grep"] }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.deepEqual(capturedExcludeTools, ["grep"]);
+});
+
+test("runAgentViaSdk: agent.disallowedTools undefined forwards excludeTools as undefined", async () => {
+  let capturedExcludeTools: unknown = "not-yet-captured";
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedExcludeTools = opts.excludeTools;
+    return { session: fakeSession as any };
+  };
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(capturedExcludeTools, undefined);
+});
+
 test("runAgentViaSdk: model override via applyOverrides flows through getModel", async () => {
   const baseAgent: AgentConfig = {
     name: "scout",
