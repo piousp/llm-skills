@@ -165,8 +165,9 @@ pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all resu
 |---|---|---|---|
 | `name` | string | — **(required)** | Agent name. Used to reference it in `subagent`. |
 | `description` | string | — **(required)** | Short description visible in the UI. |
-| `tools` | list | `[]` | Tools the agent is allowed to use. Comma-separated in YAML. |
-| `model` | string | *inherited from parent session* | Model to use. E.g. `claude-sonnet-4-20250514`, `openrouter/gpt-4o`. |
+| `tools` | list | `[]` | Tools the agent is allowed to use. Comma-separated in YAML. Accepts pi tool names or Claude Code tool names (see [Claude Code compatibility](#claude-code-compatibility)). |
+| `disallowedTools` | list | `[]` | Tools the agent is denied, applied after `tools`. Comma-separated in YAML. Same name compatibility as `tools`. Forwarded to the SDK as `excludeTools`. |
+| `model` | string | *inherited from parent session* | Model to use, in `provider/modelId` form, e.g. `openrouter/gpt-4o`. Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`, `inherit`) are also accepted but have no effect on model resolution — see [Claude Code compatibility](#claude-code-compatibility). |
 | `systemPromptMode` | `append` or `replace` | `append` | `append`: the agent's system prompt is added to the parent session context. `replace`: replaces the entire system context. |
 | `inheritProjectContext` | boolean | `true` | If `false`, the agent starts without loading project context files (AGENTS.md, CLAUDE.md, etc.). |
 | `inheritSkills` | boolean | `true` | If `false`, the agent does not inherit the parent's active skills. |
@@ -174,7 +175,73 @@ pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all resu
 | `defaultReads` | list | `[]` | Files to pre-load into the agent's context on startup. |
 | `defaultContext` | `forked` or `fresh` | `forked` | `forked`: copies the parent session's conversation history. `fresh`: starts with an empty conversation. |
 | `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| `skills` | list | *inherited* | Explicit list of skills to load. When set, overrides automatic inheritance. |
+| `skills` | list | *inherited* | Explicit list of skills to load. When set, overrides automatic inheritance. **Limitation:** parsed and stored on `AgentConfig`, but nothing in this repo currently preloads the named skills' content into the subagent's context — this is not the same as Claude Code's skill-preload semantics. |
+
+## Claude Code compatibility
+
+Frontmatter values are parsed as real YAML. If a scalar value (like `description`) contains an
+unquoted colon followed by a space (e.g. `description: Use when: X happens`), strict YAML parsing
+fails on that colon; pi-simple-agents then auto-quotes the offending line and retries once, so the
+agent still loads, with a warning naming the recovered field. The safe/recommended practice is to
+quote such values yourself to avoid the warning: `description: "Use when: X happens"`. Similarly,
+an unquoted `#` inside a value is treated as a YAML comment and silently truncates everything after
+it — this is detected (not auto-repaired, since a `#` might be intentional) and produces a warning;
+quote the value if the `#` is meant to be literal text.
+
+Agent files written for Claude Code's subagent frontmatter format (`.claude/agents/*.md`) load and
+run unchanged as pi-simple-agents agents. Compatibility is **one-directional**: Claude → pi. The
+reverse isn't guaranteed — pi's own extension fields (`systemPromptMode`, `inheritProjectContext`,
+`defaultReads`, `thinking`, `inheritSkills`, `inheritExtensions`, `defaultContext`) have no Claude
+Code equivalent and are ignored by Claude Code.
+
+### Tool name mapping
+
+`tools` and `disallowedTools` accept Claude Code's capitalized tool names and map them to pi's
+tool names. Any other name (already a lowercase pi name, or unrecognized) passes through
+unchanged. Duplicates after mapping are deduped.
+
+| Claude Code name | pi name |
+|---|---|
+| `Read` | `read` |
+| `Grep` | `grep` |
+| `Glob` | `find` |
+| `Bash` | `bash` |
+| `Write` | `write` |
+| `Edit` | `edit` |
+| `MultiEdit` | `edit` |
+| `LS` | `ls` |
+| `WebSearch` | `web_search` |
+| `WebFetch` | `web_read` |
+
+Some Claude Code tool names have no pi equivalent (`Task`, `TodoWrite`, `NotebookEdit`,
+`SlashCommand`, `KillShell`, `BashOutput`, `ExitPlanMode`, `AskUserQuestion`). They pass through in
+the `tools`/`disallowedTools` array unchanged (harmless — the SDK is unlikely to ever match them)
+and are reported in the aggregated inert-fields warning below, not per file.
+
+### Model aliases
+
+`model` accepts Claude Code's model aliases (`sonnet`, `opus`, `haiku`, `fable`) and `inherit`.
+`inherit` normalizes to using the session's default model, same as omitting `model` entirely.
+Aliases are **not** resolved to a real model ID — pi has no such registry lookup — they pass
+through as literal strings. Model resolution only acts on values containing a `/`
+(`provider/modelId` form), so a bare alias like `sonnet` degrades gracefully to "use the session's
+default model," the same mechanism as `inherit`. **To force a specific model, use pi's
+`provider/modelId` format, not a bare Claude Code alias** — e.g. `openrouter/anthropic/claude-sonnet-4-20250514`
+instead of `sonnet` or `claude-sonnet-4-20250514`.
+
+### Inert fields
+
+These Claude Code frontmatter fields are accepted without error and their values are preserved on
+the parsed frontmatter, but they have no functional effect in pi: `permissionMode`, `maxTurns`,
+`mcpServers`, `hooks`, `memory`, `background`, `isolation`, `color`, `effort`, `initialPrompt`.
+
+Inert fields, inert tool names, and model aliases are reported together in one aggregated
+`console.warn`, at most once per 60 seconds (not per file), e.g.:
+
+```
+pi-simple-agents: accepted but inert in pi — fields: maxTurns, permissionMode; tools: Task;
+model aliases: sonnet (Claude Code compatibility)
+```
 
 ## Overriding agent configuration (overrides)
 
@@ -198,13 +265,17 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
   "pi-simple-agents": {
     "agentOverrides": {
       "scout": {
-        "model": "claude-sonnet-4-20250514",
+        "model": "openrouter/anthropic/claude-sonnet-4-20250514",
         "thinking": "high"
       }
     }
   }
 }
 ```
+
+> `model` must use pi's `provider/modelId` form to actually take effect. A bare Claude Code model
+> name or alias (no `/`) is accepted without error but has no effect on model resolution — see
+> [Claude Code compatibility](#claude-code-compatibility).
 
 ### Precedence rules
 
@@ -223,7 +294,7 @@ Merge is field-level. If the project override only changes `model`, the rest of 
 name: scout
 description: Code explorer
 tools: read, grep, find, ls
-model: claude-haiku-4-5
+model: openrouter/anthropic/claude-haiku-4-5
 ---
 ...
 ```
@@ -235,7 +306,7 @@ model: claude-haiku-4-5
   "pi-simple-agents": {
     "agentOverrides": {
       "scout": {
-        "model": "claude-sonnet-4-20250514",
+        "model": "openrouter/anthropic/claude-sonnet-4-20250514",
         "thinking": "low"
       }
     }

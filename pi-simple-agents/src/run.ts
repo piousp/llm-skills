@@ -64,7 +64,7 @@ export function mapWithConcurrencyLimit<TIn, TOut>(
 
 type CreateSessionOpts = Pick<
   CreateAgentSessionOptions,
-  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "resourceLoader" | "sessionManager"
+  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
 >;
 
 export interface RunAgentViaSdkOptions {
@@ -114,6 +114,7 @@ export function runAgentViaSdk(
           model,
           thinkingLevel,
           tools: agent.tools,
+          excludeTools: agent.disallowedTools,
           resourceLoader: options.resourceLoader,
           sessionManager: options.sessionManager,
         });
