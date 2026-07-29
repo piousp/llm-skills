@@ -1,32 +1,40 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit } from "../../src/run.ts";
+import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS } from "../../src/run.ts";
 import { applyOverrides, type AgentConfig } from "../../src/agents.ts";
+import type { SubagentToolEvent } from "../../src/progress.ts";
 
 class FakeAgentSession {
   private _lastAssistantText: string;
   private _listeners: Array<(event: any) => void> = [];
+  private _resolvePrompt?: () => void;
+  private _toolEvents: any[];
   shouldThrow = false;
+  hangUntilAbort = false;
+  abortCalled = false;
+  subscribeCallCount = 0;
   _dispose?: () => void;
 
-  constructor(text: string) {
+  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[] } = {}) {
     this._lastAssistantText = text;
+    this.hangUntilAbort = opts.hangUntilAbort ?? false;
+    this._toolEvents = opts.toolEvents ?? [];
   }
 
   subscribe(listener: (event: any) => void): () => void {
+    this.subscribeCallCount++;
     this._listeners.push(listener);
     return () => {};
   }
 
   async prompt(_text: string): Promise<void> {
     if (this.shouldThrow) throw new Error("prompt failed");
-    for (const char of this._lastAssistantText) {
-      this._listeners.forEach((l) =>
-        l({
-          type: "message_update",
-          assistantMessageEvent: { type: "text_delta", delta: char },
-        }),
-      );
+    if (this.hangUntilAbort) {
+      await new Promise<void>((resolve) => { this._resolvePrompt = resolve; });
+      return;
+    }
+    for (const event of this._toolEvents) {
+      this._listeners.forEach((l) => l(event));
     }
   }
 
@@ -38,7 +46,10 @@ class FakeAgentSession {
     this._dispose?.();
   }
 
-  abort(): void {}
+  abort(): void {
+    this.abortCalled = true;
+    this._resolvePrompt?.();
+  }
 }
 
 function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
@@ -64,6 +75,44 @@ test("clampThinkingLevel: valid level passes through", () => {
 test("clampThinkingLevel: invalid level returns undefined with warning", () => {
   const result = clampThinkingLevel("adaptative");
   assert.equal(result, undefined);
+});
+
+test("resolveTimeoutMs: undefined falls back to default", () => {
+  assert.equal(resolveTimeoutMs(undefined), DEFAULT_TIMEOUT_MS);
+});
+
+test("resolveTimeoutMs: finite positive number passes through", () => {
+  assert.equal(resolveTimeoutMs(1000), 1000);
+});
+
+test("resolveTimeoutMs: 0 falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(0), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: negative number falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(-5), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: NaN falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(NaN), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: Infinity falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(Infinity), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: string value falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs("600000"), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
 });
 
 test("mapWithConcurrencyLimit: empty input returns empty array", async () => {
@@ -159,19 +208,66 @@ test("runAgentViaSdk: resolves abort-named error when signal is already aborted"
   assert.match((result as any).error ?? "", /abort/i);
 });
 
-test("runAgentViaSdk: calls onProgress with text deltas", async () => {
-  const progressCalls: string[] = [];
-  const fakeSession = new FakeAgentSession("hello world");
+test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into SubagentToolEvent, in order", async () => {
+  const events: SubagentToolEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
+      { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false },
+    ],
+  });
   const createSession = async () => ({ session: fakeSession as any });
 
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onProgress: (t) => progressCalls.push(t) },
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
   );
 
-  assert.ok(progressCalls.length > 0);
-  assert.equal(progressCalls.join(""), "hello world");
+  assert.deepEqual(events, [
+    { type: "tool_start", toolCallId: "t1", toolName: "read" },
+    { type: "tool_end", toolCallId: "t1" },
+  ]);
+});
+
+test("runAgentViaSdk: no onToolEvent means no subscription happens at all", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(fakeSession.subscribeCallCount, 0);
+});
+
+test("runAgentViaSdk: tool_execution_update events are ignored, not translated", async () => {
+  const events: SubagentToolEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
+      { type: "tool_execution_update", toolCallId: "t1", toolName: "read", args: {}, partialResult: "partial" },
+      { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
+  );
+
+  assert.deepEqual(events, [
+    { type: "tool_start", toolCallId: "t1", toolName: "read" },
+    { type: "tool_end", toolCallId: "t1" },
+  ]);
 });
 
 test("runAgentViaSdk: resolves model from getModel when agent.model is set", async () => {
@@ -331,4 +427,62 @@ test("runAgentViaSdk: model override via applyOverrides flows through getModel",
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
+});
+
+test("runAgentViaSdk: timeoutMs elapses, settles error and aborts+disposes the session", async () => {
+  let disposed = false;
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  fakeSession._dispose = () => { disposed = true; };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ timeoutMs: 20 }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /timed out after 20ms/);
+  assert.equal(fakeSession.abortCalled, true);
+
+  // settleOnce resolves the outer promise before abort() unblocks the hung
+  // prompt(), so dispose() (in the IIFE's finally) may still be pending a
+  // moment after this await returns. Poll for it, bounded by a short real
+  // timeout, instead of asserting on a race.
+  await new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + 200;
+    const check = () => {
+      if (disposed) return resolve();
+      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of timeout"));
+      setTimeout(check, 0);
+    };
+    check();
+  });
+  assert.equal(disposed, true);
+});
+
+test("runAgentViaSdk: large timeoutMs does not interfere with a fast successful run", async () => {
+  const fakeSession = new FakeAgentSession("done fast");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ timeoutMs: 5000 }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: no timeoutMs configured still succeeds on a fast run (default timeout doesn't interfere)", async () => {
+  const fakeSession = new FakeAgentSession("done fast");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
 });

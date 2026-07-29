@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.0 — 2026-07-29
+
+- **Subagent runs are now bounded by a timeout.** New `AgentConfig.timeoutMs?: number`
+  (settings-only, override via the existing `agentOverrides` channel, same as `model`/`thinking`).
+  Default when unset: `DEFAULT_TIMEOUT_MS = 600_000` (10 minutes), exported from `src/run.ts`.
+  Invalid values (`0`, negative, `NaN`, `Infinity`, non-numeric values from raw JSON) fall back to
+  the default with a `console.warn`. On expiry, the run settles as `status: "error"` with message
+  `"timed out after <N>ms"`; any partial output is discarded rather than returned as a truncated
+  success.
+  - **Behavior change:** previously a subagent run had no timeout at all and could hang forever;
+    every run is now bounded, 10 minutes by default unless overridden via `timeoutMs`.
+- **Live progress feed in the `subagent` tool_box.** While a subagent runs, the call body now
+  shows a per-task status line: `<agent> · tools: <N> · <status>`, where `<status>` is
+  `working…` (no tool started yet), `running: <tool1, tool2, ...>` (tools currently executing, in
+  start order — parallel tool calls are possible), or `done` (task settled). Replaces the
+  previously-static "Running..." placeholder. New module `src/progress.ts`.
+
 ## 0.5.0 — 2026-07-29
 
 - **`defaultReads`, `defaultContext`, `skills`, and `description` are now connected to the
