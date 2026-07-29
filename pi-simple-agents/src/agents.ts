@@ -20,6 +20,8 @@ export interface AgentConfig {
   inheritExtensions?: boolean;
   defaultContext?: "forked" | "fresh";
   skills?: string[];
+  /** Max wall-clock time for one run's prompt execution, in ms. Settings-only (agentOverrides). */
+  timeoutMs?: number;
 }
 
 export interface AgentOverrides {

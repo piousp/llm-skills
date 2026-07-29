@@ -159,6 +159,11 @@ subagent tasks: [
 
 pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all results.
 
+While a subagent runs, the `subagent` tool's call display shows a live status line per task:
+`<agent> · tools: <N> · <status>`, where `<status>` is `working…` (no tool started yet),
+`running: <tool1, tool2, ...>` (tools currently executing, in start order — parallel tool calls
+within one agent are possible), or `done` (the task has settled).
+
 ## Frontmatter fields
 
 | Field | Type | Default | Description |
@@ -267,6 +272,10 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
       "scout": {
         "model": "openrouter/anthropic/claude-sonnet-4-20250514",
         "thinking": "high"
+      },
+      "planner": {
+        "thinking": "xhigh",
+        "timeoutMs": 1800000
       }
     }
   }
@@ -276,6 +285,15 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
 > `model` must use pi's `provider/modelId` form to actually take effect. A bare Claude Code model
 > name or alias (no `/`) is accepted without error but has no effect on model resolution — see
 > [Claude Code compatibility](#claude-code-compatibility).
+
+> `timeoutMs` (number, milliseconds) bounds how long a subagent run may take before it's aborted.
+> It's settings-only — there's no frontmatter equivalent. Default when unset: `600000` (10
+> minutes). An invalid value (`0`, negative, `NaN`, `Infinity`, or a non-numeric value from raw
+> JSON) falls back to the default with a `console.warn`. On expiry, the run settles as an error
+> (`"timed out after <N>ms"`) and any partial output is discarded — it is not returned as a
+> truncated success. The example above raises `planner`'s timeout to 30 minutes for a
+> heavy-thinking, long-running agent. It bounds only the model/prompt execution phase — session
+> creation and resource-loader setup happen before the timer starts and are not covered.
 
 ### Precedence rules
 

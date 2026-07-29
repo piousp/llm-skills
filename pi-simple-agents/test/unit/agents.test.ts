@@ -248,6 +248,43 @@ test("applyOverrides: propagates new fields (thinking, inheritSkills, defaultCon
   assert.deepEqual(applied!.skills, ["skill-a"]);
 });
 
+test("applyOverrides: timeoutMs override flows onto the merged config; agents without an override keep it undefined", () => {
+  const scoutAgent: AgentConfig = {
+    name: "scout",
+    description: "test",
+    tools: ["read"],
+    model: "default",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "body",
+  };
+
+  const otherAgent: AgentConfig = {
+    name: "other",
+    description: "test",
+    tools: ["read"],
+    model: "default",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/other.md",
+    systemPrompt: "body",
+  };
+
+  const overrides: AgentOverrides = {
+    scout: { timeoutMs: 1200000 },
+  };
+
+  const [appliedScout, appliedOther] = applyOverrides([scoutAgent, otherAgent], overrides);
+
+  assert.equal(appliedScout!.timeoutMs, 1200000);
+  assert.equal(appliedOther!.timeoutMs, undefined);
+});
+
 test("discoverAgents: cache returns cached data on second call", () => {
   const dir = makeTmpDir();
   try {

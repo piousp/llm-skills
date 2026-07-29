@@ -1,5 +1,7 @@
 import type { AgentConfig } from "./agents.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
+import type { SubagentToolEvent } from "./progress.ts";
+import { toSubagentToolEvent } from "./progress.ts";
 
 interface AgentRunResultBase {
   agent: string;
@@ -41,6 +43,15 @@ export function clampThinkingLevel(level: string): ThinkingLevel | undefined {
   return undefined;
 }
 
+export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min, per Phase 1 decision.
+
+export function resolveTimeoutMs(value: unknown): number {
+  if (value === undefined) return DEFAULT_TIMEOUT_MS;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  console.warn(`pi-simple-agents: invalid timeoutMs ${value}, falling back to default`);
+  return DEFAULT_TIMEOUT_MS;
+}
+
 export function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,
@@ -73,8 +84,29 @@ export interface RunAgentViaSdkOptions {
   resourceLoader: CreateAgentSessionOptions["resourceLoader"];
   sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
-  onProgress?: (text: string) => void;
+  onToolEvent?: (event: SubagentToolEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+}
+
+function resolveModel(
+  agent: AgentConfig,
+  getModel: RunAgentViaSdkOptions["getModel"],
+): CreateAgentSessionOptions["model"] {
+  if (!agent.model || !getModel) return undefined;
+  const parts = agent.model.split("/");
+  if (parts.length < 2) return undefined;
+  return getModel(parts[0], parts.slice(1).join("/"));
+}
+
+function subscribeToolEvents(
+  agentSession: CreateAgentSessionResult["session"],
+  onToolEvent: RunAgentViaSdkOptions["onToolEvent"],
+): void {
+  if (!onToolEvent) return;
+  agentSession.subscribe((event) => {
+    const toolEvent = toSubagentToolEvent(event);
+    if (toolEvent) onToolEvent(toolEvent);
+  });
 }
 
 export function runAgentViaSdk(
@@ -88,6 +120,7 @@ export function runAgentViaSdk(
   return new Promise((resolve) => {
     let settled = false;
     let session: any = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const settleOnce: SettleFn = (result) => {
       if (settled) return;
@@ -97,13 +130,7 @@ export function runAgentViaSdk(
 
     (async () => {
       try {
-        let model: CreateAgentSessionOptions["model"] = undefined;
-        if (agent.model && options.getModel) {
-          const parts = agent.model.split("/");
-          if (parts.length >= 2) {
-            model = options.getModel(parts[0], parts.slice(1).join("/"));
-          }
-        }
+        const model = resolveModel(agent, options.getModel);
 
         const thinkingLevel = agent.thinking
           ? clampThinkingLevel(agent.thinking)
@@ -128,16 +155,14 @@ export function runAgentViaSdk(
         const abortHandler = () => { agentSession.abort(); };
         options.signal?.addEventListener("abort", abortHandler, { once: true });
 
-        if (options.onProgress) {
-          agentSession.subscribe((event: any) => {
-            if (
-              event.type === "message_update" &&
-              event.assistantMessageEvent?.type === "text_delta"
-            ) {
-              options.onProgress!(event.assistantMessageEvent.delta);
-            }
-          });
-        }
+        subscribeToolEvents(agentSession, options.onToolEvent);
+
+        const timeoutMs = resolveTimeoutMs(agent.timeoutMs);
+        timer = setTimeout(() => {
+          if (settled) return;
+          settleOnce(errorResult(ctx, `timed out after ${timeoutMs}ms`));
+          Promise.resolve(agentSession.abort()).catch(() => { /* ignore */ });
+        }, timeoutMs);
 
         await agentSession.prompt(task);
 
@@ -157,6 +182,7 @@ export function runAgentViaSdk(
           err instanceof Error ? err.message : String(err),
         ));
       } finally {
+        if (timer) clearTimeout(timer);
         if (session) {
           try { session.dispose(); } catch { /* ignore */ }
         }
