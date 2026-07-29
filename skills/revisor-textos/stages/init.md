@@ -8,7 +8,7 @@ Después de que el usuario confirma archivo y evaluadores. No hay subagente aqu�
 ### 1. Preguntar al usuario
 
 Usar `ask_user_question` para:
-1. **Ruta del archivo Markdown** a revisar (pregunta abierta, el usuario escribe la ruta).
+1. **Ruta del archivo Markdown** a revisar.
 2. **Qué evaluadores aplicar**: todos, o seleccionar algunos de la lista.
 
 Si el usuario no especifica evaluadores, aplicar todos.
@@ -16,30 +16,30 @@ Si el usuario no especifica evaluadores, aplicar todos.
 ### 2. Ejecutar init
 
 ```bash
-python3 <skill-dir>/state.py init <ruta_archivo.md> [eval_id_1 eval_id_2 ...]
+python3 <skill-dir>/state.py init <ruta_archivo.md> [eval_id ...]
 ```
 
-- `skill-dir` es el directorio donde reside este SKILL.md (el mismo que `stages/`).
+- `skill-dir` es el directorio donde reside este SKILL.md.
 - Si no se pasan IDs, se usan todos los evaluadores de `evaluadores.json`.
 - Si se pasan IDs, se filtran preservando el orden del JSON.
 
 ### 3. Leer output
 
 El script imprime:
-- `Session: <session_id>` — guardar este ID, se usa en todos los comandos siguientes.
+- `Session: <PPID>` — guardar este ID, se usa en todos los comandos siguientes.
 - `Directorio de sesion: <ruta>` — ruta donde están los archivos de trabajo.
 
 ### 4. Confirmar con el usuario
 
 Mostrar al usuario:
-- Session ID
+- Session ID (PPID)
 - Archivo original
 - Evaluadores seleccionados
-- Primer evaluador a aplicar
+- Directorio de sesión
 
 Preguntar: "¿Iniciamos la revisión?"
 
 ## Output del stage
-- `session_id` — para pasar a `state.py next`.
+- `session_id` — PPID, para pasar a `state.py next`.
 - `session_dir` — ruta del directorio de sesión.
 - `working_file` — ruta de la copia de trabajo.

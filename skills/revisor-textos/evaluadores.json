@@ -1,8 +1,10 @@
 [
+  "evaluadores/apa.md",
+  "evaluadores/defectos-epistemicos.md",
+  "evaluadores/falacias.md",
   "evaluadores/filologica.md",
   "evaluadores/heuristica.md",
-  "evaluadores/apa.md",
-  "evaluadores/falacias.md",
-  "evaluadores/defectos-epistemicos.md",
-  "evaluadores/hilo-conductor-historia.md"
+  "evaluadores/hilo-conductor-historia.md",
+  "evaluadores/teivc.md",
+  "evaluadores/estructura-parrafo.md"
 ]
