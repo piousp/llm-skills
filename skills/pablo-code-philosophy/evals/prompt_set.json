@@ -1,0 +1,52 @@
+[
+  {
+    "id": "trigger_write_new_service",
+    "prompt": "Escribe un servicio nuevo desde cero en TypeScript que exponga un endpoint para crear usuarios.",
+    "expected_checks": ["tests_planned"]
+  },
+  {
+    "id": "trigger_add_endpoint_existing_api",
+    "prompt": "Añade un endpoint GET /orders/{id} a la API existente en server.js.",
+    "expected_checks": ["no_unrelated_edits:server.js"]
+  },
+  {
+    "id": "trigger_implement_scala_function",
+    "prompt": "Implementa una función en Scala que valide si un rango de fechas es correcto.",
+    "expected_checks": []
+  },
+  {
+    "id": "trigger_dry_extract_decision",
+    "prompt": "Tengo este bloque de código duplicado en dos servicios distintos. ¿Debería extraerlo a una función compartida?",
+    "expected_checks": ["mentions_keywords:yagni|kiss|dry|solid|strikes"]
+  },
+  {
+    "id": "trigger_gof_strategy_decision",
+    "prompt": "¿Necesito aplicar un patrón Strategy aquí, o es prematuro para el caso que tengo?",
+    "expected_checks": ["mentions_keywords:yagni|premature|kiss|pattern"]
+  },
+  {
+    "id": "trigger_review_diff",
+    "prompt": "Revisa el diff en changes.diff (sobre order_service.py) antes de que lo mergee.",
+    "expected_checks": ["no_file_edits"]
+  },
+  {
+    "id": "trigger_suggest_tests",
+    "prompt": "Sugiere qué tests debería agregar para el cambio que acabo de hacer en messy_module.py.",
+    "expected_checks": ["mentions_keywords:test|edge case|boundary|null"]
+  },
+  {
+    "id": "edge_yagni_refactor_cutoff",
+    "prompt": "Estoy por refactorizar messy_module.py, pero no estoy seguro si vale la pena extraer esta parte todavía o si es prematuro.",
+    "expected_checks": ["mentions_keywords:yagni|premature|strikes"]
+  },
+  {
+    "id": "edge_mixed_philosophy_fp",
+    "prompt": "Quiero rediseñar este pipeline de validaciones en validations.scala usando composición funcional. ¿Tiene sentido la abstracción o es prematura?",
+    "expected_checks": ["mentions_keywords:yagni|kiss|premature", "sibling_loaded:functional-programming"]
+  },
+  {
+    "id": "edge_clean_file_surgical",
+    "prompt": "Limpia messy_module.py, se ve desordenado.",
+    "expected_checks": ["no_unrelated_edits"]
+  }
+]

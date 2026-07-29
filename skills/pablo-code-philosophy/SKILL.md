@@ -1,7 +1,14 @@
 ---
 name: pablo-code-philosophy
 description: >
-  Pablo's code philosophy for writing and generating code.
+  Pablo's opinionated code philosophy: the YAGNI → KISS → DRY → SOLID decision
+  pipeline, conflict resolutions (KISS > DRY > SOLID), surgical-change rules,
+  and test-planning defaults. Invoked by explicit name (see AGENTS.md
+  delegation rules), not auto-triggered — do not rely on this description for
+  discovery. The mechanical "how" for FP idioms, the GoF pattern catalog, and
+  branch-scoped refactor detection lives in `functional-programming`,
+  `gof-design-patterns`, and `refactor-identification` respectively; this
+  skill owns the judgment layer (whether/when/cut-off) those three defer to.
 ---
 
 # Code Philosophy
@@ -9,6 +16,34 @@ description: >
 Simple and readable code over elegant and terse.
 Write code for the version of yourself months from now who will maintain it without the task's context. Write code so anyone can read it years after you're gone.
 Being able to maintain code effectively is of great value.
+
+## Scope — when to use, when to delegate
+
+**Invocation:** this skill is loaded by explicit name (see the calling agent's
+delegation rules), not via auto-discovery/trigger matching. An empirical
+Layer-2 eval (see `evals/`) confirmed pi's discovery mechanism works in
+general but does not reliably auto-trigger this skill for generic codegen/
+review prompts — treat it as name-only.
+
+This skill is the judgment layer: it decides **if / when / how far** — scope, simplicity,
+duplication, architecture. Three sibling skills own the mechanical **how** and defer to this
+skill's cut-off criteria:
+
+- `functional-programming` — FP idioms and typed-error mechanics per language (Java/Scala).
+  This skill delegates there from the "Light FP" bullet below; that skill delegates back here
+  for the "when to apply FP" judgment.
+- `gof-design-patterns` — the curated pattern catalog. This skill delegates there from the
+  "GoF patterns" bullet below; that skill defers to this skill's YAGNI/KISS gates before
+  reaching for a pattern.
+- `refactor-identification` — detects refactor candidates within a branch's diff. This skill
+  does not detect; it supplies the cut-off criterion (when NOT to bother) that skill consumes.
+
+On conflicts of judgment between skills, this skill's resolutions win (see Conflict matrix
+below).
+
+Do NOT use this skill for: non-code prose/documentation, authoring or reviewing Agent Skills
+(see `writing-agent-skills`), or purely mechanical questions already owned by the three skills
+above.
 
 # Coding Principles
 
@@ -21,6 +56,7 @@ Being able to maintain code effectively is of great value.
 - **GoF patterns** — Design patterns with judgment, not religion. → See [principles/GoF.md](principles/GoF.md)
 - **Unix philosophy** — Design for Composition. → See [principles/UNX.md](principles/UNX.md)
 - **Light FP** — Immutability, typed errors, composition with judgment. → See [principles/FP.md](principles/FP.md)
+- **Tests are part of the deliverable** — every change or new code, including standalone functions/snippets, ships with a unit-test plan. See Tests below.
 - **Data structures first**: start with the data model. If the structure is wrong, the algorithm is irrelevant. Eliminate special cases by fixing the shape of the data, not by piling up conditionals.
 - **Composition over inheritance** (except for Algebraic Data Types).
 - **Config over code**: prefer runtime configuration (routing rules, policies) over compile-time conditionals. Business behavior changes should not require a redeploy. However, don't introduce feature flags or backwards-compatibility shims when you can just change the code directly — config is for genuine runtime variability, not for hedging against changes you're already making.
@@ -57,21 +93,13 @@ GoF patterns are SOLID's implementation toolbox (Phase 4) — gated by Phases 1�
 | **YAGNI vs SOLID** | YAGNI wins. Don't add an abstraction layer until the pain of not having it is real. |
 | **DRY vs YAGNI** | Allies. Business logic: 3 strikes. **Structural duplication (same algorithm, different type): abstract at 2 — YAGNI yields.** |
 | **DRY vs SRP** | SRP wins. Don't extract shared code if the two contexts change for different reasons. |
-| **UNIX vs KISS** | Allies. Transparency reveals complexity; KISS reduces it. They form a feedback loop. |
-| **UNIX vs YAGNI** | Allies. Fail Early, Fail Loud is YAGNI applied to error handling — don't speculatively handle errors that haven't occurred. |
-| **UNIX vs SOLID** | Allies. Least Surprise governs interface contracts. ISP governs dependencies. Together they define clean boundaries. |
-| **DRY vs UNIX** | Allies. Invest in Tools automates repetition. Fail Early prevents repeating error-handling patterns across the codebase. |
 | **FP vs KISS** | Allies. Composition and immutability are usually more concise, not less — but if composition adds indirection without reducing real complexity, KISS wins. |
-| **FP vs DRY** | Allies. Higher-order functions are the mechanism for structural duplication — abstract at 2, same as DRY's own rule. |
 | **FP vs YAGNI** | Orthogonal, with a YAGNI gate: don't build a composable pipeline for a two-step chain nobody will extend. |
-| **FP vs SOLID** | Allies. ISP is natural with functional interfaces/typeclasses; DIP is trivial when the dependency is a passed parameter. |
-| **FP vs UNIX** | Allies (strongest pair). Function composition is pipeline composition in another paradigm; immutability reinforces Least Surprise. |
 | **GoF vs KISS** | KISS wins unless the variation the pattern manages is real and current — not anticipated. |
 | **GoF vs YAGNI** | YAGNI wins. Applying a pattern before the variation exists is the canonical over-engineering case. |
-| **GoF vs DRY** | Allies. Template Method and Strategy remove duplicated skeleton/branching — a DRY mechanism. |
-| **GoF vs SOLID** | Allies. GoF patterns implement SOLID concretely (Strategy → OCP, Adapter → DIP); they don't duplicate it. |
 | **GoF vs FP** | FP subsumes GoF when there's no shared state (Strategy → HOF, Command → lambda). The pattern is still justified with mutable state or open dispatch. |
-| **GoF vs UNIX** | Allies. Composition-of-handlers (Chain of Responsibility, Composite) is the OO echo of pipeline composition. |
+
+For the non-conflicting interactions (allies/synergies), see [references/interactions.md](references/interactions.md).
 
 ## Before Coding
 
@@ -102,7 +130,7 @@ Touch only what's necessary. Don't clean what you didn't mess up.
 
 ## Tests
 
-Always plan unit tests for changes. For planning and generating tests:
+Always plan unit tests for changes or new code. For planning and generating tests:
 - Identify what the changes do that existing tests don't cover
 - Changed behavior in existing methods where tests only cover the old behavior
 - Edge cases: nulls, empty collections, boundary values, error paths
