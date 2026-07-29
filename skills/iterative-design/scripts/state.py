@@ -9,7 +9,7 @@ single-writer log), and resuming within one session is just re-running this
 script.
 
 Design artifacts live in a per-launch temp directory, not in the repo:
-${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/<PPID>/ — no nested
+/tmp (or $TMPDIR if /tmp is unusable)/iterative-design/<basename(cwd)>/<PPID>/ — no nested
 `.design/` subdir, the PID dir itself holds goal.md/plan.md/technical.md/
 spec.md/decisions.md directly. `--dir` (repo root) is used only for git HEAD
 reads and stays independent of `--design-dir`. Because the temp dir is keyed
@@ -106,14 +106,25 @@ def gate_answer(decisions_text: str, gate_label: str) -> str | None:
 SKILL_DIR = Path(__file__).resolve().parent.parent
 
 
+def tmp_root_dir() -> Path:
+    """/tmp first; fall back to $TMPDIR only if /tmp doesn't exist or isn't
+    writable."""
+    tmp = Path("/tmp")
+    if tmp.is_dir() and os.access(tmp, os.W_OK):
+        return tmp
+    fallback = os.environ.get("TMPDIR")
+    return Path(fallback) if fallback else tmp
+
+
 def sessions_base_dir() -> Path:
-    """${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/ — the parent of all
-    per-launch <PID>/ design dirs for this repo (keyed by basename of the
-    current working directory ONLY — never by --dir/repo_root, so this must
-    match exactly how the coordinator derives $DESIGN_DIR in SKILL.md Phase
-    0. Two repos sharing a basename collide on purpose, an accepted
-    tradeoff favoring a readable path over uniqueness)."""
-    tmp_root = Path(os.environ.get("TMPDIR", "/tmp"))
+    """/tmp (or $TMPDIR if /tmp is unusable, see tmp_root_dir)/
+    iterative-design/<basename(cwd)>/ — the parent of all per-launch
+    <PID>/ design dirs for this repo (keyed by basename of the current
+    working directory ONLY — never by --dir/repo_root, so this must match
+    exactly how the coordinator derives $DESIGN_DIR in SKILL.md Phase 0.
+    Two repos sharing a basename collide on purpose, an accepted tradeoff
+    favoring a readable path over uniqueness)."""
+    tmp_root = tmp_root_dir()
     return tmp_root / "iterative-design" / Path.cwd().name
 
 
