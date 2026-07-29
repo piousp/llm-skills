@@ -121,7 +121,8 @@ Before anything else, resolve where this launch's design artifacts live:
    that key (mtime + last-derived phase each), read-only — it never prompts
    or picks for you.
 2. If the list is **empty** — this is a fresh launch. Set
-   `DESIGN_DIR=${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/<PPID>`
+   `DESIGN_DIR=/tmp/iterative-design/<basename(cwd)>/<PPID>` (if `/tmp`
+   doesn't exist or isn't writable, use `${TMPDIR:-/tmp}` instead)
    (`$PPID` inside a shell/bash tool call is the parent `pi` process's PID,
    stable for the whole launch), `mkdir -p` it, and proceed.
 3. If the list is **non-empty** — use `ask_user_question` (or your harness's
@@ -147,7 +148,8 @@ keep it updated as phases and sub-steps complete.
 All durable design artifacts this skill controls live in a **per-launch temp directory**, never in
 the repo:
 
-    $DESIGN_DIR = ${TMPDIR:-/tmp}/iterative-design/<basename(cwd)>/<PPID>
+    $DESIGN_DIR = /tmp/iterative-design/<basename(cwd)>/<PPID>
+    (falling back to ${TMPDIR:-/tmp} only if /tmp is unusable)
 
 resolved once in Phase 0 (see above) and reused for the rest of the session. There is no nested
 `.design/` subdir — the files below live directly in `$DESIGN_DIR`. The coordinator creates the
