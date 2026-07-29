@@ -1,0 +1,80 @@
+[
+  {
+    "id": "init_full_evaluadores",
+    "prompt": "Usa el skill revisor-textos para revisar /tmp/eval-evals/article.md con todos los evaluadores disponibles.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_edit_write_to_working_file",
+      "announced_missing_subagent",
+      "invoked_state_py_init",
+      "used_parallel_subagent_tasks"
+    ]
+  },
+  {
+    "id": "init_partial_evaluadores",
+    "prompt": "Usa el skill revisor-textos para revisar /tmp/eval-evals/article.md solo con los evaluadores filologica y heuristica.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_edit_write_to_working_file",
+      "announced_missing_subagent",
+      "invoked_state_py_init",
+      "used_parallel_subagent_tasks"
+    ]
+  },
+  {
+    "id": "ask_current_phase",
+    "prompt": "Estoy en medio de una revision con revisor-textos. El directorio de sesion es /tmp/revisor-textos/eval-evals/12345/. ¿Cual es la fase actual y que sigue?",
+    "should_trigger": true,
+    "expected_checks": [
+      "invoked_state_py_next",
+      "mentions_phase_name"
+    ]
+  },
+  {
+    "id": "correct_when_done",
+    "prompt": "La revision ha terminado. El directorio de sesion es /tmp/revisor-textos/eval-evals/12345/ y la correccion consolidada esta completa.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_bash_diff_invocations",
+      "no_write_to_resumen",
+      "no_write_outside_session_dir",
+      "mentions_working_file_path"
+    ]
+  },
+  {
+    "id": "continue_after_partial_findings",
+    "prompt": "Continua con la revision. El directorio de sesion es /tmp/revisor-textos/eval-evals/12345/ y ya tenemos algunos hallazgos.",
+    "should_trigger": true,
+    "expected_checks": [
+      "mentioned_asking_for_confirmation",
+      "no_edit_write_to_working_file"
+    ]
+  },
+  {
+    "id": "correct_after_evaluations",
+    "prompt": "Aplica las correcciones del evaluador filologica. El directorio de sesion es /tmp/revisor-textos/eval-evals/12345/ y todos los evaluadores tienen hallazgos.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_edit_write_to_working_file",
+      "either_invoked_redactor_or_announced_missing"
+    ]
+  },
+  {
+    "id": "recover_corrupt_session",
+    "prompt": "El directorio de sesion /tmp/revisor-textos/eval-evals/12345/ parece estar corrupto. ¿Que hago?",
+    "should_trigger": true,
+    "expected_checks": [
+      "reported_error_phase",
+      "did_not_continue_after_error"
+    ]
+  },
+  {
+    "id": "report_findings_summary",
+    "prompt": "Necesito un resumen de los hallazgos de la revision. El directorio de sesion es /tmp/revisor-textos/eval-evals/12345/ y tengo hallazgos de filologica, heuristica y apa.",
+    "should_trigger": true,
+    "expected_checks": [
+      "mentions_count_per_evaluator",
+      "mentions_severity_breakdown"
+    ]
+  }
+]
