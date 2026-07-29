@@ -8,6 +8,7 @@ import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig, type A
 import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
+import { buildSubagentCallText } from "../src/render-call.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
 
@@ -46,33 +47,32 @@ const SubagentParams = Type.Object({
 });
 type SubagentArgs = Static<typeof SubagentParams>;
 
-function firstLine(text: string): string {
-  return text.trim().split("\n", 1)[0] ?? "";
+// Builds a name→config lookup for the render-time parameter line.
+function toParamAgentsMap(agents: AgentConfig[]): Map<string, AgentConfig> {
+  return new Map(agents.map((agent) => [agent.name, agent]));
 }
 
-function truncate(text: string, max = 80): string {
-  return text.length > max ? `${text.slice(0, max - 1)}\u2026` : text;
-}
-
-// Collapsed one-line summary for a single task entry, e.g. "agent: first line of the task".
-function describeTask(t: TaskEntry): string {
-  return `${t.agent}: ${truncate(firstLine(t.task))}`;
+// `ToolRenderContext` isn't re-exported from the package's public entry point,
+// so this structural subset (the only fields used here) stands in for it. It
+// stays assignable to the real renderCall context param because every field
+// it declares also exists on the host's ToolRenderContext.
+interface RenderCallContext {
+  cwd: string;
+  argsComplete: boolean;
 }
 
 // Renders the tool_box title: agent name + truncated first line of the task.
 // The host only supports expand/collapse on the result body (renderResult),
 // not on the call title, so there is no separate "expanded" title variant.
-function renderSubagentCall(args: SubagentArgs, theme: Theme) {
-  const prefix = theme.fg("toolTitle", theme.bold("subagent "));
-
-  if (args.tasks?.length) {
-    const suffix = args.tasks.length > 1 ? ", ..." : "";
-    return new Text(`${prefix}(${args.tasks.length}): ${describeTask(args.tasks[0])}${suffix}`, 0, 0);
-  }
-
-  const agent = args.agent ?? "?";
-  const task = args.task ? `: ${truncate(firstLine(args.task))}` : "";
-  return new Text(`${prefix}${theme.fg("accent", agent)}${task}`, 0, 0);
+function renderSubagentCall(
+  args: SubagentArgs,
+  theme: Theme,
+  context: RenderCallContext | undefined,
+) {
+  const paramAgents = context?.argsComplete
+    ? toParamAgentsMap(loadAvailableAgents(context.cwd))
+    : new Map<string, AgentConfig>();
+  return new Text(buildSubagentCallText(args, theme, paramAgents), 0, 0);
 }
 
 // Normalizes validateSubagentParams' two accepted shapes ({agent, task} or
