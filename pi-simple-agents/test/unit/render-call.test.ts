@@ -1,0 +1,344 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { formatAgentParams, buildSubagentCallText } from "../../src/render-call.ts";
+import type { AgentConfig } from "../../src/agents.ts";
+import type { CallTheme } from "../../src/render-call.ts";
+
+function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    name: "scout",
+    description: "finds things",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/agents/scout.md",
+    systemPrompt: "",
+    ...overrides,
+  };
+}
+
+test("formatAgentParams: model, thinking, and tools all set renders each verbatim", () => {
+  const agent = makeAgent({
+    model: "claude-opus-4",
+    thinking: "high",
+    tools: ["a", "b", "c"],
+  });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: claude-opus-4 · thinking: high · tools: a, b, c");
+});
+
+test("formatAgentParams: none of the three set renders all as inherited", () => {
+  const agent = makeAgent({});
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited");
+});
+
+test("formatAgentParams: only model set renders thinking and tools as inherited", () => {
+  const agent = makeAgent({ model: "claude-opus-4" });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: inherited");
+});
+
+test("formatAgentParams: empty tools array renders tools as none", () => {
+  const agent = makeAgent({ tools: [] });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: inherited · thinking: inherited · tools: none");
+});
+
+test("formatAgentParams: exactly 5 tools renders the full list with no +more suffix", () => {
+  const agent = makeAgent({ tools: ["a", "b", "c", "d", "e"] });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: inherited · thinking: inherited · tools: a, b, c, d, e");
+});
+
+test("formatAgentParams: 8 tools renders first 5 plus a +3 more suffix", () => {
+  const agent = makeAgent({
+    tools: ["a", "b", "c", "d", "e", "f", "g", "h"],
+  });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(
+    result,
+    "model: inherited · thinking: inherited · tools: a, b, c, d, e +3 more",
+  );
+});
+
+const fakeTheme: CallTheme = {
+  fg: (c, t) => `<${c}>${t}</${c}>`,
+  bold: (t) => `<b>${t}</b>`,
+};
+
+test("buildSubagentCallText: agent + task renders bold prefix, accent agent, truncated first-line task (regression pin)", () => {
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X" },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X",
+  );
+});
+
+test("buildSubagentCallText: missing agent renders literal '?' in place of the name", () => {
+  const result = buildSubagentCallText({ task: "Find X" }, fakeTheme, new Map());
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>?</accent>: Find X",
+  );
+});
+
+test("buildSubagentCallText: missing task renders no ': ...' segment", () => {
+  const result = buildSubagentCallText({ agent: "scout" }, fakeTheme, new Map());
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>",
+  );
+});
+
+test("buildSubagentCallText: task longer than 80 chars is truncated with ellipsis on first line only", () => {
+  const longLine = "a".repeat(90);
+  const result = buildSubagentCallText(
+    { agent: "scout", task: `${longLine}\nsecond line` },
+    fakeTheme,
+    new Map(),
+  );
+  const expectedTruncated = `${"a".repeat(79)}\u2026`;
+
+  assert.equal(
+    result,
+    `<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: ${expectedTruncated}`,
+  );
+});
+
+test("buildSubagentCallText: paramAgents contains the agent appends a dim params line", () => {
+  const agent = makeAgent({ name: "scout", model: "claude-opus-4" });
+  const paramAgents = new Map([["scout", agent]]);
+
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X" },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X"
+      + `\n  <dim>${formatAgentParams(agent)}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: paramAgents does not contain the agent renders title only", () => {
+  const paramAgents = new Map([["other", makeAgent({ name: "other" })]]);
+
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X" },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X",
+  );
+});
+
+test("buildSubagentCallText: paramAgents undefined renders title only", () => {
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X" },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X",
+  );
+});
+
+const prefix = "<toolTitle><b>subagent </b></toolTitle>";
+
+test("buildSubagentCallText: two tasks, paramAgents undefined renders parallel title (regression pin)", () => {
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files" },
+        { agent: "web-scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(result, `${prefix}(2): scout: List files, ...`);
+});
+
+test("buildSubagentCallText: single task in tasks array renders no ', ...' suffix", () => {
+  const result = buildSubagentCallText(
+    { tasks: [{ agent: "scout", task: "List files" }] },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(result, `${prefix}(1): scout: List files`);
+});
+
+test("buildSubagentCallText: tasks entry missing task renders empty description instead of throwing", () => {
+  const result = buildSubagentCallText(
+    { tasks: [{ agent: "scout" }] },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(result, `${prefix}(1): scout: `);
+});
+
+test("buildSubagentCallText: tasks entry missing agent renders '?' instead of throwing", () => {
+  const result = buildSubagentCallText(
+    { tasks: [{ task: "List files" }] },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(result, `${prefix}(1): ?: List files`);
+});
+
+test("buildSubagentCallText: empty tasks array falls through to single-agent branch", () => {
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X", tasks: [] },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X",
+  );
+});
+
+test("buildSubagentCallText: two tasks, paramAgents has both appends two param lines in order", () => {
+  const scoutAgent = makeAgent({ name: "scout", model: "claude-opus-4" });
+  const webScoutAgent = makeAgent({ name: "web-scout", model: "claude-haiku" });
+  const paramAgents = new Map([
+    ["scout", scoutAgent],
+    ["web-scout", webScoutAgent],
+  ]);
+
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files" },
+        { agent: "web-scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2): scout: List files, ...`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent)}</dim>`
+      + `\n  <accent>web-scout</accent><dim>: ${formatAgentParams(webScoutAgent)}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: two tasks, paramAgents has only the second appends exactly one param line", () => {
+  const webScoutAgent = makeAgent({ name: "web-scout", model: "claude-haiku" });
+  const paramAgents = new Map([["web-scout", webScoutAgent]]);
+
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files" },
+        { agent: "web-scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2): scout: List files, ...`
+      + `\n  <accent>web-scout</accent><dim>: ${formatAgentParams(webScoutAgent)}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: duplicate agent name in tasks produces two separate param lines", () => {
+  const scoutAgent = makeAgent({ name: "scout", model: "claude-opus-4" });
+  const paramAgents = new Map([["scout", scoutAgent]]);
+
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files" },
+        { agent: "scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2): scout: List files, ...`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent)}</dim>`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent)}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: tasks present with paramAgents undefined renders title only, no param lines", () => {
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files" },
+        { agent: "web-scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(result, `${prefix}(2): scout: List files, ...`);
+});
+
+test("formatAgentParams: 6 tools renders first 5 plus a +1 more suffix", () => {
+  const agent = makeAgent({ tools: ["a", "b", "c", "d", "e", "f"] });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(
+    result,
+    "model: inherited · thinking: inherited · tools: a, b, c, d, e +1 more",
+  );
+});
+
+test("buildSubagentCallText: task exactly 80 chars renders without truncation", () => {
+  const exactTask = "a".repeat(80);
+  const result = buildSubagentCallText(
+    { agent: "scout", task: exactTask },
+    fakeTheme,
+    new Map(),
+  );
+
+  assert.equal(
+    result,
+    `<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: ${exactTask}`,
+  );
+});

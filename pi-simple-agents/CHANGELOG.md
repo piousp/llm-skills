@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1 — 2026-07-28
+
+- **Subagent toolbox now shows agent parameters.** The `subagent` tool's call title displays a
+  second line with `model`/`thinking`/`tools` for the resolved agent, in addition to the existing
+  agent name + task preview. New `src/render-call.ts` module (`formatAgentParams`,
+  `buildSubagentCallText`). Resolved at render time only once tool args are complete
+  (`context.argsComplete`), so no extra I/O happens while args are still streaming.
+  - Unset fields render as `inherited`; an empty `tools: []` renders as `none`; more than 5 tools
+    show the first 5 plus a `+k more` suffix.
+  - Parallel mode (`tasks: [...]`) shows one parameter line per resolving task entry, in order;
+    unresolved/unknown agent names are silently omitted (no placeholder).
+  - Fixes a pre-existing crash hazard: a partial/streaming `tasks` entry missing `agent` or `task`
+    previously could throw inside the renderer; it now falls back to `"?"`/empty text.
+
 ## 0.4.0 — 2026-07-28
 
 - **Real YAML frontmatter parsing.** `src/frontmatter.ts` now parses frontmatter with the `yaml`
