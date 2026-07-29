@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0 — 2026-07-29
+
+- **`defaultReads`, `defaultContext`, `skills`, and `description` are now connected to the
+  runtime.** All four fields were already parsed onto `AgentConfig` but had no effect; they now
+  drive real behavior, via 6 new internal modules: `src/default-reads.ts`, `src/loader-config.ts`,
+  `src/skills-filter.ts`, `src/subagent-session.ts`, `src/tool-description.ts`, `src/warn.ts`.
+  - **`defaultReads`** pre-loads files into the agent's context on startup via the SDK's
+    `agentsFilesOverride`. Relative paths resolve against the invocation's cwd (not the agent's
+    `.md` file); `~`/`~/...` expands to the home directory. A missing/unreadable/non-regular-file
+    entry produces a warning and is skipped, the rest of the list still loads; duplicate entries
+    (same resolved path) are deduped, first occurrence wins.
+  - **`defaultContext`'s documented default is corrected from `forked` to `fresh`.** The runtime
+    always ran `fresh` regardless of what the README said; the README now matches reality instead
+    of the behavior silently changing for every existing agent. An explicit `defaultContext:
+    forked` is now honored for real: it forks the caller's session into a dedicated
+    `~/.pi/agent/sessions/subagents/` directory (kept out of `pi --continue`'s recent-session
+    lookup); if the caller session isn't persisted, or the fork fails, it falls back to `fresh`
+    with a warning — a subagent run never fails because of this.
+  - **`skills`** now filters the inherited skill set down to the named subset (exact,
+    case-sensitive match), via the SDK's `skillsOverride`. Requested names with no match produce a
+    warning per run. `skills` combined with `inheritSkills: false` is contradictory config: it
+    warns and the filter is ignored. Still doesn't preload the named skills' content into context
+    — not the same as Claude Code's skill-preload semantics.
+  - **`description`** now builds the `subagent` tool's description shown to the model (a
+    `name: description` line per discovered agent), computed once at extension registration time;
+    agents added or renamed while pi is running aren't reflected until restart.
+  - **Fix:** the fresh session path now uses `SessionManager.inMemory(cwd)` instead of
+    `SessionManager.inMemory()`, so a subagent's session header records the actual invocation cwd
+    instead of the SDK's `process.cwd()` default.
+
 ## 0.4.1 — 2026-07-28
 
 - **Subagent toolbox now shows agent parameters.** The `subagent` tool's call title displays a

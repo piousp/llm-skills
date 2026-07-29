@@ -70,8 +70,10 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
 - `thinking`, `inheritSkills`, `inheritExtensions`, `defaultContext`, `skills` are parsed from
   frontmatter and populated onto `AgentConfig` by `discoverAgents` (previously declared on the
   type but silently dropped during parsing).
-- `skills` is populated but **not consumed**: nothing in this repo preloads the named skills'
-  content into the subagent's context yet.
+- `skills` is populated and now consumed via `skillsOverride` in `src/loader-config.ts` (see
+  below): it filters the inherited skill set down to the named subset. It still does not preload
+  the named skills' content into the subagent's context — not the same as Claude Code's
+  skill-preload semantics.
 
 ## parseFrontmatter
 
@@ -401,6 +403,158 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    and runs agents via `runAgentViaSdk` with concurrency cap of 4 via `mapWithConcurrencyLimit`.
    `ctx.modelRegistry` is forwarded to `runAgentViaSdk` unchanged as `modelRegistry`.
 7. Formats results via `formatRunResults`.
+
+As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
+`buildLoaderOptions` (`src/loader-config.ts`), which composes `resolveDefaultReads` and
+`filterSkillsByName`; and `runTasks`'s per-task session manager is glue over
+`createSubagentSessionManager` (`src/subagent-session.ts`). The 6 modules below are internal to
+`src/`, not exported from the package entry point.
+
+### src/default-reads.ts
+
+```typescript
+function resolveDefaultReads(
+  defaultReads: readonly string[],
+  cwd: string,
+  homeDir: string,
+): ResolvedDefaultReads;
+
+interface ResolvedDefaultReads {
+  files: Array<{ path: string; content: string }>; // path: resolved absolute path
+  warnings: string[];
+}
+```
+
+Resolves and eagerly reads the `defaultReads` frontmatter field. Per entry: `~`/`~/...` expands
+against `homeDir`; a non-absolute path resolves against `cwd` (the invocation's cwd, not the
+agent's `.md` location); an absolute path passes through unchanged. `files` preserves frontmatter
+order; duplicate entries (same resolved path) are deduped, first occurrence wins, including when
+the first occurrence fails to read (the dedupe check happens before the read). A missing,
+unreadable, or non-regular-file (e.g. a directory) entry produces one warning naming both the raw
+and resolved path, and is omitted from `files` — the rest of the list still loads. Never throws.
+Warnings are unprefixed (the caller adds `pi-simple-agents: `, per the `parseFrontmatter`
+convention). Pure given its parameters: no internal `os.homedir()`/`process.cwd()`.
+
+### src/loader-config.ts
+
+```typescript
+function buildLoaderOptions(
+  agent: AgentConfig,
+  cwd: string,
+  homeDir: string,
+): LoaderOptionsResult;
+
+interface LoaderOptionsResult {
+  options: MinimalLoaderOptions; // ConstructorParameters<typeof DefaultResourceLoader>[0]
+  warnings: string[];
+}
+```
+
+Builds the full `DefaultResourceLoader` options object, extracted out of
+`createMinimalResourceLoader` (the `inherit*` → `no*`/prompt-override mapping shown above is
+unchanged) and extended with two new overrides:
+
+- `agentsFilesOverride`, set iff `agent.defaultReads.length > 0`. Reads the files eagerly at
+  build time via `resolveDefaultReads` (its warnings flow into `result.warnings`); the returned
+  callback appends the resolved extras after the SDK's base `agentsFiles`, skipping any extra
+  whose resolved path already appears in the base.
+- `skillsOverride`, set iff `agent.skills !== undefined && agent.inheritSkills !== false`. The
+  callback filters the base skill set via `filterSkillsByName`, keeps `diagnostics` untouched, and
+  `console.warn`s any missing requested names — this happens inside the SDK's reload path, which
+  can't return warnings up through `result.warnings`, so it warns directly on every subagent run
+  that hits it (not once per process).
+- `agent.skills !== undefined && agent.inheritSkills === false` is contradictory config: it
+  produces a warning in `result.warnings` and no `skillsOverride` is attached.
+
+Never throws.
+
+### src/skills-filter.ts
+
+```typescript
+function filterSkillsByName<T extends { name: string }>(
+  base: readonly T[],
+  requested: readonly string[],
+): SkillsFilterResult<T>;
+
+interface SkillsFilterResult<T extends { name: string }> {
+  skills: T[];       // base order preserved
+  missing: string[]; // requested names with no match, request order, deduplicated
+}
+```
+
+Exact, case-sensitive whitelist filter over a `{ name: string }`-shaped collection. Generic over
+`T` since the algorithm doesn't depend on the SDK's `Skill` type (which isn't re-exported from the
+package's public entry point). Pure, total, never throws.
+
+### src/subagent-session.ts
+
+```typescript
+function createSubagentSessionManager<S>(
+  agent: Pick<AgentConfig, "name" | "defaultContext">,
+  callerSessionFile: string | undefined,
+  cwd: string,
+  sessionDir: string,
+  factory: SessionManagerFactory<S>,
+): SubagentSessionResult<S>;
+
+interface SessionManagerFactory<S> {
+  forkFrom(sourcePath: string, targetCwd: string, sessionDir: string): S; // may throw
+  inMemory(cwd: string): S;
+}
+
+interface SubagentSessionResult<S> {
+  manager: S;
+  warnings: string[];
+}
+```
+
+Decides fork-vs-fresh for a subagent's session. `defaultContext !== "forked"` (including
+`undefined` — the effective default is `fresh`) returns `factory.inMemory(cwd)`, no warnings.
+`"forked"` without a `callerSessionFile` (the caller session isn't persisted) falls back to
+`inMemory(cwd)` with a warning naming the agent. `"forked"` with a file calls
+`factory.forkFrom(callerSessionFile, cwd, sessionDir)`; if that throws (e.g. the source file was
+deleted or is empty/invalid), it catches and falls back to `inMemory(cwd)` with a warning that
+includes the underlying error message. Never throws itself — forking a subagent's session never
+aborts the run. Generic over `S` with an injected `factory`, mirroring the injection pattern
+already used by `RunAgentViaSdkOptions.createSession` in `src/run.ts`, so it's testable with fakes
+without touching disk.
+
+Wired in `runTasks` with `sessionDir = ~/.pi/agent/sessions/subagents/` (a dedicated directory, not
+the project's default session dir, so a forked subagent session never becomes the "most recent"
+session that `pi --continue` would resume) and `callerSessionFile = ctx.sessionManager.getSessionFile()`.
+
+### src/tool-description.ts
+
+```typescript
+const SUBAGENT_BASE_DESCRIPTION = "Run one or more subagents and wait for their results";
+
+function buildSubagentToolDescription(
+  agents: ReadonlyArray<Pick<AgentConfig, "name" | "description">>,
+): string;
+```
+
+Builds the `subagent` tool's description shown to the model. No agents → exactly
+`SUBAGENT_BASE_DESCRIPTION` (unchanged from before this field was wired up). One or more agents →
+base description + `"Available agents:"` + one `- name: description` line per agent, sorted by
+name for determinism (`readdirSync` order isn't guaranteed), each description `trim()`med (a
+non-string description, e.g. from a hand-edited override file, is treated as empty rather than
+throwing). Computed once, at extension registration time, against `process.cwd()` — the SDK has no
+API to re-describe an already-registered tool, so agents added or renamed while pi is running don't
+appear until restart. Pure.
+
+### src/warn.ts
+
+```typescript
+const WARN_PREFIX = "pi-simple-agents: ";
+
+function emitWarnings(warnings: string[]): void;
+```
+
+Shared helper: prefixes and `console.warn`s each warning in a list. Used by the glue in
+`extensions/index.ts` to emit the warnings collected from `buildLoaderOptions` and
+`createSubagentSessionManager`, keeping the `src/` warning-returning modules (which never call
+`console.warn` for run-level warnings themselves) consistent with the emission convention already
+used by `parseFrontmatter`.
 
 ## Running tests
 

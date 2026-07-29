@@ -164,7 +164,7 @@ pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all resu
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `name` | string | — **(required)** | Agent name. Used to reference it in `subagent`. |
-| `description` | string | — **(required)** | Short description visible in the UI. |
+| `description` | string | — **(required)** | Short description visible in the UI. Also used to build the `subagent` tool's description shown to the model (a `name: description` line per discovered agent), computed once when the pi session starts — agents added or renamed while pi is running aren't reflected until restart. |
 | `tools` | list | `[]` | Tools the agent is allowed to use. Comma-separated in YAML. Accepts pi tool names or Claude Code tool names (see [Claude Code compatibility](#claude-code-compatibility)). |
 | `disallowedTools` | list | `[]` | Tools the agent is denied, applied after `tools`. Comma-separated in YAML. Same name compatibility as `tools`. Forwarded to the SDK as `excludeTools`. |
 | `model` | string | *inherited from parent session* | Model to use, in `provider/modelId` form, e.g. `openrouter/gpt-4o`. Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`, `inherit`) are also accepted but have no effect on model resolution — see [Claude Code compatibility](#claude-code-compatibility). |
@@ -172,10 +172,10 @@ pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all resu
 | `inheritProjectContext` | boolean | `true` | If `false`, the agent starts without loading project context files (AGENTS.md, CLAUDE.md, etc.). |
 | `inheritSkills` | boolean | `true` | If `false`, the agent does not inherit the parent's active skills. |
 | `inheritExtensions` | boolean | `true` | If `false`, the agent starts without loading pi extensions. |
-| `defaultReads` | list | `[]` | Files to pre-load into the agent's context on startup. |
-| `defaultContext` | `forked` or `fresh` | `forked` | `forked`: copies the parent session's conversation history. `fresh`: starts with an empty conversation. |
+| `defaultReads` | list | `[]` | Files to pre-load into the agent's context on startup. Relative paths resolve against the **invocation's cwd** (not the agent's `.md` file location); `~`/`~/...` expands to the home directory; absolute paths pass through unchanged. A missing, unreadable, or non-regular-file entry produces a warning and is skipped — the rest of the list still loads. Duplicate entries (same resolved path) are deduped, first occurrence wins. |
+| `defaultContext` | `forked` or `fresh` | `fresh` | `fresh`: starts with an empty conversation (default). `forked`: attempts to copy the parent session's conversation history via a real persisted session under `~/.pi/agent/sessions/subagents/`. If the parent session isn't persisted, or the fork fails, it falls back to `fresh` with a warning — a subagent run never fails because of this. |
 | `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| `skills` | list | *inherited* | Explicit list of skills to load. When set, overrides automatic inheritance. **Limitation:** parsed and stored on `AgentConfig`, but nothing in this repo currently preloads the named skills' content into the subagent's context — this is not the same as Claude Code's skill-preload semantics. |
+| `skills` | list | *inherited* | Explicit whitelist of skills to load, matched by exact, case-sensitive name against the inherited set. When set, overrides automatic inheritance; requested names with no match produce a warning per run. Setting `skills` together with `inheritSkills: false` is contradictory config — it produces a warning and the filter is ignored. **Limitation:** the filter narrows *which* skills are available, but still doesn't preload the named skills' content into the subagent's context — this is not the same as Claude Code's skill-preload semantics. |
 
 ## Claude Code compatibility
 

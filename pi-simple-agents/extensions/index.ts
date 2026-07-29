@@ -9,8 +9,17 @@ import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "..
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
+import { buildLoaderOptions } from "../src/loader-config.ts";
+import { createSubagentSessionManager } from "../src/subagent-session.ts";
+import { buildSubagentToolDescription } from "../src/tool-description.ts";
+import { emitWarnings } from "../src/warn.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
+const SUBAGENT_SESSIONS_DIR = path.join(os.homedir(), ".pi/agent/sessions/subagents");
+const SESSION_MANAGER_FACTORY = {
+  forkFrom: (s: string, t: string, d: string) => SessionManager.forkFrom(s, t, d),
+  inMemory: (c: string) => SessionManager.inMemory(c),
+};
 
 const agentCache = new Map<string, CacheEntry<AgentConfig[]>>();
 const overridesCache = new Map<string, CacheEntry<AgentOverrides>>();
@@ -83,46 +92,49 @@ function normalizeTasks(params: { agent?: string; task?: string; tasks?: TaskEnt
 }
 
 function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    cwd,
-    agentDir: path.join(os.homedir(), ".pi", "agent"),
-    noExtensions: agent.inheritExtensions === false,
-    noSkills: agent.inheritSkills === false,
-    noContextFiles: agent.inheritProjectContext === false,
-    systemPromptOverride:
-      agent.systemPromptMode === "replace" && agent.systemPrompt
-        ? () => agent.systemPrompt
-        : undefined,
-    appendSystemPromptOverride:
-      agent.systemPromptMode === "append" && agent.systemPrompt
-        ? (base) => [...base, agent.systemPrompt]
-        : undefined,
-  });
+  const result = buildLoaderOptions(agent, cwd, os.homedir());
+  emitWarnings(result.warnings);
+  return new DefaultResourceLoader(result.options);
 }
 
 // Runs every task with concurrency limit (4) via the SDK runner.
 // Returns settled results in the same order as `tasks`.
 // No onUpdate calls during progress — the TUI renders a lightweight "Running..."
 // indicator by default, avoiding the cost of repeated full re-renders.
+interface RunTasksOptions {
+  cwd: string;
+  signal: AbortSignal | undefined;
+  modelRegistry: ModelRegistry;
+  callerSessionFile: string | undefined;
+}
+
 async function runTasks(
   tasks: TaskEntry[],
   resolvedAgents: AgentConfig[],
-  cwd: string,
-  signal: AbortSignal | undefined,
-  modelRegistry: ModelRegistry,
+  options: RunTasksOptions,
 ): Promise<AgentRunResult[]> {
+  const { cwd, signal, modelRegistry, callerSessionFile } = options;
   return mapWithConcurrencyLimit(tasks, 4, async (t, index) => {
     const agent = resolvedAgents[index];
 
     const resourceLoader = createMinimalResourceLoader(agent, cwd);
     await resourceLoader.reload();
 
+    const { manager, warnings } = createSubagentSessionManager(
+      agent,
+      callerSessionFile,
+      cwd,
+      SUBAGENT_SESSIONS_DIR,
+      SESSION_MANAGER_FACTORY,
+    );
+    emitWarnings(warnings);
+
     return runAgentViaSdk(agent, t.task, {
       modelRegistry,
       signal,
       createSession: createAgentSession,
       resourceLoader,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: manager,
       getModel: (provider, modelId) => modelRegistry.find(provider, modelId),
     });
   });
@@ -146,10 +158,11 @@ function renderSubagentResult(
 }
 
 export default function (pi: ExtensionAPI) {
+  const description = buildSubagentToolDescription(loadAvailableAgents(process.cwd()));
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Run one or more subagents and wait for their results",
+    description,
     parameters: SubagentParams,
     renderCall: renderSubagentCall,
     renderResult: renderSubagentResult,
@@ -167,7 +180,12 @@ export default function (pi: ExtensionAPI) {
         return errorResult(resolved.error);
       }
 
-      const results = await runTasks(tasks, resolved.value, ctx.cwd, signal, ctx.modelRegistry);
+      const results = await runTasks(tasks, resolved.value, {
+        cwd: ctx.cwd,
+        signal,
+        modelRegistry: ctx.modelRegistry,
+        callerSessionFile: ctx.sessionManager.getSessionFile(),
+      });
 
       const formatted = formatRunResults(results);
       return {
