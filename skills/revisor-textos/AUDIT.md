@@ -22,7 +22,7 @@ Fecha: 2025-07-29
 | 9 | `argparse.REMAINDER` puede tragarse `--dir` | **Baja** | `state.py:291` | Usar `nargs='*'` con manejo explícito en `cmd_init` |
 | 10 | Sin guía de fallback para subagentes no disponibles | **Baja** | `SKILL.md:55-56` | Añadir "si no está configurado, delegar mediante subagent tool" |
 | 11 | Verificación de corrupción de working file no implementada en stages | **Baja** | `SKILL.md:134-135` (mencionado) vs stages (ausente) | Referenciar la regla de restauración desde cada stage relevante |
-| 12 | Sin mecanismo de `--design-dir` o equivalente; state.py opera sobre cwd | **Informativa** | `state.py:260` | Depende del diseño; no es un bug si `revision/` en cwd es intencional |
+| 12 | ~~Sin mecanismo de `--design-dir` o equivalente; state.py opera sobre cwd~~ **OBSOLETO** — El fix reemplazó `--design-dir` con `Path.cwd().name` como clave de sesión. | **Informativa** | `state.py:260` | Resuelto: ahora usa `Path.cwd().name` en lugar de `--design-dir` |
 
 ---
 
@@ -90,13 +90,7 @@ A diferencia de lo que podría pensarse, revisor-textos sí tiene `cmd_status` (
 
 ### 2d. `--dir` como argparse global vs. posicional
 
-revisor-textos usa `parser.add_argument("--dir", default=".")` como argumento global, y `next` recibe `session_id` como posicional. El SKILL.md muestra la invocación como:
-
-```
-python3 <skill-dir>/state.py next <session_id> --dir <project-root>
-```
-
-Esto funciona porque argparse permite opciones entre posicionales, pero es frágil: si se invierte el orden (`--dir <path> next <session_id>`), argparse falla porque `next` está definido como subparser. iterative-design evita esto usando `--design-dir` como flag de `next` y `--dir` como flag de `sessions`, ambos dentro del subparser.
+**OBSOLETO (post-fix):** `state.py` ya no acepta `--design-dir`. La clave de sesión se deriva de `Path.cwd().name`, eliminando la necesidad de pasar `--design-dir` o `--dir` explícitamente. El argparse sigue usando `--dir` como argumento global con `default="."`, pero la sesión se resuelve por `cwd` en lugar de por un flag.
 
 ---
 

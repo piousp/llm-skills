@@ -1,81 +1,79 @@
-# Stage: Correct (Phase 2 — First Pass, Correction)
+# Stage: Correct (Phase 4 — Corrección consolidada en una sola pasada)
 
 ## Cuándo se ejecuta
-Cuando `state.py next` reporta `step: "correct"` en la primera pasada.
+Cuando `state.py next` reporta `phase: 4, phase_name: "correct"`.
 
 ## Actor
-`redactor` — agente con capacidad de escritura. Aplica correcciones y escribe el archivo.
+`redactor` — agente con capacidad de escritura. Aplica todas las correcciones del consolidado en una sola pasada.
 
 ## Inputs recibidos de state.py
 - `session_dir` — directorio de la sesión.
 - `working_file` — ruta absoluta de la copia de trabajo.
-- `findings_file` — ruta al archivo JSON de hallazgos.
-- `evaluator` — ID del evaluador.
+- `consolidado_path` — ruta a `<session_dir>/hallazgos-consolidado.md`.
 
 ## Proceso
 
-### 1. Leer los hallazgos (el coordinador)
+### 1. Confirmar con el usuario
 
-El coordinador lee el archivo de hallazgos (pequeño, siempre JSON) e incrusta su
-contenido en el prompt. El working file puede ser grande; el redactor lo lee y
-escribe directamente.
+Preguntar: "¿Aplicar todas las correcciones del consolidado en una sola pasada?"
 
-### 2. Delegar a `redactor`
+NO avanzar hasta que el usuario confirme explícitamente.
+
+### 2. Invocar al `redactor` (una sola pasada)
 
 Invocar al subagente `redactor` con este prompt estructurado:
 
 ```
 [CONTEXTO]
-Hallazgos a corregir:
---- INICIO HALLAZGOS ---
-<contenido del archivo findings_file, copiado textualmente>
---- FIN HALLAZGOS ---
+Hallazgos consolidados (ruta absoluta):
+<consolidado_path>
 
 Archivo a modificar (ruta absoluta):
 <working_file>
 
 [INSTRUCCION]
 Modo: repair
-1. Lee el archivo <working_file> usando la herramienta `read` con la ruta exacta.
-2. Aplica las correcciones sugeridas en los hallazgos al contenido del archivo.
-3. Escribe el archivo corregido COMPLETO en <working_file> usando la herramienta `write`.
+1. Lee el archivo <consolidado_path> usando la herramienta `read` con la ruta exacta.
+2. Lee el archivo <working_file> usando la herramienta `read` con la ruta exacta.
+3. Aplica TODAS las correcciones sugeridas en los hallazgos consolidados al contenido del archivo, en una sola pasada.
+4. Escribe el archivo corregido COMPLETO en <working_file> usando la herramienta `write` (sobrescribiendo el original).
 
 [LIMITES]
-- No leas ningun otro archivo — solo el working file indicado.
+- No leas ningun otro archivo — solo el consolidado y el working file indicados.
 - No introduzcas cambios no solicitados.
 - No alteres el formato Markdown del documento.
 - Preserva el contenido sustancial — solo corrige lo señalado en los hallazgos.
 - Escribe el archivo completo (no solo el diff).
+- Output: sigue el protocolo definido en `references/subagent-protocol.md`.
 ```
 
 ### 3. Verificar
 
-Después de que `redactor` confirme que escribió el archivo, verificar que
-`<working_file>` se modificó (fecha de modificación).
+El redactor debe devolver el output segun el protocolo en `references/subagent-protocol.md`. Verificar también que `<working_file>` se modificó (fecha de modificación posterior a la llamada).
 
-### 4. Marcar evaluador como corregido
+### 4. Crear marcador único
 
-Crear un archivo marcador:
-```
-<session_dir>/corregido-<evaluator>.md
-```
+Crear un archivo marcador en `<session_dir>/correccion.md`:
 
-Contenido:
-```
-# Correccion aplicada: <evaluator>
-- Fecha: <fecha>
-- Hallazgos corregidos: <N>
+```markdown
+# Corrección
+
+- Fecha: <fecha ISO 8601>
+- Status: applied | failed
+- Razón: <reason del redactor, solo si failed>
+- Total hallazgos procesados: <N>
 ```
 
-### 5. Presentar al usuario
+- **applied**: si el output del redactor empieza con "Work finished" (case-insensitive, con whitespace, segun el protocolo en `references/subagent-protocol.md`).
+- **failed**: en cualquier otro caso (incluyendo "FAILURE: ..." o cualquier output inesperado). La razón es el output completo del redactor.
 
-Mostrar al usuario:
-- Evaluador corregido
-- Número de correcciones aplicadas
+### 5. Manejo de fallos
 
-Preguntar: "¿Continuar con el siguiente evaluador?"
+Si el redactor devuelve output vacío, error, o el output no sigue el protocolo en `references/subagent-protocol.md`:
+1. Re-delegar una vez con el mismo prompt.
+2. Si falla de nuevo, escribir `correccion.md` con `Status: failed` y `Razón: <output del segundo intento>`.
+3. No hay más pases — el pipeline termina aquí.
 
 ### 6. Avanzar
 
-El siguiente `state.py next` detectará que `corregido-<evaluator>.md` existe
-y avanzará al siguiente evaluador o a la siguiente fase.
+El siguiente `state.py next` detectará que `correccion.md` existe y reportará `phase: "done"`.
