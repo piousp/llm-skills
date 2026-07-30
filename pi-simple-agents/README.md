@@ -186,12 +186,71 @@ silently falls back to the session default. A bare alias without a `/` (e.g. `"s
 rejected outright — the whole `subagent` call fails with a validation error before any agent
 runs. Always use the full `provider/modelId` form — see [Model aliases](#model-aliases).
 
+### Overriding tools per invocation
+
+Both modes accept an optional `tools` param — an array of pi tool names. Unlike frontmatter
+`tools`, this does **not** accept Claude Code tool-name aliases (`Read`, `Grep`, etc.) — that
+mapping is frontmatter-only, see [Claude Code compatibility](#claude-code-compatibility). Only
+native pi tool names (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, ...) are recognized
+here.
+
+In single mode, `tools` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", tools: ["read", "grep"]
+```
+
+In parallel mode, `tools` goes inside each entry of `tasks[]` — a top-level `tools` alongside
+`tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", tools: ["find", "ls"]
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+`tools` is a **total replacement**, not a merge — it does not add to or subtract from the agent's
+configured tool list, it replaces it outright for that call. An explicit `tools: []` means "no
+tools for this call"; omitting `tools` entirely means "use whatever settings.json/frontmatter
+already resolved" — these are two different things. The `subagent` tool's call display always
+shows the effective (post-override) tool list, so a call with `tools: []` renders as `tools: none`
+in that line, never the agent's configured tools.
+
+### Overriding skills per invocation
+
+Both modes accept an optional `skills` param — an array of skill names, matched the same way as
+frontmatter `skills`: an explicit whitelist, by exact case-sensitive name against the inherited
+set.
+
+In single mode, `skills` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", skills: ["tdd"]
+```
+
+In parallel mode, `skills` goes inside each entry of `tasks[]` — a top-level `skills` alongside
+`tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", skills: ["tdd"]
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+As with `tools`, `skills` is a **total replacement**, not a merge. An explicit `skills: []` means
+"no skills for this call"; omitting `skills` means "inherit whatever settings.json/frontmatter
+already resolved." This has the same limitation as the frontmatter `skills` field (see
+[Frontmatter fields](#frontmatter-fields) above): the whitelist narrows *which* skills are
+available, but doesn't preload the named skills' content into the subagent's context.
+
 ### Bundled skill: `invoking-subagents`
 
 The package ships a self-discovering Agent Skill at
 [skills/invoking-subagents/SKILL.md](./skills/invoking-subagents/SKILL.md) that teaches single and
-parallel invocation and the `model` override. It loads automatically once the package is
-installed, and can also be invoked explicitly as `/skill:invoking-subagents`.
+parallel invocation and the `model`, `tools`, and `skills` overrides. It loads automatically once
+the package is installed, and can also be invoked explicitly as `/skill:invoking-subagents`.
 
 While a subagent runs, the `subagent` tool's call display shows a live status line per task:
 `<agent> · tools: <N> · <status>`, where `<status>` is `working…` (no tool started yet),
@@ -355,10 +414,14 @@ override user settings (`~/.pi/agent/settings.json`) when both set it.
 Invocation (subagent call)  >  Project settings  >  User settings  >  Frontmatter (.md file)
 ```
 
-Merge is field-level. If the project override only changes `model`, the rest of the fields defined in the user override or frontmatter are preserved. The invocation-level `model` param (see
-[Overriding the model per invocation](#overriding-the-model-per-invocation)) only overrides `model`
-for that one call — it doesn't touch `tools`, `thinking`, or any other field, unlike
-settings-level `agentOverrides`, which can override any field.
+Merge is field-level: each present field replaces independently, and any field left absent falls
+through to the next-lower precedence layer. Invocation-level overrides cover `model` (see
+[Overriding the model per invocation](#overriding-the-model-per-invocation)), `tools` (see
+[Overriding tools per invocation](#overriding-tools-per-invocation)), and `skills` (see
+[Overriding skills per invocation](#overriding-skills-per-invocation)) — each overrides only its
+own field for that one call. `thinking` and `disallowedTools` are **not** overridable at
+invocation level — they can only be changed via settings-level `agentOverrides` or frontmatter,
+which can override any field, including those two.
 
 ### Complete example
 

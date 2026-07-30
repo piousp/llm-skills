@@ -20,6 +20,7 @@ import {
   discoverAgents,
   loadSettings,
   applyOverrides,
+  applyInvocationOverride,
   runAgentViaSdk,
   mapWithConcurrencyLimit,
   resolveConcurrency,
@@ -31,6 +32,7 @@ import {
   createAgentRegistry,
   type AgentConfig,
   type AgentOverrides,
+  type InvocationOverride,
   type AgentRunResult,
   type CacheEntry,
   type RunAgentViaSdkOptions,
@@ -69,7 +71,7 @@ interface AgentConfig {
 }
 ```
 
-Fields are resolved from YAML frontmatter with defaults filled in by `discoverAgents`, then merged with overrides via `applyOverrides`.
+Fields are resolved from YAML frontmatter with defaults filled in by `discoverAgents`, then merged with overrides via `applyOverrides` (settings-level) and, per invocation, via `applyInvocationOverride` (see below).
 
 - `disallowedTools` — denylist, forwarded to the SDK's `createSession` as `excludeTools`, applied
   after `tools`. Accepts the same Claude Code tool-name compatibility as `tools` (see
@@ -81,6 +83,37 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
   below): it filters the inherited skill set down to the named subset. It still does not preload
   the named skills' content into the subagent's context — not the same as Claude Code's
   skill-preload semantics.
+
+## InvocationOverride and applyInvocationOverride
+
+Per-invocation override applied on top of an already-configured `AgentConfig`, distinct from the
+settings-level `AgentOverrides` merged by `applyOverrides` above: this one comes from the
+`subagent` tool call's own arguments (single-mode `{model, tools, skills}`, or a `tasks[]` entry's
+own `model`/`tools`/`skills`), not from `settings.json`.
+
+```typescript
+interface InvocationOverride {
+  model?: string;
+  tools?: string[];
+  skills?: string[];
+}
+
+function applyInvocationOverride(
+  agent: AgentConfig,
+  override: InvocationOverride,
+): AgentConfig;
+```
+
+Pure merge, presence-gated per field: only fields actually present (not `undefined`) on `override`
+replace the corresponding field on `agent` — `tools: []`/`skills: []` are valid and replace with an
+empty array; only `undefined` means "leave this field alone". When `override` has no fields set at
+all (`model`, `tools`, and `skills` all `undefined`), `applyInvocationOverride` returns the SAME
+`agent` reference, not a copy.
+
+Used at two call sites: `extensions/index.ts`'s `runSingleTask`, which computes one
+`effectiveAgent` reused for the whole run (see [Extension internals](#extension-internals)), and
+`src/render-call.ts`'s `formatAgentParams`, which computes the effective values shown in the
+tool_box call line (see [src/render-call.ts](#srcrender-callts) below).
 
 ## parseFrontmatter
 
@@ -400,15 +433,40 @@ function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams>;
 ### SubagentParams
 
 ```typescript
+type TaskEntry = { agent: string; task: string } & InvocationOverride;
+
 type SubagentParams =
-  | { agent: string; task: string; tasks?: undefined }
-  | { agent?: undefined; task?: undefined; tasks: Array<{ agent: string; task: string }> };
+  | ({ agent: string; task: string; tasks?: undefined } & InvocationOverride)
+  | {
+      agent?: undefined;
+      task?: undefined;
+      model?: undefined;
+      tools?: undefined;
+      skills?: undefined;
+      tasks: TaskEntry[];
+    };
 ```
 
+Both call shapes intersect `InvocationOverride` (see above): single mode carries `model`/`tools`/
+`skills` directly on the top-level object, `tasks` mode carries them per entry via `TaskEntry`.
+`invocationOverrideOf(t)` (`src/validate.ts`) extracts just the present override fields off either
+shape (a `TaskEntry`, or validated single-mode args) into a plain `InvocationOverride`, for feeding
+to `applyInvocationOverride`.
+
 Validation rules:
-- Exactly one of `{agent, task}` or `{tasks: [...]}` must be provided (not both, not neither).
+- Exactly one of `{agent, task, ...}` or `{tasks: [...]}` must be provided (not both, not neither).
 - `tasks` array must have between 1 and 8 entries (`MAX_PARALLEL_TASKS`).
-- Each entry must be `{ agent: string, task: string }` with non-empty strings.
+- Each entry must be `{ agent: string, task: string }` with non-empty strings, plus optional
+  per-entry `model` (a `"provider/modelId"` string, same format/validation as single-mode `model`
+  below), `tools` (an array of strings), and `skills` (an array of strings). `[]` is a valid value
+  for `tools`/`skills` and is distinct from omitting the field: omitted means "inherit the agent's
+  configured value", `[]` means "override to empty".
+- In single mode, a top-level `model` must be a `"provider/modelId"` string (rejected otherwise
+  with a message naming the required format); top-level `tools`/`skills` must each be an array of
+  strings.
+- In `tasks` mode, top-level `model`/`tools`/`skills` are rejected outright (checked via a small
+  loop over the three fields before validating `tasks` itself) with an error naming the field and
+  pointing at the per-entry equivalent — overrides only apply per task in this mode.
 
 ### ValidationResult
 
@@ -585,12 +643,18 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 `runTasks`'s per-task worker, `runSingleTask` (resource loader creation/reload, session manager
 creation, the SDK run, and progress-tracker teardown), is exported from `extensions/index.ts`
 (was module-private) purely so its unit tests can call it directly — not part of a stable public
-API, just a visibility change for testability.
+API, just a visibility change for testability. `runSingleTask` computes ONE
+`effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t))` per task and reuses
+that single reference across all three of its call sites — `createMinimalResourceLoader`,
+`createSubagentSessionManager`, and `runAgentViaSdk` — so a per-invocation `model`/`tools`/`skills`
+override (the task's own override fields, see [InvocationOverride](#invocationoverride-and-applyinvocationoverride)
+above) applies consistently to resource loading, session naming/forking, and the actual SDK run —
+not just to model resolution.
 
 As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
 `buildLoaderOptions` (`src/loader-config.ts`), which composes `resolveDefaultReads` and
 `filterSkillsByName`; and `runTasks`'s per-task session manager is glue over
-`createSubagentSessionManager` (`src/subagent-session.ts`). The 6 modules below are internal to
+`createSubagentSessionManager` (`src/subagent-session.ts`). The 7 modules below are internal to
 `src/`, not exported from the package entry point.
 
 ### src/default-reads.ts
@@ -654,6 +718,54 @@ interactive mode, and subagent sessions are headless, so this skips theme loadin
 on every subagent's `resourceLoader.reload()`.
 
 Never throws.
+
+### src/render-call.ts
+
+```typescript
+type RenderTaskEntry = { agent?: string; task?: string } & InvocationOverride;
+
+type SubagentCallArgs = {
+  agent?: string;
+  task?: string;
+  tasks?: RenderTaskEntry[];
+} & InvocationOverride;
+
+interface CallTheme {
+  fg(color: "toolTitle" | "accent" | "dim", text: string): string;
+  bold(text: string): string;
+}
+
+function buildSubagentCallText(
+  args: SubagentCallArgs,
+  theme: CallTheme,
+  paramAgents: ReadonlyMap<string, AgentConfig>,
+): string;
+
+function formatAgentParams(agent: AgentConfig, override?: InvocationOverride): string;
+```
+
+Builds the `tool_box` call display text for the `subagent` tool — the one/two-line summary shown
+while/after the tool call renders in single mode (one `agent`/`task`) or parallel mode (a `tasks`
+array). `buildSubagentCallText` dispatches on whether `args.tasks` is non-empty; each branch looks
+up the named agent(s) in `paramAgents` and, when found, appends a dim parameter line built by
+`formatAgentParams`.
+
+- `formatAgentParams` merges `agent` with `override` via `applyInvocationOverride` first, then
+  renders the *effective* (post-invocation-override) `model`/`tools`/`skills` — not the agent's
+  raw configured values. This is deliberate: before this module took its current shape, the render
+  showed the agent's configured values even when an invocation override changed what would
+  actually run, which was misleading.
+- `thinking` has no `InvocationOverride` field, so unlike `model`/`tools`/`skills` it's always read
+  directly off `agent.thinking` — never merged through `applyInvocationOverride`.
+- The rendered param line has the fixed shape
+  `model: ... · thinking: ... · tools: ... · skills: ...`.
+- `formatList` (private, generalized from an earlier `formatTools`) renders both the `tools` and
+  `skills` segments: `undefined` → `"inherited"`, empty array → `"none"`, otherwise the first
+  `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer.
+- In parallel mode (`buildSubagentCallText` → `buildParallelCallText`), each task's own
+  `tools`/`skills`/`model` override is looked up via `invocationOverrideOf(t)` and merged via
+  `applyInvocationOverride` independently per task/line — one task's override never bleeds into
+  another task's rendered line.
 
 ### src/skills-filter.ts
 

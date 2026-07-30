@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.9.0 — 2026-07-30
+
+- **New optional `tools`/`skills` params on the `subagent` tool invocation**, extending the
+  0.8.0 `model` override to the same two fields. Same placement rule as `model`: single mode
+  top-level, or per-entry inside each `tasks[]` item (top-level `tools`/`skills` alongside `tasks`
+  is rejected, same as `model`). Both are arrays of strings, **total replacement** (not merge) of
+  whatever the agent would otherwise resolve. `tools` accepts native pi tool names only — no
+  Claude Code tool-name aliasing in this invocation path (frontmatter `tools` still maps Claude
+  Code names, unchanged). `skills` is a whitelist by exact case-sensitive name against the
+  inherited set, same semantics as frontmatter `skills`. `[]` is a valid explicit value meaning
+  "none" for that call, distinct from omitting the field ("inherit whatever settings.json/
+  frontmatter already resolved"). Precedence now covers `model`, `tools`, and `skills`:
+  invocation > project settings > user settings > frontmatter > session default. `disallowedTools`
+  remains settings/frontmatter-only, out of scope for invocation-level override.
+- **`applyModelOverride` generalized into `applyInvocationOverride(agent, {model?, tools?,
+  skills?})`** (`src/agents.ts`) — one pure, presence-gated merge function now shared by both the
+  runtime path (`extensions/index.ts::runSingleTask`, which computes a single `effectiveAgent` and
+  reuses it for resource-loader creation, session-manager creation, and the SDK run — a fix in
+  itself, see below) and the render path (`src/render-call.ts::formatAgentParams`).
+- **Fix: the `subagent` tool's call display now renders effective (post-invocation-override)
+  `tools`/`skills`, not the agent's configured values.** Previously (and still true for `model`
+  as of 0.8.0) the render showed the agent's *configured* values regardless of any invocation
+  override — e.g. a call with `tools: []` would render the agent's full configured tool list.
+  `formatAgentParams` now merges via `applyInvocationOverride` internally before rendering. The
+  call display also gained a new `skills: ...` segment (previously not rendered at all).
+- **Fix: an invocation-level `skills` override no longer reaches only `runAgentViaSdk`.** An
+  earlier draft of this change applied the override just before the SDK call, leaving
+  `createMinimalResourceLoader`'s resource loading (the only real consumer of `agent.skills`, via
+  `buildSkillsOverride`) working off the pre-override agent — silently inert. Fixed by hoisting the
+  merge to the top of `runSingleTask` and reusing one `effectiveAgent` everywhere.
+- **Known, documented gap:** no unit test directly exercises `runSingleTask`'s wiring of the
+  effective agent into `createMinimalResourceLoader`/`createSubagentSessionManager`/
+  `runAgentViaSdk` (ESM named imports aren't mockable without `--experimental-test-module-mocks`,
+  not enabled in this repo — same limitation already accepted for the `model` override). Covered
+  by composition (`agents.test.ts`, `run.test.ts`, `loader-config.test.ts`) plus manual live
+  validation.
+- **Known, documented gap:** an agent with `inheritSkills: false` combined with an invocation
+  `skills` override renders the requested skills as if effective, but the loader discards them
+  all at runtime per the existing contradictory-config rule — surfaced only via `console.warn`,
+  not in the render. Latent: no shipped agent currently sets `inheritSkills: false`.
+- Docs updated: README.md (`Overriding tools per invocation` / `Overriding skills per invocation`
+  sections, corrected precedence-rules paragraph), `skills/invoking-subagents/SKILL.md`
+  (`Forcing tools or skills for one invocation` section, extended description, new error cases),
+  DEVELOPER.md (new `InvocationOverride`/`applyInvocationOverride` section, corrected
+  `SubagentParams`/`TaskEntry` reference — this closes a doc gap left over from 0.8.0's `model`
+  override too — and a new `src/render-call.ts` module section).
+
 ## 0.8.1 — 2026-07-30
 
 Internal tech-debt paydown from a strict `pablo-code-philosophy` review. No changes to the

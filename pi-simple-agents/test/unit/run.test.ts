@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
-import { applyOverrides, applyModelOverride, type AgentConfig } from "../../src/agents.ts";
+import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
 class FakeAgentSession {
@@ -552,7 +552,7 @@ test("runAgentViaSdk: precedence chain — invocation override wins over setting
   };
 
   const [afterSettingsOverride] = applyOverrides([baseAgent], settingsOverrides);
-  const afterInvocationOverride = applyModelOverride(afterSettingsOverride!, "anthropic/claude-opus-4-8");
+  const afterInvocationOverride = applyInvocationOverride(afterSettingsOverride!, { model: "anthropic/claude-opus-4-8" });
 
   let capturedModel: unknown = undefined;
   const fakeSession = new FakeAgentSession("done");

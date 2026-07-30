@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DefaultResourceLoader, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import extensionFactory, { runSingleTask } from "../../extensions/index.ts";
+import extensionFactory, { runSingleTask, SubagentParams } from "../../extensions/index.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker } from "../../src/progress.ts";
@@ -40,6 +40,19 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
     ...overrides,
   };
 }
+
+// (S16) Smoke-level only: full schema-shape assertions belong to
+// test/unit/schema-consistency.test.ts (Bucket 4); this just confirms the
+// tools/skills keys exist at both the top level and inside tasks[] items.
+test("SubagentParams: has tools/skills keys at both top level and tasks[] item level", () => {
+  const props = SubagentParams.properties;
+  assert.ok("tools" in props);
+  assert.ok("skills" in props);
+
+  const taskItemProps = (props.tasks as any).items.properties;
+  assert.ok("tools" in taskItemProps);
+  assert.ok("skills" in taskItemProps);
+});
 
 // (a)
 test("execute: neither {agent, task} nor {tasks} returns validateSubagentParams' own error message as isError", async () => {
