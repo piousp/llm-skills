@@ -21,4 +21,6 @@ Cada hallazgo debe seguir esta estructura:
 - `desconocida` solo para hallazgos globales de todo el documento (por ejemplo, interlineado APA
   aplicado uniformemente) — en ese caso, `Ubicación` debe describir el alcance completo.
 - `Ubicación` conserva su rol de contexto legible para humanos; ya no es la clave usada para
-  agrupar hallazgos (esa clave viene del campo `Línea`, parseado mecánicamente por `state.py`).
+  agrupar hallazgos. `state.py` deriva el párrafo desde `working.md` (dividiendo por líneas en
+  blanco) y agrupa por párrafo. El campo `Línea` sigue siendo el número que el evaluador reporta;
+  la traducción a párrafo es interna a `state.py`.

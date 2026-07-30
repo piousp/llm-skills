@@ -147,7 +147,7 @@ Reglas:
 | **1 — Init** | Seleccionar archivo + evaluadores, crear sesión | Coordinador |
 | **2 — Evaluate** | Evaluación paralela de todos los evaluadores via `subagent tasks` | analyst |
 | **3 — Consolidate** | El coordinador ejecuta `state.py consolidate`; determinístico, sin subagente | Coordinador |
-| **4 — Plan** | `state.py group` agrupa mecánicamente por ubicación; el `worker` redacta un plan de corrección conjunto por grupo | worker |
+| **4 — Plan** | `state.py group` agrupa mecánicamente por párrafo (derivado de `working.md` por `state.py group`); el `worker` redacta un plan de corrección conjunto por grupo | worker |
 | **5 — Correct** | Una sola pasada del `worker` con `plan-correccion.md` | worker |
 | **Done** | Pipeline terminado; notificar al usuario | Coordinador |
 

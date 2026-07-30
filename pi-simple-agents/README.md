@@ -23,118 +23,9 @@ pi-simple-agents looks for these files in `~/.pi/agent/agents/` and exposes them
 
 Create a `.md` file in `~/.pi/agent/agents/`. The YAML frontmatter defines the configuration, and the body is the system prompt.
 
-### Example: scout agent (`~/.pi/agent/agents/scout.md`)
+You can also symlink claude-styled agents (directory/AGENT.md)
+See the `scout.md` example agent in [agents-examples/scout.md](agents-examples/scout.md)
 
-```markdown
----
-name: scout
-description: >
-  Fast codebase recon — finds files, symbols, patterns, and references.
-  No analysis, no evaluation, no implementation. Returns compressed
-  findings (file paths, line numbers, excerpts) to the caller.
-tools: read, grep, find, ls
-systemPromptMode: append
-inheritProjectContext: false
----
-
-You are **scout**, a fast codebase reconnaissance agent. Your job is to
-receive a search query and return compressed findings: file paths, line
-numbers, and relevant excerpts. You do not analyze, evaluate, or implement
-— you only locate and report.
-
-## How you work
-
-1. **Understand what to search for.** Read the prompt. Identify:
-   - What files, symbols, patterns, or references you need to find
-   - Where to look (directories, extensions, file names)
-   - How to narrow results (avoid noise)
-
-2. **Search intelligently.** Prefer search tools over reading entire files:
-   - `grep` for text patterns, symbols, imports, references
-   - `find` / `glob` for locating files by name or extension
-   - `read` only to confirm specific lines you need
-   - `ls` to explore directory structure
-
-3. **Compress findings.** Do not return full files or extensive dumps.
-   Report only:
-   - File path and line number
-   - Relevant excerpt (1-5 lines of context)
-   - What you found there
-
-## Rules
-
-- **Read-only and search only.** Do not edit, write, or execute commands
-  that alter the system. Only use `read`, `grep`, `find`, `ls`.
-- **One task at a time.** The prompt contains exactly one query. Do not
-  invent additional searches or anticipate next steps.
-- **Prefer precision over exhaustiveness.** Better 3 exact results than 30
-  with noise. If the query is ambiguous, ask for clarification before
-  searching blindly.
-- **Do not interpret or evaluate.** Report what you found, not what you
-  think.
-- **If you find nothing, say so.** "No results found" is a valid answer.
-
-## Output format
-
-Always end with a structured summary:
-
-```
-## Search Results
-
-**Query:** <one line restating what was asked to find>
-
-**Files found:** <N>
-
-**Findings:**
-
-<path/file>:<line>
-  <code snippet>
-  → <what it is>
-
-**Status:** FOUND | NOT_FOUND | PARTIAL
-```
-```
-
-### Example: web-scout agent (`~/.pi/agent/agents/web-scout.md`)
-
-```markdown
----
-name: web-scout
-description: Fast web searcher — runs 2 parallelizable queries, picks the best source, returns direct results
-tools: web_search, web_read
-systemPromptMode: replace
-inheritProjectContext: false
----
-
-You are a fast web search agent. Your task is to find information on the
-web and return it directly and concisely.
-
-- Short answers, no filler, no generic introductions.
-- No emojis, no embellishments.
-
-## Process
-
-1. Run **2 web_search** queries with different angles on the topic.
-2. Review both result sets and pick the most promising URL (the one
-   giving the most direct, current, and authoritative answer).
-3. Read that URL with **web_read**.
-4. Return the information found. No report structure, no source metadata.
-   Just the data.
-
-## Rules
-
-- Do not fabricate sources or URLs.
-- No second pass or additional searches.
-- If nothing useful is found, say so clearly.
-- Prefer depth over breadth: one well-read source over three snippets.
-
-## Hard limits
-
-- Only use web_search and web_read. Do not use write, bash, or any other
-  tool.
-- Do not modify any files.
-- Maximum 2 web_search and 1 web_read per invocation.
-```
 
 ## Using the `subagent` tool
 
@@ -142,22 +33,34 @@ Once installed and your agents are defined, you can invoke them from any pi sess
 
 ### Single mode — one agent, one task
 
-```
+```bash
 subagent agent: "scout", task: "Find all functions that use fetch() in src/"
 ```
 
 The `scout` agent runs, does its work, and returns the result.
 
+You can of course, just talk to the LLM:
+
+```bash
+Use the agent scout to find all the functions that use fetch in src
+```
+
 ### Parallel mode — multiple agents simultaneously
 
-```
+```bash
 subagent tasks: [
   agent: "scout", task: "List all .ts files in src/"
   agent: "web-scout", task: "Find the latest version of the API docs"
 ]
 ```
 
-pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all results.
+Natural language example:
+
+```bash
+Use 2 agents in parallel: one scout to find all .ts files in src and one web-scoutto find the latest version of the API docs
+```
+
+pi-simple-agents runs agents in parallel and returns all results.
 
 ### Overriding the model per invocation
 
@@ -167,14 +70,20 @@ the rest is the model ID (e.g. `"openrouter/anthropic/claude-sonnet-4-5"`).
 
 In single mode, `model` is a top-level param:
 
-```
+```bash
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", model: "anthropic/claude-opus-4-8"
+```
+
+It can also be done by natural language:
+
+```bash
+Use the agent scout with model "anthropic/claude-opus-4-8" to find all the functions that use fetch in src
 ```
 
 In parallel mode, `model` goes inside each entry of `tasks[]` — a top-level `model` alongside
 `tasks` is rejected:
 
-```
+```bash
 subagent tasks: [
   agent: "scout", task: "List all .ts files in src/", model: "anthropic/claude-haiku-4-5"
   agent: "web-scout", task: "Find the latest version of the API docs"

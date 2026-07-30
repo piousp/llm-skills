@@ -377,25 +377,105 @@ _SEVERIDAD_RANK = {"alta": 3, "media": 2, "baja": 1, "informativa": 0}
 
 
 class _ClaveGrupo(NamedTuple):
-    kind: str  # "linea" | "texto"
+    kind: str  # "parrafo" | "texto"
     valor: str
 
     def __str__(self) -> str:
         return f"{self.kind}:{self.valor}"
 
 
-def _clave_grupo(finding: "Hallazgo") -> _ClaveGrupo:
-    """Clave de agrupamiento = SOLO ubicacion normalizada, nunca severidad.
-    kind='linea' si finding['linea'] no es None (comparacion exacta de
-    string, rangos distintos nunca se fusionan); si no, kind='texto' con
-    valor=ubicacion casefold + whitespace colapsado + strip.
+def _build_paragraph_index_from_text(text: str) -> dict[int, int]:
+    """Pure function: split text into paragraphs by blank lines, return
+    {line_number: paragraph_number} for every non-blank line.
+
+    - 1-indexed (first line is 1, first paragraph is 1)
+    - A blank line is one whose stripped content is empty (line.strip() == "")
+    - Blank lines are boundaries, not in any paragraph
+    - Consecutive non-blank lines share a paragraph
+    - Returns {} when text is empty or has no non-blank lines
+    """
+    if not text:
+        return {}
+
+    lines = text.splitlines()
+    result: dict[int, int] = {}
+    paragraph = 0
+    in_paragraph = False
+
+    for i, line in enumerate(lines, start=1):
+        if line.strip() == "":
+            in_paragraph = False
+        else:
+            if not in_paragraph:
+                paragraph += 1
+                in_paragraph = True
+            result[i] = paragraph
+
+    return result
+
+
+def _build_line_to_paragraph_mapping(working_path: Path) -> dict[int, int]:
+    """Read working_path (UTF-8) and return line→paragraph mapping.
+    Returns {} when the file does not exist, cannot be read, or contains
+    no non-blank lines. Delegates to _build_paragraph_index_from_text."""
+    try:
+        text = working_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return {}
+    return _build_paragraph_index_from_text(text)
+
+
+def _ubicacion_a_texto_clave(ubicacion: str | None) -> str:
+    """Normaliza una Ubicación para usarla como valor de la clave 'texto':
+    casefold + colapsar whitespace + strip. None -> ''. """
+    return re.sub(r"\s+", " ", (ubicacion or "").casefold()).strip()
+
+
+def _start_line_from_linea(linea: str) -> int | None:
+    """Parsea la línea de inicio de un campo Línea con formato 'N' o 'N-M'.
+    Devuelve el entero de la línea de inicio, o None si no es parseable."""
+    linea = linea.strip()
+    if not linea:
+        return None
+    if "-" in linea:
+        start_str = linea.split("-", 1)[0].strip()
+    else:
+        start_str = linea
+    try:
+        return int(start_str)
+    except ValueError:
+        return None
+
+
+def _clave_grupo(
+    finding: "Hallazgo",
+    line_to_paragraph: dict[int, int] | None = None,
+) -> _ClaveGrupo:
+    """Clave de agrupamiento con soporte de parrafos.
+
+    Arbol de decision:
+    1. finding['linea'] is None -> ("texto", normalize(ubicacion))
+    2. Extraer start line: si linea es "N" -> N; si "N-M" -> N;
+       si no es parseable -> fallback a texto
+    3. line_to_paragraph is not None y start in mapping ->
+       ("parrafo", str(mapping[start]))
+    4. Sino -> ("texto", normalize(ubicacion))
     """
     linea = finding["linea"]
-    if linea is not None:
-        return _ClaveGrupo("linea", linea)
-    ubicacion = finding["ubicacion"] or ""
-    normalizada = re.sub(r"\s+", " ", ubicacion.casefold()).strip()
-    return _ClaveGrupo("texto", normalizada)
+    if linea is None:
+        return _ClaveGrupo("texto", _ubicacion_a_texto_clave(finding["ubicacion"]))
+
+    # Extraer start line
+    start = _start_line_from_linea(finding["linea"])
+    if start is None:
+        # No parseable -> fallback a texto
+        return _ClaveGrupo("texto", _ubicacion_a_texto_clave(finding["ubicacion"]))
+
+    if line_to_paragraph is not None and start in line_to_paragraph:
+        return _ClaveGrupo("parrafo", str(line_to_paragraph[start]))
+
+    # Fallback a texto
+    return _ClaveGrupo("texto", _ubicacion_a_texto_clave(finding["ubicacion"]))
 
 
 def _normalizar_texto_dedup(texto: str | None) -> str:
@@ -421,21 +501,61 @@ def _severidad_maxima(hallazgos_grupo: list["Hallazgo"]) -> str:
     return mejor
 
 
-def _linea_sort_key(clave: _ClaveGrupo) -> tuple[int, int, int]:
-    """Claves kind='linea' -> (0, inicio, fin); claves kind='texto' no se
-    ordenan por esta funcion (se anexan despues, en orden de primera
-    aparicion)."""
-    valor = clave.valor
-    if "-" in valor:
-        inicio_str, fin_str = valor.split("-", 1)
+def _clave_sort_key(clave: _ClaveGrupo) -> tuple[int, int, int]:
+    """"parrafo" -> (0, int(valor), 0). "texto" -> (1, 0, 0)."""
+    if clave.kind == "parrafo":
+        return (0, int(clave.valor), 0)
+    return (1, 0, 0)
+
+
+def _paragraph_range(mapping: dict[int, int], paragraph: int) -> str:
+    """Return line range of a paragraph as "5-8" or "12". '' if not found."""
+    lines = [line for line, par in mapping.items() if par == paragraph]
+    if not lines:
+        return ""
+    min_line = min(lines)
+    max_line = max(lines)
+    if min_line == max_line:
+        return str(min_line)
+    return f"{min_line}-{max_line}"
+
+
+def _build_grupo_output(
+    grupo: dict,
+    primer: Hallazgo,
+    line_to_paragraph: dict[int, int] | None = None,
+) -> dict:
+    """Construye el dict final de un grupo a partir del grupo base y el
+    primer hallazgo. Añade linea, ubicacion, y campos de parrafo.
+
+    ``grupo`` ya contiene ``hallazgos``, ``severidad_maxima``, ``clave``
+    (string) y ``grupo`` (indice). La funcion añade los campos derivados
+    de ``primer`` (linea, ubicacion) y, si la clave es de tipo ``parrafo``,
+    los campos ``parrafo`` (int) y ``parrafo_rango`` (str).
+    """
+    grupo["linea"] = primer["linea"]
+    grupo["ubicacion"] = primer["ubicacion"]
+    kind, valor = grupo["clave"].split(":", 1)
+    if kind == "parrafo":
+        grupo["parrafo"] = int(valor)
+        grupo["parrafo_rango"] = (
+            _paragraph_range(line_to_paragraph, int(valor))
+            if line_to_paragraph is not None
+            else None
+        )
     else:
-        inicio_str = fin_str = valor
-    return (0, int(inicio_str), int(fin_str))
+        grupo["parrafo"] = None
+        grupo["parrafo_rango"] = None
+    return grupo
 
 
-def _agrupar_hallazgos(consolidado: dict, generated_at: str) -> dict:
+def _agrupar_hallazgos(
+    consolidado: dict,
+    generated_at: str,
+    line_to_paragraph: dict[int, int] | None = None,
+) -> dict:
     """Agrupa los hallazgos de un consolidado por ubicacion normalizada
-    (linea o texto), nunca por severidad. Deduplica solo duplicados exactos
+    (parrafo o texto), nunca por severidad. Deduplica solo duplicados exactos
     intra-evaluador dentro de un mismo grupo. Funcion pura: no hace I/O ni
     llama a datetime.now(); `generated_at` se recibe como parametro para
     determinismo. Ver spec de la Fase 3 (Bucket 2 / Seam 2.1).
@@ -445,7 +565,7 @@ def _agrupar_hallazgos(consolidado: dict, generated_at: str) -> dict:
     duplicados_eliminados = 0
 
     for finding in consolidado["hallazgos"]:
-        clave = _clave_grupo(finding)
+        clave = _clave_grupo(finding, line_to_paragraph)
         if clave not in hallazgos_por_clave:
             hallazgos_por_clave[clave] = []
             orden_primera_aparicion.append(clave)
@@ -462,25 +582,21 @@ def _agrupar_hallazgos(consolidado: dict, generated_at: str) -> dict:
             continue
         grupo.append(finding)
 
-    claves_linea = sorted(
-        (c for c in orden_primera_aparicion if c.kind == "linea"),
-        key=_linea_sort_key,
-    )
-    claves_texto = [c for c in orden_primera_aparicion if c.kind != "linea"]
-    claves_ordenadas = claves_linea + claves_texto
+    claves_ordenadas = sorted(orden_primera_aparicion, key=_clave_sort_key)
 
     grupos = []
     for i, clave in enumerate(claves_ordenadas, start=1):
         hallazgos_grupo = hallazgos_por_clave[clave]
+        hallazgos_grupo.sort(key=lambda h: -_SEVERIDAD_RANK.get(h["severidad"], -1))
         primer = hallazgos_grupo[0]
-        grupos.append({
+        grupo_base = {
             "grupo": i,
             "clave": str(clave),
-            "linea": primer["linea"],
-            "ubicacion": primer["ubicacion"],
             "severidad_maxima": _severidad_maxima(hallazgos_grupo),
             "hallazgos": hallazgos_grupo,
-        })
+        }
+        grupo_dict = _build_grupo_output(grupo_base, primer, line_to_paragraph)
+        grupos.append(grupo_dict)
 
     return {
         "generated_at": generated_at,
@@ -846,7 +962,14 @@ def cmd_group(args: list[str]) -> None:
             )
             sys.exit(1)
 
-    agrupados = _agrupar_hallazgos(consolidado, generated_at=datetime.now().isoformat())
+    working_path = sdir / "working.md"
+    line_to_paragraph = _build_line_to_paragraph_mapping(working_path)
+
+    agrupados = _agrupar_hallazgos(
+        consolidado,
+        generated_at=datetime.now().isoformat(),
+        line_to_paragraph=line_to_paragraph,
+    )
 
     _agrupados_path(sdir).write_text(
         json.dumps(agrupados, indent=2, ensure_ascii=False),

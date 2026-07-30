@@ -21,10 +21,13 @@ Ejecutar:
 python3 <skill-dir>/state.py group <session_id>
 ```
 
-Este comando lee `hallazgos-consolidado.json`, agrupa los hallazgos por ubicación normalizada
-(misma línea → mismo grupo, sin importar la severidad de cada hallazgo individual), calcula la
-severidad máxima por grupo, deduplica solo duplicados exactos intra-evaluador, y escribe
-`<session_dir>/hallazgos-agrupados.json`.
+Este comando lee `hallazgos-consolidado.json` y `working.md`. Primero construye un mapping
+`línea → párrafo` dividiendo `working.md` por líneas en blanco (un párrafo es un bloque de texto
+separado de otros por una o más líneas en blanco). Luego agrupa los hallazgos por párrafo
+derivado (mismo párrafo → mismo grupo). Cuando el mapping no está disponible (working.md
+ausente) o la línea del hallazgo no está en el mapping (fuera de rango, desconocida), agrupa
+por `Ubicación` normalizada como fallback. Calcula la severidad máxima por grupo, deduplica solo
+duplicados exactos intra-evaluador, y escribe `<session_dir>/hallazgos-agrupados.json`.
 
 Si el script termina con exit code distinto de 0: mostrar el error (stderr) al usuario y escalar.
 Sin reintento — mismo razonamiento que en `stages/consolidate.md` (error determinístico de
@@ -77,7 +80,7 @@ Formato de salida esperado:
 - Total grupos: <N>
 - Total hallazgos cubiertos: <M>
 
-## Grupo <k> — <Línea N | Líneas N-M | Ubicación: "<texto>"> — severidad <severidad_maxima>
+## Grupo <k> — <Párrafo N (líneas M-P) | Ubicación: "<texto>"> — severidad <severidad_maxima>
 
 - Evaluadores: <eval1 (severidad), eval2 (severidad)>
 - Hallazgos: <ids>

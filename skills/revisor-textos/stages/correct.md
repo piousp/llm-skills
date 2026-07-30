@@ -59,6 +59,9 @@ Modo: repair
 - Los números de línea del plan refieren al contenido de working.md TAL COMO ESTÁ ANTES de tus
   ediciones. Si tus correcciones desplazan líneas, aplica los grupos siguientes por su contexto
   (Ubicación y Problema del grupo), no por el número de línea a ciegas.
+- Si la corrección integraba hallazgos de varias líneas dentro de un mismo párrafo, opera sobre
+  el párrafo completo (rango `M-P` provisto en el plan, campo `parrafo_rango`), no línea por
+  línea.
 - Escribe el archivo completo (no solo el diff).
 - Output: sigue el protocolo definido en `references/subagent-protocol.md`.
 ```

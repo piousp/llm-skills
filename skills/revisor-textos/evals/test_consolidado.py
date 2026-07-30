@@ -21,6 +21,10 @@ from state import (
     _construir_consolidado,
     _agrupar_hallazgos,
     _severidad_maxima,
+    _start_line_from_linea,
+    _ubicacion_a_texto_clave,
+    _paragraph_range,
+    _build_paragraph_index_from_text,
     cmd_consolidate,
     cmd_group,
     _session_dir,
@@ -465,26 +469,34 @@ class TestAgruparHallazgos(unittest.TestCase):
             "avisos": [],
         }
 
-    def test_same_linea_different_severidad_same_group_max_severidad(self):
-        h1 = self._hallazgo("apa", "23", severidad="baja")
-        h2 = self._hallazgo("filologica", "23", severidad="alta")
+    def _mapping(self, text: str) -> dict[int, int]:
+        """Build line→paragraph mapping from text. Convenience wrapper."""
+        return _build_paragraph_index_from_text(text)
+
+    def test_findings_in_same_paragraph_merge(self):
+        h1 = self._hallazgo("apa", "1", severidad="baja")
+        h2 = self._hallazgo("filologica", "2", severidad="alta")
         consolidado = self._consolidado([h1, h2])
-        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00")
+        mapping = self._mapping("a\nb\n")  # líneas 1-2, párrafo 1
+        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00", line_to_paragraph=mapping)
         with self.subTest("un solo grupo"):
             self.assertEqual(resultado["total_grupos"], 1)
         with self.subTest("severidad maxima"):
             self.assertEqual(resultado["grupos"][0]["severidad_maxima"], "alta")
+        with self.subTest("clave es parrafo"):
+            self.assertEqual(resultado["grupos"][0]["clave"], "parrafo:1")
         with self.subTest("ambos hallazgos presentes"):
-            self.assertEqual(resultado["grupos"][0]["hallazgos"], [h1, h2])
+            self.assertEqual(resultado["grupos"][0]["hallazgos"], [h2, h1])
 
-    def test_distinct_ranges_never_merge(self):
-        h1 = self._hallazgo("apa", "23")
-        h2 = self._hallazgo("filologica", "22-25")
+    def test_findings_in_different_paragraphs_dont_merge(self):
+        h1 = self._hallazgo("apa", "3")  # línea 3 → párrafo 2
+        h2 = self._hallazgo("filologica", "1")  # línea 1 → párrafo 1
         consolidado = self._consolidado([h1, h2])
-        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00")
+        mapping = self._mapping("linea1\n\nlinea3\n")
+        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00", line_to_paragraph=mapping)
         self.assertEqual(resultado["total_grupos"], 2)
         claves = {g["clave"] for g in resultado["grupos"]}
-        self.assertEqual(claves, {"linea:23", "linea:22-25"})
+        self.assertEqual(claves, {"parrafo:1", "parrafo:2"})
 
     def test_group_by_normalized_ubicacion_text(self):
         h1 = self._hallazgo("apa", None, ubicacion="Referencias")
@@ -522,18 +534,18 @@ class TestAgruparHallazgos(unittest.TestCase):
         self.assertEqual(len(resultado["grupos"][0]["hallazgos"]), 2)
         self.assertEqual(resultado["duplicados_eliminados"], 0)
 
-    def test_ordering_lines_ascending_then_text_last(self):
-        h_10 = self._hallazgo("apa", "10")
-        h_5 = self._hallazgo("apa", "5", idx=2)
-        h_5_8 = self._hallazgo("apa", "5-8", idx=3)
+    def test_paragraphs_sorted_ascending_then_text(self):
+        # Archivo: párrafo 1 (líneas 1-2), párrafo 2 (línea 4), párrafo 3 (línea 6)
+        texto = "a\nb\n\nc\n\nd\n"
+        mapping = self._mapping(texto)
+        h_parr2 = self._hallazgo("apa", "4")  # párrafo 2
+        h_parr1 = self._hallazgo("apa", "1", idx=2)  # párrafo 1
+        h_parr3 = self._hallazgo("apa", "6", idx=3)  # párrafo 3
         h_texto = self._hallazgo("apa", None, ubicacion="Conclusiones", idx=4)
-        consolidado = self._consolidado([h_10, h_5, h_5_8, h_texto])
-        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00")
+        consolidado = self._consolidado([h_parr2, h_parr1, h_parr3, h_texto])
+        resultado = _agrupar_hallazgos(consolidado, "2026-07-29T00:00:00", line_to_paragraph=mapping)
         claves_en_orden = [g["clave"] for g in resultado["grupos"]]
-        self.assertEqual(
-            claves_en_orden,
-            ["linea:5", "linea:5-8", "linea:10", "texto:conclusiones"],
-        )
+        self.assertEqual(claves_en_orden, ["parrafo:1", "parrafo:2", "parrafo:3", "texto:conclusiones"])
 
     def test_severidad_maxima_never_none_when_all_unranked(self):
         """Todas las severidades ausentes (None) -> _severidad_maxima nunca
@@ -559,6 +571,71 @@ class TestAgruparHallazgos(unittest.TestCase):
             self.assertEqual(resultado["total_hallazgos"], 0)
         with self.subTest("duplicados_eliminados"):
             self.assertEqual(resultado["duplicados_eliminados"], 0)
+
+    # ── Seam 4.3 — 7 nuevos tests de párrafo ────────────────────────────
+
+    def test_range_uses_start_line_paragraph(self):
+        """Rango '5-8' en párrafo que cubre líneas 5-8 → parrafo:1."""
+        mapping = self._mapping("\n" * 4 + "a\nb\nc\nd\n")  # líneas 5-8, párrafo 1
+        h = self._hallazgo("apa", "5-8")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=mapping)
+        self.assertEqual(resultado["grupos"][0]["clave"], "parrafo:1")
+
+    def test_range_spanning_paragraphs_uses_start_paragraph(self):
+        """Rango '5-12' donde párrafo 1 es 5-7 y párrafo 2 es 8-12 → grupo parrafo:1."""
+        texto = "\n" * 4 + "a\nb\nc\n\nd\ne\nf\ng\nh\n"  # p1:5-7, p2:9-12
+        mapping = self._mapping(texto)
+        h = self._hallazgo("apa", "5-12")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=mapping)
+        self.assertEqual(resultado["grupos"][0]["clave"], "parrafo:1")
+
+    def test_line_out_of_range_falls_back_to_texto(self):
+        """Línea 50 no está en mapping (solo líneas 1-10) → kind='texto'."""
+        mapping = self._mapping("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\n")  # líneas 1-10
+        h = self._hallazgo("apa", "50")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=mapping)
+        self.assertEqual(resultado["grupos"][0]["clave"].startswith("texto:"), True)
+
+    def test_desconocida_falls_back_to_even_with_mapping(self):
+        """linea=None con mapping presente → kind='texto'."""
+        mapping = self._mapping("a\nb\n")
+        h = self._hallazgo("apa", None, ubicacion="Global")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=mapping)
+        self.assertEqual(resultado["grupos"][0]["clave"], "texto:global")
+
+    def test_parrafo_and_parrafo_rango_in_output(self):
+        """Grupo parrafo lleva parrafo:int y parrafo_rango:str."""
+        mapping = self._mapping("a\nb\n\nc\n")  # p1:1-2, p2:4
+        h1 = self._hallazgo("apa", "1")
+        h2 = self._hallazgo("filologica", "2", idx=2)
+        resultado = _agrupar_hallazgos(self._consolidado([h1, h2]), "irrelevant", line_to_paragraph=mapping)
+        grupo = resultado["grupos"][0]
+        with self.subTest("parrafo exists"):
+            self.assertEqual(grupo["parrafo"], 1)
+        with self.subTest("parrafo_rango"):
+            self.assertEqual(grupo["parrafo_rango"], "1-2")
+        with self.subTest("linea preserved"):
+            self.assertEqual(grupo["linea"], "1")
+
+    def test_parrafo_clave_format(self):
+        """Clave de grupo parrafo es 'parrafo:N'."""
+        mapping = self._mapping("a\n")
+        h = self._hallazgo("apa", "1")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=mapping)
+        self.assertEqual(resultado["grupos"][0]["clave"], "parrafo:1")
+
+    def test_texto_clave_unchanged(self):
+        """Clave de grupo texto sigue siendo 'texto:...'."""
+        h = self._hallazgo("apa", None, ubicacion="Referencias")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant")
+        self.assertEqual(resultado["grupos"][0]["clave"], "texto:referencias")
+
+    def test_agrupar_hallazgos_linea_fallback_without_mapping(self):
+        """line_to_paragraph=None con hallazgo que tiene línea numérica
+        → grupo con clave 'texto:...' (fallback)."""
+        h = self._hallazgo("apa", "23")
+        resultado = _agrupar_hallazgos(self._consolidado([h]), "irrelevant", line_to_paragraph=None)
+        self.assertTrue(resultado["grupos"][0]["clave"].startswith("texto:"))
 
 
 class TestCmdConsolidateAndGroup(unittest.TestCase):
@@ -810,6 +887,165 @@ class TestCmdConsolidateAndGroup(unittest.TestCase):
         first.pop("generated_at")
         second.pop("generated_at")
         self.assertEqual(first, second)
+
+    # ── Seam 4.4 — 2 tests de cmd_group con/sin working.md ──────────────
+
+    def test_cmd_group_reads_working_md_and_groups_by_paragraph(self):
+        """working.md con 2 párrafos, hallazgos en diferentes párrafos → 2 grupos."""
+        session_id = "test-group-with-working"
+        sdir = self._new_session(session_id, ["apa"])
+        # Escribir working.md con 2 párrafos: línea 1 (p1), línea 3 (p2)
+        (sdir / "working.md").write_text("Parrafo uno\n\nParrafo dos\n", encoding="utf-8")
+        # Hallazgo en línea 1 (párrafo 1) y línea 3 (párrafo 2)
+        hallazgo_contenido = (
+            "## Hallazgo: Primero\n\n"
+            "**Severidad:** alta\n\n"
+            "**Línea:** 1\n\n"
+            "**Ubicación:** Párrafo 1\n\n"
+            "**Problema:** Problema uno.\n\n"
+            "**Corrección sugerida:** Corregir uno.\n\n"
+            "## Hallazgo: Segundo\n\n"
+            "**Severidad:** media\n\n"
+            "**Línea:** 3\n\n"
+            "**Ubicación:** Párrafo 2\n\n"
+            "**Problema:** Problema dos.\n\n"
+            "**Corrección sugerida:** Corregir dos.\n"
+        )
+        self._write_hallazgo(sdir, "apa", hallazgo_contenido)
+        with redirect_stdout(io.StringIO()):
+            cmd_consolidate([session_id])
+        with redirect_stdout(io.StringIO()):
+            cmd_group([session_id])
+        agrupados = json.loads(_agrupados_path(sdir).read_text(encoding="utf-8"))
+        with self.subTest("2 grupos (2 párrafos)"):
+            self.assertEqual(agrupados["total_grupos"], 2)
+        with self.subTest("primer grupo parrafo:1"):
+            self.assertEqual(agrupados["grupos"][0]["clave"], "parrafo:1")
+        with self.subTest("segundo grupo parrafo:2"):
+            self.assertEqual(agrupados["grupos"][1]["clave"], "parrafo:2")
+
+    def test_cmd_group_without_working_md_falls_back_to_texto(self):
+        """Sin working.md, hallazgos con línea caen a texto."""
+        session_id = "test-group-no-working"
+        sdir = self._new_session(session_id, ["apa"])
+        # NO escribir working.md
+        hallazgo_contenido = (
+            "## Hallazgo: Unico\n\n"
+            "**Severidad:** alta\n\n"
+            "**Línea:** 5\n\n"
+            "**Ubicación:** Párrafo 1\n\n"
+            "**Problema:** Problema.\n\n"
+            "**Corrección sugerida:** Corregir.\n"
+        )
+        self._write_hallazgo(sdir, "apa", hallazgo_contenido)
+        with redirect_stdout(io.StringIO()):
+            cmd_consolidate([session_id])
+        with redirect_stdout(io.StringIO()):
+            cmd_group([session_id])
+        agrupados = json.loads(_agrupados_path(sdir).read_text(encoding="utf-8"))
+        with self.subTest("un solo grupo"):
+            self.assertEqual(agrupados["total_grupos"], 1)
+        with self.subTest("clave es texto"):
+            self.assertTrue(agrupados["grupos"][0]["clave"].startswith("texto:"))
+
+
+class TestBuildParagraphMapping(unittest.TestCase):
+    """Test _build_paragraph_index_from_text() — paragraph detection from
+    raw text. Pure function, no I/O tested here.
+
+    Predicted RED with OLD state.py:
+    - _build_paragraph_index_from_text does not exist yet → ImportError at
+      module load time.
+    """
+
+    def test_three_paragraphs_simple(self):
+        """Three paragraphs separated by single blank lines."""
+        texto = (
+            "Párrafo uno línea uno\n"
+            "Párrafo uno línea dos\n"
+            "\n"
+            "Párrafo dos línea uno\n"
+            "\n"
+            "Párrafo tres línea uno\n"
+        )
+        esperado = {1: 1, 2: 1, 4: 2, 6: 3}
+        self.assertEqual(_build_paragraph_index_from_text(texto), esperado)
+
+    def test_empty_file(self):
+        """Empty text → {}."""
+        self.assertEqual(_build_paragraph_index_from_text(""), {})
+
+    def test_all_blank_lines(self):
+        """Only blank lines → {}."""
+        self.assertEqual(_build_paragraph_index_from_text("\n\n\n"), {})
+
+    def test_single_line(self):
+        """Single non-blank line → {1: 1}."""
+        self.assertEqual(_build_paragraph_index_from_text("Solo línea\n"), {1: 1})
+
+    def test_multiple_consecutive_blank_lines(self):
+        """Two paragraphs separated by multiple consecutive blank lines."""
+        texto = (
+            "Párrafo uno\n"
+            "\n"
+            "\n"
+            "\n"
+            "Párrafo dos\n"
+        )
+        esperado = {1: 1, 5: 2}
+        self.assertEqual(_build_paragraph_index_from_text(texto), esperado)
+
+    def test_starts_with_blank(self):
+        """File that starts with a blank line; first paragraph is line 2."""
+        texto = "\nPrimer párrafo\n"
+        esperado = {2: 1}
+        self.assertEqual(_build_paragraph_index_from_text(texto), esperado)
+
+    def test_ends_with_newline(self):
+        """File ending in \n does not create a virtual extra line."""
+        texto = "Párrafo único\n"
+        self.assertEqual(_build_paragraph_index_from_text(texto), {1: 1})
+
+    def test_crlf(self):
+        """CRLF line endings: \r\n blank lines are recognised as blank."""
+        texto = "Párrafo uno\r\n\r\nPárrafo dos\r\n"
+        esperado = {1: 1, 3: 2}
+        self.assertEqual(_build_paragraph_index_from_text(texto), esperado)
+
+
+class TestStartLineFromLinea(unittest.TestCase):
+    """Tests for _start_line_from_linea() — Major 2."""
+
+    def test_start_line_single(self):
+        self.assertEqual(_start_line_from_linea("23"), 23)
+
+    def test_start_line_range(self):
+        self.assertEqual(_start_line_from_linea("22-25"), 22)
+
+    def test_start_line_empty(self):
+        self.assertIsNone(_start_line_from_linea(""))
+
+    def test_start_line_non_numeric(self):
+        self.assertIsNone(_start_line_from_linea("abc"))
+
+    def test_start_line_whitespace(self):
+        self.assertIsNone(_start_line_from_linea("  "))
+
+
+class TestUbicacionYParagraphRange(unittest.TestCase):
+    """Tests for _ubicacion_a_texto_clave() and _paragraph_range() — Major 3."""
+
+    def test_ubicacion_a_texto_clave_none(self):
+        self.assertEqual(_ubicacion_a_texto_clave(None), "")
+
+    def test_ubicacion_a_texto_clave_whitespace(self):
+        self.assertEqual(_ubicacion_a_texto_clave("  Ref  "), "ref")
+
+    def test_paragraph_range_empty_mapping(self):
+        self.assertEqual(_paragraph_range({}, 1), "")
+
+    def test_paragraph_range_nonexistent(self):
+        self.assertEqual(_paragraph_range({1: 1, 2: 1}, 2), "")
 
 
 if __name__ == "__main__":
