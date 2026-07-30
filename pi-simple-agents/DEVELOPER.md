@@ -18,14 +18,17 @@ npm install pi-simple-agents
 ```typescript
 import {
   discoverAgents,
-  loadOverrides,
+  loadSettings,
   applyOverrides,
   runAgentViaSdk,
   mapWithConcurrencyLimit,
+  resolveConcurrency,
+  DEFAULT_CONCURRENCY,
   clampThinkingLevel,
   validateSubagentParams,
   resolveAgents,
   formatRunResults,
+  createAgentRegistry,
   type AgentConfig,
   type AgentOverrides,
   type AgentRunResult,
@@ -34,6 +37,10 @@ import {
   type SubagentParams,
   type ValidationResult,
   type FormattedResults,
+  type SubagentSettings,
+  type AgentRegistry,
+  type LoadedAgents,
+  type AgentRegistryPaths,
 } from "pi-simple-agents";
 ```
 
@@ -146,15 +153,20 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
 Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig[]`.
 
 ```typescript
-function discoverAgents(
+export function discoverAgents(
   agentsDir: string,
-  cache?: Map<string, CacheEntry<AgentConfig[]>>,
+  cache?: Map<string, CacheEntry<Promise<AgentConfig[]>>>,
   warnRegistry?: Map<string, number>,
-): AgentConfig[];
+): Promise<AgentConfig[]>;
 ```
 
+**Behavior change: now async (was sync).** Backed by `fs/promises` — `readdir` plus a per-file
+`stat`/`readFile` fanned out via `Promise.all`, preserving `readdir` entry order. Warnings
+collected per file are emitted sequentially after `Promise.all` settles, so their order stays
+deterministic despite the parallel I/O.
+
 - Skips files missing `name` or `description` (logs a warning).
-- Symlinks are supported.
+- Symlinks are supported (per-file `stat` follows symlinks).
 - Defaults: `systemPromptMode: "append"`, `inheritProjectContext: true`, `defaultReads: []`.
 - An invalid `systemPromptMode` or `defaultContext` value normalizes to that field's default (with
   a per-file `console.warn`) instead of silently breaking the rest of the config — previously an
@@ -163,37 +175,96 @@ function discoverAgents(
   throttle the aggregated Claude-compatibility warning (inert fields/tools/model aliases) to once
   per 60 seconds. Defaults to a module-level registry shared across calls; pass your own `Map` to
   isolate throttling (e.g. per test).
+- **Never rejects.** An unreadable directory resolves to `[]`; an unexpected error anywhere in the
+  pipeline is caught at the top level, logged via `console.warn` (prefixed, naming the directory
+  and the error message), and resolves to `[]` rather than rejecting — so a rejected promise never
+  sits poisoned in the cache for the 5s TTL. Per-file failures (unreadable file, missing
+  `name`/`description`) still skip just that file with a warning, same as before.
 
 ### Cache
 
-Pass a `Map<string, CacheEntry<AgentConfig[]>>` to cache results for 5 seconds (TTL). Subsequent calls within the TTL skip filesystem reads.
+Pass a `Map<string, CacheEntry<Promise<AgentConfig[]>>>` to cache results for 5 seconds (TTL).
+Subsequent calls within the TTL return the SAME cached in-flight/resolved promise (dedupe),
+skipping filesystem reads.
 
 ```typescript
-const cache = new Map<string, CacheEntry<AgentConfig[]>>();
-const agents = discoverAgents("~/.pi/agent/agents", cache);
-const agentsAgain = discoverAgents("~/.pi/agent/agents", cache); // cached
+const cache = new Map<string, CacheEntry<Promise<AgentConfig[]>>>();
+const agents = await discoverAgents("~/.pi/agent/agents", cache);
+const agentsAgain = await discoverAgents("~/.pi/agent/agents", cache); // cached
 ```
 
-## loadOverrides
+## loadSettings
 
-Loads agent overrides from `settings.json`. Supports both `pi-simple-agents` and `subagents` top-level JSON keys, checked in that order.
+Replaces the deleted `loadOverrides` (`loadOverrides` no longer exists). Loads both
+`agentOverrides` and `concurrency` from `settings.json`.
 
 ```typescript
-function loadOverrides(
+interface SubagentSettings {
+  agentOverrides: AgentOverrides;
+  /** Raw value from settings JSON; validated at use site by resolveConcurrency. */
+  concurrency?: unknown;
+}
+
+function loadSettings(
   userSettingsPath: string,
   projectSettingsPath?: string,
-  cache?: Map<string, CacheEntry<AgentOverrides>>,
-): AgentOverrides;
+  cache?: Map<string, CacheEntry<Promise<SubagentSettings>>>,
+): Promise<SubagentSettings>;
 ```
 
-When both paths are provided, project-level overrides take precedence over user-level overrides. Merge is field-level (not whole-object replacement).
+Reads `settings.json` via `fs/promises`. `agentOverrides` and `concurrency` are resolved as
+**independent per-field fallbacks** between the top-level `pi-simple-agents` key and the legacy
+`subagents` key: `primary?.field ?? legacy?.field`, evaluated separately for EACH field — so one
+file can use `pi-simple-agents` for one field and `subagents` for another, and both are honored
+(a real bug, fixed during QA: this is the correct independent-per-field behavior, not an
+all-or-nothing key choice). When both keys set the same field, `pi-simple-agents`'s value wins.
+
+Whenever the `subagents` key is present in a file AT ALL (regardless of which fields it supplies),
+one deprecation `console.warn` fires (once per file, not once per field) recommending
+`pi-simple-agents` instead — `subagents` still works fully, this is a warning only, not a
+functional restriction.
+
+`agentOverrides` gets a plain-object guard: if a resolved (non-`undefined`) `agentOverrides` value
+isn't a plain object (e.g. a string, array, or `null`), it's ignored with a warning and treated as
+`{}` — a fix for a silent-corruption bug where a malformed value used to flow through and produce
+garbage per-agent merges with zero warning.
+
+`concurrency` is **not** validated here — it's passed through as `unknown` raw JSON; validation
+happens at the consuming site via `resolveConcurrency` (see below), the same division of
+responsibility as the pre-existing `timeoutMs` field.
+
+When both paths are provided, the project file overrides the user file per-field:
+`agentOverrides` is merged, `concurrency` takes the project's value if defined, else the user's.
+Malformed JSON in one file doesn't poison the other — each file's own parse/read failure only
+affects that file's contribution. Cache key: `` `${userSettingsPath}::${projectSettingsPath ?? ""}` ``.
+Never rejects.
 
 ```typescript
-const overrides = loadOverrides(
+const settings = await loadSettings(
   "~/.pi/agent/settings.json",
   "/path/to/project/.pi/settings.json",
 );
+// settings.agentOverrides, settings.concurrency
 ```
+
+### Settings JSON contract
+
+```json
+{
+  "pi-simple-agents": {
+    "concurrency": 6,
+    "agentOverrides": { "scout": { "model": "..." } }
+  }
+}
+```
+
+`concurrency` controls the max number of subagent tasks run in parallel within one `subagent` tool
+call (a BATCH-level setting, not per-agent). Default `4` (via `DEFAULT_CONCURRENCY`/
+`resolveConcurrency`). Effective ceiling of 8, because the tool's own `MAX_PARALLEL_TASKS` bounds
+how many tasks one call can even have. Read from either `pi-simple-agents.concurrency` (preferred)
+or the legacy `subagents.concurrency` (deprecated, still works, warns). Project settings
+(`{cwd}/.pi/settings.json`) override user settings (`~/.pi/agent/settings.json`) when the project
+value is defined — same precedence pattern as `agentOverrides`.
 
 ## applyOverrides
 
@@ -207,9 +278,9 @@ function applyOverrides(
 ```
 
 ```typescript
-const agents = discoverAgents("~/.pi/agent/agents");
-const overrides = loadOverrides("~/.pi/agent/settings.json", ".pi/settings.json");
-const configured = applyOverrides(agents, overrides);
+const agents = await discoverAgents("~/.pi/agent/agents");
+const { agentOverrides } = await loadSettings("~/.pi/agent/settings.json", ".pi/settings.json");
+const configured = applyOverrides(agents, agentOverrides);
 ```
 
 ## runAgentViaSdk
@@ -277,6 +348,21 @@ function mapWithConcurrencyLimit<TIn, TOut>(
 
 The concurrency value is clamped to `[1, items.length]`. Empty input returns an immediately resolved empty array.
 
+## resolveConcurrency
+
+```typescript
+const DEFAULT_CONCURRENCY = 4;
+
+function resolveConcurrency(value: unknown): number;
+```
+
+Validates the raw `concurrency` value read from settings (see `loadSettings` above).
+`undefined` → `DEFAULT_CONCURRENCY` (4). A finite integer ≥ 1 → returned unchanged. Anything else
+(`0`, negative, `NaN`, `Infinity`, non-integer, non-number) → `console.warn` naming the invalid
+value, then `DEFAULT_CONCURRENCY`. No upper cap of its own — `mapWithConcurrencyLimit` already
+clamps to `[1, items.length]`, and the `subagent` tool's own `MAX_PARALLEL_TASKS` (8) bounds
+`items.length`, so an effective ceiling of 8 applies at the tool layer, not inside this function.
+
 ## clampThinkingLevel
 
 Validates a thinking budget level against the allowed set.
@@ -330,7 +416,7 @@ function resolveAgents(
 ```
 
 ```typescript
-const agents = discoverAgents("~/.pi/agent/agents");
+const agents = await discoverAgents("~/.pi/agent/agents");
 const resolved = resolveAgents(["scout", "worker"], agents);
 if (resolved.ok) {
   // resolved.value: AgentConfig[]
@@ -358,7 +444,7 @@ interface FormattedResults {
 
 ## Caching
 
-Both `discoverAgents` and `loadOverrides` accept an optional `Map` cache with `CacheEntry<T>` values.
+Both `discoverAgents` and `loadSettings` accept an optional `Map` cache with `CacheEntry<T>` values.
 
 ```typescript
 interface CacheEntry<T> {
@@ -367,14 +453,89 @@ interface CacheEntry<T> {
 }
 ```
 
-The cache TTL is **5 seconds** (constant: `CACHE_TTL_MS`). The cache key for `loadOverrides` is a composite of both settings paths.
+The cached value is now promise-valued (`CacheEntry<Promise<T>>`, not `CacheEntry<T>`): a cache hit
+within the 5s TTL returns the SAME cached promise, giving in-flight dedupe (concurrent callers
+sharing one cache never trigger duplicate filesystem reads) in addition to the TTL itself.
+
+The cache TTL is **5 seconds** (constant: `CACHE_TTL_MS`). The cache key for `loadSettings` is a
+composite of both settings paths.
+
+## createAgentRegistry
+
+New module `src/agent-registry.ts`. Composes `discoverAgents` + `loadSettings` + `applyOverrides`
++ `resolveConcurrency` behind one `load`/`peek` API, and is what the extension actually uses — see
+[Extension internals](#extension-internals) below.
+
+```typescript
+interface LoadedAgents {
+  /** Overrides already applied. Treat as immutable. */
+  agents: readonly AgentConfig[];
+  /** Already resolved via resolveConcurrency; always a valid integer ≥ 1. */
+  concurrency: number;
+}
+
+interface AgentRegistry {
+  /** Async, TTL-cached (5s, inherited from the underlying loaders),
+      in-flight-deduped, never rejects. Updates the peek snapshot for `cwd`
+      on completion. */
+  load(cwd: string): Promise<LoadedAgents>;
+  /** Sync, zero I/O. Last COMPLETED load for exactly this cwd, or undefined.
+      May be arbitrarily stale; freshness is driven by load() callers. */
+  peek(cwd: string): LoadedAgents | undefined;
+}
+
+interface AgentRegistryPaths {
+  agentsDir: string;
+  userSettingsPath: string;
+}
+
+function createAgentRegistry(paths: AgentRegistryPaths): AgentRegistry;
+```
+
+`createAgentRegistry` does no I/O at construction. `load(cwd)` derives
+`projectSettingsPath = path.join(cwd, ".pi", "settings.json")` internally (no injection point —
+deliberate, one implementation, YAGNI), runs `discoverAgents` and `loadSettings` in PARALLEL via
+`Promise.all` (both are independent I/O and neither rejects, so there's no fail-fast reason to
+serialize them), applies `applyOverrides`, resolves concurrency via `resolveConcurrency`, stores
+the result keyed by `cwd` in an internal snapshot map (for `peek`), and returns it.
+
+`peek(cwd)` is purely synchronous/zero-I/O: it returns the last COMPLETED `load(cwd)` result for
+that exact `cwd`, or `undefined` if none completed yet — used by the extension's `renderCall`
+(which must stay synchronous per the SDK's `renderCall` contract).
+
+The registry owns ALL its instance state internally (agents cache, settings cache, a
+`warnRegistry` for Claude-compat inert-field warning dedup, and the peek snapshots) — no
+module-level globals, so two `createAgentRegistry()` instances never share caching/dedup state
+with each other.
+
+`load` never rejects (it composes only never-rejecting primitives).
+
+```typescript
+const registry = createAgentRegistry({
+  agentsDir: "~/.pi/agent/agents",
+  userSettingsPath: "~/.pi/agent/settings.json",
+});
+
+const { agents, concurrency } = await registry.load(process.cwd());
+// later, synchronously, e.g. inside renderCall:
+const snapshot = registry.peek(process.cwd());
+```
 
 ## Extension internals
 
-The extension at `extensions/index.ts` registers the `subagent` tool with pi's `ExtensionAPI`. It:
+The extension at `extensions/index.ts` registers the `subagent` tool with pi's `ExtensionAPI`. Its
+default export is now `async function (pi: ExtensionAPI): Promise<void>` (was sync); activation
+awaits `registry.load(process.cwd())` before building the tool description and calling
+`pi.registerTool(...)`. It:
 
-1. Scans `~/.pi/agent/agents/` via `discoverAgents` (with caching).
-2. Loads overrides from `~/.pi/agent/settings.json` and `{cwd}/.pi/settings.json` (with caching).
+1. Loads agents and settings via one `createAgentRegistry({ agentsDir: AGENTS_DIR, userSettingsPath: ... })`
+   instance's `registry.load(cwd)` — this composes `discoverAgents` (`~/.pi/agent/agents/`) and
+   `loadSettings` (`~/.pi/agent/settings.json` + `{cwd}/.pi/settings.json`) plus `applyOverrides`
+   and `resolveConcurrency`, replacing the old module-level `agentCache`/`overridesCache`/
+   `loadAvailableAgents` helpers, which combined `discoverAgents` + `loadOverrides` +
+   `applyOverrides` by hand — those are gone.
+2. `registry.peek(cwd)` is used wherever a synchronous, zero-I/O read of the last completed load
+   is needed (e.g. `renderCall`, which must stay synchronous per the SDK's `renderCall` contract).
 3. Validates parameters via `validateSubagentParams`.
 4. Resolves agent names via `resolveAgents`.
 5. Creates a `DefaultResourceLoader` per agent (from `@earendil-works/pi-coding-agent`) with field-to-behavior mapping:
@@ -400,8 +561,11 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 ```
 
 6. Resolves models via `ctx.modelRegistry.find(provider, modelId)` (passed through as `getModel`)
-   and runs agents via `runAgentViaSdk` with concurrency cap of 4 via `mapWithConcurrencyLimit`.
-   `ctx.modelRegistry` is forwarded to `runAgentViaSdk` unchanged as `modelRegistry`.
+   and runs agents via `runAgentViaSdk` with a configurable concurrency (default 4, resolved via
+   `resolveConcurrency`) via `mapWithConcurrencyLimit` — no longer a hardcoded `4`. The value comes
+   from `registry.load(ctx.cwd)`'s resolved `concurrency` field, threaded through
+   `RunTasksOptions.concurrency: number`. `ctx.modelRegistry` is forwarded to `runAgentViaSdk`
+   unchanged as `modelRegistry`.
 7. Formats results via `formatRunResults`.
 
 As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
@@ -465,6 +629,10 @@ unchanged) and extended with two new overrides:
   that hits it (not once per process).
 - `agent.skills !== undefined && agent.inheritSkills === false` is contradictory config: it
   produces a warning in `result.warnings` and no `skillsOverride` is attached.
+
+The returned `options` also unconditionally include `noThemes: true` — themes are only consumed by
+interactive mode, and subagent sessions are headless, so this skips theme loading/resolution work
+on every subagent's `resourceLoader.reload()`.
 
 Never throws.
 

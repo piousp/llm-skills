@@ -28,6 +28,29 @@ function baseAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+// --- S7: noThemes ---
+
+test("buildLoaderOptions: noThemes is unconditionally true regardless of agent config", () => {
+  const cwd = "/some/cwd";
+  const homeDir = "/some/home";
+
+  const minimal = buildLoaderOptions(baseAgent(), cwd, homeDir);
+  assert.equal(minimal.options.noThemes, true);
+
+  const withOverrides = buildLoaderOptions(
+    baseAgent({
+      inheritExtensions: false,
+      inheritSkills: false,
+      inheritProjectContext: false,
+      systemPromptMode: "replace",
+      systemPrompt: "X",
+    }),
+    cwd,
+    homeDir,
+  );
+  assert.equal(withOverrides.options.noThemes, true);
+});
+
 // --- S2: paridad ---
 
 test("buildLoaderOptions: inheritExtensions false maps to noExtensions true, undefined maps to false", () => {
