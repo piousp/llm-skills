@@ -40,7 +40,7 @@ Body content.
 `,
     );
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -82,7 +82,7 @@ Body.
 `,
     );
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.name, "good");
@@ -111,7 +111,7 @@ Claude Code body.
     const symlinkPath = path.join(dir, "claude-agent.md");
     fs.symlinkSync(realFilePath, symlinkPath);
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -284,13 +284,13 @@ Body`,
 
     const cache = new Map<string, CacheEntry<Promise<AgentConfig[]>>>();
 
-    const first = await discoverAgents(dir, cache);
+    const first = await discoverAgents(dir, cache, new Map<string, number>());
     assert.equal(first.length, 1);
     assert.equal(first[0]!.name, "test-agent");
 
     // Delete the file and call again — should still return cached data
     fs.rmSync(path.join(dir, "test-agent.md"));
-    const second = await discoverAgents(dir, cache);
+    const second = await discoverAgents(dir, cache, new Map<string, number>());
     assert.equal(second.length, 1);
     assert.equal(second[0]!.name, "test-agent");
   } finally {
@@ -311,7 +311,7 @@ description: test
 Body`,
     );
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.name, "test-agent");
   } finally {
@@ -324,8 +324,8 @@ test("discoverAgents: two synchronous un-awaited calls with the same cache Map a
   try {
     const cache = new Map<string, CacheEntry<Promise<AgentConfig[]>>>();
 
-    const first = discoverAgents(dir, cache);
-    const second = discoverAgents(dir, cache);
+    const first = discoverAgents(dir, cache, new Map<string, number>());
+    const second = discoverAgents(dir, cache, new Map<string, number>());
 
     assert.ok(Object.is(first, second));
   } finally {
@@ -366,7 +366,7 @@ Missing description C.
 
     const warnSpy = t.mock.method(console, "warn");
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 0);
 
@@ -508,7 +508,7 @@ Body.
 `,
     );
 
-    const agents = await discoverAgents(dir);
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -526,7 +526,7 @@ test("discoverAgents: golden-file backward-compat gate — agents-examples/scout
   const agentsDir = path.join(import.meta.dirname, "../../agents-examples");
   const warnSpy = t.mock.method(console, "warn");
 
-  const agents = await discoverAgents(agentsDir);
+  const agents = await discoverAgents(agentsDir, undefined, new Map<string, number>());
 
   assert.equal(agents.length, 2);
 

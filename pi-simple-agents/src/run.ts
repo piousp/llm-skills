@@ -2,6 +2,7 @@ import type { AgentConfig } from "./agents.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 import type { SubagentToolEvent } from "./progress.ts";
 import { toSubagentToolEvent } from "./progress.ts";
+import { toErrorMessage } from "./warn.ts";
 
 interface AgentRunResultBase {
   agent: string;
@@ -118,6 +119,37 @@ function subscribeToolEvents(
   });
 }
 
+// Registers the abort listener, schedules the timeout, and issues the prompt.
+// Resolves when prompt() resolves normally, or after abort() is triggered by
+// signal-abort or timeout — prompt's own rejection/resolution races the abort;
+// the caller's settleOnce dedupes, so no "resolved vs aborted" discriminant is
+// needed here. onTimeout is invoked once, before abort() is issued, so the
+// caller can settle "timed out" before disposal races the prompt's rejection.
+// Listener removal only happens on the normal-completion path — the abort
+// path relies on { once: true } to self-remove, matching prior behavior.
+export async function runWithTimeoutAndAbort(
+  agentSession: CreateAgentSessionResult["session"],
+  task: string,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  onTimeout: () => void,
+): Promise<void> {
+  const abortHandler = () => { agentSession.abort(); };
+  signal?.addEventListener("abort", abortHandler, { once: true });
+
+  const timer = setTimeout(() => {
+    onTimeout();
+    Promise.resolve(agentSession.abort()).catch(() => { /* ignore */ });
+  }, timeoutMs);
+
+  try {
+    await agentSession.prompt(task);
+    signal?.removeEventListener("abort", abortHandler);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function runAgentViaSdk(
   agent: AgentConfig,
   task: string,
@@ -129,7 +161,6 @@ export function runAgentViaSdk(
   return new Promise((resolve) => {
     let settled = false;
     let session: any = null;
-    let timer: ReturnType<typeof setTimeout> | undefined;
 
     const settleOnce: SettleFn = (result) => {
       if (settled) return;
@@ -161,21 +192,17 @@ export function runAgentViaSdk(
           return;
         }
 
-        const abortHandler = () => { agentSession.abort(); };
-        options.signal?.addEventListener("abort", abortHandler, { once: true });
-
         subscribeToolEvents(agentSession, options.onToolEvent);
 
         const timeoutMs = resolveTimeoutMs(agent.timeoutMs);
-        timer = setTimeout(() => {
-          if (settled) return;
-          settleOnce(errorResult(ctx, `timed out after ${timeoutMs}ms`));
-          Promise.resolve(agentSession.abort()).catch(() => { /* ignore */ });
-        }, timeoutMs);
+        await runWithTimeoutAndAbort(
+          agentSession,
+          task,
+          timeoutMs,
+          options.signal,
+          () => settleOnce(errorResult(ctx, `timed out after ${timeoutMs}ms`)),
+        );
 
-        await agentSession.prompt(task);
-
-        options.signal?.removeEventListener("abort", abortHandler);
         const finalText = agentSession.getLastAssistantText() ?? undefined;
 
         settleOnce({
@@ -188,10 +215,9 @@ export function runAgentViaSdk(
       } catch (err) {
         settleOnce(errorResult(
           ctx,
-          err instanceof Error ? err.message : String(err),
+          toErrorMessage(err),
         ));
       } finally {
-        if (timer) clearTimeout(timer);
         if (session) {
           try { session.dispose(); } catch { /* ignore */ }
         }

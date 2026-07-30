@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
 import { applyOverrides, applyModelOverride, type AgentConfig } from "../../src/agents.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
@@ -192,6 +192,65 @@ test("mapWithConcurrencyLimit: respects concurrency limit", async () => {
 
   assert.equal(maxConcurrent, 3);
   assert.deepEqual(result, [1, 2, 3, 4, 5, 6]);
+});
+
+test("runWithTimeoutAndAbort: prompt resolves normally before timeout/abort -> resolves cleanly and removes abort listener", async () => {
+  const fakeSession = new FakeAgentSession("done");
+  const controller = new AbortController();
+  let removeCalled = false;
+  const originalRemove = controller.signal.removeEventListener.bind(controller.signal);
+  controller.signal.removeEventListener = ((...args: Parameters<typeof originalRemove>) => {
+    removeCalled = true;
+    return originalRemove(...args);
+  }) as typeof controller.signal.removeEventListener;
+
+  let onTimeoutCalled = false;
+  await runWithTimeoutAndAbort(
+    fakeSession as any,
+    "find things",
+    5000,
+    controller.signal,
+    () => { onTimeoutCalled = true; },
+  );
+
+  assert.equal(fakeSession.abortCalled, false);
+  assert.equal(onTimeoutCalled, false);
+  assert.equal(removeCalled, true);
+});
+
+test("runWithTimeoutAndAbort: signal abort mid-prompt calls agentSession.abort()", async () => {
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  const controller = new AbortController();
+  let onTimeoutCalled = false;
+
+  const promise = runWithTimeoutAndAbort(
+    fakeSession as any,
+    "find things",
+    5000,
+    controller.signal,
+    () => { onTimeoutCalled = true; },
+  );
+  controller.abort();
+  await promise;
+
+  assert.equal(fakeSession.abortCalled, true);
+  assert.equal(onTimeoutCalled, false);
+});
+
+test("runWithTimeoutAndAbort: timeout elapses before prompt resolves -> onTimeout invoked then agentSession.abort() called", async () => {
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  let onTimeoutCalled = false;
+
+  await runWithTimeoutAndAbort(
+    fakeSession as any,
+    "find things",
+    10,
+    undefined,
+    () => { onTimeoutCalled = true; },
+  );
+
+  assert.equal(onTimeoutCalled, true);
+  assert.equal(fakeSession.abortCalled, true);
 });
 
 test("runAgentViaSdk: resolves success with finalText from session", async () => {

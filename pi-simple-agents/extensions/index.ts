@@ -121,7 +121,7 @@ interface RunTasksOptions {
 // Runs one task end-to-end: resource loader creation/reload, session manager
 // creation, the SDK run, and progress tracking teardown. Extracted from
 // `runTasks` so the concurrency orchestration there stays a thin wrapper.
-async function runSingleTask(
+export async function runSingleTask(
   t: TaskEntry,
   agent: AgentConfig,
   index: number,

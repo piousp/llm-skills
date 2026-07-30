@@ -428,9 +428,16 @@ in this repository.
 
 ## Limits
 
-- **Maximum 8 tasks** per call in parallel mode.
-- **Maximum 4 agents** running concurrently.
+- **Maximum 8 tasks** per call in parallel mode (`MAX_PARALLEL_TASKS`).
+- **Up to 8 agents running concurrently** — controlled by the `concurrency` setting (default 4,
+  see [Concurrency](#concurrency)); it can never exceed the 8-task-per-call limit above.
 - Agents run inside a pi SDK session with proper resource handling, context management, and cleanup.
+
+## For developers
+
+If you're integrating `pi-simple-agents` programmatically (importing its internal functions,
+contributing to the package, or just want the low-level API reference), see
+[DEVELOPER.md](./DEVELOPER.md).
 
 ## License
 

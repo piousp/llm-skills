@@ -116,6 +116,10 @@ interface FrontmatterResult {
   `undefined` for `inherit`).
 - `warnings` — per-file messages (invalid enum/boolean/scalar values, YAML parse failures) that
   `discoverAgents` prefixes with the file path and forwards to `console.warn`.
+- Field normalization (the `LIST_FIELDS`/`SCALAR_FIELDS`/model-alias/`ENUM_FIELDS`/`BOOLEAN_FIELDS`
+  passes) is factored into a module-private `normalizeFrontmatterFields` helper (not exported),
+  called once per `parseFrontmatter` invocation. Same order, same warnings, no behavior change —
+  extracted purely to keep `parseFrontmatter` itself readable.
 - The initial `yaml.parse` call is wrapped in try/catch with a second-chance retry, not a straight
   catch-and-empty: on failure, `attemptLenientRecovery` auto-quotes unindented plain-scalar lines
   containing an unquoted `": "` and reparses once; only if that also throws does
@@ -142,11 +146,15 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
   dedupes the result, and separately reports which input names were inert.
 - `normalizeClaudeModel(model): { model?, alias? }` — turns `"inherit"` into `undefined`; tags
   recognized aliases with `alias` while passing the literal string through as `model`.
-- `claimUnwarned(keys, registry?, ttlMs = 60_000): string[]` — generic once-per-TTL dedup: given a
+- `claimUnwarned(keys, registry, ttlMs = 60_000): string[]` — generic once-per-TTL dedup: given a
   list of keys, returns only the ones not "claimed" (warned about) within the last `ttlMs`
   milliseconds, recording a claim timestamp for each returned key. Used to throttle the aggregated
   inert-fields/tools/model-alias warning to once per 60 seconds across an entire `discoverAgents`
-  call, independent of how many files triggered it.
+  call, independent of how many files triggered it. `registry` is a **required** parameter (no
+  default) — there used to be a module-level singleton `Map` fallback; it was removed because it
+  was dead in production (the only real caller always supplied its own registry) and, being
+  shared across every call that omitted the argument, was a latent cross-call TTL-leak risk.
+  `reportInertUsage`'s own `registry` parameter is required for the same reason.
 
 ## discoverAgents
 
@@ -155,8 +163,8 @@ Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig
 ```typescript
 export function discoverAgents(
   agentsDir: string,
-  cache?: Map<string, CacheEntry<Promise<AgentConfig[]>>>,
-  warnRegistry?: Map<string, number>,
+  cache: Map<string, CacheEntry<Promise<AgentConfig[]>>> | undefined,
+  warnRegistry: Map<string, number>,
 ): Promise<AgentConfig[]>;
 ```
 
@@ -171,10 +179,11 @@ deterministic despite the parallel I/O.
 - An invalid `systemPromptMode` or `defaultContext` value normalizes to that field's default (with
   a per-file `console.warn`) instead of silently breaking the rest of the config — previously an
   invalid `systemPromptMode` silently dropped the entire system prompt.
-- `warnRegistry` — optional override for the `Map<string, number>` used by `claimUnwarned` to
-  throttle the aggregated Claude-compatibility warning (inert fields/tools/model aliases) to once
-  per 60 seconds. Defaults to a module-level registry shared across calls; pass your own `Map` to
-  isolate throttling (e.g. per test).
+- `warnRegistry` — **required** `Map<string, number>` used by `claimUnwarned` (via
+  `reportInertUsage`) to throttle the aggregated Claude-compatibility warning (inert
+  fields/tools/model aliases) to once per 60 seconds. There is no default/shared fallback —
+  every caller owns its own registry's lifetime explicitly (`createAgentRegistry` creates one per
+  registry instance; pass your own `Map` in tests to isolate throttling).
 - **Never rejects.** An unreadable directory resolves to `[]`; an unexpected error anywhere in the
   pipeline is caught at the top level, logged via `console.warn` (prefixed, naming the directory
   and the error message), and resolves to `[]` rather than rejecting — so a rejected promise never
@@ -333,6 +342,11 @@ type AgentRunResult =
 ```
 
 Session disposal is guaranteed in a `finally` block regardless of success or error.
+
+Internally, the abort-listener registration, timeout scheduling, and the `agentSession.prompt(task)`
+call are factored into a module-private `runWithTimeoutAndAbort` helper (not exported) — extracted
+out of `runAgentViaSdk` to keep the outer function's own promise-settlement/dispose logic
+readable. No behavior change; not part of the public API.
 
 ## mapWithConcurrencyLimit
 
@@ -568,6 +582,11 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    unchanged as `modelRegistry`.
 7. Formats results via `formatRunResults`.
 
+`runTasks`'s per-task worker, `runSingleTask` (resource loader creation/reload, session manager
+creation, the SDK run, and progress-tracker teardown), is exported from `extensions/index.ts`
+(was module-private) purely so its unit tests can call it directly — not part of a stable public
+API, just a visibility change for testability.
+
 As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
 `buildLoaderOptions` (`src/loader-config.ts`), which composes `resolveDefaultReads` and
 `filterSkillsByName`; and `runTasks`'s per-task session manager is glue over
@@ -716,13 +735,19 @@ appear until restart. Pure.
 const WARN_PREFIX = "pi-simple-agents: ";
 
 function emitWarnings(warnings: string[]): void;
+function toErrorMessage(error: unknown): string;
 ```
 
-Shared helper: prefixes and `console.warn`s each warning in a list. Used by the glue in
+`emitWarnings` prefixes and `console.warn`s each warning in a list. Used by the glue in
 `extensions/index.ts` to emit the warnings collected from `buildLoaderOptions` and
 `createSubagentSessionManager`, keeping the `src/` warning-returning modules (which never call
 `console.warn` for run-level warnings themselves) consistent with the emission convention already
 used by `parseFrontmatter`.
+
+`toErrorMessage` normalizes a caught `unknown` value to a display string: `error.message` when
+it's an `Error` instance, `String(error)` otherwise. Never throws. Used by every `catch` block
+across `src/` that needs to log/report an error message (`agents.ts`, `frontmatter.ts`,
+`subagent-session.ts`, `run.ts`), replacing 4 previously-duplicated inline ternaries.
 
 ## Running tests
 

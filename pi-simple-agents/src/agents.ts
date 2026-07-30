@@ -3,7 +3,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { parseFrontmatter, type FrontmatterResult } from "./frontmatter.ts";
 import { reportInertUsage } from "./claude-compat.ts";
-import { WARN_PREFIX } from "./warn.ts";
+import { WARN_PREFIX, toErrorMessage } from "./warn.ts";
 
 export interface AgentConfig {
   name: string;
@@ -137,8 +137,8 @@ async function discoverAgentFile(filePath: string): Promise<DiscoveredFileResult
 
 export function discoverAgents(
   agentsDir: string,
-  cache?: Map<string, CacheEntry<Promise<AgentConfig[]>>>,
-  warnRegistry?: Map<string, number>,
+  cache: Map<string, CacheEntry<Promise<AgentConfig[]>>> | undefined,
+  warnRegistry: Map<string, number>,
 ): Promise<AgentConfig[]> {
   return cachedPromise(cache, agentsDir, async (): Promise<AgentConfig[]> => {
     try {
@@ -171,7 +171,7 @@ export function discoverAgents(
 
       return agents;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = toErrorMessage(error);
       console.warn(`${WARN_PREFIX}unexpected error discovering agents in ${agentsDir}: ${message}`);
       return [];
     }
