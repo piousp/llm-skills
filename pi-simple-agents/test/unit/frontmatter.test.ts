@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseFrontmatter } from "../../src/frontmatter.ts";
+import { parseFrontmatter, normalizeFrontmatterFields } from "../../src/frontmatter.ts";
 
 test("valid frontmatter with all 4 Claude-Code fields parses into correct object and body", () => {
   const content = `---
@@ -20,6 +20,14 @@ Rest of the content.
   assert.deepEqual(frontmatter.tools, ["read", "grep"]);
   assert.equal(frontmatter.model, "sonnet");
   assert.equal(body, "# Body\n\nRest of the content.\n");
+});
+
+test("normalizeFrontmatterFields resolves modelAlias from the already-normalized model scalar", () => {
+  const warnings: string[] = [];
+  const { normalized, modelAlias } = normalizeFrontmatterFields({ model: "sonnet" }, warnings);
+
+  assert.equal(normalized.model, "sonnet");
+  assert.equal(modelAlias, "sonnet");
 });
 
 test("tools list is split on comma and trimmed", () => {

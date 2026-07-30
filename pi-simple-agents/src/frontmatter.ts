@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { mapClaudeTools, normalizeClaudeModel, CLAUDE_INERT_FIELDS } from "./claude-compat.ts";
+import { toErrorMessage } from "./warn.ts";
 
 const SYSTEM_PROMPT_MODES = ["append", "replace"] as const;
 type SystemPromptMode = (typeof SYSTEM_PROMPT_MODES)[number];
@@ -120,6 +121,54 @@ function normalizeTools(
   return undefined;
 }
 
+export function normalizeFrontmatterFields(
+  raw: Record<string, unknown>,
+  warnings: string[],
+): { normalized: Record<string, unknown>; modelAlias?: string; inertTools: string[] } {
+  const normalized: Record<string, unknown> = {};
+  const inertToolNames = new Set<string>();
+
+  for (const field of LIST_FIELDS) {
+    if (raw[field] === undefined) continue;
+    const normalizedList = normalizeTools(raw[field], field, warnings);
+    if (normalizedList === undefined) {
+      normalized[field] = undefined;
+      continue;
+    }
+    if (CLAUDE_MAPPED_LIST_FIELDS.has(field)) {
+      const { tools: mapped, inert } = mapClaudeTools(normalizedList);
+      normalized[field] = mapped;
+      for (const name of inert) inertToolNames.add(name);
+    } else {
+      normalized[field] = normalizedList;
+    }
+  }
+
+  for (const field of SCALAR_FIELDS) {
+    if (raw[field] === undefined) continue;
+    normalized[field] = normalizeScalar(raw[field], field, warnings);
+  }
+
+  let modelAlias: string | undefined;
+  if (typeof normalized.model === "string") {
+    const resolved = normalizeClaudeModel(normalized.model);
+    normalized.model = resolved.model;
+    modelAlias = resolved.alias;
+  }
+
+  for (const { key, allowed } of ENUM_FIELDS) {
+    if (raw[key] === undefined) continue;
+    normalized[key] = normalizeEnum(raw[key], allowed, key, warnings);
+  }
+
+  for (const field of BOOLEAN_FIELDS) {
+    if (raw[field] === undefined) continue;
+    normalized[field] = normalizeBoolean(raw[field], field, warnings);
+  }
+
+  return { normalized, modelAlias, inertTools: [...inertToolNames] };
+}
+
 function emptyResult(body: string, warnings: string[] = []): FrontmatterResult {
   return { frontmatter: {}, body, inertFields: [], inertTools: [], warnings };
 }
@@ -207,7 +256,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
   try {
     parsed = parseYaml(block);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     const recovery = attemptLenientRecovery(block);
     if (!recovery) {
       return emptyResult(content, [`Failed to parse YAML frontmatter: ${message}`]);
@@ -225,7 +274,6 @@ export function parseFrontmatter(content: string): FrontmatterResult {
   }
 
   const raw = parsed as Record<string, unknown>;
-  const normalized: Record<string, unknown> = {};
   const warnings: string[] = [];
 
   if (recoveredFields) {
@@ -239,45 +287,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     .filter((key) => CLAUDE_INERT_FIELDS.has(key))
     .sort();
 
-  const inertToolNames = new Set<string>();
-
-  for (const field of LIST_FIELDS) {
-    if (raw[field] === undefined) continue;
-    const normalizedList = normalizeTools(raw[field], field, warnings);
-    if (normalizedList === undefined) {
-      normalized[field] = undefined;
-      continue;
-    }
-    if (CLAUDE_MAPPED_LIST_FIELDS.has(field)) {
-      const { tools: mapped, inert } = mapClaudeTools(normalizedList);
-      normalized[field] = mapped;
-      for (const name of inert) inertToolNames.add(name);
-    } else {
-      normalized[field] = normalizedList;
-    }
-  }
-
-  for (const field of SCALAR_FIELDS) {
-    if (raw[field] === undefined) continue;
-    normalized[field] = normalizeScalar(raw[field], field, warnings);
-  }
-
-  let modelAlias: string | undefined;
-  if (typeof normalized.model === "string") {
-    const resolved = normalizeClaudeModel(normalized.model);
-    normalized.model = resolved.model;
-    modelAlias = resolved.alias;
-  }
-
-  for (const { key, allowed } of ENUM_FIELDS) {
-    if (raw[key] === undefined) continue;
-    normalized[key] = normalizeEnum(raw[key], allowed, key, warnings);
-  }
-
-  for (const field of BOOLEAN_FIELDS) {
-    if (raw[field] === undefined) continue;
-    normalized[field] = normalizeBoolean(raw[field], field, warnings);
-  }
+  const { normalized, modelAlias, inertTools } = normalizeFrontmatterFields(raw, warnings);
 
   const frontmatter: ParsedFrontmatter = { ...raw, ...normalized } as ParsedFrontmatter;
 
@@ -289,7 +299,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     frontmatter,
     body,
     inertFields,
-    inertTools: [...inertToolNames],
+    inertTools,
     modelAlias,
     warnings,
   };

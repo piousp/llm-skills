@@ -73,11 +73,9 @@ export function normalizeClaudeModel(model: string): { model?: string; alias?: s
   return { model };
 }
 
-const defaultUnwarnedRegistry = new Map<string, number>();
-
 export function claimUnwarned(
   keys: string[],
-  registry: Map<string, number> = defaultUnwarnedRegistry,
+  registry: Map<string, number>,
   ttlMs = 60_000,
 ): string[] {
   const now = Date.now();
@@ -96,7 +94,7 @@ export function claimUnwarned(
 
 export function reportInertUsage(
   usage: { fields: Iterable<string>; tools: Iterable<string>; models: Iterable<string> },
-  registry?: Map<string, number>,
+  registry: Map<string, number>,
 ): string | undefined {
   const inertKeys = [
     ...[...usage.fields].map((name) => `field:${name}`),

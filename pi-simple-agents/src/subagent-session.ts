@@ -1,4 +1,5 @@
 import type { AgentConfig } from "./agents.ts";
+import { toErrorMessage } from "./warn.ts";
 
 export interface SessionManagerFactory<S> {
   forkFrom(sourcePath: string, targetCwd: string, sessionDir: string): S; // may throw
@@ -34,7 +35,7 @@ export function createSubagentSessionManager<S>(
     const manager = factory.forkFrom(callerSessionFile, cwd, sessionDir);
     return { manager, warnings: [] };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = toErrorMessage(error);
     return {
       manager: factory.inMemory(cwd),
       warnings: [`${agent.name}: failed to fork caller session — falling back to fresh: ${message}`],

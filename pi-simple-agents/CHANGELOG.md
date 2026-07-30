@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.1 — 2026-07-30
+
+Internal tech-debt paydown from a strict `pablo-code-philosophy` review. No changes to the
+`subagent` tool's public contract (schema, invocation shape, or output format) — everything below
+is an implementation-detail refactor plus added test coverage.
+
+- **Removed a hidden shared-state footgun in Claude-compat warning dedupe.** `claimUnwarned` and
+  `reportInertUsage` (`src/claude-compat.ts`) no longer default their `registry` param to a
+  module-level singleton `Map` — it's now a required argument, same as `discoverAgents`'s
+  `warnRegistry` (`src/agents.ts`). The only production call site (`agent-registry.ts`) already
+  passed its own registry explicitly, so there's no behavior change; this only removes an
+  implicit fallback that could have silently shared TTL-dedupe state across unrelated callers that
+  omitted the argument.
+- **New `toErrorMessage(error: unknown): string` in `src/warn.ts`**, replacing 4 duplicated
+  `error instanceof Error ? error.message : String(error)` ternaries across `agents.ts`,
+  `frontmatter.ts`, `subagent-session.ts`, and `run.ts`. No behavior change.
+- **Reduced complexity in two hot-path functions**, both extractions with no behavior change:
+  - `runAgentViaSdk` (`src/run.ts`) now delegates its abort-listener/timeout wiring to a new
+    `runWithTimeoutAndAbort` helper.
+  - `parseFrontmatter` (`src/frontmatter.ts`) now delegates its four field-group normalization
+    passes (list/scalar/enum/boolean fields, plus model-alias resolution) to a new
+    `normalizeFrontmatterFields` helper.
+- **New unit test coverage for `extensions/index.ts`** (`test/unit/extensions-index.test.ts`,
+  previously untested at the unit level): the tool's `execute` validation-error branches,
+  `renderSubagentCall`'s incomplete-args short-circuit, `renderSubagentResult`'s partial-render
+  path, and `runSingleTask`'s progress-tracking `finally` guarantee. `runSingleTask` is now
+  exported from `extensions/index.ts` (was module-private) to make this last case testable
+  directly — visibility-only change, no behavior change.
+
 ## 0.8.0 — 2026-07-29
 
 - **New optional `model` param on the `subagent` tool invocation.** In single mode it's a
