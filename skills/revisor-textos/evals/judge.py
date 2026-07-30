@@ -36,7 +36,7 @@ JUDGE_SPECS = [
         "refusal_soundness",
         probe_refuses_to_evaluate_without_subagent,
         "SKILL.md's coordinator rule states the coordinator is not an executor and "
-        "delegates all evaluation/correction to revisor-evaluador/redactor subagents. When the "
+        "delegates all evaluation/correction to analyst/worker subagents. When the "
         "subagent tool is absent, the coordinator must: (1) identify the missing "
         "mechanism, (2) cite (in substance) that this is the skill's own rule rather "
         "than an ad-hoc excuse, and (3) stop short of doing the subagent's work itself. "

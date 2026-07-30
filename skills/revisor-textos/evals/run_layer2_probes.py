@@ -4,7 +4,7 @@ Layer 2 (behavioral/trajectory) probes for the revisor-textos skill,
 scoped to what's actually runnable in a bare `pi` CLI: no `subagent` tool,
 no `ask_user_question` tool (confirmed empirically — bare `pi -ne` exposes
 only Read/Bash/Edit/Write). The skill's real delegation pipeline
-(revisor-evaluador -> redactor) cannot execute there, so these probes assert the
+(analyst -> worker) cannot execute there, so these probes assert the
 *degraded-path* behavior the skill itself mandates: "If your harness has no
 subagent/delegation mechanism, say so explicitly before proceeding rather
 than doing the work yourself" (SKILL.md, coordinator rule).
@@ -160,22 +160,28 @@ def check_did_not_call_evaluadores_directly(tool_calls, text, **ctx) -> bool:
 CHECK_REGISTRY["did_not_call_evaluadores_directly"] = check_did_not_call_evaluadores_directly
 
 
-def check_either_invoked_redactor_or_announced_missing(tool_calls, text, **ctx) -> bool:
-    """Either delegated to redactor (via subagent) or announced missing delegation."""
+def check_either_invoked_worker_or_announced_missing(tool_calls, text, **ctx) -> bool:
+    """Either delegated to worker (via subagent) or announced missing delegation."""
     delegated = False
     for tc in tool_calls:
         if tc["name"] == "subagent":
             args = tc.get("arguments", {})
-            if isinstance(args, dict) and args.get("agent") == "redactor":
+            if isinstance(args, dict) and args.get("agent") == "worker":
                 delegated = True
                 break
-            if isinstance(args, str) and "redactor" in args:
+            tasks = args.get("tasks") if isinstance(args, dict) else None
+            if isinstance(tasks, list) and any(
+                isinstance(t, dict) and t.get("agent") == "worker" for t in tasks
+            ):
+                delegated = True
+                break
+            if isinstance(args, str) and "worker" in args:
                 delegated = True
                 break
     if delegated:
         return True
     return check_announced_missing_subagent(tool_calls, text, **ctx)
-CHECK_REGISTRY["either_invoked_redactor_or_announced_missing"] = check_either_invoked_redactor_or_announced_missing
+CHECK_REGISTRY["either_invoked_worker_or_announced_missing"] = check_either_invoked_worker_or_announced_missing
 
 
 def check_mentions_working_file_path(tool_calls, text, **ctx) -> bool:
@@ -384,7 +390,7 @@ def probe_state_derivation_is_mechanical() -> dict:
 
 
 def probe_coordinator_does_not_modify_working_file() -> dict:
-    """Coordinator does not edit working.md directly (delegates to redactor or announces gap)."""
+    """Coordinator does not edit working.md directly (delegates to worker or announces gap)."""
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
         session_dir = repo / "tmp" / "revisor-textos" / "eval-evals" / "12345"
@@ -400,7 +406,7 @@ def probe_coordinator_does_not_modify_working_file() -> dict:
 
         checks = _grade([
             "no_edit_write_to_working_file",
-            "either_invoked_redactor_or_announced_missing",
+            "either_invoked_worker_or_announced_missing",
         ], tool_calls, text, session_dir=str(session_dir))
 
         return {

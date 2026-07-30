@@ -102,7 +102,9 @@ def run_pi(cwd: Path, prompt: str, session: Path | None = None,
 
 
 def subagent_called(tool_calls: list[dict], name: str) -> bool:
-    """True if a subagent tool call references the named agent."""
+    """True if a subagent tool call references the named agent, either as a
+    single-task call (agent/subagent field) or inside a parallel tasks: [...]
+    array (each task item's own agent field)."""
     for tc in tool_calls:
         if tc["name"] == "subagent":
             args = tc.get("arguments", {})
@@ -111,6 +113,13 @@ def subagent_called(tool_calls: list[dict], name: str) -> bool:
                     return True
                 if args.get("subagent") == name:
                     return True
+                tasks = args.get("tasks")
+                if isinstance(tasks, list):
+                    for task in tasks:
+                        if isinstance(task, dict) and (
+                            task.get("agent") == name or task.get("subagent") == name
+                        ):
+                            return True
             if isinstance(args, str) and name in args:
                 return True
     return False
@@ -223,10 +232,10 @@ def run_trial() -> dict:
             working_modified = wf_mtime_after > wf_mtime_before
 
         checks = {
-            "delegated_to_revisor_evaluador": subagent_called(all_tool_calls, "revisor-evaluador"),
+            "delegated_to_analyst": subagent_called(all_tool_calls, "analyst"),
             "coordinator_wrote_hallazgos": hallazgos_file is not None,
             "hallazgos_follows_template": hallazgos_valid,
-            "delegated_to_redactor": subagent_called(all_tool_calls, "redactor"),
+            "delegated_to_worker": subagent_called(all_tool_calls, "worker"),
             "working_file_modified": working_modified,
             "correccion_marker_written": correccion_file is not None,
             "correccion_marker_valid": correccion_valid,
