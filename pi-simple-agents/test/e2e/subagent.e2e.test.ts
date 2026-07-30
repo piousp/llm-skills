@@ -76,3 +76,50 @@ live(
     );
   },
 );
+
+live(
+  "e2e: subagent tool honors a single-mode `model` override without crashing",
+  { timeout: TIMEOUT_MS + 10_000 },
+  async () => {
+    const prompt =
+      "Usa la herramienta subagent para invocar al agente pablo-planner con esta tarea: " +
+      "'Consulta de prueba: responde en una sola frase confirmando que funcionas correctamente.' " +
+      "Pasa el parametro model con el valor 'anthropic/claude-sonnet-5' para forzar ese modelo " +
+      "en lugar del que el agente use por defecto. Reporta el resultado tal cual.";
+
+    const { code, stdout } = await runPi(["-e", EXTENSIONS_DIR, "-ne", "-p", prompt]);
+
+    assert.equal(code, 0, `pi exited non-zero. Output:\n${stdout}`);
+    assert.ok(stdout.trim().length > 0, "expected non-empty stdout from pi");
+    assert.doesNotMatch(
+      stdout,
+      /Cannot read properties of undefined|TypeError/i,
+      `pi output looked like a crash:\n${stdout}`,
+    );
+  },
+);
+
+live(
+  "e2e: subagent tool honors a per-task `model` override in parallel mode without crashing",
+  { timeout: TIMEOUT_MS + 10_000 },
+  async () => {
+    const prompt =
+      "Usa la herramienta subagent en modo paralelo (parametro tasks) con estas dos tareas: " +
+      "1) agente pablo-planner, tarea 'Consulta de prueba A: responde en una sola frase confirmando " +
+      "que funcionas correctamente.', con el parametro model en 'anthropic/claude-sonnet-5' para " +
+      "forzar ese modelo en lugar del que el agente use por defecto; " +
+      "2) agente scout, tarea 'Consulta de prueba B: responde en una sola frase confirmando que " +
+      "funcionas correctamente.', sin especificar model (usa el modelo configurado por defecto). " +
+      "Reporta ambos resultados tal cual.";
+
+    const { code, stdout } = await runPi(["-e", EXTENSIONS_DIR, "-ne", "-p", prompt]);
+
+    assert.equal(code, 0, `pi exited non-zero. Output:\n${stdout}`);
+    assert.ok(stdout.trim().length > 0, "expected non-empty stdout from pi");
+    assert.doesNotMatch(
+      stdout,
+      /Cannot read properties of undefined|TypeError/i,
+      `pi output looked like a crash:\n${stdout}`,
+    );
+  },
+);

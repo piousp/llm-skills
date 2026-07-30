@@ -1,10 +1,17 @@
 import type { AgentConfig } from "./agents.ts";
 
 export type SubagentParams =
-  | { agent: string; task: string; tasks?: undefined }
-  | { agent?: undefined; task?: undefined; tasks: Array<{ agent: string; task: string }> };
+  | { agent: string; task: string; model?: string; tasks?: undefined }
+  | {
+      agent?: undefined;
+      task?: undefined;
+      model?: undefined;
+      tasks: Array<{ agent: string; task: string; model?: string }>;
+    };
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export type TaskEntry = { agent: string; task: string; model?: string };
 
 export const MAX_PARALLEL_TASKS = 8;
 
@@ -16,43 +23,55 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isValidModelRef(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const slashIndex = value.indexOf("/");
+  if (slashIndex <= 0) return false;
+  return slashIndex < value.length - 1;
+}
+
+function validateModelRef(value: unknown, label: string): string | undefined {
+  if (value === undefined || isValidModelRef(value)) return undefined;
+  return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
+}
+
 function validateTaskEntry(entry: unknown, index: number): string | undefined {
   if (!isRecord(entry)) return `tasks[${index}] must be an object with "agent" and "task"`;
   if (!isNonEmptyString(entry.agent)) return `tasks[${index}].agent must be a non-empty string`;
   if (!isNonEmptyString(entry.task)) return `tasks[${index}].task must be a non-empty string`;
+  const modelError = validateModelRef(entry.model, `tasks[${index}].model`);
+  if (modelError) return modelError;
   return undefined;
 }
 
-export function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams> {
-  if (!isRecord(raw)) {
-    return { ok: false, error: 'Provide either {agent, task} or {tasks: [...]}, not neither.' };
+function validateSingleMode(raw: Record<string, unknown>): ValidationResult<SubagentParams> {
+  if (!isNonEmptyString(raw.agent)) {
+    return { ok: false, error: '"agent" must be a non-empty string.' };
   }
+  if (!isNonEmptyString(raw.task)) {
+    return { ok: false, error: '"task" must be a non-empty string.' };
+  }
+  const modelError = validateModelRef(raw.model, '"model"');
+  if (modelError) {
+    return { ok: false, error: modelError };
+  }
+  return {
+    ok: true,
+    value: {
+      agent: raw.agent,
+      task: raw.task,
+      ...(raw.model !== undefined ? { model: raw.model as string } : {}),
+    },
+  };
+}
 
-  const hasSingle = raw.agent !== undefined || raw.task !== undefined;
-  const hasTasks = raw.tasks !== undefined;
-
-  if (hasSingle && hasTasks) {
+function validateTasksMode(raw: Record<string, unknown>): ValidationResult<SubagentParams> {
+  if (raw.model !== undefined) {
     return {
       ok: false,
-      error: "Provide exactly one of {agent, task} or {tasks: [...]}, not both.",
+      error:
+        'top-level "model" is only valid with {agent, task}; in tasks mode set "model" per entry.',
     };
-  }
-
-  if (!hasSingle && !hasTasks) {
-    return {
-      ok: false,
-      error: "Provide exactly one of {agent, task} or {tasks: [...]}; neither was given.",
-    };
-  }
-
-  if (hasSingle) {
-    if (!isNonEmptyString(raw.agent)) {
-      return { ok: false, error: '"agent" must be a non-empty string.' };
-    }
-    if (!isNonEmptyString(raw.task)) {
-      return { ok: false, error: '"task" must be a non-empty string.' };
-    }
-    return { ok: true, value: { agent: raw.agent, task: raw.task } };
   }
 
   if (!Array.isArray(raw.tasks)) {
@@ -77,8 +96,42 @@ export function validateSubagentParams(raw: unknown): ValidationResult<SubagentP
 
   return {
     ok: true,
-    value: { tasks: raw.tasks as Array<{ agent: string; task: string }> },
+    value: { tasks: raw.tasks as Array<{ agent: string; task: string; model?: string }> },
   };
+}
+
+export function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams> {
+  if (!isRecord(raw)) {
+    return { ok: false, error: 'Provide either {agent, task} or {tasks: [...]}, not neither.' };
+  }
+
+  const hasSingle = raw.agent !== undefined || raw.task !== undefined;
+  const hasTasks = raw.tasks !== undefined;
+
+  if (hasSingle && hasTasks) {
+    return {
+      ok: false,
+      error: "Provide exactly one of {agent, task} or {tasks: [...]}, not both.",
+    };
+  }
+
+  if (!hasSingle && !hasTasks) {
+    return {
+      ok: false,
+      error: "Provide exactly one of {agent, task} or {tasks: [...]}; neither was given.",
+    };
+  }
+
+  return hasSingle ? validateSingleMode(raw) : validateTasksMode(raw);
+}
+
+// Normalizes validateSubagentParams' two accepted shapes ({agent, task} or
+// {tasks: [...]}) into the single task-entry array every downstream step
+// (agent resolution, spawning, progress indexing) operates on.
+export function normalizeTasks(params: SubagentParams): TaskEntry[] {
+  return params.tasks === undefined
+    ? [{ agent: params.agent, task: params.task, ...(params.model !== undefined ? { model: params.model } : {}) }]
+    : params.tasks;
 }
 
 function findUnknownNames(names: string[], availableNames: string[]): string[] {

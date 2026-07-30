@@ -159,6 +159,40 @@ subagent tasks: [
 
 pi-simple-agents runs agents in parallel (max 4 concurrent) and returns all results.
 
+### Overriding the model per invocation
+
+Both modes accept an optional `model` param, in `provider/modelId` form (e.g.
+`"anthropic/claude-opus-4-8"`). Multiple slashes are valid — the first segment is the provider,
+the rest is the model ID (e.g. `"openrouter/anthropic/claude-sonnet-4-5"`).
+
+In single mode, `model` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", model: "anthropic/claude-opus-4-8"
+```
+
+In parallel mode, `model` goes inside each entry of `tasks[]` — a top-level `model` alongside
+`tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", model: "anthropic/claude-haiku-4-5"
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+As with frontmatter `model`, registry existence isn't checked — a well-formed but unknown model
+silently falls back to the session default. A bare alias without a `/` (e.g. `"sonnet"`) is
+rejected outright — the whole `subagent` call fails with a validation error before any agent
+runs. Always use the full `provider/modelId` form — see [Model aliases](#model-aliases).
+
+### Bundled skill: `invoking-subagents`
+
+The package ships a self-discovering Agent Skill at
+[skills/invoking-subagents/SKILL.md](./skills/invoking-subagents/SKILL.md) that teaches single and
+parallel invocation and the `model` override. It loads automatically once the package is
+installed, and can also be invoked explicitly as `/skill:invoking-subagents`.
+
 While a subagent runs, the `subagent` tool's call display shows a live status line per task:
 `<agent> · tools: <N> · <status>`, where `<status>` is `working…` (no tool started yet),
 `running: <tool1, tool2, ...>` (tools currently executing, in start order — parallel tool calls
@@ -318,10 +352,13 @@ override user settings (`~/.pi/agent/settings.json`) when both set it.
 ### Precedence rules
 
 ```
-Project  >  User  >  Frontmatter (.md file)
+Invocation (subagent call)  >  Project settings  >  User settings  >  Frontmatter (.md file)
 ```
 
-Merge is field-level. If the project override only changes `model`, the rest of the fields defined in the user override or frontmatter are preserved.
+Merge is field-level. If the project override only changes `model`, the rest of the fields defined in the user override or frontmatter are preserved. The invocation-level `model` param (see
+[Overriding the model per invocation](#overriding-the-model-per-invocation)) only overrides `model`
+for that one call — it doesn't touch `tools`, `thinking`, or any other field, unlike
+settings-level `agentOverrides`, which can override any field.
 
 ### Complete example
 

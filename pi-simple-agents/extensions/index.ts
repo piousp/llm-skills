@@ -11,12 +11,13 @@ import type {
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../src/agents.ts";
+import { applyModelOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
 import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { formatRunResults } from "../src/format-results.ts";
-import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
-import type { SubagentParams as ValidatedSubagentParams } from "../src/validate.ts";
+import { validateSubagentParams, resolveAgents, normalizeTasks } from "../src/validate.ts";
+import type { TaskEntry } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
 import { buildLoaderOptions } from "../src/loader-config.ts";
 import { createSubagentSessionManager } from "../src/subagent-session.ts";
@@ -54,16 +55,20 @@ export type SubagentToolDetails =
   | { runs: AgentRunResult[] }
   | { error: string };
 
-type TaskEntry = { agent: string; task: string };
-
-const SubagentParams = Type.Object({
+export const SubagentParams = Type.Object({
   agent: Type.Optional(Type.String()),
   task: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String({
+    description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
+  })),
   tasks: Type.Optional(
     Type.Array(
       Type.Object({
         agent: Type.String(),
         task: Type.String(),
+        model: Type.Optional(Type.String({
+          description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
+        })),
       }),
     ),
   ),
@@ -96,13 +101,6 @@ function renderSubagentCall(
     ? toParamAgentsMap(registry.peek(context.cwd)?.agents ?? [])
     : new Map<string, AgentConfig>();
   return new Text(buildSubagentCallText(args, theme, paramAgents), 0, 0);
-}
-
-// Normalizes validateSubagentParams' two accepted shapes ({agent, task} or
-// {tasks: [...]}) into the single task-entry array every downstream step
-// (agent resolution, spawning, progress indexing) operates on.
-function normalizeTasks(params: ValidatedSubagentParams): TaskEntry[] {
-  return params.tasks === undefined ? [{ agent: params.agent, task: params.task }] : params.tasks;
 }
 
 function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
@@ -145,7 +143,7 @@ async function runSingleTask(
     );
     emitWarnings(warnings);
 
-    return await runAgentViaSdk(agent, t.task, {
+    return await runAgentViaSdk(applyModelOverride(agent, t.model), t.task, {
       modelRegistry,
       signal,
       createSession: createAgentSession,
