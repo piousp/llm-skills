@@ -11,12 +11,12 @@ import type {
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../src/agents.ts";
-import { applyModelOverride } from "../src/agents.ts";
+import { applyInvocationOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
 import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { formatRunResults } from "../src/format-results.ts";
-import { validateSubagentParams, resolveAgents, normalizeTasks } from "../src/validate.ts";
+import { validateSubagentParams, resolveAgents, normalizeTasks, invocationOverrideOf } from "../src/validate.ts";
 import type { TaskEntry } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
 import { buildLoaderOptions } from "../src/loader-config.ts";
@@ -61,6 +61,12 @@ export const SubagentParams = Type.Object({
   model: Type.Optional(Type.String({
     description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
   })),
+  tools: Type.Optional(Type.Array(Type.String(), {
+    description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Native pi tool names only — Claude Code tool-name aliases are not mapped here.',
+  })),
+  skills: Type.Optional(Type.Array(Type.String(), {
+    description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
+  })),
   tasks: Type.Optional(
     Type.Array(
       Type.Object({
@@ -68,6 +74,12 @@ export const SubagentParams = Type.Object({
         task: Type.String(),
         model: Type.Optional(Type.String({
           description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
+        })),
+        tools: Type.Optional(Type.Array(Type.String(), {
+          description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Native pi tool names only — Claude Code tool-name aliases are not mapped here.',
+        })),
+        skills: Type.Optional(Type.Array(Type.String(), {
+          description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
         })),
       }),
     ),
@@ -129,13 +141,14 @@ export async function runSingleTask(
   options: Omit<RunTasksOptions, "onUpdate" | "concurrency">,
 ): Promise<AgentRunResult> {
   const { cwd, signal, modelRegistry, callerSessionFile } = options;
+  const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
 
   try {
-    const resourceLoader = createMinimalResourceLoader(agent, cwd);
+    const resourceLoader = createMinimalResourceLoader(effectiveAgent, cwd);
     await resourceLoader.reload();
 
     const { manager, warnings } = createSubagentSessionManager(
-      agent,
+      effectiveAgent,
       callerSessionFile,
       cwd,
       SUBAGENT_SESSIONS_DIR,
@@ -143,15 +156,19 @@ export async function runSingleTask(
     );
     emitWarnings(warnings);
 
-    return await runAgentViaSdk(applyModelOverride(agent, t.model), t.task, {
-      modelRegistry,
-      signal,
-      createSession: createAgentSession,
-      resourceLoader,
-      sessionManager: manager,
-      getModel: (provider, modelId) => modelRegistry.find(provider, modelId),
-      onToolEvent: tracker ? (event) => tracker.onToolEvent(index, event) : undefined,
-    });
+    return await runAgentViaSdk(
+      effectiveAgent,
+      t.task,
+      {
+        modelRegistry,
+        signal,
+        createSession: createAgentSession,
+        resourceLoader,
+        sessionManager: manager,
+        getModel: (provider, modelId) => modelRegistry.find(provider, modelId),
+        onToolEvent: tracker ? (event) => tracker.onToolEvent(index, event) : undefined,
+      },
+    );
   } finally {
     tracker?.markTaskDone(index);
   }

@@ -1,29 +1,26 @@
-import type { AgentConfig } from "./agents.ts";
+import type { AgentConfig, InvocationOverride } from "./agents.ts";
+import { applyInvocationOverride } from "./agents.ts";
+import { invocationOverrideOf } from "./validate.ts";
 
-const MAX_TOOLS_SHOWN = 5;
+const MAX_ITEMS_SHOWN = 5;
 const MAX_PREVIEW_WIDTH = 80;
 
-function formatTools(tools: string[] | undefined): string {
-  if (tools === undefined) return "inherited";
-  if (tools.length === 0) return "none";
+function formatList(items: string[] | undefined): string {
+  if (items === undefined) return "inherited";
+  if (items.length === 0) return "none";
 
-  const shown = tools.slice(0, MAX_TOOLS_SHOWN).join(", ");
-  const remaining = tools.length - MAX_TOOLS_SHOWN;
+  const shown = items.slice(0, MAX_ITEMS_SHOWN).join(", ");
+  const remaining = items.length - MAX_ITEMS_SHOWN;
   return remaining > 0 ? `${shown} +${remaining} more` : shown;
 }
 
-export interface RenderTaskEntry {
-  agent?: string;
-  task?: string;
-  model?: string;
-}
+export type RenderTaskEntry = { agent?: string; task?: string } & InvocationOverride;
 
-export interface SubagentCallArgs {
+export type SubagentCallArgs = {
   agent?: string;
   task?: string;
-  model?: string;
   tasks?: RenderTaskEntry[];
-}
+} & InvocationOverride;
 
 export interface CallTheme {
   fg(color: "toolTitle" | "accent" | "dim", text: string): string;
@@ -72,7 +69,7 @@ function buildParallelCallText(
     if (!agentName) continue;
     const config = paramAgents.get(agentName);
     if (config) {
-      paramLines.push(`\n  ${theme.fg("accent", agentName)}${theme.fg("dim", `: ${formatAgentParams(config, t.model)}`)}`);
+      paramLines.push(`\n  ${theme.fg("accent", agentName)}${theme.fg("dim", `: ${formatAgentParams(config, invocationOverrideOf(t))}`)}`);
     }
   }
 
@@ -90,15 +87,19 @@ function buildSingleCallText(
   const title = `${prefix}${theme.fg("accent", agent)}${task}`;
 
   const agentConfig = paramAgents.get(agent);
-  const paramLine = agentConfig ? `\n  ${theme.fg("dim", formatAgentParams(agentConfig, args.model))}` : "";
+  const paramLine = agentConfig
+    ? `\n  ${theme.fg("dim", formatAgentParams(agentConfig, invocationOverrideOf(args)))}`
+    : "";
 
   return `${title}${paramLine}`;
 }
 
-export function formatAgentParams(agent: AgentConfig, modelOverride?: string): string {
-  const model = modelOverride ?? agent.model ?? "inherited";
+export function formatAgentParams(agent: AgentConfig, override?: InvocationOverride): string {
+  const effective = applyInvocationOverride(agent, override ?? {});
+  const model = effective.model ?? "inherited";
   const thinking = agent.thinking ?? "inherited";
-  const tools = formatTools(agent.tools);
+  const tools = formatList(effective.tools);
+  const skills = formatList(effective.skills);
 
-  return `model: ${model} · thinking: ${thinking} · tools: ${tools}`;
+  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills}`;
 }

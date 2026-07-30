@@ -1,6 +1,6 @@
 ---
 name: invoking-subagents
-description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}), parallel mode ({tasks: [...]}, up to 8 tasks), and forcing a specific model for one invocation via the optional model parameter (provider/modelId). Use when delegating work to a subagent, fanning tasks out in parallel, or overriding which model a single subagent run uses. Not for defining new agents or configuring persistent overrides — see the pi-simple-agents README for that."
+description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}), parallel mode ({tasks: [...]}, up to 8 tasks), and forcing a model, tool whitelist, or skill whitelist for one invocation via the optional model/tools/skills parameters. Use when delegating work to a subagent, fanning tasks out in parallel, or overriding which model, tools, or skills a single subagent run uses. Not for defining new agents or configuring persistent overrides — see the pi-simple-agents README for that."
 ---
 
 # Invoking subagents
@@ -47,6 +47,26 @@ per `tasks[]` entry:
 - Bare aliases without a `/` (`sonnet`, `opus`) are the malformed-format case below —
   they're rejected with a validation error, not silently ignored.
 
+## Forcing tools or skills for one invocation
+
+Add the optional `tools` and/or `skills` params (arrays of strings) — in single mode
+at the top level, in parallel mode per `tasks[]` entry:
+
+```json
+{"agent": "scout", "task": "List files with no write access", "tools": ["read", "grep"], "skills": ["tdd"]}
+```
+
+- Both `tools` and `skills` are **total replacement**, not merge, of whatever the
+  agent would otherwise resolve.
+- `tools`: native pi tool names only — no Claude Code tool-name aliasing (e.g.
+  `Read`→`read`) in this invocation path.
+- `skills`: whitelist by exact case-sensitive name against the inherited skill set.
+- `[]` is a valid explicit value meaning "none" for that call; omitting the field
+  means "inherit whatever settings.json/frontmatter already resolved" — these are
+  different things.
+- Same placement rule as `model`: single mode top-level, or per `tasks[]` entry —
+  never mixed with a top-level `agent`/`task` plus `tasks`.
+
 ## Errors and how to fix them
 
 - Top-level `model` together with `tasks` → rejected; put `model` inside each
@@ -54,6 +74,9 @@ per `tasks[]` entry:
 - Unknown `agent` name → error lists the available agents.
 - `model` not in `provider/modelId` form → validation error.
 - Mixing top-level `agent`/`task` with `tasks` → rejected; use exactly one mode.
+- Top-level `tools`/`skills` together with `tasks` → rejected; put them inside
+  each `tasks[]` entry instead.
+- `tools`/`skills` not an array of strings → validation error.
 
 ## Not covered here
 

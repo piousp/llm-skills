@@ -253,12 +253,29 @@ export function loadSettings(
   });
 }
 
-export function applyModelOverride(
+export interface InvocationOverride {
+  model?: string;
+  tools?: string[];
+  skills?: string[];
+}
+
+export function applyInvocationOverride(
   agent: AgentConfig,
-  model: string | undefined,
+  override: InvocationOverride,
 ): AgentConfig {
-  if (model === undefined) return agent;
-  return { ...agent, model };
+  if (
+    override.model === undefined
+    && override.tools === undefined
+    && override.skills === undefined
+  ) {
+    return agent;
+  }
+
+  const result: AgentConfig = { ...agent };
+  if (override.model !== undefined) result.model = override.model;
+  if (override.tools !== undefined) result.tools = override.tools;
+  if (override.skills !== undefined) result.skills = override.skills;
+  return result;
 }
 
 export function applyOverrides(

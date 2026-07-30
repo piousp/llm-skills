@@ -7,7 +7,7 @@ import {
   discoverAgents,
   loadSettings,
   applyOverrides,
-  applyModelOverride,
+  applyInvocationOverride,
   type AgentConfig,
   type AgentOverrides,
   type CacheEntry,
@@ -128,7 +128,7 @@ Claude Code body.
   }
 });
 
-test("applyModelOverride: model undefined returns the same config", () => {
+test("applyInvocationOverride: empty override returns the same config", () => {
   const baseAgent: AgentConfig = {
     name: "scout",
     description: "Frontmatter description",
@@ -142,12 +142,12 @@ test("applyModelOverride: model undefined returns the same config", () => {
     systemPrompt: "Frontmatter body.",
   };
 
-  const result = applyModelOverride(baseAgent, undefined);
+  const result = applyInvocationOverride(baseAgent, {});
 
   assert.equal(result, baseAgent);
 });
 
-test("applyModelOverride: model string returns a new config with only model replaced, original untouched", () => {
+test("applyInvocationOverride: model string returns a new config with only model replaced, original untouched", () => {
   const baseAgent: AgentConfig = {
     name: "scout",
     description: "Frontmatter description",
@@ -161,7 +161,7 @@ test("applyModelOverride: model string returns a new config with only model repl
     systemPrompt: "Frontmatter body.",
   };
 
-  const result = applyModelOverride(baseAgent, "a/b");
+  const result = applyInvocationOverride(baseAgent, { model: "a/b" });
 
   assert.notEqual(result, baseAgent);
   assert.equal(result.model, "a/b");
@@ -175,6 +175,77 @@ test("applyModelOverride: model string returns a new config with only model repl
   assert.equal(result.filePath, baseAgent.filePath);
   assert.equal(result.systemPrompt, baseAgent.systemPrompt);
   assert.equal(baseAgent.model, "frontmatter-model");
+});
+
+test("applyInvocationOverride: tools set to empty array replaces tools with [], not undefined or original", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { tools: [] });
+
+  assert.notEqual(result, baseAgent);
+  assert.deepEqual(result.tools, []);
+  assert.deepEqual(baseAgent.tools, ["read"]);
+});
+
+test("applyInvocationOverride: skills set to empty array replaces skills with [], not undefined or original", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    skills: ["skill-a"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { skills: [] });
+
+  assert.notEqual(result, baseAgent);
+  assert.deepEqual(result.skills, []);
+  assert.deepEqual(baseAgent.skills, ["skill-a"]);
+});
+
+test("applyInvocationOverride: model, tools, and skills all set together replaces all three in one copy, unrelated fields untouched", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    skills: ["skill-a"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, {
+    model: "a/b",
+    tools: ["grep", "find"],
+    skills: ["skill-b"],
+  });
+
+  assert.notEqual(result, baseAgent);
+  assert.equal(result.model, "a/b");
+  assert.deepEqual(result.tools, ["grep", "find"]);
+  assert.deepEqual(result.skills, ["skill-b"]);
+  assert.equal(result.description, baseAgent.description);
 });
 
 test("applyOverrides: project override wins over user override; user override wins over frontmatter when project doesn't touch the field", () => {

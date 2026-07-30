@@ -27,7 +27,7 @@ test("formatAgentParams: model, thinking, and tools all set renders each verbati
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: claude-opus-4 · thinking: high · tools: a, b, c");
+  assert.equal(result, "model: claude-opus-4 · thinking: high · tools: a, b, c · skills: inherited");
 });
 
 test("formatAgentParams: none of the three set renders all as inherited", () => {
@@ -35,7 +35,7 @@ test("formatAgentParams: none of the three set renders all as inherited", () => 
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited");
+  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited · skills: inherited");
 });
 
 test("formatAgentParams: only model set renders thinking and tools as inherited", () => {
@@ -43,7 +43,7 @@ test("formatAgentParams: only model set renders thinking and tools as inherited"
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: inherited");
+  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: inherited · skills: inherited");
 });
 
 test("formatAgentParams: empty tools array renders tools as none", () => {
@@ -51,7 +51,7 @@ test("formatAgentParams: empty tools array renders tools as none", () => {
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: none");
+  assert.equal(result, "model: inherited · thinking: inherited · tools: none · skills: inherited");
 });
 
 test("formatAgentParams: exactly 5 tools renders the full list with no +more suffix", () => {
@@ -59,7 +59,7 @@ test("formatAgentParams: exactly 5 tools renders the full list with no +more suf
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: a, b, c, d, e");
+  assert.equal(result, "model: inherited · thinking: inherited · tools: a, b, c, d, e · skills: inherited");
 });
 
 test("formatAgentParams: 8 tools renders first 5 plus a +3 more suffix", () => {
@@ -71,7 +71,7 @@ test("formatAgentParams: 8 tools renders first 5 plus a +3 more suffix", () => {
 
   assert.equal(
     result,
-    "model: inherited · thinking: inherited · tools: a, b, c, d, e +3 more",
+    "model: inherited · thinking: inherited · tools: a, b, c, d, e +3 more · skills: inherited",
   );
 });
 
@@ -325,16 +325,51 @@ test("formatAgentParams: 6 tools renders first 5 plus a +1 more suffix", () => {
 
   assert.equal(
     result,
-    "model: inherited · thinking: inherited · tools: a, b, c, d, e +1 more",
+    "model: inherited · thinking: inherited · tools: a, b, c, d, e +1 more · skills: inherited",
   );
 });
 
 test("formatAgentParams: modelOverride present shows the override instead of agent.model", () => {
   const agent = makeAgent({ model: "claude-opus-4" });
 
-  const result = formatAgentParams(agent, "claude-haiku");
+  const result = formatAgentParams(agent, { model: "claude-haiku" });
 
-  assert.equal(result, "model: claude-haiku · thinking: inherited · tools: inherited");
+  assert.equal(result, "model: claude-haiku · thinking: inherited · tools: inherited · skills: inherited");
+});
+
+test("formatAgentParams: tools override renders 'none' regardless of agent's configured tools", () => {
+  const agent = makeAgent({ tools: ["a", "b", "c"] });
+
+  const result = formatAgentParams(agent, { tools: [] });
+
+  assert.equal(result, "model: inherited · thinking: inherited · tools: none · skills: inherited");
+});
+
+test("formatAgentParams: empty override object behaves exactly like no override", () => {
+  const agent = makeAgent({ model: "claude-opus-4", tools: ["a", "b"] });
+
+  const result = formatAgentParams(agent, {});
+
+  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: a, b · skills: inherited");
+});
+
+test("formatAgentParams: skills override renders a new skills segment with the effective skills", () => {
+  const agent = makeAgent({});
+
+  const result = formatAgentParams(agent, { skills: ["a", "b"] });
+
+  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited · skills: a, b");
+});
+
+test("formatAgentParams: tools and skills both overridden together renders both effective values", () => {
+  const agent = makeAgent({ tools: ["a", "b"], skills: ["x"] });
+
+  const result = formatAgentParams(agent, { tools: ["read", "grep"], skills: ["tdd", "gof-design-patterns"] });
+
+  assert.equal(
+    result,
+    "model: inherited · thinking: inherited · tools: read, grep · skills: tdd, gof-design-patterns",
+  );
 });
 
 test("buildSubagentCallText: single-mode args.model overrides the agent's configured model in the param line", () => {
@@ -350,7 +385,7 @@ test("buildSubagentCallText: single-mode args.model overrides the agent's config
   assert.equal(
     result,
     "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X"
-      + `\n  <dim>${formatAgentParams(agent, "claude-haiku")}</dim>`,
+      + `\n  <dim>${formatAgentParams(agent, { model: "claude-haiku" })}</dim>`,
   );
 });
 
@@ -376,8 +411,35 @@ test("buildSubagentCallText: parallel tasks each show their own model override i
   assert.equal(
     result,
     `${prefix}(2): scout: List files, ...`
-      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent, "claude-sonnet")}</dim>`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent, { model: "claude-sonnet" })}</dim>`
       + `\n  <accent>web-scout</accent><dim>: ${formatAgentParams(webScoutAgent, undefined)}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: parallel tasks each show their own tools/skills override independently", () => {
+  const scoutAgent = makeAgent({ name: "scout", tools: ["read", "grep"] });
+  const webScoutAgent = makeAgent({ name: "web-scout", skills: ["web-fetch"] });
+  const paramAgents = new Map([
+    ["scout", scoutAgent],
+    ["web-scout", webScoutAgent],
+  ]);
+
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files", tools: [] },
+        { agent: "web-scout", task: "Find docs", skills: ["search"] },
+      ],
+    },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2): scout: List files, ...`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent, { tools: [] })}</dim>`
+      + `\n  <accent>web-scout</accent><dim>: ${formatAgentParams(webScoutAgent, { skills: ["search"] })}</dim>`,
   );
 });
 
