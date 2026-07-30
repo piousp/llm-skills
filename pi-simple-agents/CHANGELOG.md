@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 — 2026-07-29
+
+- **New optional `model` param on the `subagent` tool invocation.** In single mode it's a
+  top-level param; in parallel mode it's per-entry, inside each `tasks[]` item (a top-level
+  `model` alongside `tasks` is rejected). Format is `provider/modelId`, same as frontmatter
+  `model`. Precedence: invocation `model` > project settings (`agentOverrides`) > user settings
+  (`agentOverrides`) > frontmatter `model` > session default. As with the existing settings-level
+  `model`, registry existence isn't checked — a well-formed but unknown model silently falls back
+  to the session default. A bare alias without a `/` (e.g. `"sonnet"`) is rejected outright as a
+  validation error, not silently ignored.
+- **New bundled Agent Skill `invoking-subagents`** (`skills/invoking-subagents/SKILL.md`),
+  declared via `package.json`'s `pi.skills` manifest entry. Teaches single/parallel `subagent`
+  invocation and the new `model` override; loads automatically once the package is installed, and
+  is also invocable explicitly as `/skill:invoking-subagents`.
+
 ## 0.7.0 — 2026-07-29
 
 - **`discoverAgents` is now async.** Returns `Promise<AgentConfig[]>` instead of `AgentConfig[]`,

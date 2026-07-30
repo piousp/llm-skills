@@ -15,11 +15,13 @@ function formatTools(tools: string[] | undefined): string {
 export interface RenderTaskEntry {
   agent?: string;
   task?: string;
+  model?: string;
 }
 
 export interface SubagentCallArgs {
   agent?: string;
   task?: string;
+  model?: string;
   tasks?: RenderTaskEntry[];
 }
 
@@ -70,7 +72,7 @@ function buildParallelCallText(
     if (!agentName) continue;
     const config = paramAgents.get(agentName);
     if (config) {
-      paramLines.push(`\n  ${theme.fg("accent", agentName)}${theme.fg("dim", `: ${formatAgentParams(config)}`)}`);
+      paramLines.push(`\n  ${theme.fg("accent", agentName)}${theme.fg("dim", `: ${formatAgentParams(config, t.model)}`)}`);
     }
   }
 
@@ -88,13 +90,13 @@ function buildSingleCallText(
   const title = `${prefix}${theme.fg("accent", agent)}${task}`;
 
   const agentConfig = paramAgents.get(agent);
-  const paramLine = agentConfig ? `\n  ${theme.fg("dim", formatAgentParams(agentConfig))}` : "";
+  const paramLine = agentConfig ? `\n  ${theme.fg("dim", formatAgentParams(agentConfig, args.model))}` : "";
 
   return `${title}${paramLine}`;
 }
 
-export function formatAgentParams(agent: AgentConfig): string {
-  const model = agent.model ?? "inherited";
+export function formatAgentParams(agent: AgentConfig, modelOverride?: string): string {
+  const model = modelOverride ?? agent.model ?? "inherited";
   const thinking = agent.thinking ?? "inherited";
   const tools = formatTools(agent.tools);
 

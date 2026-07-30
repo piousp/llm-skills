@@ -253,6 +253,14 @@ export function loadSettings(
   });
 }
 
+export function applyModelOverride(
+  agent: AgentConfig,
+  model: string | undefined,
+): AgentConfig {
+  if (model === undefined) return agent;
+  return { ...agent, model };
+}
+
 export function applyOverrides(
   agents: AgentConfig[],
   overrides: AgentOverrides,

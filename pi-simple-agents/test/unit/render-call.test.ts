@@ -329,6 +329,58 @@ test("formatAgentParams: 6 tools renders first 5 plus a +1 more suffix", () => {
   );
 });
 
+test("formatAgentParams: modelOverride present shows the override instead of agent.model", () => {
+  const agent = makeAgent({ model: "claude-opus-4" });
+
+  const result = formatAgentParams(agent, "claude-haiku");
+
+  assert.equal(result, "model: claude-haiku · thinking: inherited · tools: inherited");
+});
+
+test("buildSubagentCallText: single-mode args.model overrides the agent's configured model in the param line", () => {
+  const agent = makeAgent({ name: "scout", model: "claude-opus-4" });
+  const paramAgents = new Map([["scout", agent]]);
+
+  const result = buildSubagentCallText(
+    { agent: "scout", task: "Find X", model: "claude-haiku" },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    "<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: Find X"
+      + `\n  <dim>${formatAgentParams(agent, "claude-haiku")}</dim>`,
+  );
+});
+
+test("buildSubagentCallText: parallel tasks each show their own model override independently", () => {
+  const scoutAgent = makeAgent({ name: "scout", model: "claude-opus-4" });
+  const webScoutAgent = makeAgent({ name: "web-scout", model: "claude-haiku" });
+  const paramAgents = new Map([
+    ["scout", scoutAgent],
+    ["web-scout", webScoutAgent],
+  ]);
+
+  const result = buildSubagentCallText(
+    {
+      tasks: [
+        { agent: "scout", task: "List files", model: "claude-sonnet" },
+        { agent: "web-scout", task: "Find docs" },
+      ],
+    },
+    fakeTheme,
+    paramAgents,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2): scout: List files, ...`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent, "claude-sonnet")}</dim>`
+      + `\n  <accent>web-scout</accent><dim>: ${formatAgentParams(webScoutAgent, undefined)}</dim>`,
+  );
+});
+
 test("buildSubagentCallText: task exactly 80 chars renders without truncation", () => {
   const exactTask = "a".repeat(80);
   const result = buildSubagentCallText(

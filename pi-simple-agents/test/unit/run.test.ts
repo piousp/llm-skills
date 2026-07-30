@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
-import { applyOverrides, type AgentConfig } from "../../src/agents.ts";
+import { applyOverrides, applyModelOverride, type AgentConfig } from "../../src/agents.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
 class FakeAgentSession {
@@ -472,6 +472,44 @@ test("runAgentViaSdk: model override via applyOverrides flows through getModel",
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
+});
+
+test("runAgentViaSdk: precedence chain — invocation override wins over settings override wins over frontmatter", async () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "test",
+    tools: ["read"],
+    model: "anthropic/claude-haiku",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "body",
+  };
+
+  const settingsOverrides = {
+    scout: { model: "anthropic/claude-sonnet-5" },
+  };
+
+  const [afterSettingsOverride] = applyOverrides([baseAgent], settingsOverrides);
+  const afterInvocationOverride = applyModelOverride(afterSettingsOverride!, "anthropic/claude-opus-4-8");
+
+  let capturedModel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = ((provider: string, modelId: string) => ({ provider, modelId })) as any;
+
+  await runAgentViaSdk(
+    afterInvocationOverride,
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+  );
+
+  assert.deepEqual(capturedModel, { provider: "anthropic", modelId: "claude-opus-4-8" });
 });
 
 test("runAgentViaSdk: timeoutMs elapses, settles error and aborts+disposes the session", async () => {

@@ -7,6 +7,7 @@ import {
   discoverAgents,
   loadSettings,
   applyOverrides,
+  applyModelOverride,
   type AgentConfig,
   type AgentOverrides,
   type CacheEntry,
@@ -125,6 +126,55 @@ Claude Code body.
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(realFileDir, { recursive: true, force: true });
   }
+});
+
+test("applyModelOverride: model undefined returns the same config", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyModelOverride(baseAgent, undefined);
+
+  assert.equal(result, baseAgent);
+});
+
+test("applyModelOverride: model string returns a new config with only model replaced, original untouched", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyModelOverride(baseAgent, "a/b");
+
+  assert.notEqual(result, baseAgent);
+  assert.equal(result.model, "a/b");
+  assert.equal(result.name, baseAgent.name);
+  assert.equal(result.description, baseAgent.description);
+  assert.deepEqual(result.tools, baseAgent.tools);
+  assert.equal(result.systemPromptMode, baseAgent.systemPromptMode);
+  assert.equal(result.inheritProjectContext, baseAgent.inheritProjectContext);
+  assert.deepEqual(result.defaultReads, baseAgent.defaultReads);
+  assert.equal(result.source, baseAgent.source);
+  assert.equal(result.filePath, baseAgent.filePath);
+  assert.equal(result.systemPrompt, baseAgent.systemPrompt);
+  assert.equal(baseAgent.model, "frontmatter-model");
 });
 
 test("applyOverrides: project override wins over user override; user override wins over frontmatter when project doesn't touch the field", () => {
