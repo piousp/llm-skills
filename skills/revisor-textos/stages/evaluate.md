@@ -4,7 +4,8 @@
 Cuando `state.py next` reporta `phase: 2, phase_name: "evaluating"`.
 
 ## Actor
-`revisor-evaluador` — agente read-only. Reporta hallazgos en su output textual (markdown).
+`analyst` — agente read-only de propósito general. Reporta hallazgos en su output textual
+(markdown), seguidos de su propio resumen estructurado (ver `references/subagent-protocol.md`).
 
 ## Inputs recibidos de state.py
 - `session_dir` — directorio de la sesión.
@@ -29,15 +30,15 @@ Invocar a `subagent tasks: [...]` con N tasks simultáneos:
 Ejemplo concreto con 3 evaluadores:
 subagent(tasks: [
   {
-    agent: "revisor-evaluador",
+    agent: "analyst",
     task: "Evalúa el documento contra el skill filologica. ..."
   },
   {
-    agent: "revisor-evaluador",
+    agent: "analyst",
     task: "Evalúa el documento contra el skill heuristica. ..."
   },
   {
-    agent: "revisor-evaluador",
+    agent: "analyst",
     task: "Evalúa el documento contra el skill APA. ..."
   }
 ])
@@ -46,7 +47,7 @@ subagent(tasks: [
 - **Máximo 4 concurrentes.** Si hay más de 4 evaluadores, se lanzan en lotes de 4.
 - **Máximo 8 tasks totales.** Si el usuario seleccionó más de 8, el coordinador debe limitar a 8 en init.
 
-Cada task usa el subagente `revisor-evaluador` con este prompt estructurado:
+Cada task usa el subagente `analyst` con este prompt estructurado:
 
 ```
 [CONTEXTO]
@@ -72,7 +73,6 @@ Modo: evaluacion
 5. Para cada hallazgo, reporta el campo Línea con el número de línea (o rango N-M) del archivo de
    trabajo tal como lo muestra la herramienta `read`; usa "desconocida" solo si el hallazgo es
    global al documento entero.
-
 [LIMITES]
 - No leas ningun otro archivo — solo el working file indicado.
 - No modifiques nada — solo reporta hallazgos.
@@ -85,8 +85,8 @@ Modo: evaluacion
 
 Esperar a que todos los `subagent tasks` completen. Para cada resultado:
 
-- Si el subagente devolvió hallazgos válidos: el coordinador escribe el resultado textual en `<session_dir>/hallazgos-<evaluador>.md`.
-- Si el subagente falló (output vacío, error): re-delegar una vez con el mismo prompt. Si falla de nuevo, marcar el evaluador como fallido y continuar con los demás.
+- Si el subagente devolvió hallazgos válidos: el coordinador extrae solo el bloque `## Hallazgo:` del output (ver `references/subagent-protocol.md` — `analyst` agrega su propio resumen al final, que se descarta) y lo escribe en `<session_dir>/hallazgos-<evaluador>.md`.
+- Si el subagente falló (output vacío, error, sin bloques `## Hallazgo:` reconocibles): re-delegar una vez con el mismo prompt. Si falla de nuevo, marcar el evaluador como fallido y continuar con los demás.
 
 ### 4. Presentar al usuario
 

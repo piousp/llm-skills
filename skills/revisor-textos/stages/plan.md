@@ -5,7 +5,7 @@ Cuando `state.py next` reporta `phase: 4, phase_name: "plan"`.
 
 ## Actores
 - Script (`state.py group`) — agrupamiento mecánico, sin juicio.
-- `redactor` — agente con capacidad de escritura. Redacta la corrección conjunta por grupo.
+- `worker` — agente con capacidad de escritura. Redacta la corrección conjunta por grupo.
 
 ## Inputs recibidos de state.py
 - `session_dir` — directorio de la sesión.
@@ -44,7 +44,7 @@ Si `total_grupos == 0` en el JSON agrupado: el coordinador escribe directamente
 No hay correcciones que aplicar.
 ```
 
-Informar al usuario y terminar el stage (no se invoca al `redactor`). Escribir este marcador no es
+Informar al usuario y terminar el stage (no se invoca al `worker`). Escribir este marcador no es
 juicio del coordinador — es transcripción mecánica de "no hay grupos".
 
 ### 3. Confirmar con el usuario
@@ -54,7 +54,7 @@ severidad máxima, duplicados eliminados) y preguntar: "¿Generar el plan de cor
 
 NO avanzar hasta que el usuario confirme explícitamente.
 
-### 4. Paso (b) — Invocar al `redactor`
+### 4. Paso (b) — Invocar al `worker`
 
 El coordinador lee `hallazgos-agrupados.json` (si < 300 líneas, lo incrusta en `[CONTEXTO]`; si es
 grande, pasa la ruta absoluta e indica que lo lea con `read`).
@@ -103,9 +103,9 @@ Modo: plan
 
 ### 5. Verificar
 
-El `redactor` debe devolver "Work finished" (protocolo). Verificar además que
-`plan-correccion.md` existe y que el número de encabezados `## Grupo` coincide con `total_grupos`
-del JSON agrupado.
+El `worker` debe devolver `**Status:** COMPLETED` (protocolo, ver `references/subagent-protocol.md`).
+Verificar además que `plan-correccion.md` existe y que el número de encabezados `## Grupo` coincide
+con `total_grupos` del JSON agrupado.
 
 ### 6. Manejo de fallos
 

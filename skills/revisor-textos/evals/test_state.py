@@ -157,7 +157,7 @@ class TestDeriveState(unittest.TestCase):
             self.assertEqual(state["progress"], "1/3")
             self.assertEqual(state["pending"], ["heuristica", "apa"])
             self.assertEqual(state["total_evaluators"], 3)
-            self.assertEqual(state["actor"], "revisor-evaluador")
+            self.assertEqual(state["actor"], "analyst")
             self.assertIsNone(state["blocked_reason"])
 
     # ── Phase 3: consolidate ────────────────────────────────────────────
@@ -194,7 +194,7 @@ class TestDeriveState(unittest.TestCase):
             state = derive_state(sdir)
             self.assertEqual(state["phase"], "4")
             self.assertEqual(state["phase_name"], "plan")
-            self.assertEqual(state["actor"], "redactor")
+            self.assertEqual(state["actor"], "worker")
             self.assertTrue(
                 str(state["stage_file"]).endswith("stages/plan.md"),
                 f"stage_file should end with stages/plan.md, got: {state['stage_file']}",
@@ -215,7 +215,7 @@ class TestDeriveState(unittest.TestCase):
             state = derive_state(sdir)
             self.assertEqual(state["phase"], "5")
             self.assertEqual(state["phase_name"], "correct")
-            self.assertEqual(state["actor"], "redactor")
+            self.assertEqual(state["actor"], "worker")
             self.assertTrue(
                 str(state["stage_file"]).endswith("stages/correct.md"),
                 f"stage_file should end with stages/correct.md, got: {state['stage_file']}",

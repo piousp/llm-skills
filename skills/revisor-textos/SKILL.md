@@ -49,8 +49,8 @@ que `state.py` pueda leerlo.
 ### Regla de subagentes: no subagent → solo informar
 
 Si la herramienta `subagent` no está disponible en el entorno:
-- **No leer archivos bajo `evaluadores/`** — eso es trabajo del `revisor-evaluador`.
-- **No intentar consolidar ni corregir** — todo eso es trabajo del `redactor`.
+- **No leer archivos bajo `evaluadores/`** — eso es trabajo del `analyst`.
+- **No intentar consolidar ni corregir** — todo eso es trabajo del `worker`.
 - **No ejecutar la revisión ni aplicar cambios** — el coordinador no es ejecutor.
 - Única acción permitida: informar al usuario que el skill requiere subagentes
   y detenerse. No seguir explorando archivos de la sesión.
@@ -76,10 +76,10 @@ Dos subagentes que **deben estar configurados en el harness** (ver Dependencias)
 invocados por nombre. No se requieren agentes nuevos. Si no están configurados,
 aplica la regla "no subagent → solo informar" (sección "Regla de subagentes" arriba).
 
-- **`revisor-evaluador`** — agente read-only de propósito general. Evalúa el documento contra
+- **`analyst`** — agente read-only de propósito general. Evalúa el documento contra
   un skill de revisión y reporta hallazgos en su **output textual** (markdown, nunca
   escribe archivos). Usado en evaluación.
-- **`redactor`** — agente con capacidad de escritura. Recibe hallazgos en markdown
+- **`worker`** — agente con capacidad de escritura. Recibe hallazgos en markdown
   y un archivo de trabajo, aplica las correcciones sugeridas. Usado en la Fase 4
   (redacta el plan de corrección conjunto) y la Fase 5 (aplica el plan).
 
@@ -145,10 +145,10 @@ Reglas:
 | Fase | Descripción | Actor |
 |------|-------------|-------|
 | **1 — Init** | Seleccionar archivo + evaluadores, crear sesión | Coordinador |
-| **2 — Evaluate** | Evaluación paralela de todos los evaluadores via `subagent tasks` | revisor-evaluador |
+| **2 — Evaluate** | Evaluación paralela de todos los evaluadores via `subagent tasks` | analyst |
 | **3 — Consolidate** | El coordinador ejecuta `state.py consolidate`; determinístico, sin subagente | Coordinador |
-| **4 — Plan** | `state.py group` agrupa mecánicamente por ubicación; el `redactor` redacta un plan de corrección conjunto por grupo | redactor |
-| **5 — Correct** | Una sola pasada del `redactor` con `plan-correccion.md` | redactor |
+| **4 — Plan** | `state.py group` agrupa mecánicamente por ubicación; el `worker` redacta un plan de corrección conjunto por grupo | worker |
+| **5 — Correct** | Una sola pasada del `worker` con `plan-correccion.md` | worker |
 | **Done** | Pipeline terminado; notificar al usuario | Coordinador |
 
 ### Loop de evaluadores
@@ -159,13 +159,14 @@ Dentro de la Fase 2 (Evaluate):
 
 Dentro de la Fase 4 (Plan):
 - El script agrupa mecánicamente por ubicación, luego una confirmación del usuario,
-  luego una invocación al `redactor` que redacta el plan de corrección conjunto.
-- El `redactor` devuelve "Work finished" o "FAILURE: <reason>".
+  luego una invocación al `worker` que redacta el plan de corrección conjunto.
+- El `worker` reporta éxito/fallo viá `**Status:** COMPLETED | BLOCKED` en su resumen
+  (ver `references/subagent-protocol.md`).
 
 Dentro de la Fase 5 (Correct):
-- Una sola pasada del `redactor` con el plan.
+- Una sola pasada del `worker` con el plan.
 - Una confirmación del usuario antes de la invocación.
-- El `redactor` devuelve "Work finished" o "FAILURE: <reason>".
+- El `worker` reporta éxito/fallo vía `**Status:** COMPLETED | BLOCKED` en su resumen.
 
 ## Control flow: `state.py`
 
@@ -233,7 +234,7 @@ Cada sesión se almacena en `/tmp/revisor-textos/<basename(cwd)>/<PPID>/`:
 | `hallazgos-consolidado.md` | Consolidado de hallazgos de todos los evaluadores |
 | `hallazgos-consolidado.json` | Vista estructurada del consolidado, usada por `state.py group` |
 | `hallazgos-agrupados.json` | Agrupamiento mecánico por ubicación, regenerado en cada entrada a Fase 4 |
-| `plan-correccion.md` | Plan de corrección conjunto por grupo de ubicación, escrito por el `redactor` en Fase 4 |
+| `plan-correccion.md` | Plan de corrección conjunto por grupo de ubicación, escrito por el `worker` en Fase 4 |
 | `correccion.md` | Marcador único de la corrección consolidada |
 
 ## Plantilla de hallazgos
@@ -241,7 +242,7 @@ Cada sesión se almacena en `/tmp/revisor-textos/<basename(cwd)>/<PPID>/`:
 Los hallazgos usan la plantilla definida en `references/findings.md`. Cada hallazgo
 tiene cinco campos: Severidad, Línea, Ubicación, Problema, Corrección sugerida.
 
-El coordinador pasa esta plantilla al `revisor-evaluador` en el prompt de evaluación para que
+El coordinador pasa esta plantilla al `analyst` en el prompt de evaluación para que
 el output siga el formato exacto.
 
 ## Iteration budget & escalation
@@ -250,9 +251,9 @@ el output siga el formato exacto.
 - **Máximo 4 evaluadores concurrentes** en evaluación paralela.
 - **Máximo 8 evaluadores totales** por sesión.
 - Si un subagente falla 2 veces:
-  - Si es el `revisor-evaluador` en evaluación: omitir ese evaluador del consolidado.
-  - Si es el `redactor` en correct: marcar `correccion.md` con Status: failed.
-  - Si el `redactor` falla 2 veces en Plan (Fase 4): el coordinador escribe un plan
+  - Si es el `analyst` en evaluación: omitir ese evaluador del consolidado.
+  - Si es el `worker` en correct: marcar `correccion.md` con Status: failed.
+  - Si el `worker` falla 2 veces en Plan (Fase 4): el coordinador escribe un plan
     degradado (transcripción mecánica verbatim de las correcciones sugeridas, sin
     redactar nada nuevo).
 - Si el archivo de trabajo se corrompe (no es Markdown válido), restaurar desde
@@ -260,18 +261,19 @@ el output siga el formato exacto.
 
 ## Anti-patterns
 
-- **El coordinador evaluando o corrigiendo contenido** — siempre delegar a `revisor-evaluador`
-  o `redactor`.
-- **El subagente escribiendo archivos de hallazgos** — `revisor-evaluador` reporta en su output
+- **El coordinador evaluando o corrigiendo contenido** — siempre delegar a `analyst`
+  o `worker`.
+- **El subagente escribiendo archivos de hallazgos** — `analyst` reporta en su output
   textual; el coordinador escribe el markdown.
-- **El subagente ejecutando comandos** — ni `revisor-evaluador` ni `redactor` tienen `bash`
-  (o si lo tienen, no deben usarlo para esta tarea). Son agentes de contenido.
+- **El subagente ejecutando comandos** — `analyst` y `worker` sí tienen `bash` en su
+  configuración, pero no deben usarlo para esta tarea: evaluación/corrección de
+  contenido es lectura y escritura de texto, no ejecución.
 - **Saltarse la confirmación del usuario** — cada fase requiere confirmación
   explícita (las fases 4 y 5 tienen una sola confirmación cada una, no una por
   hallazgo/grupo).
 - **Ignorar el estado de `state.py`** — si `state.py` reporta una fase, confiar en
   ella. No re-derivar el estado manualmente.
-- **El coordinador escribiendo archivos de trabajo** — solo `redactor` modifica
+- **El coordinador escribiendo archivos de trabajo** — solo `worker` modifica
   `working.md`. El coordinador solo escribe archivos de hallazgos y marcadores.
 - **Pasar rutas de archivos a los subagentes sin contexto** — los subagentes tienen
   `inheritProjectContext: false` y no pueden resolver rutas del proyecto.
@@ -279,19 +281,19 @@ el output siga el formato exacto.
   bajo `[CONTEXTO]`, o proporcionar la ruta absoluta para archivos grandes.
 - **Lanzar evaluadores secuencialmente** — en Fase 2, usar `subagent tasks: [...]`
   para lanzar todos en paralelo.
-- **Generar archivos intermedios de corrección por evaluador** — el redactor hace una
+- **Generar archivos intermedios de corrección por evaluador** — el worker hace una
   sola pasada sobre el consolidado; no se generan `correccion-<eval>.md`.
 - **Ejecutar la fase de handoff** — eliminada del pipeline; el done es solo notificación.
-- **Pasar el plan al redactor por secciones** — el redactor recibe `plan-correccion.md`
+- **Pasar el plan al worker por secciones** — el worker recibe `plan-correccion.md`
   completo y hace una sola pasada.
 - **Delegar la consolidación o el agrupamiento a un subagente** — son pasos
-  determinísticos de `state.py` (`consolidate`, `group`), nunca del `redactor`.
-- **El `redactor` de la Fase 5 leyendo los hallazgos crudos** — consume
+  determinísticos de `state.py` (`consolidate`, `group`), nunca del `worker`.
+- **El `worker` de la Fase 5 leyendo los hallazgos crudos** — consume
   `plan-correccion.md`, nunca `hallazgos-consolidado.md`/`.json` directamente.
 
 ## Dependencias
 
 - Python 3.6+ (para `state.py`).
-- `revisor-evaluador` y `redactor` subagentes configurados en el harness.
+- `analyst` y `worker` subagentes configurados en el harness.
 - Archivos de evaluadores en `evaluadores/` dentro de este skill.
 - Configuración de evaluadores en `evaluadores.json`.
