@@ -223,7 +223,7 @@ def run_trial() -> dict:
             working_modified = wf_mtime_after > wf_mtime_before
 
         checks = {
-            "delegated_to_analyst": subagent_called(all_tool_calls, "analyst"),
+            "delegated_to_revisor_evaluador": subagent_called(all_tool_calls, "revisor-evaluador"),
             "coordinator_wrote_hallazgos": hallazgos_file is not None,
             "hallazgos_follows_template": hallazgos_valid,
             "delegated_to_redactor": subagent_called(all_tool_calls, "redactor"),

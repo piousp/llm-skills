@@ -1,10 +1,10 @@
 # Stage: Evaluate (Phase 2 — Evaluación paralela)
 
 ## Cuándo se ejecuta
-Cuando `state.py next` reporta `phase: 2, phase_name: "evaluating"` o `phase: 3, phase_name: "evaluated"`.
+Cuando `state.py next` reporta `phase: 2, phase_name: "evaluating"`.
 
 ## Actor
-`analyst` — agente read-only. Reporta hallazgos en su output textual (markdown).
+`revisor-evaluador` — agente read-only. Reporta hallazgos en su output textual (markdown).
 
 ## Inputs recibidos de state.py
 - `session_dir` — directorio de la sesión.
@@ -29,15 +29,15 @@ Invocar a `subagent tasks: [...]` con N tasks simultáneos:
 Ejemplo concreto con 3 evaluadores:
 subagent(tasks: [
   {
-    agent: "analyst",
+    agent: "revisor-evaluador",
     task: "Evalúa el documento contra el skill filologica. ..."
   },
   {
-    agent: "analyst",
+    agent: "revisor-evaluador",
     task: "Evalúa el documento contra el skill heuristica. ..."
   },
   {
-    agent: "analyst",
+    agent: "revisor-evaluador",
     task: "Evalúa el documento contra el skill APA. ..."
   }
 ])
@@ -46,7 +46,7 @@ subagent(tasks: [
 - **Máximo 4 concurrentes.** Si hay más de 4 evaluadores, se lanzan en lotes de 4.
 - **Máximo 8 tasks totales.** Si el usuario seleccionó más de 8, el coordinador debe limitar a 8 en init.
 
-Cada task usa el subagente `analyst` con este prompt estructurado:
+Cada task usa el subagente `revisor-evaluador` con este prompt estructurado:
 
 ```
 [CONTEXTO]
@@ -60,15 +60,7 @@ Archivo a revisar (ruta absoluta):
 
 Plantilla de hallazgos (copiar esta estructura exacta en el output):
 --- INICIO PLANTILLA ---
-## Hallazgo: <título breve>
-
-**Severidad:** alta | media | baja | informativa
-
-**Ubicación:** <sección, párrafo o línea del documento>
-
-**Problema:** <descripción del problema identificado>
-
-**Corrección sugerida:** <cómo corregirlo>
+<contenido de references/findings.md, copiado textualmente por el coordinador>
 --- FIN PLANTILLA ---
 
 [INSTRUCCION]
@@ -77,6 +69,9 @@ Modo: evaluacion
 2. Aplica los criterios del skill de revision al contenido del archivo.
 3. Identifica todos los hallazgos segun los criterios del skill.
 4. Reporta los hallazgos siguiendo EXACTAMENTE la plantilla de hallazgos.
+5. Para cada hallazgo, reporta el campo Línea con el número de línea (o rango N-M) del archivo de
+   trabajo tal como lo muestra la herramienta `read`; usa "desconocida" solo si el hallazgo es
+   global al documento entero.
 
 [LIMITES]
 - No leas ningun otro archivo — solo el working file indicado.
@@ -108,4 +103,4 @@ Preguntar: "¿Continuar con la corrección?"
 ### 5. Avanzar
 
 No se necesita comando adicional — el siguiente `state.py next` detectará
-que los archivos `hallazgos-*.md` existen y reportará `phase: 3, phase_name: "evaluated"`.
+que los archivos `hallazgos-*.md` existen y reportará `phase: 3, phase_name: "consolidate"`.

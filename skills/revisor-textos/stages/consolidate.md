@@ -1,10 +1,11 @@
-# Stage: Consolidate (Phase 3 — Consolidación de hallazgos)
+# Stage: Consolidate (Phase 3 — Consolidación determinística de hallazgos)
 
 ## Cuándo se ejecuta
 Cuando `state.py next` reporta `phase: 3, phase_name: "consolidate"`.
 
 ## Actor
-`redactor` — agente con capacidad de escritura. Lee los hallazgos individuales y escribe el consolidado.
+Coordinador — este paso es 100% determinístico (parseo y ensamblado de archivos), no requiere
+ningún subagente.
 
 ## Inputs recibidos de state.py
 - `session_dir` — directorio de la sesión.
@@ -17,66 +18,34 @@ Cuando `state.py next` reporta `phase: 3, phase_name: "consolidate"`.
 
 Preguntar: "¿Consolidar los hallazgos de todos los evaluadores en un solo archivo?"
 
-NO avanzar hasta que el usuario confirme explícitamente.
+NO avanzar hasta que el usuario confirme explícitamente. (La confirmación se mantiene aunque el
+paso sea determinístico — la regla CRÍTICO de confirmación por fase aplica siempre.)
 
-### 2. Preparar el prompt (el coordinador)
+### 2. Ejecutar el script
 
-El coordinador prepara un prompt para el `redactor` con las rutas absolutas a los archivos `hallazgos-<eval>.md` y la ruta de salida.
-
-Estrategia: los archivos de hallazgos son pequeños (< 300 líneas cada uno), por lo que el coordinador puede incrustar el contenido en el prompt bajo `[CONTEXTO]`. Si hay muchos hallazgos, usar rutas absolutas para que el redactor lea directamente.
-
-### 3. Invocar al `redactor`
-
-```
-[CONTEXTO]
-Archivos de hallazgos a consolidar (orden de seleccion.json):
-<lista de rutas absolutas, una por linea>
-
-Archivo de salida:
-<session_dir>/hallazgos-consolidado.md
-
-Formato de salida esperado:
---- INICIO FORMATO ---
-# Hallazgos Consolidados
-
-- Generado: <fecha ISO 8601>
-- Evaluadores que aportaron: <M de N>
-- Total hallazgos: <N>
-
-## Evaluador: <eval_id_1>
-
-<contenido de hallazgos-<eval_id_1>.md>
-
----
-
-## Evaluador: <eval_id_2>
-
-<contenido de hallazgos-<eval_id_2>.md>
---- FIN FORMATO ---
-
-[INSTRUCCION]
-Modo: consolidation
-1. Lee cada archivo de hallazgos usando la herramienta `read` con la ruta exacta.
-2. Construye un unico archivo consolidado siguiendo EXACTAMENTE el formato de salida.
-3. Escribe el archivo consolidado en <session_dir>/hallazgos-consolidado.md usando la herramienta `write`.
-
-[LIMITES]
-- No modifiques el contenido de los hallazgos — conservalos textualmente.
-- No introduzcas cambios ni evaluaciones nuevas.
-- Preserva el orden de los evaluadores tal como aparece en la lista.
-- Output: sigue el protocolo definido en `references/subagent-protocol.md`.
+```bash
+python3 <skill-dir>/state.py consolidate <session_id>
 ```
 
-### 4. Verificar
+Este comando parsea cada `hallazgos-<eval>.md`, y escribe (en este orden):
+1. `<session_dir>/hallazgos-consolidado.md` — versión legible, con el contenido crudo de cada
+   evaluador preservado verbatim.
+2. `<session_dir>/hallazgos-consolidado.json` — versión estructurada (hallazgos parseados con
+   línea, severidad, evaluador, problema, corrección sugerida), usada por la Fase 4 para agrupar.
 
-Después de que `redactor` confirme, verificar que `<session_dir>/hallazgos-consolidado.md` existe y tiene contenido.
+### 3. Verificar
 
-### 5. Manejo de fallos
+Confirmar exit code 0 y que ambos archivos existen. Presentar al usuario el resumen impreso por el
+script (totales por evaluador, total de hallazgos, avisos de parseo si los hubo).
 
-Si el redactor devuelve output vacío, error, o no escribe el archivo:
-1. Re-delegar una vez con el mismo prompt.
-2. Si falla de nuevo, el coordinador escribe un consolidado mínimo directamente.
+### 4. Manejo de fallos
 
-### 6. Avanzar
+Si el script termina con exit code distinto de 0: mostrar el mensaje de error (stderr) al usuario y
+escalar. **No hay reintento de 2 intentos aquí** — el patrón de reintento existe para salidas no
+deterministas de subagentes; re-ejecutar un script determinista sin cambiar la causa del error no
+puede dar un resultado distinto.
 
-No se necesita comando adicional — el siguiente `state.py next` detectará que `hallazgos-consolidado.md` existe y reportará `phase: 4, phase_name: "correct"`.
+### 5. Avanzar
+
+No se necesita comando adicional — el siguiente `state.py next` detectará que
+`hallazgos-consolidado.json` existe y reportará `phase: 4, phase_name: "plan"`.

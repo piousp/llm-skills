@@ -54,7 +54,8 @@ class TestDeriveState(unittest.TestCase):
         )
 
     def _make_consolidado(self, sdir: Path, evaluadores: list[str]):
-        """Create a hallazgos-consolidado.md file."""
+        """Create hallazgos-consolidado.md AND hallazgos-consolidado.json
+        (phase 3 -> phase 4 'plan' requires the .json to exist)."""
         lines = [
             "# Hallazgos Consolidados\n",
             "\n",
@@ -66,6 +67,26 @@ class TestDeriveState(unittest.TestCase):
             lines.append(f"\n## Evaluador: {eid}\n\n")
             lines.append(f"# Hallazgos: {eid}\n\n- Finding 1\n")
         (sdir / "hallazgos-consolidado.md").write_text("".join(lines), encoding="utf-8")
+
+        consolidado_json = {
+            "generated_at": "2024-01-01T00:00:00",
+            "session_id": "12345",
+            "evaluadores": [
+                {"id": eid, "hallazgos": 1, "estado": "ok"} for eid in evaluadores
+            ],
+            "total_hallazgos": 1,
+            "hallazgos": [],
+            "avisos": [],
+        }
+        (sdir / "hallazgos-consolidado.json").write_text(
+            json.dumps(consolidado_json, indent=2), encoding="utf-8"
+        )
+
+    def _make_plan(self, sdir: Path):
+        """Create a plan-correccion.md file."""
+        (sdir / "plan-correccion.md").write_text(
+            "# Plan de corrección\n\n- Total grupos: 0\n", encoding="utf-8"
+        )
 
     def _make_correccion(self, sdir: Path):
         """Create a correccion.md file."""
@@ -136,6 +157,7 @@ class TestDeriveState(unittest.TestCase):
             self.assertEqual(state["progress"], "1/3")
             self.assertEqual(state["pending"], ["heuristica", "apa"])
             self.assertEqual(state["total_evaluators"], 3)
+            self.assertEqual(state["actor"], "revisor-evaluador")
             self.assertIsNone(state["blocked_reason"])
 
     # ── Phase 3: consolidate ────────────────────────────────────────────
@@ -161,8 +183,8 @@ class TestDeriveState(unittest.TestCase):
 
     # ── Phase 4: correct ─────────────────────────────────────────────────
 
-    def test_correct_phase_consolidado_no_correccion(self):
-        """hallazgos-consolidado.md exists, NO correccion.md → phase: 4, correct."""
+    def test_plan_phase_consolidado_no_plan(self):
+        """hallazgos-consolidado.json exists, NO plan-correccion.md → phase: 4, plan."""
         with tempfile.TemporaryDirectory() as tmp:
             sdir = Path(tmp) / "session"
             self._make_seleccion(sdir, ["filologica", "heuristica", "apa"])
@@ -171,6 +193,27 @@ class TestDeriveState(unittest.TestCase):
             self._make_consolidado(sdir, ["filologica", "heuristica", "apa"])
             state = derive_state(sdir)
             self.assertEqual(state["phase"], "4")
+            self.assertEqual(state["phase_name"], "plan")
+            self.assertEqual(state["actor"], "redactor")
+            self.assertTrue(
+                str(state["stage_file"]).endswith("stages/plan.md"),
+                f"stage_file should end with stages/plan.md, got: {state['stage_file']}",
+            )
+            self.assertIsNone(state["pending"])
+            self.assertIsNone(state["progress"])
+            self.assertIsNone(state["blocked_reason"])
+
+    def test_correct_phase_plan_no_correccion(self):
+        """plan-correccion.md exists, NO correccion.md → phase: 5, correct."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sdir = Path(tmp) / "session"
+            self._make_seleccion(sdir, ["filologica", "heuristica", "apa"])
+            for eid in ["filologica", "heuristica", "apa"]:
+                self._make_hallazgo(sdir, eid)
+            self._make_consolidado(sdir, ["filologica", "heuristica", "apa"])
+            self._make_plan(sdir)
+            state = derive_state(sdir)
+            self.assertEqual(state["phase"], "5")
             self.assertEqual(state["phase_name"], "correct")
             self.assertEqual(state["actor"], "redactor")
             self.assertTrue(
@@ -179,18 +222,18 @@ class TestDeriveState(unittest.TestCase):
             )
             self.assertIsNone(state["pending"])
             self.assertIsNone(state["progress"])
-            self.assertIsNone(state["blocked_reason"])
 
     # ── Done: correction exists ───────────────────────────────────────────
 
     def test_done_phase_correccion_exists(self):
-        """hallazgos-consolidado.md + correccion.md → phase: 'done', phase_name: 'done'."""
+        """hallazgos-consolidado.json + plan-correccion.md + correccion.md → phase: 'done'."""
         with tempfile.TemporaryDirectory() as tmp:
             sdir = Path(tmp) / "session"
             self._make_seleccion(sdir, ["filologica", "heuristica", "apa"])
             for eid in ["filologica", "heuristica", "apa"]:
                 self._make_hallazgo(sdir, eid)
             self._make_consolidado(sdir, ["filologica", "heuristica", "apa"])
+            self._make_plan(sdir)
             self._make_correccion(sdir)
             state = derive_state(sdir)
             self.assertEqual(state["phase"], "done")
@@ -546,6 +589,24 @@ class TestDeriveState(unittest.TestCase):
             self.assertIn("Consolidado: no", output)
             self.assertIn("Correccion: pendiente", output)
 
+    def test_cmd_status_plan_line(self):
+        """cmd_status prints Plan: si when plan-correccion.md exists."""
+        with tempfile.TemporaryDirectory() as tmp:
+            session_id = "test-plan-line"
+            sdir = _session_dir(session_id)
+            sdir.mkdir(parents=True, exist_ok=True)
+            self._make_seleccion(sdir, ["filologica"])
+            self._make_hallazgo(sdir, "filologica")
+            self._make_consolidado(sdir, ["filologica"])
+            self._make_plan(sdir)
+
+            f = io.StringIO()
+            with redirect_stdout(f):
+                cmd_status([session_id])
+            output = f.getvalue()
+
+            self.assertIn("Plan: si", output)
+
     def test_cmd_status_on_correccion_failed(self):
         """cmd_status with correccion.md containing 'Status: failed' prints Correccion: failed."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -583,10 +644,17 @@ class TestDeriveState(unittest.TestCase):
             self.assertIsNone(state["pending"])
             self.assertIsNone(state["progress"])
 
-            # Phase 4: consolidado exists, no correccion → pending=None, progress=None
+            # Phase 4: consolidado exists, no plan → pending=None, progress=None
             self._make_consolidado(sdir, ["filologica", "heuristica", "apa"])
             state = derive_state(sdir)
             self.assertEqual(state["phase"], "4")
+            self.assertIsNone(state["pending"])
+            self.assertIsNone(state["progress"])
+
+            # Phase 5: plan exists, no correccion → pending=None, progress=None
+            self._make_plan(sdir)
+            state = derive_state(sdir)
+            self.assertEqual(state["phase"], "5")
             self.assertIsNone(state["pending"])
             self.assertIsNone(state["progress"])
 
