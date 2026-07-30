@@ -1,0 +1,56 @@
+[
+  {
+    "id": "single_mode_basic",
+    "prompt": "Use the worker agent, single mode, to just reply with the exact word DONE and nothing else — no file edits, no other tools.",
+    "should_trigger": true,
+    "expected_checks": ["single_call_agent_mode", "agent_is_worker"]
+  },
+  {
+    "id": "parallel_two_independent",
+    "prompt": "I have two fully independent one-word-reply tasks for the worker agent: task A should reply FIRST, task B should reply SECOND. Neither depends on the other's output — run both.",
+    "should_trigger": true,
+    "expected_checks": ["parallel_tasks_array", "tasks_count_two", "no_mode_mixing"]
+  },
+  {
+    "id": "model_override_single",
+    "prompt": "Ask the worker agent to reply with the word DONE, but for this one call only, force it onto anthropic/claude-opus-4-8.",
+    "should_trigger": true,
+    "expected_checks": ["single_mode_model_top_level"]
+  },
+  {
+    "id": "model_override_parallel",
+    "prompt": "Run two independent worker replies in parallel — one replying FIRST forced onto anthropic/claude-haiku-4-5, one replying SECOND forced onto anthropic/claude-opus-4-8. Don't set a call-wide model.",
+    "should_trigger": true,
+    "expected_checks": ["parallel_model_per_entry", "no_top_level_model_with_tasks", "model_format_valid_everywhere"]
+  },
+  {
+    "id": "bare_alias_resolved",
+    "prompt": "Ask the worker agent to reply with the word DONE, forced onto the 'sonnet' model.",
+    "should_trigger": true,
+    "expected_checks": ["single_mode_model_top_level", "model_format_valid_everywhere"]
+  },
+  {
+    "id": "nine_tasks_respect_cap",
+    "prompt": "I need 9 fully independent one-word worker replies: the numbers 1 through 9, each its own task, none depending on another. Get them all done.",
+    "should_trigger": true,
+    "expected_checks": ["respects_max_8_per_call", "all_nine_replies_attempted"]
+  },
+  {
+    "id": "negative_unrelated_question",
+    "prompt": "What's the boiling point of water at sea level, in Celsius?",
+    "should_trigger": false,
+    "expected_checks": ["no_subagent_call"]
+  },
+  {
+    "id": "negative_direct_edit",
+    "prompt": "Append a trailing newline to this string yourself and show me the result: 'hello world'. Don't delegate this.",
+    "should_trigger": false,
+    "expected_checks": ["no_subagent_call"]
+  },
+  {
+    "id": "mixed_request_no_mode_mixing",
+    "prompt": "Ask the worker agent to reply A (on its own), and also run two more independent worker replies, B and C, in parallel — all three are unrelated to each other.",
+    "should_trigger": true,
+    "expected_checks": ["no_mode_mixing"]
+  }
+]
