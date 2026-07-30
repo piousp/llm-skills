@@ -17,8 +17,8 @@ trials, isolate each run.
 For a coordinator/process skill, "success" is **process fidelity**, not
 "the code compiles":
 
-- Correct phase order (1 → 2 → 3 → 4 → done) as derived by `state.py`.
-- Delegation to `analyst` and `redactor` happens — or is correctly refused
+- Correct phase order (1 → 2 → 3 → 4 → 5 → done) as derived by `state.py`.
+- Delegation to `revisor-evaluador` and `redactor` happens — or is correctly refused
   with an explicit reason when the harness can't delegate. The coordinator
   never authors revision content itself.
 - The coordinator never writes to `working.md` directly; only `redactor`
@@ -29,34 +29,36 @@ For a coordinator/process skill, "success" is **process fidelity**, not
   advances unilaterally.
 - `state.py` is the sole source of phase derivation (100% read-only
   `derive_state()`), not the coordinator's manual inspection.
-- Hallazgos follow the 4-field template: Severidad, Ubicación, Problema,
+- Hallazgos follow the 5-field template: Severidad, Línea, Ubicación, Problema,
   Corrección sugerida.
 
 ## A first-class environment finding
 
 Bare `pi -ne` (no extensions) exposes only **Read / Bash / Edit / Write** —
 confirmed empirically, no `subagent` tool, no `ask_user_question` tool. The
-skill's real delegation pipeline (`analyst` → `redactor`) **cannot execute**
+skill's real delegation pipeline (`revisor-evaluador` → `redactor`) **cannot execute**
 in that environment; only a harness that has a subagent mechanism (like the
 one this skill normally runs in) can exercise that pipeline. This shapes
 every layer below: Layers 1–3 run in bare `pi` and assert the *degraded-path*
 behavior the skill itself mandates ("if your harness has no subagent/
 delegation mechanism, say so explicitly before proceeding rather than doing
 the work yourself") — they do not, and currently cannot, exercise the real
-analyst/redactor pipeline end-to-end. See "Known limitations" below.
+revisor-evaluador/redactor pipeline end-to-end. See "Known limitations" below.
 
 ## Layers
 
 ### Layer 1 — code-based, offline, free
 
 `test_state.py`: a `unittest` suite over `state.py` — phase derivation
-(1→2→3→4→done), read-only contract, pending order, CLI commands, and
-absence of the `fase` field in `seleccion.json`. No LLM calls, runs in
-under a second, safe to run on every change to `state.py`.
+(1→2→3→4→5→done), read-only contract, pending order, CLI commands, and
+absence of the `fase` field in `seleccion.json`. `test_consolidado.py`:
+parsing, normalization, grouping, and the `consolidate`/`group` CLI commands
+of `state.py`. No LLM calls, runs in under a second, safe to run on every
+change to `state.py`.
 
 ```bash
 cd <this-skill-dir>   # the directory containing this evals/ folder
-python3 -m unittest evals.test_state -v
+python3 -m unittest evals.test_state evals.test_consolidado -v
 ```
 
 ### Layer 2 — trajectory/tool-call probes, live-gated
@@ -119,10 +121,11 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 revisor-textos/evals/
 ├── README.md                   # este archivo
 ├── __init__.py                 # para imports
-├── test_state.py               # L1: 17 tests para state.py
+├── test_state.py               # L1: 23 tests para state.py
+├── test_consolidado.py         # L1: parsing/grouping + CLI tests for state.py
 ├── prompt_set.json             # 8 prompts con expected_checks
 ├── run_layer2_probes.py        # L2: 4 probes + CHECK_REGISTRY (15 checks)
-├── run_layer2b_pipeline.py     # L2b: real analyst/redactor delegation
+├── run_layer2b_pipeline.py     # L2b: real revisor-evaluador/redactor delegation
 └── judge.py                    # L3: 2 qualitative judges
 ```
 
@@ -131,15 +134,17 @@ revisor-textos/evals/
 - Layers 2/3 exercise the **degraded path** (no subagent tool available);
   Layer 2b exercises the **real path** but only through Phase 1→3, and only
   with a single evaluator (`heuristica`). Driving Phase 4 (correct→done) and
-  multi-evaluator parallel evaluation (4 concurrent analysts) remains out
-  of reach without a scriptable `ask_user_question`.
+  multi-evaluator parallel evaluation (4 concurrent revisor-evaluador instances)
+  remains out of reach without a scriptable `ask_user_question`.
 - All live layers (2, 2b, 3) are single-trial, not the 3–5 trials both
   source articles recommend for non-deterministic agent output. Acceptable
   for now given low run count; revisit if flakiness appears.
-- L2b requires that `analyst` and `redactor` are configured as named
+- L2b requires that `revisor-evaluador` and `redactor` are configured as named
   subagents in the evaluating machine's harness. If the harness only has
-  a generic `subagent` tool (without named slots), the `subagent_called`
-  checks will fail and the probe will report a meaningful failure.
+  a generic `subagent` tool (without those two named slots configured), the
+  `subagent_called` checks will fail with a meaningful failure message rather
+  than silently passing — this is the expected outcome on a harness that has
+  `subagent` but hasn't configured these two specific agents.
 - The eval suite does **not** test the quality of the corrections
   (orthographic, stylistic, or content). It asserts the **mechanics** of
   the pipeline: delegation happens, files are written correctly, the

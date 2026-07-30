@@ -4,7 +4,7 @@ Layer 2 (behavioral/trajectory) probes for the revisor-textos skill,
 scoped to what's actually runnable in a bare `pi` CLI: no `subagent` tool,
 no `ask_user_question` tool (confirmed empirically — bare `pi -ne` exposes
 only Read/Bash/Edit/Write). The skill's real delegation pipeline
-(analyst -> redactor) cannot execute there, so these probes assert the
+(revisor-evaluador -> redactor) cannot execute there, so these probes assert the
 *degraded-path* behavior the skill itself mandates: "If your harness has no
 subagent/delegation mechanism, say so explicitly before proceeding rather
 than doing the work yourself" (SKILL.md, coordinator rule).
@@ -207,8 +207,8 @@ CHECK_REGISTRY["mentioned_asking_for_confirmation"] = check_mentioned_asking_for
 
 def check_mentions_phase_name(tool_calls, text, **ctx) -> bool:
     """The final text mentions the current phase name."""
-    phases = ["fase 1", "fase 2", "fase 3", "fase 4",
-              "init", "evaluating", "consolidate", "correct", "done",
+    phases = ["fase 1", "fase 2", "fase 3", "fase 4", "fase 5",
+              "init", "evaluating", "consolidate", "plan", "correct", "done",
               "evaluacion", "evaluacion", "correccion", "consolidado"]
     low = text.lower()
     return any(p in low for p in phases)
