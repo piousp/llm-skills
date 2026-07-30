@@ -56,7 +56,7 @@
     "should_trigger": true,
     "expected_checks": [
       "no_edit_write_to_working_file",
-      "either_invoked_redactor_or_announced_missing"
+      "either_invoked_worker_or_announced_missing"
     ]
   },
   {

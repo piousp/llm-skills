@@ -18,10 +18,10 @@ For a coordinator/process skill, "success" is **process fidelity**, not
 "the code compiles":
 
 - Correct phase order (1 → 2 → 3 → 4 → 5 → done) as derived by `state.py`.
-- Delegation to `revisor-evaluador` and `redactor` happens — or is correctly refused
+- Delegation to `analyst` and `worker` happens — or is correctly refused
   with an explicit reason when the harness can't delegate. The coordinator
   never authors revision content itself.
-- The coordinator never writes to `working.md` directly; only `redactor`
+- The coordinator never writes to `working.md` directly; only `worker`
   modifies it.
 - The done phase is notification-only: no `diff`, no `resumen.md`, no copy to
   output directory.
@@ -36,14 +36,14 @@ For a coordinator/process skill, "success" is **process fidelity**, not
 
 Bare `pi -ne` (no extensions) exposes only **Read / Bash / Edit / Write** —
 confirmed empirically, no `subagent` tool, no `ask_user_question` tool. The
-skill's real delegation pipeline (`revisor-evaluador` → `redactor`) **cannot execute**
+skill's real delegation pipeline (`analyst` → `worker`) **cannot execute**
 in that environment; only a harness that has a subagent mechanism (like the
 one this skill normally runs in) can exercise that pipeline. This shapes
 every layer below: Layers 1–3 run in bare `pi` and assert the *degraded-path*
 behavior the skill itself mandates ("if your harness has no subagent/
 delegation mechanism, say so explicitly before proceeding rather than doing
 the work yourself") — they do not, and currently cannot, exercise the real
-revisor-evaluador/redactor pipeline end-to-end. See "Known limitations" below.
+analyst/worker pipeline end-to-end. See "Known limitations" below.
 
 ## Layers
 
@@ -125,7 +125,7 @@ revisor-textos/evals/
 ├── test_consolidado.py         # L1: parsing/grouping + CLI tests for state.py
 ├── prompt_set.json             # 8 prompts con expected_checks
 ├── run_layer2_probes.py        # L2: 4 probes + CHECK_REGISTRY (15 checks)
-├── run_layer2b_pipeline.py     # L2b: real revisor-evaluador/redactor delegation
+├── run_layer2b_pipeline.py     # L2b: real analyst/worker delegation
 └── judge.py                    # L3: 2 qualitative judges
 ```
 
@@ -134,12 +134,12 @@ revisor-textos/evals/
 - Layers 2/3 exercise the **degraded path** (no subagent tool available);
   Layer 2b exercises the **real path** but only through Phase 1→3, and only
   with a single evaluator (`heuristica`). Driving Phase 4 (correct→done) and
-  multi-evaluator parallel evaluation (4 concurrent revisor-evaluador instances)
+  multi-evaluator parallel evaluation (4 concurrent analyst instances)
   remains out of reach without a scriptable `ask_user_question`.
 - All live layers (2, 2b, 3) are single-trial, not the 3–5 trials both
   source articles recommend for non-deterministic agent output. Acceptable
   for now given low run count; revisit if flakiness appears.
-- L2b requires that `revisor-evaluador` and `redactor` are configured as named
+- L2b requires that `analyst` and `worker` are configured as named
   subagents in the evaluating machine's harness. If the harness only has
   a generic `subagent` tool (without those two named slots configured), the
   `subagent_called` checks will fail with a meaningful failure message rather
