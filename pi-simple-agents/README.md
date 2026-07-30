@@ -295,6 +295,26 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
 > heavy-thinking, long-running agent. It bounds only the model/prompt execution phase — session
 > creation and resource-loader setup happen before the timer starts and are not covered.
 
+### Concurrency
+
+The `pi-simple-agents.concurrency` (or `subagents.concurrency`) key, set alongside
+`agentOverrides` in the same `settings.json` files, controls how many subagent tasks a single
+`subagent` tool call runs in parallel. Default when unset: `4`. It's effectively capped at `8`,
+since a call can't have more than `MAX_PARALLEL_TASKS` (8) tasks to begin with — `concurrency`
+only throttles how many of those run at once, it isn't a separate, independent limit. An invalid
+value (not a positive integer) falls back to the default with a `console.warn`.
+
+```json
+{
+  "pi-simple-agents": {
+    "concurrency": 6
+  }
+}
+```
+
+Same precedence as `agentOverrides`: project settings (`{project-folder}/.pi/settings.json`)
+override user settings (`~/.pi/agent/settings.json`) when both set it.
+
 ### Precedence rules
 
 ```

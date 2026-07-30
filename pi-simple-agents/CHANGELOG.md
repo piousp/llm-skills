@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.7.0 — 2026-07-29
+
+- **`discoverAgents` is now async.** Returns `Promise<AgentConfig[]>` instead of `AgentConfig[]`,
+  backed by `fs/promises` (parallel `stat`/`readFile` fan-out, deterministic warning order).
+  Never rejects: an unreadable directory or an unexpected pipeline error resolves to `[]` (logged
+  via `console.warn`) rather than rejecting, so a rejected promise can't sit poisoned in the cache
+  for the 5s TTL.
+  - **Behavior change:** every call site must now `await discoverAgents(...)`.
+- **`loadOverrides` is deleted, replaced by `loadSettings`.** New shape,
+  `SubagentSettings { agentOverrides: AgentOverrides; concurrency?: unknown }`, adding the new
+  `concurrency` field alongside the existing `agentOverrides`.
+  - **Behavior change:** `loadOverrides` no longer exists; update call sites to `loadSettings`.
+  - **Fix:** `agentOverrides` and `concurrency` now fall back between the `pi-simple-agents` and
+    legacy `subagents` settings keys **independently, per field**, instead of all-or-nothing —
+    previously a file mixing both keys across different fields could silently lose one field's
+    value.
+  - **Fix:** a malformed (non-plain-object) `agentOverrides` value is now ignored with a warning
+    instead of silently flowing through and producing garbage per-agent merges.
+  - Using the `subagents` key at all (regardless of which fields it supplies) now emits one
+    deprecation `console.warn` per file recommending `pi-simple-agents` instead; `subagents`
+    still works fully, this is a warning only.
+- **New configurable `concurrency` setting**, default `4` (`DEFAULT_CONCURRENCY`, `src/run.ts`),
+  validated by the new `resolveConcurrency(value: unknown): number` (invalid values warn and fall
+  back to the default). Effective cap of 8, since the `subagent` tool's own `MAX_PARALLEL_TASKS`
+  bounds how many tasks one call can have. Replaces the previously hardcoded `4` passed to
+  `mapWithConcurrencyLimit` for the subagent batch.
+- **New `createAgentRegistry`/`AgentRegistry` module** (`src/agent-registry.ts`), composing
+  `discoverAgents` + `loadSettings` + `applyOverrides` + `resolveConcurrency` behind one
+  `load(cwd): Promise<LoadedAgents>` / `peek(cwd): LoadedAgents | undefined` API. `load` runs
+  discovery and settings loading in parallel and never rejects; `peek` is synchronous/zero-I/O for
+  use in the SDK's synchronous `renderCall` contract. Now used internally by
+  `extensions/index.ts`, replacing the old module-level `agentCache`/`overridesCache`/
+  `loadAvailableAgents` helpers.
+- **`noThemes: true` added to the loader config** (`buildLoaderOptions`, `src/loader-config.ts`).
+  Perf: skips theme loading/resolution on every subagent's `resourceLoader.reload()`, since themes
+  are only consumed by interactive mode and subagent sessions are headless.
+- Primarily an internal/perf-focused release. End-user-facing behavior is meant to be equivalent
+  except for the new `concurrency` knob and the `subagents` deprecation warning.
+
 ## 0.6.0 — 2026-07-29
 
 - **Subagent runs are now bounded by a timeout.** New `AgentConfig.timeoutMs?: number`

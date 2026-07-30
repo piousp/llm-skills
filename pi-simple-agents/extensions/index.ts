@@ -10,11 +10,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { discoverAgents, applyOverrides, loadOverrides, type AgentConfig, type AgentOverrides, type CacheEntry } from "../src/agents.ts";
+import type { AgentConfig } from "../src/agents.ts";
+import { createAgentRegistry } from "../src/agent-registry.ts";
 import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
 import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents } from "../src/validate.ts";
+import type { SubagentParams as ValidatedSubagentParams } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
 import { buildLoaderOptions } from "../src/loader-config.ts";
 import { createSubagentSessionManager } from "../src/subagent-session.ts";
@@ -28,16 +30,10 @@ const SESSION_MANAGER_FACTORY = {
   inMemory: (c: string) => SessionManager.inMemory(c),
 };
 
-const agentCache = new Map<string, CacheEntry<AgentConfig[]>>();
-const overridesCache = new Map<string, CacheEntry<AgentOverrides>>();
-
-function loadAvailableAgents(cwd: string): AgentConfig[] {
-  const agents = discoverAgents(AGENTS_DIR, agentCache);
-  const userSettingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
-  const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-  const overrides = loadOverrides(userSettingsPath, projectSettingsPath, overridesCache);
-  return applyOverrides(agents, overrides);
-}
+const registry = createAgentRegistry({
+  agentsDir: AGENTS_DIR,
+  userSettingsPath: path.join(os.homedir(), ".pi", "agent", "settings.json"),
+});
 
 function errorResult(error: string) {
   return {
@@ -75,7 +71,7 @@ const SubagentParams = Type.Object({
 type SubagentArgs = Static<typeof SubagentParams>;
 
 // Builds a name→config lookup for the render-time parameter line.
-function toParamAgentsMap(agents: AgentConfig[]): Map<string, AgentConfig> {
+function toParamAgentsMap(agents: readonly AgentConfig[]): Map<string, AgentConfig> {
   return new Map(agents.map((agent) => [agent.name, agent]));
 }
 
@@ -97,7 +93,7 @@ function renderSubagentCall(
   context: RenderCallContext | undefined,
 ) {
   const paramAgents = context?.argsComplete
-    ? toParamAgentsMap(loadAvailableAgents(context.cwd))
+    ? toParamAgentsMap(registry.peek(context.cwd)?.agents ?? [])
     : new Map<string, AgentConfig>();
   return new Text(buildSubagentCallText(args, theme, paramAgents), 0, 0);
 }
@@ -105,8 +101,8 @@ function renderSubagentCall(
 // Normalizes validateSubagentParams' two accepted shapes ({agent, task} or
 // {tasks: [...]}) into the single task-entry array every downstream step
 // (agent resolution, spawning, progress indexing) operates on.
-function normalizeTasks(params: { agent?: string; task?: string; tasks?: TaskEntry[] }): TaskEntry[] {
-  return params.tasks === undefined ? [{ agent: params.agent!, task: params.task! }] : params.tasks;
+function normalizeTasks(params: ValidatedSubagentParams): TaskEntry[] {
+  return params.tasks === undefined ? [{ agent: params.agent, task: params.task }] : params.tasks;
 }
 
 function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
@@ -115,18 +111,13 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
   return new DefaultResourceLoader(result.options);
 }
 
-// Runs every task with concurrency limit (4) via the SDK runner.
-// Returns settled results in the same order as `tasks`.
-// When `onUpdate` is provided, tracks per-task tool-use progress (see
-// src/progress.ts) and re-emits the full progress array on every tool-start/
-// tool-end event and when each task settles, so the TUI can render a live
-// feed. When `onUpdate` is absent, no progress tracking happens at all.
 interface RunTasksOptions {
   cwd: string;
   signal: AbortSignal | undefined;
   modelRegistry: ModelRegistry;
   callerSessionFile: string | undefined;
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined;
+  concurrency: number;
 }
 
 // Runs one task end-to-end: resource loader creation/reload, session manager
@@ -137,7 +128,7 @@ async function runSingleTask(
   agent: AgentConfig,
   index: number,
   tracker: ProgressTracker | undefined,
-  options: Omit<RunTasksOptions, "onUpdate">,
+  options: Omit<RunTasksOptions, "onUpdate" | "concurrency">,
 ): Promise<AgentRunResult> {
   const { cwd, signal, modelRegistry, callerSessionFile } = options;
 
@@ -168,18 +159,24 @@ async function runSingleTask(
   }
 }
 
+// Runs every task with the configured concurrency limit via the SDK runner.
+// Returns settled results in the same order as `tasks`.
+// When `onUpdate` is provided, tracks per-task tool-use progress (see
+// src/progress.ts) and re-emits the full progress array on every tool-start/
+// tool-end event and when each task settles, so the TUI can render a live
+// feed. When `onUpdate` is absent, no progress tracking happens at all.
 async function runTasks(
   tasks: TaskEntry[],
   resolvedAgents: AgentConfig[],
   options: RunTasksOptions,
 ): Promise<AgentRunResult[]> {
-  const { cwd, signal, modelRegistry, callerSessionFile, onUpdate } = options;
+  const { cwd, signal, modelRegistry, callerSessionFile, onUpdate, concurrency } = options;
 
   const tracker = onUpdate
     ? createProgressTracker(tasks.map((t) => t.agent), (details) => onUpdate({ content: [], details }))
     : undefined;
 
-  return mapWithConcurrencyLimit(tasks, 4, (t, index) =>
+  return mapWithConcurrencyLimit(tasks, concurrency, (t, index) =>
     runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRegistry, callerSessionFile }),
   );
 }
@@ -205,8 +202,9 @@ function renderSubagentResult(
   return new Text(content ? theme.fg("toolOutput", content) : "", 0, 0);
 }
 
-export default function (pi: ExtensionAPI) {
-  const description = buildSubagentToolDescription(loadAvailableAgents(process.cwd()));
+export default async function (pi: ExtensionAPI): Promise<void> {
+  const { agents } = await registry.load(process.cwd());
+  const description = buildSubagentToolDescription(agents);
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -222,7 +220,7 @@ export default function (pi: ExtensionAPI) {
 
       const tasks = normalizeTasks(parsedParams.value);
 
-      const availableAgents = loadAvailableAgents(ctx.cwd);
+      const { agents: availableAgents, concurrency } = await registry.load(ctx.cwd);
       const resolved = resolveAgents(tasks.map((t) => t.agent), availableAgents);
       if (!resolved.ok) {
         return errorResult(resolved.error);
@@ -234,6 +232,7 @@ export default function (pi: ExtensionAPI) {
         modelRegistry: ctx.modelRegistry,
         callerSessionFile: ctx.sessionManager.getSessionFile(),
         onUpdate,
+        concurrency,
       });
 
       const formatted = formatRunResults(results);

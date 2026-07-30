@@ -52,6 +52,15 @@ export function resolveTimeoutMs(value: unknown): number {
   return DEFAULT_TIMEOUT_MS;
 }
 
+export const DEFAULT_CONCURRENCY = 4;
+
+export function resolveConcurrency(value: unknown): number {
+  if (value === undefined) return DEFAULT_CONCURRENCY;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
+  console.warn(`pi-simple-agents: invalid concurrency ${value}, falling back to default`);
+  return DEFAULT_CONCURRENCY;
+}
+
 export function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,

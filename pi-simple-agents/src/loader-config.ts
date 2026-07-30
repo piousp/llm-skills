@@ -96,6 +96,7 @@ export function buildLoaderOptions(
           : undefined,
       agentsFilesOverride: agentsFiles.override,
       skillsOverride: skills.override,
+      noThemes: true,
     },
     warnings: [...agentsFiles.warnings, ...skills.warnings],
   };

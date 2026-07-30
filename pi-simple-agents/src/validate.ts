@@ -94,7 +94,7 @@ function unknownAgentsMessage(unknown: string[], availableNames: string[]): stri
 // full AgentConfig so callers never need a post-hoc `.find(...)!` lookup.
 export function resolveAgents(
   names: string[],
-  agents: AgentConfig[],
+  agents: readonly AgentConfig[],
 ): ValidationResult<AgentConfig[]> {
   const availableNames = agents.map((agent) => agent.name);
   const unknown = findUnknownNames(names, availableNames);

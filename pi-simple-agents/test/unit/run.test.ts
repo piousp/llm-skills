@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS } from "../../src/run.ts";
+import { runAgentViaSdk, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
 import { applyOverrides, type AgentConfig } from "../../src/agents.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
@@ -112,6 +112,51 @@ test("resolveTimeoutMs: Infinity falls back to default with warning", (t) => {
 test("resolveTimeoutMs: string value falls back to default with warning", (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   assert.equal(resolveTimeoutMs("600000"), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: undefined falls back to default", () => {
+  assert.equal(resolveConcurrency(undefined), DEFAULT_CONCURRENCY);
+});
+
+test("resolveConcurrency: valid integers pass through unchanged", () => {
+  assert.equal(resolveConcurrency(1), 1);
+  assert.equal(resolveConcurrency(8), 8);
+});
+
+test("resolveConcurrency: 0 falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency(0), DEFAULT_CONCURRENCY);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: negative number falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency(-1), DEFAULT_CONCURRENCY);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: NaN falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency(NaN), DEFAULT_CONCURRENCY);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: Infinity falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency(Infinity), DEFAULT_CONCURRENCY);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: non-integer falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency(2.5), DEFAULT_CONCURRENCY);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveConcurrency: non-number falls back to default with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveConcurrency("4"), DEFAULT_CONCURRENCY);
   assert.equal(warnSpy.mock.callCount(), 1);
 });
 

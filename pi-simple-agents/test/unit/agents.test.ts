@@ -5,11 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   discoverAgents,
-  loadOverrides,
+  loadSettings,
   applyOverrides,
   type AgentConfig,
   type AgentOverrides,
   type CacheEntry,
+  type SubagentSettings,
 } from "../../src/agents.ts";
 
 function makeTmpDir(): string {
@@ -22,7 +23,7 @@ function writeAgentFile(dir: string, filename: string, content: string): string 
   return filePath;
 }
 
-test("discoverAgents: directory with one valid agent .md returns one AgentConfig with resolved defaults", () => {
+test("discoverAgents: directory with one valid agent .md returns one AgentConfig with resolved defaults", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -38,7 +39,7 @@ Body content.
 `,
     );
 
-    const agents = discoverAgents(dir);
+    const agents = await discoverAgents(dir);
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -57,7 +58,7 @@ Body content.
   }
 });
 
-test("discoverAgents: file missing description is skipped without throwing; other valid files still returned", () => {
+test("discoverAgents: file missing description is skipped without throwing; other valid files still returned", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -80,7 +81,7 @@ Body.
 `,
     );
 
-    const agents = discoverAgents(dir);
+    const agents = await discoverAgents(dir);
 
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.name, "good");
@@ -89,7 +90,7 @@ Body.
   }
 });
 
-test("discoverAgents: symlinked .md with only 4 base Claude Code fields gets pi-simple-agents defaults filled in", () => {
+test("discoverAgents: symlinked .md with only 4 base Claude Code fields gets pi-simple-agents defaults filled in", async () => {
   const dir = makeTmpDir();
   const realFileDir = makeTmpDir();
   try {
@@ -109,7 +110,7 @@ Claude Code body.
     const symlinkPath = path.join(dir, "claude-agent.md");
     fs.symlinkSync(realFilePath, symlinkPath);
 
-    const agents = discoverAgents(dir);
+    const agents = await discoverAgents(dir);
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -126,95 +127,28 @@ Claude Code body.
   }
 });
 
-test("loadOverrides: no settings files present returns {}", () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    const projectSettingsPath = path.join(dir, "project-settings.json");
-
-    const overrides = loadOverrides(userSettingsPath, projectSettingsPath);
-
-    assert.deepEqual(overrides, {});
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test("applyOverrides: project override wins over user override; user override wins over frontmatter when project doesn't touch the field", () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    const projectSettingsPath = path.join(dir, "project-settings.json");
+  const overrides: AgentOverrides = {
+    scout: { model: "project-model", description: "User description" },
+  };
 
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({
-        "pi-simple-agents": {
-          agentOverrides: {
-            scout: { model: "user-model", description: "User description" },
-          },
-        },
-      }),
-      "utf8",
-    );
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
 
-    fs.writeFileSync(
-      projectSettingsPath,
-      JSON.stringify({
-        "pi-simple-agents": {
-          agentOverrides: {
-            scout: { model: "project-model" },
-          },
-        },
-      }),
-      "utf8",
-    );
+  const [applied] = applyOverrides([baseAgent], overrides);
 
-    const overrides = loadOverrides(userSettingsPath, projectSettingsPath);
-
-    const baseAgent: AgentConfig = {
-      name: "scout",
-      description: "Frontmatter description",
-      tools: ["read"],
-      model: "frontmatter-model",
-      systemPromptMode: "append",
-      inheritProjectContext: true,
-      defaultReads: [],
-      source: "user",
-      filePath: "/fake/scout.md",
-      systemPrompt: "Frontmatter body.",
-    };
-
-    const [applied] = applyOverrides([baseAgent], overrides);
-
-    assert.equal(applied!.model, "project-model");
-    assert.equal(applied!.description, "User description");
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadOverrides: accepts 'subagents' key (Bug 1)", () => {
-  const dir = makeTmpDir();
-  try {
-    const settingsPath = path.join(dir, "settings.json");
-    fs.writeFileSync(
-      settingsPath,
-      JSON.stringify({
-        subagents: {
-          agentOverrides: {
-            scout: { model: "override-model" },
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    const overrides = loadOverrides(settingsPath);
-    assert.equal(overrides.scout?.model, "override-model");
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  assert.equal(applied!.model, "project-model");
+  assert.equal(applied!.description, "User description");
 });
 
 test("applyOverrides: propagates new fields (thinking, inheritSkills, defaultContext, skills)", () => {
@@ -285,7 +219,7 @@ test("applyOverrides: timeoutMs override flows onto the merged config; agents wi
   assert.equal(appliedOther!.timeoutMs, undefined);
 });
 
-test("discoverAgents: cache returns cached data on second call", () => {
+test("discoverAgents: cache returns cached data on second call", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -298,15 +232,15 @@ description: test
 Body`,
     );
 
-    const cache = new Map<string, CacheEntry<AgentConfig[]>>();
+    const cache = new Map<string, CacheEntry<Promise<AgentConfig[]>>>();
 
-    const first = discoverAgents(dir, cache);
+    const first = await discoverAgents(dir, cache);
     assert.equal(first.length, 1);
     assert.equal(first[0]!.name, "test-agent");
 
     // Delete the file and call again — should still return cached data
     fs.rmSync(path.join(dir, "test-agent.md"));
-    const second = discoverAgents(dir, cache);
+    const second = await discoverAgents(dir, cache);
     assert.equal(second.length, 1);
     assert.equal(second[0]!.name, "test-agent");
   } finally {
@@ -314,7 +248,7 @@ Body`,
   }
 });
 
-test("discoverAgents: cache is optional — not passing cache still works", () => {
+test("discoverAgents: cache is optional — not passing cache still works", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -327,7 +261,7 @@ description: test
 Body`,
     );
 
-    const agents = discoverAgents(dir);
+    const agents = await discoverAgents(dir);
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.name, "test-agent");
   } finally {
@@ -335,7 +269,71 @@ Body`,
   }
 });
 
-test("discoverAgents: maps Claude tool names onto tools/disallowedTools and does not skip the agent for inert fields", () => {
+test("discoverAgents: two synchronous un-awaited calls with the same cache Map and dir return Object.is-equal promises", () => {
+  const dir = makeTmpDir();
+  try {
+    const cache = new Map<string, CacheEntry<Promise<AgentConfig[]>>>();
+
+    const first = discoverAgents(dir, cache);
+    const second = discoverAgents(dir, cache);
+
+    assert.ok(Object.is(first, second));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: warnings are emitted in readdir/filename order regardless of internal parallel execution", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "agent-a.md",
+      `---
+name: agent-a
+---
+Missing description A.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "agent-b.md",
+      `---
+name: agent-b
+---
+Missing description B.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "agent-c.md",
+      `---
+name: agent-c
+---
+Missing description C.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir);
+
+    assert.equal(agents.length, 0);
+
+    const skipWarnings = warnSpy.mock.calls
+      .map((call) => call.arguments[0] as string)
+      .filter((message) => message.includes("skipping"));
+
+    assert.equal(skipWarnings.length, 3);
+    assert.ok(skipWarnings[0]!.includes("agent-a.md"));
+    assert.ok(skipWarnings[1]!.includes("agent-b.md"));
+    assert.ok(skipWarnings[2]!.includes("agent-c.md"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: maps Claude tool names onto tools/disallowedTools and does not skip the agent for inert fields", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -354,7 +352,7 @@ Body.
 `,
     );
 
-    const agents = discoverAgents(dir, undefined, new Map<string, number>());
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -366,7 +364,7 @@ Body.
   }
 });
 
-test("discoverAgents: aggregates inert-field warnings across the whole pass into exactly one console.warn call", (t) => {
+test("discoverAgents: aggregates inert-field warnings across the whole pass into exactly one console.warn call", async (t) => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -395,7 +393,7 @@ Body B.
     const warnSpy = t.mock.method(console, "warn");
     const warnRegistry = new Map<string, number>();
 
-    const agents = discoverAgents(dir, undefined, warnRegistry);
+    const agents = await discoverAgents(dir, undefined, warnRegistry);
 
     assert.equal(agents.length, 2);
 
@@ -412,7 +410,7 @@ Body B.
   }
 });
 
-test("discoverAgents: model alias (e.g. opus) end-to-end produces exactly one console.warn matching 'model aliases: opus'", (t) => {
+test("discoverAgents: model alias (e.g. opus) end-to-end produces exactly one console.warn matching 'model aliases: opus'", async (t) => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -430,7 +428,7 @@ Body.
     const warnSpy = t.mock.method(console, "warn");
     const warnRegistry = new Map<string, number>();
 
-    const agents = discoverAgents(dir, undefined, warnRegistry);
+    const agents = await discoverAgents(dir, undefined, warnRegistry);
 
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.model, "opus");
@@ -441,7 +439,7 @@ Body.
   }
 });
 
-test("discoverAgents: populates thinking, inheritSkills, inheritExtensions, defaultContext, skills from frontmatter", () => {
+test("discoverAgents: populates thinking, inheritSkills, inheritExtensions, defaultContext, skills from frontmatter", async () => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -460,7 +458,7 @@ Body.
 `,
     );
 
-    const agents = discoverAgents(dir);
+    const agents = await discoverAgents(dir);
 
     assert.equal(agents.length, 1);
     const agent = agents[0]!;
@@ -474,11 +472,11 @@ Body.
   }
 });
 
-test("discoverAgents: golden-file backward-compat gate — agents-examples/scout.md and web-scout.md (S16)", (t) => {
+test("discoverAgents: golden-file backward-compat gate — agents-examples/scout.md and web-scout.md (S16)", async (t) => {
   const agentsDir = path.join(import.meta.dirname, "../../agents-examples");
   const warnSpy = t.mock.method(console, "warn");
 
-  const agents = discoverAgents(agentsDir);
+  const agents = await discoverAgents(agentsDir);
 
   assert.equal(agents.length, 2);
 
@@ -504,42 +502,394 @@ test("discoverAgents: golden-file backward-compat gate — agents-examples/scout
   assert.equal(warnSpy.mock.calls.length, 0);
 });
 
-test("loadOverrides: cache returns cached data on second call", () => {
+test("loadSettings: both files missing returns empty agentOverrides and undefined concurrency", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.deepEqual(settings.agentOverrides, {});
+    assert.equal(settings.concurrency, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: reads concurrency from 'pi-simple-agents' key", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { concurrency: 6 } }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: reads concurrency from legacy 'subagents' key", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ subagents: { concurrency: 6 } }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: legacy 'subagents' key emits a deprecation warning naming the settings file", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ subagents: { concurrency: 6 } }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn", () => {});
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+    assert.ok(
+      warnSpy.mock.calls.some((call) => {
+        const message = call.arguments[0] as string;
+        return message.includes("subagents") && message.includes(userSettingsPath);
+      }),
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: legacy 'subagents' key used for both agentOverrides and concurrency warns once, not twice", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        subagents: { concurrency: 6, agentOverrides: { scout: { model: "custom" } } },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn", () => {});
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+    assert.equal(settings.agentOverrides.scout?.model, "custom");
+    const deprecationCalls = warnSpy.mock.calls.filter((call) => {
+      const message = call.arguments[0] as string;
+      return message.includes("subagents") && message.includes(userSettingsPath);
+    });
+    assert.equal(deprecationCalls.length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: 'pi-simple-agents' key alone does not emit the legacy deprecation warning", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { concurrency: 6 } }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn", () => {});
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+    assert.equal(warnSpy.mock.calls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: 'pi-simple-agents' concurrency and legacy 'subagents' agentOverrides in the same file are both honored independently", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": { concurrency: 6 },
+        subagents: { agentOverrides: { scout: { model: "custom" } } },
+      }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+    assert.equal(settings.agentOverrides.scout?.model, "custom");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: 'pi-simple-agents' agentOverrides and legacy 'subagents' concurrency in the same file are both honored independently", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": { agentOverrides: { scout: { model: "custom" } } },
+        subagents: { concurrency: 8 },
+      }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.concurrency, 8);
+    assert.equal(settings.agentOverrides.scout?.model, "custom");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: when both 'pi-simple-agents' and legacy 'subagents' set agentOverrides in the same file, 'pi-simple-agents' wins entirely", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": { agentOverrides: { scout: { model: "primary-model" } } },
+        subagents: { agentOverrides: { scout: { model: "legacy-model" } } },
+      }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.equal(settings.agentOverrides.scout?.model, "primary-model");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: project file's concurrency overrides user file's", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { concurrency: 4 } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { concurrency: 8 } }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.equal(settings.concurrency, 8);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: project file with no concurrency key falls back to user file's value", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { concurrency: 4 } }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({ "pi-simple-agents": { agentOverrides: {} } }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.equal(settings.concurrency, 4);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: agentOverrides merge — project field wins per-agent over user", async () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: {
+            scout: { model: "user-model", description: "User description" },
+          },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: {
+            scout: { model: "project-model" },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.equal(settings.agentOverrides.scout?.model, "project-model");
+    assert.equal(settings.agentOverrides.scout?.description, "User description");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: malformed JSON in project file only still returns user file's data, with a warning naming the project file", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          concurrency: 6,
+          agentOverrides: { scout: { model: "user-model" } },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(projectSettingsPath, "{ not valid json", "utf8");
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.equal(settings.concurrency, 6);
+    assert.equal(settings.agentOverrides.scout?.model, "user-model");
+    assert.ok(
+      warnSpy.mock.calls.some((call) =>
+        (call.arguments[0] as string).includes(projectSettingsPath),
+      ),
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: non-object agentOverrides in settings file falls back to {} and warns naming the file", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: "oops",
+        },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.deepEqual(settings.agentOverrides, {});
+    assert.ok(
+      warnSpy.mock.calls.some((call) =>
+        (call.arguments[0] as string).includes(userSettingsPath),
+      ),
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: two synchronous un-awaited calls with the same cache Map and paths return Object.is-equal promises", () => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    const cache = new Map<string, CacheEntry<Promise<SubagentSettings>>>();
+
+    const first = loadSettings(userSettingsPath, projectSettingsPath, cache);
+    const second = loadSettings(userSettingsPath, projectSettingsPath, cache);
+
+    assert.ok(Object.is(first, second));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: cache hit within TTL does not re-read the file", async () => {
   const dir = makeTmpDir();
   try {
     const settingsPath = path.join(dir, "settings.json");
     fs.writeFileSync(
       settingsPath,
       JSON.stringify({
-        "pi-simple-agents": {
-          agentOverrides: {
-            scout: { model: "first-model" },
-          },
-        },
+        "pi-simple-agents": { agentOverrides: { scout: { model: "first-model" } } },
       }),
       "utf8",
     );
 
-    const cache = new Map<string, CacheEntry<AgentOverrides>>();
+    const cache = new Map<string, CacheEntry<Promise<SubagentSettings>>>();
 
-    const first = loadOverrides(settingsPath, undefined, cache);
-    assert.equal(first.scout?.model, "first-model");
+    const first = await loadSettings(settingsPath, undefined, cache);
+    assert.equal(first.agentOverrides.scout?.model, "first-model");
 
     // Change the file and call again — should still return cached data
     fs.writeFileSync(
       settingsPath,
       JSON.stringify({
-        "pi-simple-agents": {
-          agentOverrides: {
-            scout: { model: "second-model" },
-          },
-        },
+        "pi-simple-agents": { agentOverrides: { scout: { model: "second-model" } } },
       }),
       "utf8",
     );
 
-    const second = loadOverrides(settingsPath, undefined, cache);
-    assert.equal(second.scout?.model, "first-model");
+    const second = await loadSettings(settingsPath, undefined, cache);
+    assert.equal(second.agentOverrides.scout?.model, "first-model");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
