@@ -2,13 +2,16 @@
 
 Optional phase — enter only on an explicit "run" at the Phase 4 gate (`SKILL.md`), with the
 answer already recorded in `$DESIGN_DIR/decisions.md`. If the user chose "skip", none of this file
-runs: no candidates, no simplification, no `code-review-checklist` — Phase 5 (if run) diffs
+runs: no candidates, no simplification, no combined review pass — Phase 5 (if run) diffs
 directly from the `phase3-green` tag.
 
 Single refactor phase over the green implementation (Phase 3). The **planner** detects candidates
-(read-only); the **implementer** applies them and simplifies (delegate to **`pablo-implementer`**
-by name if configured, refactor mode; otherwise fall back to the generic **implementer** role);
-one frozen-test re-run and one `code-review-checklist` pass close the phase.
+(read-only); the **implementer** applies them and simplifies (delegate to **`code-implementer`**,
+`Mode: refactor`, with `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md` as its lens;
+`model: "anthropic/claude-sonnet-5"`, `tools: ["read", "grep", "find", "ls", "write", "edit"]`,
+`skills: []` per invocation — see `stages/tdd.md` step 4 for why, same reinforcement rule); one
+frozen-test re-run and one combined review pass (**`analyst`** applying the `code-review-checklist`
+skill) close the phase.
 
 ## Preflight
 
@@ -17,10 +20,15 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 
 ## How to run
 
-1. **Detect.** Delegate to the **planner** subagent to run `refactor-identification` (read-only)
-   against the green implementation and the frozen tests (Phase 3 artifacts) — do not modify tests.
-   Self-contained prompt:
+1. **Detect.** Delegate to the **`planner`** subagent (`model:` the most capable model/subagent
+   your harness offers, `skills: []`) to run `refactor-identification`
+   (read-only) against the green implementation and the frozen tests (Phase 3 artifacts) — do not
+   modify tests. Self-contained prompt:
 
+   > Lens: read and apply `~/.pi/agent/skills/iterative-design/lens/planner-lens.md` before analyzing;
+   > if you cannot read it, make no changes and say so. This invocation is the lens's
+   > refactor-candidate detection mode, not initial design.
+   >
    > Base method: this code passes its frozen tests (Phase 3) and follows the Phase 2 design
    > (`$DESIGN_DIR/plan.md` + `$DESIGN_DIR/technical.md`). Apply `refactor-identification` to the diff
    > `<base>..<phase3-green hash>` (same `<base>` and hash recorded in `$DESIGN_DIR/decisions.md` at
@@ -36,27 +44,45 @@ one frozen-test re-run and one `code-review-checklist` pass close the phase.
 3. **Apply.** Delegate to the **implementer** (refactor mode) to apply the accepted candidates
    only, re-validating each against `pablo-code-philosophy` (data-structures-first, composition
    over inheritance, low complexity) as it goes. No behavior change. Compartmentalize: apply
-   **the first bucket only**, then stop at a checkpoint for review.
+   **the first bucket only**, then stop at a checkpoint for review. Prompt:
+
+   > Mode: refactor. Lens: ~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md. Accepted
+   > candidates (user-approved, file:line evidence each): <paste>. Frozen tests (do not modify):
+   > <selector>. Simplification pass: NOT in scope for this invocation. Apply the first bucket
+   > only, then stop.
+
 4. **Simplify.** Once accepted candidates are applied, delegate to the **implementer** for one
    more simplification/cleanup pass on the result: dead code, redundant indirection, naming,
    altitude mismatches — still `pablo-code-philosophy`, still no behavior change. This is a
-   standalone refactor-mode invocation — with `pablo-implementer`, the prompt must explicitly
-   list the files this phase touched (it cannot compute that itself, no git/shell).
+   standalone refactor-mode invocation — the prompt must explicitly list the files this phase
+   touched (it cannot compute that itself, no git/shell). Prompt:
+
+   > Mode: refactor. Lens: ~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md. No
+   > candidates in this invocation — standalone simplification pass over exactly these files this
+   > phase touched: <explicit list>.
 
 ## Verify (once, combined)
 
 1. Delegate the frozen-test selector (Phase 3 artifact) to your build/test subagent — a regression
    here must be fixed before moving to Phase 5.
-2. Run `code-review-checklist` **once**, against the cumulative diff since the `phase3-green`
-   checkpoint hash — the single combined review covering both the applied candidates and the
-   simplification pass together. Do not run it twice.
-3. If `code-review-checklist` findings are addressed with further edits, re-run the frozen tests
+2. Delegate once to **`analyst`** (`model: "anthropic/claude-sonnet-5"`, `skills: []` — the lens
+   arrives by path below, not by skill discovery; no `tools` param, analyst's own frontmatter is
+   right for this and its read-only discipline is doctrine, not a tool filter):
+
+   > Lens: read and apply `~/.pi/agent/skills/code-review-checklist/SKILL.md`; if unreadable, stop
+   > and report — run no default review. Review the cumulative diff since the `phase3-green`
+   > checkpoint: `<hash>..HEAD` — the single combined review covering the applied candidates and
+   > the simplification pass together. Use the lens's output format and verdict scheme (READY |
+   > NEEDS WORK) exactly.
+
+   Do not run it twice.
+3. If the combined review's findings are addressed with further edits, re-run the frozen tests
    again before Phase 5 — do not carry forward a green status from before those edits.
 
 ## Exit criteria
 
 Refactored implementation: evidence-backed candidates applied, simplified, `pablo-code-philosophy`
-conformant, behavior unchanged. Frozen tests still green and `code-review-checklist` passes (or its
+conformant, behavior unchanged. Frozen tests still green and the combined review passes (or its
 violations are addressed, with a re-run confirming green per step 3 above) for the combined diff —
 a single gate before Phase 5. Accepted/rejected candidates are logged in `$DESIGN_DIR/decisions.md`.
 

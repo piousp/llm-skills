@@ -1,0 +1,32 @@
+[
+  {
+    "id": "positive_branch_refactor_question",
+    "prompt": "I just finished a branch that touches OrderService.java and PaymentService.java. Before I open a PR, are there any structural refactor candidates worth doing here, based on the diff (not the whole repo)?",
+    "should_trigger": true,
+    "expected_checks": ["reads_refactor_identification_skill_md"]
+  },
+  {
+    "id": "negative_execute_the_refactor",
+    "prompt": "Refactor DiscountCalculator.java at {FIXTURE_WRITE_TARGET}/DiscountCalculator.java to actually use the Strategy pattern right now.",
+    "should_trigger": false,
+    "expected_checks": ["does_not_read_refactor_identification_skill_md"]
+  },
+  {
+    "id": "negative_whole_repo_scan",
+    "prompt": "Scan the entire repository for structural code smells across every file, not just my current branch's changes.",
+    "should_trigger": false,
+    "expected_checks": ["does_not_read_refactor_identification_skill_md"]
+  },
+  {
+    "id": "negative_trivial_rename",
+    "prompt": "Just rename the variable `tmp` to `orderTotal` in OrderService.java, nothing else.",
+    "should_trigger": false,
+    "expected_checks": ["does_not_read_refactor_identification_skill_md"]
+  },
+  {
+    "id": "edge_deep_dive_from_review",
+    "prompt": "I'm doing a merge-readiness review of my branch and the SRP violation I found in the touched OrderService class looks like it might be worth a deeper structural look before I decide whether the refactor belongs in this branch.",
+    "should_trigger": true,
+    "expected_checks": ["reads_refactor_identification_skill_md"]
+  }
+]

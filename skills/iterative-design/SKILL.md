@@ -50,31 +50,43 @@ proves insufficient.
 
 ## Subagent cast
 
-Two roles and two concrete subagents, used across the phases below. `pablo-planner`,
-`pablo-implementer`, `code-review-checklist`, and `qa-adversary` are all specific, named
-subagents — invoke them by name when your harness has them configured. If a named agent isn't
-available, fall back to the generic role description and delegate however your harness does work
-(a subagent tool, a task/agent call, etc.) — the role is what matters, not the syntax.
+Three roles, all running on generic agents (`planner`, `code-implementer`, `analyst`) that carry
+no method knowledge of their own — each invocation names its lens file by path (fail-closed: no
+lens, no work) and passes an explicit `model` (plus, where noted, `tools`/`skills`) for the role's
+tier. If a named agent isn't available, fall back to the generic role description and delegate
+however your harness does work (a subagent tool, a task/agent call, etc.) — the role is what
+matters, not the syntax.
 
-- **planner** (concrete: **`pablo-planner`**) — the most capable model/subagent available.
-  Read-only: explores the codebase and designs, but never implements. In Phase 2 it returns **one
-  document with two delimited sections** (Plan / Technical) that the **coordinator** splits and
-  persists as `$DESIGN_DIR/plan.md` and `$DESIGN_DIR/technical.md`. Later it surfaces refactor candidates
-  via `refactor-identification` (Phase 4, if run). Never edits code. `pablo-planner` embeds
-  `pablo-code-philosophy` and runs in a fresh context — invocation prompts don't need to
-  repeat the philosophy, only the design inputs (goal, constraints, prior decisions).
-- **implementer** (concrete: **`pablo-implementer`**) — writes tests and code, applies refactors;
-  the coordinator runs the build/test cycle separately (via your harness's build/test subagent or
-  tool), never the implementer itself. Used in Phase 3 (TDD mode, plus **repair mode** when a
-  seam's test/implementation doesn't go green as predicted) and Phase 4 (refactor mode, applying
-  accepted candidates and the standalone simplification pass). Exactly one mode per invocation,
-  stated in the prompt. `pablo-implementer` embeds `tdd` and `pablo-code-philosophy` and runs
-  in a fresh context — invocation prompts don't need to repeat either skill, only the mode,
-  the seam/candidates, and any required file lists (it has no git/shell to compute a diff itself).
-- **`code-review-checklist`** — a concrete subagent, not a generic role. Invoke it by name in
-  Phase 4.
-- **`qa-adversary`** — a concrete subagent, not a generic role. Invoke it by name in Phase 5:
-  read-only, never runs tests, never edits.
+- **planner** (concrete: **`planner`**, lens: `~/.pi/agent/skills/iterative-design/lens/planner-lens.md`)
+  — the most capable model/subagent available. Read-only: explores the codebase and designs, but
+  never implements. In Phase 2 it returns **one document with two delimited sections** (Plan /
+  Technical) that the **coordinator** splits and persists as `$DESIGN_DIR/plan.md` and
+  `$DESIGN_DIR/technical.md`. Later it surfaces refactor candidates via `refactor-identification`
+  (Phase 4, if run) using the same lens's refactor-detection mode. Never edits code. `planner`
+  runs in a fresh context (`systemPromptMode: replace`) and self-selects its internal `code` lens,
+  which already attempts to load `pablo-code-philosophy` — the invocation's `Lens:` path (this
+  method's own lens) carries the output-contract, seam-sizing, and goal-precedence rules on top of
+  that; invocation prompts don't need to repeat any of it, only the design inputs (goal,
+  constraints, prior decisions). Pass `model:` the most capable model/subagent your harness offers
+  (nothing else guarantees that tier), `skills: []` (the lens arrives by path, never by skill
+  discovery).
+- **implementer** (concrete: **`code-implementer`**, lens: `lens/code-implementer-lens.md`) — writes
+  tests and code, applies refactors; the coordinator runs the build/test cycle separately (via
+  your harness's build/test subagent or tool), never the implementer itself. Used in Phase 3 (TDD
+  mode, plus **repair mode** when a seam's test/implementation doesn't go green as predicted) and
+  Phase 4 (refactor mode, applying accepted candidates and the standalone simplification pass).
+  Exactly one mode per invocation, stated in the prompt. `code-implementer` does **not** embed
+  `tdd`/`pablo-code-philosophy` in its own system prompt — the lens carries them, so every
+  invocation prompt must reference
+  `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md` by path (never repeat the
+  doctrine inline). Still no git/shell — prompts must pass explicit file lists where the lens
+  requires them. Pass `model: anthropic/claude-sonnet-5`,
+  `tools: ["read","grep","find","ls","write","edit"]`, `skills: []` on every invocation.
+- **code review** (concrete: **`analyst`** + the `~/.pi/agent/skills/code-review-checklist/SKILL.md`
+  lens) — used in Phase 4. `model: anthropic/claude-sonnet-5`, `skills: []`.
+- **qa** (concrete: **`analyst`** + the `~/.pi/agent/skills/qa-adversary/SKILL.md` lens) — used in
+  Phase 5: read-only, never runs tests, never edits. `model: anthropic/claude-opus-4-8`,
+  `skills: []`.
 
 ## Control flow: `scripts/state.py`
 
@@ -208,7 +220,11 @@ user, using exactly this shape, and do nothing until answered:
   > [run / finish]
 
 Append the answer (and the user's reason, when given) to `$DESIGN_DIR/decisions.md` **before** acting
-on it, using the gate-header contract above. Skipping is never the coordinator's own call: no
+on it, using the gate-header contract above. Record the answer itself as the literal word `run`,
+`skip`, or `finish` immediately after `Decision:` (e.g. `Decision: skip` — not paraphrased prose
+like "the user chose to skip Phase 4"): `scripts/state.py`'s `gate_answer()` parses that exact word
+to derive `gate_status`, and free-text phrasing there leaves the gate reported as unanswered
+forever. Skipping is never the coordinator's own call: no
 explicit gate answer, no skip. If the
 reply is not unambiguously "run" or "skip"/"finish" (e.g. a conditional or partial answer),
 re-ask for a clear choice — never infer skip from an ambiguous reply. Skipping

@@ -17,13 +17,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 
 # Add parent directory to path so we can import state.py
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from state import derive_state, cmd_init, cmd_status, _session_dir, _seleccion_path, SKILL_DIR
+from state import (
+    derive_state, cmd_init, cmd_status, _session_dir, _seleccion_path, SKILL_DIR,
+    list_sessions, MAX_EVALUADORES, _write_json,
+)
 
 
 class TestDeriveState(unittest.TestCase):
@@ -628,6 +631,23 @@ class TestDeriveState(unittest.TestCase):
 
             self.assertIn("Correccion: failed", output)
 
+    def test_cmd_status_exits_nonzero_on_corrupt_seleccion(self):
+        """cmd_status exits with code 1 (via _die) when seleccion.json is corrupt — same
+        error-phase contract as cmd_consolidate/cmd_group, uniform across operator commands."""
+        with tempfile.TemporaryDirectory() as tmp:
+            session_id = "test-status-corrupt-seleccion"
+            sdir = _session_dir(session_id)
+            sdir.mkdir(parents=True, exist_ok=True)
+            (sdir / "seleccion.json").write_text("not valid json", encoding="utf-8")
+
+            err = io.StringIO()
+            with redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    cmd_status([session_id])
+
+            self.assertEqual(ctx.exception.code, 1)
+            self.assertIn("ERROR:", err.getvalue())
+
     # ── Pending order ───────────────────────────────────────────────────────
 
     def test_consolidate_and_correct_have_no_pending(self):
@@ -664,6 +684,138 @@ class TestDeriveState(unittest.TestCase):
             self.assertEqual(state["phase"], "done")
             self.assertIsNone(state["pending"])
             self.assertIsNone(state["progress"])
+
+    # ── Session discovery (M1) ───────────────────────────────────────────
+
+    def test_list_sessions_empty_when_base_dir_missing(self):
+        """list_sessions() returns [] when no sessions base dir exists yet."""
+        import state as state_module
+        original = state_module._sessions_base_dir
+        state_module._sessions_base_dir = lambda: Path("/tmp/revisor-textos-does-not-exist-xyz")
+        try:
+            self.assertEqual(list_sessions(), [])
+        finally:
+            state_module._sessions_base_dir = original
+
+    def test_list_sessions_reports_phase_and_sorts_newest_first(self):
+        """list_sessions() derives phase per candidate and sorts by mtime desc."""
+        import state as state_module
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+
+            older = base / "111"
+            self._make_seleccion(older, ["filologica"])
+            newer = base / "222"
+            self._make_seleccion(newer, ["filologica", "heuristica"])
+            self._make_hallazgo(newer, "filologica")
+
+            # Force older's mtime behind newer's regardless of creation order.
+            os.utime(older, (1000, 1000))
+            os.utime(newer, (2000, 2000))
+
+            original = state_module._sessions_base_dir
+            state_module._sessions_base_dir = lambda: base
+            try:
+                sessions = list_sessions()
+            finally:
+                state_module._sessions_base_dir = original
+
+            self.assertEqual([s["session_id"] for s in sessions], ["222", "111"])
+            self.assertEqual(sessions[0]["phase_name"], "evaluating")
+            self.assertEqual(sessions[1]["phase_name"], "init")
+
+    def test_cmd_sessions_cli_lists_prior_session(self):
+        """`state.py sessions` (subprocess, real cwd) lists a session created by init."""
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = Path(tmp) / "article.md"
+            test_file.write_text("# Test\n\nParagraph.\n", encoding="utf-8")
+
+            state_py = SKILL_DIR / "state.py"
+            init_result = subprocess.run(
+                [sys.executable, str(state_py), "init", str(test_file), "filologica"],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(init_result.returncode, 0)
+            session_id = next(
+                line.split(":", 1)[1].strip()
+                for line in init_result.stdout.splitlines()
+                if line.startswith("Session:")
+            )
+
+            sessions_result = subprocess.run(
+                [sys.executable, str(state_py), "sessions"],
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(sessions_result.returncode, 0)
+            sessions = json.loads(sessions_result.stdout)
+            self.assertIn(session_id, [s["session_id"] for s in sessions])
+
+    # ── MAX_EVALUADORES cap (M2) ─────────────────────────────────────────
+
+    def test_cmd_init_truncates_to_max_evaluadores(self):
+        """cmd_init caps selection at MAX_EVALUADORES, preserving order, and
+        warns on stderr about the omitted ids."""
+        import state as state_module
+        original_disponibles = state_module._evaluadores_disponibles
+        state_module._evaluadores_disponibles = lambda: [
+            {"id": f"ev{i}", "ruta": f"/tmp/ev{i}.md"} for i in range(MAX_EVALUADORES + 2)
+        ]
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                test_file = Path(tmp) / "article.md"
+                test_file.write_text("# Test\n\nParagraph.\n", encoding="utf-8")
+                ids = [f"ev{i}" for i in range(MAX_EVALUADORES + 2)]
+
+                out, err = io.StringIO(), io.StringIO()
+                with redirect_stdout(out), redirect_stderr(err):
+                    cmd_init([str(test_file)] + ids)  # completes normally (warning, not error)
+        finally:
+            state_module._evaluadores_disponibles = original_disponibles
+
+        stdout = out.getvalue()
+        selected = [
+            line.strip().lstrip("- ").strip()
+            for line in stdout.splitlines()
+            if line.startswith("  - ev")
+        ]
+        self.assertEqual(selected, [f"ev{i}" for i in range(MAX_EVALUADORES)])
+        self.assertIn(f"se truncó a los primeros {MAX_EVALUADORES}", err.getvalue())
+        self.assertIn("ev8", err.getvalue())
+        self.assertIn("ev9", err.getvalue())
+
+    def test_cmd_init_dies_when_no_valid_evaluators_requested(self):
+        """cmd_init with an eval_id not present in evaluadores.json exits via
+        _die(msg, *extra): stderr carries both the primary message and the
+        'IDs disponibles:' extra line (the only real call site exercising
+        _die's *extra mechanism end-to-end)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            test_file = Path(tmp) / "article.md"
+            test_file.write_text("# Test\n\nParagraph.\n", encoding="utf-8")
+
+            err = io.StringIO()
+            with redirect_stderr(err):
+                with self.assertRaises(SystemExit) as ctx:
+                    cmd_init([str(test_file), "eval_id_que_no_existe"])
+
+            self.assertEqual(ctx.exception.code, 1)
+            stderr = err.getvalue()
+            self.assertIn("Ningun evaluador valido entre los solicitados.", stderr)
+            self.assertIn("IDs disponibles:", stderr)
+
+    # ── _write_json contract ─────────────────────────────────────────────
+
+    def test_write_json_uses_indent2_and_ensure_ascii_false(self):
+        """_write_json() writes indent=2, ensure_ascii=False, UTF-8-decodable JSON."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.json"
+            _write_json(path, {"clave": "valor con ñ"})
+
+            raw = path.read_text(encoding="utf-8")
+
+            self.assertIn('\n  "clave"', raw)
+            self.assertIn("ñ", raw)
+            self.assertNotIn("\\u00f1", raw)
 
 
 if __name__ == "__main__":

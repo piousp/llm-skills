@@ -14,8 +14,8 @@ is expected to STOP at the Phase 4 gate, not proceed past it. Seeds
 $DESIGN_DIR with goal.md so Phase 1 (which needs an interactive interview)
 is bypassed, same scoping choice as Layer 2a.
 
-This is a real, multi-minute, real-token trial: pablo-planner runs on
-fable-5/xhigh, pablo-implementer on sonnet. Start with N=1 to validate
+This is a real, multi-minute, real-token trial: planner (lens/planner-lens.md) runs on
+fable-5/xhigh, code-implementer on sonnet. Start with N=1 to validate
 harness mechanics before considering repeated trials.
 
 Gated behind PI_LIVE_EVAL=1.
@@ -112,14 +112,14 @@ def run_trial() -> dict:
 
         prompt2 = (
             "Confirmed, the Phase 2 design (plan + technical) looks good. "
-            "Proceed to Phase 3 (delegate to pablo-implementer for the TDD loop) "
+            "Proceed to Phase 3 (delegate to code-implementer for the TDD loop) "
             "per the skill's process."
         )
         tool_calls_2, text_2, stderr_2 = run_pi(repo, prompt2, session)
 
         prompt3 = (
             "Confirmed, the spec looks good. Proceed: delegate this seam to "
-            "pablo-implementer for the TDD loop (RED then GREEN), and freeze/record "
+            "code-implementer for the TDD loop (RED then GREEN), and freeze/record "
             "the phase3-green checkpoint once it's done."
         )
         tool_calls_3, text_3, stderr_3 = run_pi(repo, prompt3, session)
@@ -139,8 +139,8 @@ def run_trial() -> dict:
             list(repo.glob("test_*.py")) + list(repo.glob("*_test.py"))
 
         checks = {
-            "delegated_to_planner": subagent_called(tool_calls, "pablo-planner"),
-            "delegated_to_implementer": subagent_called(tool_calls, "pablo-implementer"),
+            "delegated_to_planner": subagent_called(tool_calls, "planner"),
+            "delegated_to_implementer": subagent_called(tool_calls, "code-implementer"),
             "coordinator_wrote_plan": artifacts["plan.md"] is not None,
             "coordinator_wrote_technical": artifacts["technical.md"] is not None,
             "spec_written": artifacts["spec.md"] is not None,

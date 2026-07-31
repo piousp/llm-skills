@@ -33,7 +33,7 @@ For a coordinator/process skill, "success" is **process fidelity**, not
 
 Bare `pi -ne` (no extensions) exposes only **Read / Bash / Edit / Write** —
 confirmed empirically, no `subagent` tool, no `ask_user_question` tool. The
-skill's real delegation pipeline (`pablo-planner` → `pablo-implementer` →
+skill's real delegation pipeline (`planner` → `code-implementer` →
 green) **cannot execute** in that environment; only a harness that has a
 subagent mechanism (like the one this skill normally runs in) can exercise
 that pipeline. This shapes every layer below: Layers 1–3 run in bare `pi`
@@ -124,7 +124,7 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 
 **N=1 finding (kept as a documented result, not silently re-run to force a
 pass):** 8/9 checks passed — real delegation to both `pablo-planner` and
-`pablo-implementer` happened, the coordinator (not the subagents) wrote
+`code-implementer` happened, the coordinator (not the subagents) wrote
 `plan.md`/`technical.md`/`spec.md`, repo code and a test file were produced,
 and all three confirmation gates hit during the run were correctly
 respected. The one failing check (`phase3_green_recorded`) is a genuine

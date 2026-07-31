@@ -1,0 +1,109 @@
+[
+  {
+    "id": "scant_perf",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: make the app faster",
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_premature_block", "no_mutation", "scan_bounded", "question_budget_low"]
+  },
+  {
+    "id": "scant_caching",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: add caching somewhere, whatever makes sense",
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_premature_block", "no_mutation", "scan_bounded", "question_budget_low"]
+  },
+  {
+    "id": "scant_flaky",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: fix the flaky test",
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_premature_block", "direct_question_asked", "no_silent_pick", "no_mutation", "scan_bounded", "question_budget_low"]
+  },
+  {
+    "id": "detailed_full",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: In billing/invoice_totals.py, fix the rounding bug in calculate_line_total(): it should round to 2 decimal places using ROUND_HALF_UP instead of truncating. Scope: only that function, no other files. Success: existing tests in tests/test_invoice_totals.py pass and a new test covering a value like 10.005 rounding to 10.01 is added.",
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_premature_block", "no_mutation", "scan_bounded", "question_budget_low"]
+  },
+  {
+    "id": "detailed_buried_gap",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: Update the retry backoff settings in config/retry_policy.yaml to use a max of 5 attempts instead of 3, then wire nightly_sync.py to read from it.",
+    "should_trigger": true,
+    "expected_checks": ["gap_surfaced", "no_mutation", "scan_bounded", "scan_read_named_area", "question_budget_low"]
+  },
+  {
+    "id": "lowimpact_naming",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: Write a small script that dumps the current inventory counts to a file so we can check them later.",
+    "should_trigger": true,
+    "expected_checks": ["no_question_about_lowimpact", "assumption_flagged", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "lowimpact_default",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: Add a function to list_utils.py that returns the top 5 entries from a list of order records by total amount.",
+    "should_trigger": true,
+    "expected_checks": ["no_question_about_lowimpact", "assumption_flagged", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "scope_which_system",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: migrate the queue consumer to the new pipeline",
+    "should_trigger": true,
+    "expected_checks": ["direct_question_asked", "no_silent_pick", "no_mutation", "scan_bounded", "scan_read_named_area", "question_budget_low"]
+  },
+  {
+    "id": "scope_success_undefined",
+    "prompt": "Using the prompt-generator skill, sharpen this ask: Clean up the report generator module until it's done.",
+    "should_trigger": true,
+    "expected_checks": ["direct_question_asked", "no_silent_pick", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "loop_confirm_first",
+    "turns": [
+      "Using the prompt-generator skill, sharpen this ask: speed up the checkout flow, it feels sluggish",
+      "It's the payment submission step specifically - clicking 'place order' takes 4-5 seconds before the confirmation page loads, and we want that under 1 second.",
+      "confirmed"
+    ],
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_premature_block", "block_only_after_confirm", "block_format_valid", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "loop_one_adjust",
+    "turns": [
+      "Using the prompt-generator skill, sharpen this ask: clean up the data pipeline scripts, they're a mess",
+      "adjust: exclude the ingestion module, focus only on the transform step",
+      "confirmed"
+    ],
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_block_on_adjust_turn", "reproposal_after_adjust", "block_only_after_confirm", "block_format_valid", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "loop_two_adjusts",
+    "turns": [
+      "Using the prompt-generator skill, sharpen this ask: improve error handling across the service, it's inconsistent",
+      "adjust: only look at the HTTP layer, not the background jobs",
+      "adjust: also pin down what 'improve' means, aim for consistent error codes",
+      "confirmed"
+    ],
+    "should_trigger": true,
+    "expected_checks": ["proposal_before_block", "no_block_on_adjust_turn", "reproposal_after_adjust", "block_only_after_confirm", "block_format_valid", "no_mutation", "question_budget_low"]
+  },
+  {
+    "id": "post_block_stop",
+    "turns": [
+      "Using the prompt-generator skill, sharpen this ask: tidy up the logging setup, it's noisy",
+      "We're using Python's built-in logging module. By noisy I mean DEBUG-level messages from third-party libraries like urllib3 and botocore are flooding production output at INFO level; app-level logs should stay as they are.",
+      "confirmed",
+      "thanks"
+    ],
+    "should_trigger": true,
+    "expected_checks": ["block_only_after_confirm", "block_format_valid", "no_task_continuation_after_block", "no_mutation"]
+  },
+  {
+    "id": "post_block_continue_here",
+    "turns": [
+      "Using the prompt-generator skill, sharpen this ask: tighten up the validation logic, it's letting bad input through",
+      "The payload is a JSON object with required string fields 'email' and 'name' and a numeric 'age' field. Bad input means missing required fields, empty strings, or an age that's negative or non-numeric.",
+      "confirmed",
+      "actually just do it here"
+    ],
+    "should_trigger": true,
+    "expected_checks": ["block_only_after_confirm", "block_format_valid", "task_continuation_allowed_when_explicit"]
+  }
+]

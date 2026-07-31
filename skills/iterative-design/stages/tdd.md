@@ -27,27 +27,39 @@ correct, minimal, green implementation of agreed seams that already conforms to
 3. Before writing anything new, search the codebase (via the coordinator's free exploration, or a
    delegated search subagent) for existing implementations. Flag duplication: "this already exists
    at X — reuse it."
-4. Delegate implementation to the **`pablo-implementer`** subagent by name if your harness has it
-   configured (TDD mode), one seam at a time (vertical slice, per the `tdd` skill). Otherwise fall
-   back to the generic **implementer** role. Self-contained prompt per seam:
+4. Delegate implementation to the **`code-implementer`** subagent (TDD mode), one seam at a time
+   (vertical slice, per the `tdd` skill). On every invocation pass:
+   `model: "anthropic/claude-sonnet-5"` (or your harness's strong coding model),
+   `tools: ["read", "grep", "find", "ls", "write", "edit"]`, and `skills: []`. The `tools` list
+   mirrors the agent's own frontmatter on purpose — it is redundant reinforcement of the execution
+   boundary (the agent's `disallowedTools` still denies `bash`/`subagent` even if a caller widens
+   `tools`), and the call display shows the effective set so you can see the boundary held.
+   `skills: []` is deliberate: the lens is delivered by path in the prompt, never via skill
+   discovery — an empty whitelist keeps unrelated skills from auto-triggering. If your harness's
+   subagent mechanism predates per-invocation `tools`/`skills` (pi-simple-agents < 0.9.0 ignores
+   them silently — verify once, don't assume), omit both; the agent's frontmatter remains the
+   boundary. Self-contained prompt per seam:
 
-   > Mode: TDD. Technical design (Phase 2): `$DESIGN_DIR/technical.md` <paste>. Spec (this phase):
-   > `$DESIGN_DIR/spec.md` <paste>. Current seam: <name/description>. [Generic implementer fallback
-   > only: Apply `tdd` (RED-first, one seam at a time) and `pablo-code-philosophy`
-   > (data-structures-first, composition over inheritance, no speculative abstractions) — both
-   > are already built into `pablo-implementer`, don't repeat them when invoking it by name.]
+   > Mode: TDD. Lens: read and apply `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md`
+   > before touching anything; if you cannot read it, make no changes and say so. Technical design
+   > (Phase 2): `$DESIGN_DIR/technical.md` <paste>. Spec (this phase):
+   > `$DESIGN_DIR/spec.md` <paste>. Current seam: <name/description>.
    > First write one failing test for this seam. Then write the minimal code to make it pass —
    > correct and green, not gold-plated. Do not apply anything beyond this seam.
 
-   (`$DESIGN_DIR/plan.md` stays coordinator-side for bucket sequencing — the implementer only needs
-   the contracts and the spec, not the logistics.)
+   (`$DESIGN_DIR/plan.md` stays coordinator-side for bucket sequencing — the code-implementer only
+   needs the contracts and the spec, not the logistics.)
 
    a. Delegate the test run to your build/test subagent or tool and confirm it fails for the
-      **right reason** (not a compile error, unless that's the intended red). With
-      `pablo-implementer`, check the actual failure against its stated Predicted RED.
-   b. Confirm the minimal implementation is green. If it isn't, re-delegate to `pablo-implementer`
+      **right reason** (not a compile error, unless that's the intended red). Check the actual
+      failure against the stated Predicted RED (defined in the lens).
+   b. Confirm the minimal implementation is green. If it isn't, re-delegate to `code-implementer`
       in **repair mode**: same seam, plus the actual failure output pasted verbatim (counts toward
-      the iteration budget: max 2 attempts total for this seam).
+      the iteration budget: max 2 attempts total for this seam). Same `model`/`tools`/`skills`
+      params. Prompt:
+
+      > Mode: repair. Lens: `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md`.
+      > Seam: <name/description>. Actual failure output (verbatim): <paste>.
    c. Confirm green with the user, then move to the next seam.
 5. Compartmentalize: **the first bucket only**, then stop at a checkpoint for review — repeat step 4
    per bucket.
