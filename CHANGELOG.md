@@ -32,6 +32,20 @@ All notable changes to this repository are documented here.
   suite (`judge.py`, `prompt_set.json`, `run_layer2_probes.py`, `README.md`).
 - `skills/iterative-design/evals/` — eval suite for the coordinator skill: `judge.py`,
   `run_layer2_probes.py`, `run_layer2b_pipeline.py`, `test_state.py`, `README.md`.
+- `skills/code-review-checklist/SKILL.md` and `skills/qa-adversary/SKILL.md` — the
+  `agents/code-review-checklist` and `agents/qa-adversary` doctrine, extracted into reusable
+  lens files so generic agents (`analyst`) can apply them via `Lens: <path>` invocations; the
+  standalone agents are unchanged.
+- `skills/iterative-design/lens/planner-lens.md` and `lens/code-implementer-lens.md` — the
+  method-specific output contracts (design markers, seam sizing, refactor-mode rules) that used
+  to live inside `pablo-planner`/`pablo-implementer`'s own system prompts, now passed by path to
+  the generic `planner`/`code-implementer` agents.
+- `skills/prompt-generator/evals/` — eval suite (`judge.py`, `run_layer2_probes.py`,
+  `prompt_set.json`, `README.md`).
+- `skills/refactor-identification/evals/` — eval suite, including trigger probes
+  (`run_trigger_probes.py`, `trigger_prompt_set.json`) since this skill has a real "when" clause
+  and negative cases (`judge.py`, `run_layer2_probes.py`, `prompt_set.json`, `test_harness.py`,
+  `README.md`).
 
 ### Changed
 - `pi-simple-agents/` — version bumped to 0.3.0. Migrated from child-process-based subagent
@@ -73,6 +87,37 @@ All notable changes to this repository are documented here.
   tool through `pi`.
 - `.gitignore` — removed `.design/` and `.pi-subagents/` (no longer created inside the repo now
   that `iterative-design` writes to `$DESIGN_DIR`); added `__pycache__/`.
+- `agents/analyst.md`, `agents/planner.md` — both gain a "Lens-mode invocations" section:
+  when the prompt supplies `Lens: <path>`, read and apply it, replacing the default output
+  format/heuristics entirely; fail-closed if the named lens is unreadable. `analyst` additionally
+  gains the `subagent` tool (read-only recon delegation only). `planner`'s `thinking` dropped from
+  `xhigh` to `high`.
+- `skills/iterative-design/` — subagent cast migrated off the named `pablo-planner` /
+  `pablo-implementer` / `code-review-checklist` / `qa-adversary` agents onto the generic
+  `planner` / `code-implementer` / `analyst` agents, each invocation now passing its lens by
+  path (`lens/planner-lens.md`, `lens/code-implementer-lens.md`,
+  `skills/code-review-checklist/SKILL.md`, `skills/qa-adversary/SKILL.md`) plus an explicit
+  `model` (and `tools`/`skills: []` where noted) instead of relying on a named agent's built-in
+  tier/skills. `scripts/state.py`'s `actor` fields, `stages/*.md`, and `SKILL.md`'s "Subagent
+  cast" section updated accordingly.
+- `skills/iterative-design/scripts/state.py` — `gate_answer()` now takes the LAST matching gate
+  header when `decisions.md` has more than one (append-only log, later block can reopen/revise an
+  earlier one); Phase 4/5 completion checks now match only `## `-header lines via a new
+  `_header_matches()` helper, not any prose mention elsewhere in the file; `SKILL.md` documents
+  the literal `Decision: run|skip|finish` contract `gate_answer()` parses.
+- `skills/prompt-generator/SKILL.md` — reformulation proposals loop (re-propose after every user
+  adjustment, never jump straight to the final block); added an "Ask vs. assume" section (ask for
+  scope-changing ambiguity, assume-and-flag for low-impact ambiguity) and a worked example;
+  clarified the fenced verbatim block is reserved for the confirmed final deliverable only.
+- `skills/refactor-identification/SKILL.md` — P1/P2 priority now keyed on the smell's
+  root-cause line (declaration/definition/dispatch site), not any call/check site referencing
+  it; added a tie-break rule (root cause wins over occurrence count).
+- `skills/revisor-textos/` — session resume via a new `state.py sessions` subcommand +
+  `ask_user_question` (never auto-resumes; ambiguous/omitted answer starts a fresh session under
+  a new PPID); no-subagent fallback rule consolidated into one section; typo fixes.
+
+### Removed
+- `skills/revisor-textos/run_tests.py` — superseded by `evals/test_state.py`.
 
 ## [0.1.0] - Initial skills
 

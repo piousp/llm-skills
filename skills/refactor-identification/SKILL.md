@@ -52,8 +52,8 @@ This skill never scans a whole repository. It only looks at what the current bra
 |---|---|---|---|
 | A1 | Missing or misplaced abstractions | SRP/OCP violated, or the same structural/business logic duplicated | Structural dup ≥2, business dup ≥3 (`pablo-code-philosophy` DRY rule) |
 | A2 | Weak encapsulation | Mutable state exposed, invariants unprotected or checked by callers instead of the object | 1 occurrence anchored in the diff, unless noted otherwise |
-| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow | Varies per smell, see table 5.3 |
-| A4 | Flag/enum-modeled variants | A discriminator (boolean/enum/string) drives dispatch that a sealed ADT + pattern matching would express directly | Varies per smell, see table 5.4 |
+| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow | Varies per smell, see the A3 table below |
+| A4 | Flag/enum-modeled variants | A discriminator (boolean/enum/string) drives dispatch that a sealed ADT + pattern matching would express directly | Varies per smell, see the A4 table below |
 
 ## A1 — Missing or misplaced abstractions
 
@@ -131,9 +131,12 @@ Assign strictly by this table — no judgment outside it.
 
 | Priority | Mechanical rule (all conditions checkable) |
 |---|---|
-| P1 | Evidence includes lines ADDED/modified by the branch (the branch introduces or worsens the smell) AND the fix stays within files the branch already changed → do it in this branch |
-| P2 | Smell pre-exists; the branch extends it (adds an occurrence/case/call site); the fix stays within changed files + 1-hop context → candidate for this branch or an immediate follow-up |
+| P1 | The smell's root-cause line — the declaration, definition, or dispatch site actually being flagged, not merely a call site or check site referencing it — is ADDED or MODIFIED by the branch (the branch introduces or worsens the smell itself) AND the fix stays within files the branch already changed → do it in this branch |
+| P2 | The smell's root-cause line pre-exists untouched; the branch only adds a new occurrence, case, or call site that references it (e.g. a second null-check on an existing nullable producer); the fix stays within changed files + 1-hop context → candidate for this branch or an immediate follow-up |
 | P3 | Anchored in changed code, but the fix exceeds 1-hop context, touches a public contract, or crosses module boundaries → follow-up ticket material, never inline |
+
+Tie-break: if a candidate has multiple evidence lines spanning both a pre-existing root cause and
+branch-added occurrences, priority follows the root cause, not the occurrence count — P2, not P1.
 
 ## Step-by-step process
 

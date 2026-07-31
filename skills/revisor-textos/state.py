@@ -16,11 +16,13 @@ Commands:
     status <session_id>             Print human-readable status
     consolidate <session_id>        Consolidate hallazgos-<id>.md into one file
     group <session_id>              Group consolidated hallazgos by ubicacion
+    sessions                        List candidate prior sessions for this cwd
 
 Usage:
     python3 <skill-dir>/state.py init <file.md> [eval_id ...]
     python3 <skill-dir>/state.py next <session_id>
     python3 <skill-dir>/state.py status <session_id>
+    python3 <skill-dir>/state.py sessions
 """
 import argparse
 import json
@@ -28,9 +30,16 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import NamedTuple, NoReturn, TypedDict
+
+
+# Máximo de evaluadores por sesión (ver SKILL.md "Iteration budget &
+# escalation"). Enforced aquí, no solo documentado, para que el límite sea
+# load-bearing en código y no solo en prosa.
+MAX_EVALUADORES = 8
 
 
 SKILL_DIR = Path(__file__).resolve().parent
@@ -57,14 +66,21 @@ def _stage_path(name: str) -> str:
 # ── Session path helpers ────────────────────────────────────────────────────
 
 def tmp_root_dir() -> Path:
-    """/tmp first; fall back to $TMPDIR only if /tmp doesn't exist or isn't
-    writable. Pure function of /tmp writability and the TMPDIR env var."""
-    if Path("/tmp").is_dir() and os.access("/tmp", os.W_OK):
-        return Path("/tmp")
-    tmpdir = os.environ.get("TMPDIR")
-    if tmpdir and os.access(tmpdir, os.W_OK):
-        return Path(tmpdir)
-    return Path("/tmp")
+    """/tmp first if it exists and is writable; otherwise delegate to the
+    stdlib's own TMPDIR/TEMP/TMP + platform-default resolution
+    (`tempfile.gettempdir()`) instead of re-implementing it and silently
+    falling back to a possibly-unwritable /tmp."""
+    tmp = Path("/tmp")
+    if tmp.is_dir() and os.access(tmp, os.W_OK):
+        return tmp
+    return Path(tempfile.gettempdir())
+
+
+def _sessions_base_dir() -> Path:
+    """<tmp_root_dir()>/revisor-textos/<basename(cwd)>/ — parent of every
+    per-launch <session_id>/ dir for this cwd. Must match `_session_dir`
+    exactly: both key off `Path.cwd().name` only, never the full path."""
+    return tmp_root_dir() / "revisor-textos" / Path.cwd().name
 
 
 def _session_dir(session_id: str) -> Path:
@@ -73,9 +89,7 @@ def _session_dir(session_id: str) -> Path:
 
     The basename of cwd is a process property, not an argument, so the path
     is stable across all invocations of the same coordinator run."""
-    root = tmp_root_dir()
-    key = Path.cwd().name
-    return root / "revisor-textos" / key / session_id
+    return _sessions_base_dir() / session_id
 
 
 def _seleccion_path(session_dir: Path) -> Path:
@@ -113,6 +127,15 @@ def _leer_json(path: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+
+def _write_json(path: Path, data) -> None:
+    """Escribe `data` como JSON en `path` (indent=2, ensure_ascii=False,
+    UTF-8). Escritor unico para todo artefacto JSON del skill."""
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 # Núcleo compartido: un número, opcionalmente seguido de un rango 'N-M'.
@@ -608,6 +631,40 @@ def _agrupar_hallazgos(
     }
 
 
+# ── Session discovery (100% read-only, no writes) ───────────────────────────
+
+def list_sessions() -> list[dict]:
+    """List candidate <session_id>/ dirs under this cwd's sessions base,
+    newest-modified first. Each entry carries enough for the coordinator to
+    offer a resume-or-fresh choice to the user (`ask_user_question`) instead
+    of guessing which prior session_id to reuse. Read-only: never prompts,
+    never picks, never writes."""
+    base = _sessions_base_dir()
+    if not base.is_dir():
+        return []
+
+    candidates = []
+    for entry in base.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        state = derive_state(entry)
+        candidates.append({
+            "session_id": entry.name,
+            "session_dir": str(entry),
+            "mtime": mtime,
+            "mtime_iso": datetime.fromtimestamp(mtime).isoformat(timespec="seconds"),
+            "phase": state["phase"],
+            "phase_name": state["phase_name"],
+        })
+
+    candidates.sort(key=lambda c: c["mtime"], reverse=True)
+    return candidates
+
+
 # ── State derivation (100% read-only, no writes) ────────────────────────────
 
 def derive_state(session_dir: Path) -> dict:
@@ -744,6 +801,15 @@ def derive_state(session_dir: Path) -> dict:
 
 # ── Commands ────────────────────────────────────────────────────────────────
 
+def _die(msg: str, *extra: str) -> NoReturn:
+    """Print 'ERROR: {msg}' to stderr, then each extra line to stderr as-is,
+    then sys.exit(1)."""
+    print(f"ERROR: {msg}", file=sys.stderr)
+    for line in extra:
+        print(line, file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_init(args: list[str]) -> None:
     """Create a new revision session.
 
@@ -752,25 +818,30 @@ def cmd_init(args: list[str]) -> None:
     - If eval_ids are given, they are filtered preserving JSON order.
     """
     if len(args) < 1:
-        print(
-            "ERROR: Uso: state.py init <archivo.md> [eval_id ...]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die("Uso: state.py init <archivo.md> [eval_id ...]")
 
     original_path = Path(args[0]).resolve()
     if not original_path.exists():
-        print(f"ERROR: El archivo '{original_path}' no existe.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"El archivo '{original_path}' no existe.")
 
     disponibles = _evaluadores_disponibles()
     ids_solicitados = args[1:] if len(args) > 1 else [d["id"] for d in disponibles]
     seleccionados = [d for d in disponibles if d["id"] in ids_solicitados]
 
     if not seleccionados:
-        print("ERROR: Ningun evaluador valido entre los solicitados.", file=sys.stderr)
-        print(f"IDs disponibles: {[d['id'] for d in disponibles]}", file=sys.stderr)
-        sys.exit(1)
+        _die(
+            "Ningun evaluador valido entre los solicitados.",
+            f"IDs disponibles: {[d['id'] for d in disponibles]}",
+        )
+
+    if len(seleccionados) > MAX_EVALUADORES:
+        omitidos = [d["id"] for d in seleccionados[MAX_EVALUADORES:]]
+        seleccionados = seleccionados[:MAX_EVALUADORES]
+        print(
+            f"AVISO: se solicitaron mas de {MAX_EVALUADORES} evaluadores; "
+            f"se truncó a los primeros {MAX_EVALUADORES}. Omitidos: {omitidos}",
+            file=sys.stderr,
+        )
 
     session_id = str(os.getppid())
     sdir = _session_dir(session_id)
@@ -793,10 +864,7 @@ def cmd_init(args: list[str]) -> None:
             for d in seleccionados
         ],
     }
-    (_seleccion_path(sdir)).write_text(
-        json.dumps(seleccion, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_json(_seleccion_path(sdir), seleccion)
 
     # Print session info
     print(f"Session: {session_id}")
@@ -818,17 +886,23 @@ def _require_session_dir(args: list[str], usage: str) -> Path:
     los mensajes de error existentes ('Uso: <usage>' / 'Sesion ... no
     encontrada'). Devuelve el session dir resuelto."""
     if len(args) < 1:
-        print(f"ERROR: Uso: {usage}", file=sys.stderr)
-        sys.exit(1)
+        _die(f"Uso: {usage}")
 
     session_id = args[0]
     sdir = _session_dir(session_id)
 
     if not sdir.exists():
-        print(f"ERROR: Sesion '{session_id}' no encontrada en {sdir}.", file=sys.stderr)
-        sys.exit(1)
+        _die(f"Sesion '{session_id}' no encontrada en {sdir}.")
 
     return sdir
+
+
+def cmd_sessions(args: list[str]) -> None:
+    """List candidate prior sessions for this cwd, newest first.
+
+    Usage: sessions
+    """
+    print(json.dumps(list_sessions(), indent=2, ensure_ascii=False))
 
 
 def cmd_next(args: list[str]) -> None:
@@ -858,14 +932,13 @@ def cmd_status(args: list[str]) -> None:
     print(f"Directorio: {sdir}")
 
     if state.get("phase") == "error":
-        print(f"Estado: ERROR - {state.get('blocked_reason', 'unknown')}")
-        return
+        _die(state.get("blocked_reason", "unknown"))
 
     print(f"Total evaluadores: {state.get('total_evaluators', 'N/A')}")
     print()
 
-    # Consolidado status (from derive_state)
-    consolidado = "si" if state.get("phase_name") in ("plan", "correct", "done") else "no"
+    # Consolidado status (direct artifact check, same style as Plan/Correccion below)
+    consolidado = "si" if _consolidado_json_path(sdir).exists() else "no"
     print(f"Consolidado: {consolidado}")
 
     # Plan status
@@ -898,21 +971,13 @@ def cmd_consolidate(args: list[str]) -> None:
 
     seleccion = _leer_json(_seleccion_path(sdir))
     if not seleccion or "evaluadores" not in seleccion:
-        print(
-            "ERROR: seleccion.json corrupto o ausente; ejecute init de nuevo",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die("seleccion.json corrupto o ausente; ejecute init de nuevo")
 
     eval_ids = [ev["id"] for ev in seleccion["evaluadores"]]
 
     for eid in eval_ids:
         if not _hallazgos_path(sdir, eid).exists():
-            print(
-                f"ERROR: Falta hallazgos-{eid}.md; la fase de evaluacion no esta completa.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            _die(f"Falta hallazgos-{eid}.md; la fase de evaluacion no esta completa.")
 
     contenidos = {
         eid: _hallazgos_path(sdir, eid).read_text(encoding="utf-8")
@@ -924,10 +989,7 @@ def cmd_consolidate(args: list[str]) -> None:
     )
 
     _consolidado_path(sdir).write_text(consolidado_md, encoding="utf-8")
-    _consolidado_json_path(sdir).write_text(
-        json.dumps(consolidado_json, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_json(_consolidado_json_path(sdir), consolidado_json)
 
     print(f"Evaluadores: {len(eval_ids)}")
     for e in consolidado_json["evaluadores"]:
@@ -948,19 +1010,11 @@ def cmd_group(args: list[str]) -> None:
 
     consolidado = _leer_json(_consolidado_json_path(sdir))
     if not consolidado:
-        print(
-            "ERROR: hallazgos-consolidado.json ausente o corrupto; ejecute consolidate primero.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        _die("hallazgos-consolidado.json ausente o corrupto; ejecute consolidate primero.")
 
     for clave in ("session_id", "hallazgos"):
         if clave not in consolidado:
-            print(
-                f"ERROR: hallazgos-consolidado.json invalido o incompleto; falta la clave '{clave}'.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            _die(f"hallazgos-consolidado.json invalido o incompleto; falta la clave '{clave}'.")
 
     working_path = sdir / "working.md"
     line_to_paragraph = _build_line_to_paragraph_mapping(working_path)
@@ -971,10 +1025,7 @@ def cmd_group(args: list[str]) -> None:
         line_to_paragraph=line_to_paragraph,
     )
 
-    _agrupados_path(sdir).write_text(
-        json.dumps(agrupados, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    _write_json(_agrupados_path(sdir), agrupados)
 
     print(f"Total grupos: {agrupados['total_grupos']}")
     print(f"Total hallazgos: {agrupados['total_hallazgos']}")
@@ -1018,6 +1069,10 @@ def main() -> int:
     )
     group_cmd.add_argument("session_id", help="Session ID (PPID)")
 
+    sub.add_parser(
+        "sessions", help="List candidate prior sessions for this cwd"
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -1030,6 +1085,8 @@ def main() -> int:
         cmd_consolidate([args.session_id])
     elif args.command == "group":
         cmd_group([args.session_id])
+    elif args.command == "sessions":
+        cmd_sessions([])
 
     return 0
 

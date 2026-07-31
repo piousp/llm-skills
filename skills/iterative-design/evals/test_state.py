@@ -70,7 +70,7 @@ class DeriveStateTests(unittest.TestCase):
         self.write("technical.md")
         s = self.next()
         self.assertEqual(s["phase"], 3)
-        self.assertEqual(s["actor"], "pablo-implementer")
+        self.assertEqual(s["actor"], "code-implementer")
 
     def test_spec_without_phase3_green_token_stays_phase3(self):
         for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
@@ -143,6 +143,38 @@ class DeriveStateTests(unittest.TestCase):
         s = self.next()
         self.assertEqual(s["phase"], 4, "'finished' must not satisfy the completion contract")
 
+    def test_phase4_prose_mention_of_phase4_and_complete_does_not_false_positive_done(self):
+        # Completion must be anchored on a '## ' header line, not any prose
+        # sentence in the document that happens to contain both words.
+        for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
+            self.write(f)
+        self.write(
+            "decisions.md",
+            "phase3-green at abc123\n\n"
+            "## Phase 4 gate: run (2026-01-02)\nDecision: run\n\n"
+            "## Phase 1 note (2026-01-03)\n"
+            "Rejected: candidate X deferred, revisit after Phase 4 to complete "
+            "the combined review later.\n",
+        )
+        s = self.next()
+        self.assertEqual(s["phase"], 4)
+        self.assertEqual(s["phase_name"], "refactor")
+
+    def test_phase4_combined_review_header_without_word_complete_still_marks_done(self):
+        # Positive-path safety net: the alternate completion phrase
+        # ('combined review') on a real header must still count, with no
+        # requirement that the word 'complete' also appear.
+        for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
+            self.write(f)
+        self.write(
+            "decisions.md",
+            "phase3-green at abc123\n\n"
+            "## Phase 4 gate: run (2026-01-02)\nDecision: run\n\n"
+            "## Phase 4 \u2014 combined review (2026-01-03)\nDecision: n/a\n",
+        )
+        s = self.next()
+        self.assertEqual(s["phase"], 5)
+
     def test_phase4_run_with_completion_marker_opens_phase5_gate(self):
         for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
             self.write(f)
@@ -170,6 +202,21 @@ class DeriveStateTests(unittest.TestCase):
         self.assertEqual(s["phase_name"], "qa")
         self.assertEqual(s["gate_status"], "run")
 
+    def test_phase5_prose_mention_of_phase5_and_complete_does_not_false_positive_done(self):
+        for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
+            self.write(f)
+        self.write(
+            "decisions.md",
+            "phase3-green at abc123\n\n"
+            "## Phase 4 gate: skip (2026-01-02)\nDecision: skip\n\n"
+            "## Phase 5 gate: run (2026-01-03)\nDecision: run\n\n"
+            "## Phase 1 followup (2026-01-04)\n"
+            "Decision: reran until the Phase 5 review felt complete enough to note here\n",
+        )
+        s = self.next()
+        self.assertEqual(s["phase"], 5)
+        self.assertEqual(s["phase_name"], "qa")
+
     def test_phase5_complete_reports_done(self):
         for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
             self.write(f)
@@ -181,6 +228,31 @@ class DeriveStateTests(unittest.TestCase):
         )
         s = self.next()
         self.assertEqual(s["phase"], "done")
+
+    def test_gate_answer_last_matching_header_wins_when_gate_reopened(self):
+        # decisions.md is append-only: a later '## Phase 4 gate reopened' block
+        # revises an earlier '## Phase 4 gate: skip' block. gate_answer must
+        # read the last matching header, not the first.
+        text = ("## Phase 4 gate: skip (2026-01-02)\nDecision: skip\n\n"
+                "## Phase 4 gate reopened (2026-01-05)\nDecision: run\n"
+                "Why: QA BLOCK findings were refactor-shaped, reopening per qa.md.\n")
+        self.assertEqual(state.gate_answer(text, "Phase 4"), "run")
+
+    def test_derive_state_resumes_phase4_active_after_gate_reopened_post_block(self):
+        for f in ("goal.md", "plan.md", "technical.md", "spec.md"):
+            self.write(f)
+        self.write(
+            "decisions.md",
+            "phase3-green at abc123\n\n"
+            "## Phase 4 gate: skip (2026-01-02)\nDecision: skip\n\n"
+            "## Phase 5 gate: run (2026-01-03)\nDecision: run\n\n"
+            "## Phase 4 gate reopened (2026-01-05)\nDecision: run\n"
+            "Why: QA BLOCK findings were refactor-shaped, reopening per qa.md.\n",
+        )
+        s = self.next()
+        self.assertEqual(s["phase"], 4)
+        self.assertEqual(s["phase_name"], "refactor")
+        self.assertEqual(s["gate_status"], "run")
 
     def test_incidental_prose_mention_does_not_leak_into_gate_block(self):
         # A gate must be anchored on its own '## ' header; mentioning "Phase 4"

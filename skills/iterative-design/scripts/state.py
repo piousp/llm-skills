@@ -81,15 +81,19 @@ def gate_answer(decisions_text: str, gate_label: str) -> str | None:
     Contract: the coordinator must title the gate's decisions.md entry with
     a '## ' header containing both the gate_label (e.g. 'Phase 4') and the
     word 'gate' (e.g. '## Phase 4 gate (2026-01-02)'), and record the answer
-    as 'Decision: run' / 'Decision: skip' / 'Decision: finish'.
+    as 'Decision: run' / 'Decision: skip' / 'Decision: finish'. decisions.md
+    is append-only, so when multiple headers match the same gate label, the
+    LAST one in the file is authoritative (a later block can revise/reopen
+    an earlier one).
     """
     header_pattern = re.compile(
         rf"^##\s+.*{re.escape(gate_label)}.*gate.*$",
         re.IGNORECASE | re.MULTILINE,
     )
-    header_match = header_pattern.search(decisions_text)
-    if not header_match:
+    header_matches = list(header_pattern.finditer(decisions_text))
+    if not header_matches:
         return None
+    header_match = header_matches[-1]
 
     block_start = header_match.end()
     next_header = re.search(r"^##\s+", decisions_text[block_start:], re.MULTILINE)
@@ -101,6 +105,17 @@ def gate_answer(decisions_text: str, gate_label: str) -> str | None:
         return None
     val = decision_match.group(1).lower()
     return "skip" if val == "finish" else val
+
+
+def _header_matches(decisions_text: str, body_pattern: str) -> list[re.Match]:
+    """Return every '## ' header line whose body matches body_pattern, in
+    document order (empty list if none). Anchoring on the header line itself
+    (not any prose elsewhere in decisions.md) prevents an incidental mention
+    of the same words in an unrelated section from being mistaken for the
+    real marker."""
+    return list(re.finditer(
+        rf"^##\s+.*{body_pattern}.*$", decisions_text, re.IGNORECASE | re.MULTILINE,
+    ))
 
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -198,9 +213,9 @@ def derive_state(repo_root: Path, design_dir: Path) -> dict:
         return {
             "phase": 2,
             "phase_name": "planner",
-            "next_action": "delegate to pablo-planner for design; split its "
+            "next_action": "delegate to planner (lens/planner-lens.md) for design; split its "
                             "returned document into plan.md + technical.md",
-            "actor": "pablo-planner",
+            "actor": "planner",
             "required_inputs": ["$DESIGN_DIR/goal.md"],
             "gate_status": None,
             "blocked_reason": None,
@@ -215,7 +230,7 @@ def derive_state(repo_root: Path, design_dir: Path) -> dict:
             "next_action": "run/continue the vertical TDD loop (spec, RED, GREEN) "
                             "over the Phase 2 design; freeze and record phase3-green "
                             "checkpoint hash on completion",
-            "actor": "pablo-implementer",
+            "actor": "code-implementer",
             "required_inputs": ["$DESIGN_DIR/plan.md", "$DESIGN_DIR/technical.md"],
             "gate_status": None,
             "blocked_reason": None,
@@ -242,8 +257,8 @@ def derive_state(repo_root: Path, design_dir: Path) -> dict:
     if phase4_answer == "run":
         # Once Phase 4 actually completes, decisions.md should also carry a
         # completion marker; until then keep surfacing Phase 4 as active.
-        phase4_done = bool(re.search(r"phase\s*4.*(complete|combined review)",
-                                      decisions_text, re.IGNORECASE))
+        phase4_done = bool(_header_matches(
+            decisions_text, r"phase\s*4.*(complete|combined review)"))
         if not phase4_done:
             return {
                 "phase": 4,
@@ -251,7 +266,7 @@ def derive_state(repo_root: Path, design_dir: Path) -> dict:
                 "next_action": "run refactor candidates, apply accepted ones, "
                                 "simplification pass, one combined "
                                 "code-review-checklist pass",
-                "actor": "pablo-implementer / code-review-checklist",
+                "actor": "code-implementer / analyst (code-review-checklist lens)",
                 "required_inputs": ["$DESIGN_DIR/plan.md", "$DESIGN_DIR/technical.md"],
                 "gate_status": "run",
                 "blocked_reason": None,
@@ -279,14 +294,14 @@ def derive_state(repo_root: Path, design_dir: Path) -> dict:
         # a BLOCK verdict must never read as done, so this keys on an explicit
         # completion marker the coordinator writes only on PASS, mirroring
         # the Phase 4 completion check above.
-        phase5_done = bool(re.search(r"phase\s*5.*complete", decisions_text, re.IGNORECASE))
+        phase5_done = bool(_header_matches(decisions_text, r"phase\s*5.*complete"))
         if not phase5_done:
             return {
                 "phase": 5,
                 "phase_name": "qa",
                 "next_action": "delegate to qa-adversary for final QA verdict "
                                 "(select prompt variant per Phase 4 gate outcome)",
-                "actor": "qa-adversary",
+                "actor": "analyst (qa-adversary lens)",
                 "required_inputs": ["$DESIGN_DIR/spec.md", "frozen tests", "implementation diff"],
                 "gate_status": "run",
                 "blocked_reason": None,

@@ -1,0 +1,25 @@
+[
+  {
+    "id": "detects_a1_structural_duplication",
+    "prompt": "Following the refactor-identification skill (invoked by name), analyze the current branch's diff (repo at {REPO_DIR}, base branch `main`, current branch `feature`) for structural refactor candidates.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_repo_mutation",
+      "output_has_required_sections",
+      "finding_has_file_line_evidence",
+      "gate_note_present",
+      "identifies_a1_category"
+    ]
+  },
+  {
+    "id": "rejects_single_implementation_by_n1",
+    "prompt": "Following the refactor-identification skill (invoked by name), analyze the current branch's diff (repo at {REPO_DIR}, base branch `main`, current branch `feature`) for structural refactor candidates.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_repo_mutation",
+      "output_has_required_sections",
+      "cites_n1_in_filtered_out",
+      "does_not_report_speculative_strategy_finding"
+    ]
+  }
+]

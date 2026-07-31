@@ -16,11 +16,11 @@ No se vuelve obsoleto por mejora del modelo base.
 
 Siempre invocado por nombre (sin auto-trigger).
 
-# *CRÍTICO*
-
-**Nunca avanzar a la siguiente fase hasta que el usuario lo confirme explícitamente.**
-Antes de cada acción de evaluación o corrección, verificar que existe un subagente
-delegado para esa tarea. Si no, detenerse y delegar. No evaluar ni corregir directamente.
+> **CRÍTICO:** Nunca avanzar a la siguiente fase hasta que el usuario lo confirme
+> explícitamente. Antes de cada acción de evaluación o corrección, verificar que
+> existe un subagente delegado para esa tarea. Si no, detenerse e informar (ver
+> "Sin `subagent` disponible → solo informar" abajo) — nunca evaluar ni corregir
+> directamente.
 
 ## La regla del coordinador
 
@@ -29,7 +29,7 @@ El agente principal ejecutando este skill es un **coordinador, no un ejecutor**.
 el estado del pipeline. Nunca debe evaluar contenido, aplicar correcciones, ni ejecutar
 comandos de revisión él mismo. Cada una de esas acciones se delega a un subagente.
 
-### Verificación de herramientas disponibles
+### Sin `subagent` disponible → solo informar
 
 **Antes de cualquier acción de evaluación, consolidación o corrección**, verificar
 que la herramienta `subagent` está disponible en el entorno actual. Si no está
@@ -37,23 +37,15 @@ disponible:
 
 1. Informar al usuario explícitamente: "No tengo acceso a la herramienta `subagent`.
    Este skill requiere subagentes para delegar evaluación, plan o corrección."
-2. Detenerse — no intentar evaluar, leer archivos de evaluadores, ni ejecutar la
-   revisión directamente.
+2. Detenerse: no leer archivos bajo `evaluadores/` (trabajo del `analyst`), no
+   intentar consolidar ni corregir (trabajo del `worker`), no ejecutar la revisión
+   ni aplicar cambios directamente, y no seguir explorando archivos de la sesión.
 3. Sugerir al usuario que ejecute este skill en un entorno con subagentes habilitados.
 
 **Carve-out explícito**: el coordinador sí escribe y mantiene los archivos de estado
 en el directorio de sesión: archivos markdown de hallazgos, archivos marcadores de
 corrección. Esto no es "evaluar" — es registrar el resultado de las delegaciones para
 que `state.py` pueda leerlo.
-
-### Regla de subagentes: no subagent → solo informar
-
-Si la herramienta `subagent` no está disponible en el entorno:
-- **No leer archivos bajo `evaluadores/`** — eso es trabajo del `analyst`.
-- **No intentar consolidar ni corregir** — todo eso es trabajo del `worker`.
-- **No ejecutar la revisión ni aplicar cambios** — el coordinador no es ejecutor.
-- Única acción permitida: informar al usuario que el skill requiere subagentes
-  y detenerse. No seguir explorando archivos de la sesión.
 
 ### Regla de lectura e incrustación
 
@@ -86,7 +78,7 @@ aplica la regla "no subagent → solo informar" (sección "Regla de subagentes" 
 ### Manejo de fallos de subagentes
 
 Si un subagente devuelve output vacío, un error, o no completa la tarea:
-1. Verificar la cause del fallo.
+1. Verificar la causa del fallo.
 2. Escalar con el usuario con: qué subagente falló, qué se intentó,
    y el mensaje de error exacto.
 3. No intentar parchear el trabajo del subagente — el coordinador no es ejecutor.
@@ -160,7 +152,7 @@ Dentro de la Fase 2 (Evaluate):
 Dentro de la Fase 4 (Plan):
 - El script agrupa mecánicamente por ubicación, luego una confirmación del usuario,
   luego una invocación al `worker` que redacta el plan de corrección conjunto.
-- El `worker` reporta éxito/fallo viá `**Status:** COMPLETED | BLOCKED` en su resumen
+- El `worker` reporta éxito/fallo vía `**Status:** COMPLETED | BLOCKED` en su resumen
   (ver `references/subagent-protocol.md`).
 
 Dentro de la Fase 5 (Correct):
@@ -212,14 +204,23 @@ dicen. Además de `init`, `state.py` tiene los subcomandos `consolidate` y `grou
 
 ### Inicio de sesión
 
-1. Preguntar al usuario: archivo a revisar y qué evaluadores aplicar.
-2. **Antes de ejecutar `state.py init`**, verificar si ya existe una sesión en el directorio
-   de sesión (`/tmp/revisor-textos/<basename(cwd)>/`). Si existe, **no crear una nueva** —
-   usar la existente y reportar su estado con `state.py next`.
-3. Si no existe sesión previa, ejecutar `state.py init <file.md> [eval_id ...]`.
-4. Iniciar el loop.
+1. Ejecutar `state.py sessions` (sin argumentos). Lista, de forma read-only, los
+   `<session_id>/` candidatos bajo `/tmp/revisor-textos/<basename(cwd)>/` (mtime
+   + fase alcanzada en cada uno). El script nunca elige ni pregunta por su cuenta.
+2. Si la lista está **vacía** — no hay sesión previa. Ir al paso 4.
+3. Si la lista **no está vacía** — usar `ask_user_question` para ofrecer cada
+   candidato (su mtime y fase) más la opción "empezar de cero". Nunca reanudar
+   automáticamente: una respuesta ambigua u omitida significa empezar de cero
+   bajo un `session_id` (PPID) nuevo, nunca adivinar cuál sesión previa reusar.
+   Si el usuario elige reanudar, guardar ese `session_id` y saltar directamente
+   al loop (paso 3a) — no volver a ejecutar `init`.
+4. Preguntar al usuario: archivo a revisar y qué evaluadores aplicar. Ejecutar
+   `state.py init <file.md> [eval_id ...]`.
+5. Iniciar el loop.
 
-No hay reanudación cross-session. El directorio de sesión es `/tmp/...` y no persiste.
+El directorio de sesión vive en `/tmp/...` y no sobrevive a un reinicio de la
+máquina — la reanudación del paso 3 solo cubre sesiones dentro del mismo ciclo
+de vida de `/tmp`, nunca cross-reboot.
 
 ## Directorio de sesión
 

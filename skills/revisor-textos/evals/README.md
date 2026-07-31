@@ -50,8 +50,9 @@ analyst/worker pipeline end-to-end. See "Known limitations" below.
 ### Layer 1 — code-based, offline, free
 
 `test_state.py`: a `unittest` suite over `state.py` — phase derivation
-(1→2→3→4→5→done), read-only contract, pending order, CLI commands, and
-absence of the `fase` field in `seleccion.json`. `test_consolidado.py`:
+(1→2→3→4→5→done), read-only contract, pending order, CLI commands, session
+discovery (`sessions`), the `MAX_EVALUADORES` cap, and absence of the `fase`
+field in `seleccion.json`. `test_consolidado.py`:
 parsing, normalization, grouping, and the `consolidate`/`group` CLI commands
 of `state.py`. No LLM calls, runs in under a second, safe to run on every
 change to `state.py`.
@@ -121,7 +122,7 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 revisor-textos/evals/
 ├── README.md                   # este archivo
 ├── __init__.py                 # para imports
-├── test_state.py               # L1: 23 tests para state.py
+├── test_state.py               # L1: tests para state.py
 ├── test_consolidado.py         # L1: parsing/grouping + CLI tests for state.py
 ├── prompt_set.json             # 8 prompts con expected_checks
 ├── run_layer2_probes.py        # L2: 4 probes + CHECK_REGISTRY (15 checks)
