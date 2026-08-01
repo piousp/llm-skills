@@ -46,6 +46,11 @@ All notable changes to this repository are documented here.
   (`run_trigger_probes.py`, `trigger_prompt_set.json`) since this skill has a real "when" clause
   and negative cases (`judge.py`, `run_layer2_probes.py`, `prompt_set.json`, `test_harness.py`,
   `README.md`).
+- `agents/critical-thinker/references/decision-checks.md` — 14-entry detection vocabulary for
+  the decision-consistency role, adapted from the `falacias` / `defectos-epistemicos` catalogs
+  of `skills/revisor-textos` to the decision domain: one-line definition, decision-domain
+  diagnostic question, adapted detection signals, source-catalog reference, and native-category
+  mapping (`drift` / `contradiction` / `hidden assumption` / `pivot risk`) per entry.
 
 ### Changed
 - `pi-simple-agents/` — version bumped to 0.3.0. Migrated from child-process-based subagent
@@ -115,6 +120,15 @@ All notable changes to this repository are documented here.
 - `skills/revisor-textos/` — session resume via a new `state.py sessions` subcommand +
   `ask_user_question` (never auto-resumes; ambiguous/omitted answer starts a fresh session under
   a new PPID); no-subagent fallback rule consolidated into one section; typo fixes.
+- `agents/pablo-oracle/` renamed to `agents/critical-thinker/` — description now reads
+  "Pensador crítico de alta consistencia: protege el estado heredado y previene la deriva
+  de decisiones"; tool box reduced to `read, grep, find, ls` (no `bash`; the ported body's
+  bash working rule dropped); and a marked local addendum
+  (`--- LOCAL ADDENDUM (no sync upstream) ---`) requiring the agent to unconditionally
+  consult `references/decision-checks.md` when building the Diagnosis, Drift / contradiction
+  check and Risks sections, attach mechanism descriptors to native categories,
+  qualify certainty coarsely (high/low), and never treat a label as a veto. The ported
+  body and output template remain verbatim.
 
 ### Removed
 - `skills/revisor-textos/run_tests.py` — superseded by `evals/test_state.py`.
