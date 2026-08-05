@@ -30,8 +30,16 @@ See the `scout.md` example agent in [agents-examples/scout.md](agents-examples/s
 `<agentsDir>/<name>/AGENT.md` is discovered directly, no symlink required. The agent's name comes
 from frontmatter `name:`, falling back to the directory's basename if absent. You can also symlink
 a directory into `agentsDir` to reuse an agent defined elsewhere. If both a flat `<name>.md` and a
-directory `<name>/AGENT.md` resolve to the same name, one is kept (first in readdir order) and a
-warning is logged — don't define an agent both ways.
+directory `<name>/AGENT.md` resolve to the same name, one is kept and a warning is logged — don't
+define an agent both ways. The winner is deterministic: entries are sorted alphabetically by
+filename before dedup, so the alphabetically-first source always wins, regardless of the
+filesystem's raw directory-listing order. The duplicate-agent warning is throttled the same way as
+other pi-simple-agents warnings, so repeated discovery calls within the throttle window won't spam
+repeated warnings for the same collision.
+
+Note: the manifest filename (`AGENT.md`) is matched case-sensitively by design — name it exactly
+`AGENT.md`, since a typo'd case (e.g. `agent.md`) can silently fail to match on case-sensitive
+filesystems (Linux) even though it appears to work on case-insensitive ones (macOS/Windows).
 
 
 ## Using the `subagent` tool

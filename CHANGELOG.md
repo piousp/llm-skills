@@ -90,6 +90,15 @@ All notable changes to this repository are documented here.
   (with matching devDependencies). Added `test:types` and `test:e2e` scripts, plus a live,
   opt-in end-to-end smoke test (`PI_LIVE_E2E=1 npm run test:e2e`) that drives the real `subagent`
   tool through `pi`.
+- `pi-simple-agents/` — version bumped from 0.3.3 to 0.9.4 (not logged release-by-release here;
+  see `pi-simple-agents/CHANGELOG.md` for the full version-by-version detail). Highlights across
+  that range: Claude Code compatibility warnings for model aliases and inert frontmatter fields
+  (0.5.x–0.7.x era); invocation-level `model`/`tools`/`skills` overrides on the `subagent` tool
+  (0.8.0–0.9.0); a fix so an unresolvable `model` warns instead of failing silently (0.9.2); and,
+  the main new capability, directory-style agent discovery — `<agentsDir>/<name>/AGENT.md`
+  alongside the existing flat `<name>.md` files, with name-fallback-to-basename, first-wins dedup
+  backed by a throttled duplicate warning, and deterministic collision ordering via sorted
+  `readdir` entries (0.9.3–0.9.4).
 - `.gitignore` — removed `.design/` and `.pi-subagents/` (no longer created inside the repo now
   that `iterative-design` writes to `$DESIGN_DIR`); added `__pycache__/`.
 - `agents/analyst.md`, `agents/planner.md` — both gain a "Lens-mode invocations" section:
