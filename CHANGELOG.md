@@ -99,6 +99,8 @@ All notable changes to this repository are documented here.
   alongside the existing flat `<name>.md` files, with name-fallback-to-basename, first-wins dedup
   backed by a throttled duplicate warning, and deterministic collision ordering via sorted
   `readdir` entries (0.9.3–0.9.4).
+- `agents/critical-thinker/AGENT.md` — the local addendum's hardcoded `/home/pablo/...` path
+  replaced with a home-relative `~/LLMs/...` path, for portability across machines/users.
 - `.gitignore` — removed `.design/` and `.pi-subagents/` (no longer created inside the repo now
   that `iterative-design` writes to `$DESIGN_DIR`); added `__pycache__/`.
 - `agents/analyst.md`, `agents/planner.md` — both gain a "Lens-mode invocations" section:
