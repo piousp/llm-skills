@@ -847,6 +847,133 @@ Manifest body.
   }
 });
 
+test("discoverAgents: collision between a directory-style agent and a flat file is resolved by sorted filename order, not raw readdir order", async () => {
+  const dir = makeTmpDir();
+  try {
+    // Entry names sort as "a-scout" < "z-scout.md", so the directory manifest
+    // must win regardless of the raw readdir() order the OS happens to return.
+    writeAgentFile(
+      dir,
+      "z-scout.md",
+      `---
+name: scout
+description: Flat scout (sorts second)
+---
+Flat body.
+`,
+    );
+    const manifestDir = path.join(dir, "a-scout");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+name: scout
+description: Directory scout (sorts first)
+---
+Manifest body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.description, "Directory scout (sorts first)");
+    assert.equal(agents[0]!.filePath, path.join(manifestDir, "AGENT.md"));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: two flat .md files with the same frontmatter name dedup to one, alphabetically-first-by-filename wins", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "a-scout.md",
+      `---
+name: scout
+description: First scout file
+---
+Body A.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "b-scout.md",
+      `---
+name: scout
+description: Second scout file
+---
+Body B.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.description, "First scout file");
+    assert.equal(agents[0]!.filePath, path.join(dir, "a-scout.md"));
+
+    const duplicateWarning = warnSpy.mock.calls.find((call) => {
+      const message = call.arguments[0] as string;
+      return message.includes("duplicate") && message.includes("scout");
+    });
+    assert.ok(duplicateWarning, "expected a console.warn call mentioning 'duplicate' and 'scout'");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: duplicate-agent warning is throttled — a second call within the TTL window for the same duplicate does not re-warn", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "a-scout.md",
+      `---
+name: scout
+description: First scout file
+---
+Body A.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "b-scout.md",
+      `---
+name: scout
+description: Second scout file
+---
+Body B.
+`,
+    );
+
+    const warnRegistry = new Map<string, number>();
+    const warnSpy = t.mock.method(console, "warn");
+
+    const countDuplicateWarnings = () =>
+      warnSpy.mock.calls.filter((call) => {
+        const message = call.arguments[0] as string;
+        return message.includes("duplicate") && message.includes("scout");
+      }).length;
+
+    const first = await discoverAgents(dir, undefined, warnRegistry);
+    assert.equal(first.length, 1);
+    assert.equal(countDuplicateWarnings(), 1);
+
+    // No cache passed, so this re-reads the directory from scratch; only the
+    // shared warnRegistry should suppress the repeat warning within the TTL.
+    const second = await discoverAgents(dir, undefined, warnRegistry);
+    assert.equal(second.length, 1);
+    assert.equal(countDuplicateWarnings(), 1, "second call within TTL should not re-warn");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("dedupeByResolvedName: first agent in input order wins on a name collision; the second is dropped with a warning naming both paths", (t) => {
   const first: AgentConfig = {
     name: "scout",
@@ -873,7 +1000,7 @@ test("dedupeByResolvedName: first agent in input order wins on a name collision;
 
   const warnSpy = t.mock.method(console, "warn");
 
-  const result = dedupeByResolvedName([first, second]);
+  const result = dedupeByResolvedName([first, second], new Map<string, number>());
 
   assert.equal(result.length, 1);
   assert.equal(result[0], first);

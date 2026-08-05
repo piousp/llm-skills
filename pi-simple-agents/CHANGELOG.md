@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.4 — 2026-08-06
+
+Follow-up fixes to 0.9.3's directory-style agent discovery.
+
+- **Fix: deterministic collision order.** `discoverAgents` (`src/agents.ts`) now sorts `readdir`
+  entries by name before resolving sources, so which of two colliding same-named agents wins
+  first-in-order is deterministic across filesystems. **Closes 0.9.3's "Known, documented gap"**
+  (collision winner depended on OS-dependent `readdir` ordering) — that gap is resolved as of
+  this release.
+- **Closed a 0.9.3 QA gap:** added a flat-vs-flat dedup test (two flat `.md` files sharing the
+  same frontmatter `name`), previously only the flat-vs-directory collision case was covered.
+- **The duplicate-agent warning is now throttled.** `dedupeByResolvedName`'s `console.warn` now
+  goes through the existing `warnRegistry`/`claimUnwarned` mechanism, same as other inert-usage
+  warnings, instead of firing unconditionally on every cache miss.
+- Docs: README.md/DEVELOPER.md updated to describe the deterministic ordering, the throttled
+  warning, and that `AGENT.md` matching is case-sensitive by design (not an oversight) — a
+  typo'd filename fails silently on Linux even if it happened to match on macOS/Windows.
+
 ## 0.9.3 — 2026-08-06
 
 - **New: directory-style agent discovery.** `discoverAgents` (`src/agents.ts`) now also

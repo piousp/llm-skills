@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { parseFrontmatter, type FrontmatterResult } from "./frontmatter.ts";
-import { reportInertUsage } from "./claude-compat.ts";
+import { claimUnwarned, reportInertUsage } from "./claude-compat.ts";
 import { WARN_PREFIX, toErrorMessage } from "./warn.ts";
 
 export interface AgentConfig {
@@ -110,19 +110,27 @@ interface DiscoveredFileResult {
 
 /**
  * First-wins dedup by resolved agent name: keeps the first agent seen for
- * each name (in input order) and warns for every later duplicate.
+ * each name (in input order) and warns for every later duplicate. The warning
+ * is throttled per resolved name via `claimUnwarned`, same TTL and registry
+ * mechanic as `reportInertUsage`'s inert-usage warnings.
  */
-export function dedupeByResolvedName(agents: AgentConfig[]): AgentConfig[] {
+export function dedupeByResolvedName(
+  agents: AgentConfig[],
+  warnRegistry: Map<string, number>,
+): AgentConfig[] {
   const seenNames = new Map<string, string>(); // resolved name -> first filePath
   const deduped: AgentConfig[] = [];
 
   for (const agent of agents) {
     const firstPath = seenNames.get(agent.name);
     if (firstPath !== undefined) {
-      console.warn(
-        `${WARN_PREFIX}skipping duplicate agent "${agent.name}" `
-          + `at ${agent.filePath} — already defined at ${firstPath}`,
-      );
+      const claimed = claimUnwarned([`duplicate-agent:${agent.name}`], warnRegistry);
+      if (claimed.length > 0) {
+        console.warn(
+          `${WARN_PREFIX}skipping duplicate agent "${agent.name}" `
+            + `at ${agent.filePath} — already defined at ${firstPath}`,
+        );
+      }
       continue;
     }
     seenNames.set(agent.name, agent.filePath);
@@ -201,12 +209,18 @@ export function discoverAgents(
         return [];
       }
 
+      // Sort by filename before any async fan-out so collision resolution
+      // (first-wins dedup) is deterministic across filesystems/OSes instead
+      // of depending on readdir's unspecified raw entry order.
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
       const sources = (
         await Promise.all(entries.map((entry) => resolveAgentSource(agentsDir, entry)))
       ).filter((s): s is AgentSource => s !== undefined);
 
       // Promise.all preserves input order in its result array regardless of
-      // settlement order, so readdir entry order is preserved here for free.
+      // settlement order, so the sorted entry order above is preserved here
+      // for free.
       const fileResults = await Promise.all(
         sources.map((s) => discoverAgentFile(s.filePath, s.fallbackName)),
       );
@@ -220,7 +234,7 @@ export function discoverAgents(
         if (fileResult.agent) candidateAgents.push(fileResult.agent);
       }
 
-      const agents = dedupeByResolvedName(candidateAgents);
+      const agents = dedupeByResolvedName(candidateAgents, warnRegistry);
 
       const warning = reportInertUsage(aggregateInertUsage(perFileResults), warnRegistry);
       if (warning) console.warn(warning);

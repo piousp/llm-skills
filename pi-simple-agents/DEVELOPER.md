@@ -194,7 +194,10 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
 Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig[]`. Two discovery
 sources are scanned per directory entry: flat `<agentsDir>/<name>.md` files, and directory-style
 agents at `<agentsDir>/<name>/AGENT.md` (a directory containing a manifest file named by the
-`MANIFEST_FILENAME` constant).
+`MANIFEST_FILENAME` constant). `MANIFEST_FILENAME` (`"AGENT.md"`) is matched case-sensitively by
+design — this is deliberate, not an oversight: case-insensitive filesystems (macOS, Windows) would
+otherwise silently mask a typo'd filename (e.g. `agent.md`) that then fails to match on
+case-sensitive filesystems (Linux).
 
 ```typescript
 export function discoverAgents(
@@ -205,9 +208,11 @@ export function discoverAgents(
 ```
 
 **Behavior change: now async (was sync).** Backed by `fs/promises` — `readdir` plus a per-file
-`stat`/`readFile` fanned out via `Promise.all`, preserving `readdir` entry order. Warnings
-collected per file are emitted sequentially after `Promise.all` settles, so their order stays
-deterministic despite the parallel I/O.
+`stat`/`readFile` fanned out via `Promise.all`. Before any async fan-out, `readdir` entries are
+sorted alphabetically by `entry.name` (plain string sort); that sorted order is what's preserved
+through `Promise.all` and into the emitted warnings, not the OS-dependent raw `readdir` order.
+Warnings collected per file are emitted sequentially after `Promise.all` settles, so their order
+stays deterministic despite the parallel I/O.
 
 - Skips files missing `name` or `description` (logs a warning). For a directory-manifest source,
   `name` resolves as `frontmatter.name ?? fallbackName` (the directory's basename); `description`
@@ -219,11 +224,16 @@ deterministic despite the parallel I/O.
   directory pointing at a directory-style agent, since `stat` follows the link to resolve the
   manifest.
 - **Dedup by resolved name.** After per-file parsing, candidate agents are passed through the
-  exported `dedupeByResolvedName(agents: AgentConfig[]): AgentConfig[]`: first-wins by resolved
-  `name`, in `readdir` order. Every later duplicate (whether flat-vs-flat, flat-vs-directory, or
-  directory-vs-directory) is dropped and logged via one `console.warn` naming both file paths
-  (the kept one and the skipped one). Because the winner depends on `readdir`'s OS-dependent
-  ordering, which source wins a same-name collision is not deterministic across platforms.
+  exported `dedupeByResolvedName(agents: AgentConfig[], warnRegistry: Map<string, number>):
+  AgentConfig[]`: first-wins by resolved `name`, in the sorted-by-filename order established
+  before the `Promise.all` fan-out (see above). Every later duplicate (whether flat-vs-flat,
+  flat-vs-directory, or directory-vs-directory) is dropped and logged via one `console.warn`
+  naming both file paths (the kept one and the skipped one). Because entries are sorted by
+  filename first, which source wins a same-name collision is now deterministic and
+  platform-independent — the alphabetically-first filename always wins. The duplicate warning is
+  throttled per resolved name via `claimUnwarned(['duplicate-agent:<name>'], warnRegistry)`, the
+  same mechanic and default 60s TTL `reportInertUsage` uses below — a repeat collision for the
+  same name within the window is silently deduped without a repeat `console.warn`.
 - Defaults: `systemPromptMode: "append"`, `inheritProjectContext: true`, `defaultReads: []`.
 - An invalid `systemPromptMode` or `defaultContext` value normalizes to that field's default (with
   a per-file `console.warn`) instead of silently breaking the rest of the config — previously an
