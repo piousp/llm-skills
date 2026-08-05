@@ -191,7 +191,10 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
 
 ## discoverAgents
 
-Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig[]`.
+Scans a directory for `.md` files with YAML frontmatter and returns `AgentConfig[]`. Two discovery
+sources are scanned per directory entry: flat `<agentsDir>/<name>.md` files, and directory-style
+agents at `<agentsDir>/<name>/AGENT.md` (a directory containing a manifest file named by the
+`MANIFEST_FILENAME` constant).
 
 ```typescript
 export function discoverAgents(
@@ -206,8 +209,21 @@ export function discoverAgents(
 collected per file are emitted sequentially after `Promise.all` settles, so their order stays
 deterministic despite the parallel I/O.
 
-- Skips files missing `name` or `description` (logs a warning).
-- Symlinks are supported (per-file `stat` follows symlinks).
+- Skips files missing `name` or `description` (logs a warning). For a directory-manifest source,
+  `name` resolves as `frontmatter.name ?? fallbackName` (the directory's basename); `description`
+  has no such fallback, so a manifest without `description` is skipped exactly like a flat file.
+- Directory sources are resolved by the module-private `resolveAgentSource(agentsDir, entry):
+  Promise<AgentSource | undefined>` helper, which returns `{ filePath, fallbackName? }` for both
+  flat files and directory manifests (`fallbackName` set only for the latter).
+- Symlinks are supported (per-file `stat` follows symlinks) — this also covers a symlinked
+  directory pointing at a directory-style agent, since `stat` follows the link to resolve the
+  manifest.
+- **Dedup by resolved name.** After per-file parsing, candidate agents are passed through the
+  exported `dedupeByResolvedName(agents: AgentConfig[]): AgentConfig[]`: first-wins by resolved
+  `name`, in `readdir` order. Every later duplicate (whether flat-vs-flat, flat-vs-directory, or
+  directory-vs-directory) is dropped and logged via one `console.warn` naming both file paths
+  (the kept one and the skipped one). Because the winner depends on `readdir`'s OS-dependent
+  ordering, which source wins a same-name collision is not deterministic across platforms.
 - Defaults: `systemPromptMode: "append"`, `inheritProjectContext: true`, `defaultReads: []`.
 - An invalid `systemPromptMode` or `defaultContext` value normalizes to that field's default (with
   a per-file `console.warn`) instead of silently breaking the rest of the config — previously an

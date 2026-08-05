@@ -8,6 +8,7 @@ import {
   loadSettings,
   applyOverrides,
   applyInvocationOverride,
+  dedupeByResolvedName,
   type AgentConfig,
   type AgentOverrides,
   type CacheEntry,
@@ -54,6 +55,107 @@ Body content.
     assert.equal(agent.source, "user");
     assert.equal(agent.filePath, path.join(dir, "scout.md"));
     assert.equal(agent.systemPrompt, "Body content.");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: directory-style agent with AGENT.md manifest (full frontmatter) is discovered", async () => {
+  const dir = makeTmpDir();
+  try {
+    const manifestDir = path.join(dir, "critical-thinker");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+name: critical-thinker
+description: Challenges assumptions
+---
+Manifest body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    const agent = agents[0]!;
+    assert.equal(agent.name, "critical-thinker");
+    assert.equal(agent.description, "Challenges assumptions");
+    assert.equal(agent.filePath, path.join(manifestDir, "AGENT.md"));
+    assert.equal(agent.systemPrompt, "Manifest body.");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: directory-style agent with AGENT.md manifest missing name falls back to directory basename", async () => {
+  const dir = makeTmpDir();
+  try {
+    const manifestDir = path.join(dir, "worker");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+description: Does the work
+---
+Manifest body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.name, "worker");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: directory-style agent with AGENT.md manifest missing both name and description is skipped", async () => {
+  const dir = makeTmpDir();
+  try {
+    const manifestDir = path.join(dir, "worker");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+systemPromptMode: append
+---
+Manifest body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: directory-style agent with AGENT.md manifest name differing from directory basename keeps frontmatter name", async () => {
+  const dir = makeTmpDir();
+  try {
+    const manifestDir = path.join(dir, "worker");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+name: custom-name
+description: Does the work
+---
+Manifest body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.name, "custom-name");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -125,6 +227,36 @@ Claude Code body.
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(realFileDir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: symlinked directory (symlink to a real dir containing AGENT.md) is discovered", async () => {
+  const dir = makeTmpDir();
+  const realParentDir = makeTmpDir();
+  try {
+    const realManifestDir = path.join(realParentDir, "critical-thinker");
+    fs.mkdirSync(realManifestDir);
+    writeAgentFile(
+      realManifestDir,
+      "AGENT.md",
+      `---
+name: critical-thinker
+description: Challenges assumptions
+---
+Manifest body.
+`,
+    );
+
+    const symlinkPath = path.join(dir, "critical-thinker");
+    fs.symlinkSync(realManifestDir, symlinkPath, "dir");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]!.name, "critical-thinker");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(realParentDir, { recursive: true, force: true });
   }
 });
 
@@ -621,6 +753,135 @@ test("discoverAgents: golden-file backward-compat gate — agents-examples/scout
 
   // Zero warnings/inert findings for either golden file.
   assert.equal(warnSpy.mock.calls.length, 0);
+});
+
+test("discoverAgents: top-level plain file (no extension) is ignored", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(dir, "README", "Just a plain file, not an agent.\n");
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 0);
+    assert.equal(warnSpy.mock.calls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: empty subdirectory is ignored", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    fs.mkdirSync(path.join(dir, "empty"));
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 0);
+    assert.equal(warnSpy.mock.calls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: subdirectory without AGENT.md is ignored", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const referencesDir = path.join(dir, "references");
+    fs.mkdirSync(referencesDir);
+    writeAgentFile(referencesDir, "notes.txt", "Unrelated notes, no AGENT.md here.\n");
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 0);
+    assert.equal(warnSpy.mock.calls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: flat scout.md and directory scout/AGENT.md both named 'scout' dedup to one agent with a duplicate warning", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "scout.md",
+      `---
+name: scout
+description: Flat scout
+---
+Flat body.
+`,
+    );
+    const manifestDir = path.join(dir, "scout");
+    fs.mkdirSync(manifestDir);
+    writeAgentFile(
+      manifestDir,
+      "AGENT.md",
+      `---
+name: scout
+description: Directory scout
+---
+Manifest body.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+
+    const duplicateWarning = warnSpy.mock.calls.find((call) => {
+      const message = call.arguments[0] as string;
+      return message.includes("duplicate") && message.includes("scout");
+    });
+    assert.ok(duplicateWarning, "expected a console.warn call mentioning 'duplicate' and 'scout'");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dedupeByResolvedName: first agent in input order wins on a name collision; the second is dropped with a warning naming both paths", (t) => {
+  const first: AgentConfig = {
+    name: "scout",
+    description: "Flat scout",
+    tools: [],
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Flat body.",
+  };
+  const second: AgentConfig = {
+    name: "scout",
+    description: "Directory scout",
+    tools: [],
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout/AGENT.md",
+    systemPrompt: "Manifest body.",
+  };
+
+  const warnSpy = t.mock.method(console, "warn");
+
+  const result = dedupeByResolvedName([first, second]);
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0], first);
+
+  assert.equal(warnSpy.mock.calls.length, 1);
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.ok(message.includes(first.filePath));
+  assert.ok(message.includes(second.filePath));
 });
 
 test("loadSettings: both files missing returns empty agentOverrides and undefined concurrency", async () => {
