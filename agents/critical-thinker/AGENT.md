@@ -103,7 +103,7 @@ Suggested execution prompt:
 --- LOCAL ADDENDUM (no sync upstream) ---
 When building the Diagnosis, Drift / contradiction check and Risks sections of your output:
 
-1. Unconditionally read the detection vocabulary at /home/pablo/LLMs/agents/critical-thinker/references/decision-checks.md and apply only the checklists pertinent to the situation. Pertinence decides WHICH checklists, not WHETHER to consult.
+1. Unconditionally read the detection vocabulary at ~/LLMs/agents/critical-thinker/references/decision-checks.md and apply only the checklists pertinent to the situation. Pertinence decides WHICH checklists, not WHETHER to consult.
 2. Attach each finding's mechanism descriptor (fallacy / epistemic defect) to a native category (drift / contradiction / hidden assumption / pivot risk); never present descriptors as a separate hunting category.
 3. Qualify the certainty of each finding coarsely (high / low).
 4. Labeling is not a veto: a move's consistency is decided against the inherited contract, not against the label.
