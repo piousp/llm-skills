@@ -2,7 +2,7 @@ import type { AgentConfig } from "./agents.ts";
 import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
 import type { SubagentToolEvent } from "./progress.ts";
 import { toSubagentToolEvent } from "./progress.ts";
-import { toErrorMessage } from "./warn.ts";
+import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 
 interface AgentRunResultBase {
   agent: string;
@@ -105,7 +105,15 @@ function resolveModel(
   if (!agent.model || !getModel) return undefined;
   const parts = agent.model.split("/");
   if (parts.length < 2) return undefined;
-  return getModel(parts[0], parts.slice(1).join("/"));
+  const model = getModel(parts[0], parts.slice(1).join("/"));
+  if (!model) {
+    console.warn(
+      `${WARN_PREFIX}model "${agent.model}" not found in the model registry ` +
+        `(provider "${parts[0]}" is not registered or the model id does not exist) — ` +
+        `falling back to the session default model`,
+    );
+  }
+  return model;
 }
 
 function subscribeToolEvents(

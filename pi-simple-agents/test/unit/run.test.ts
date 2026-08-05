@@ -410,6 +410,45 @@ test("runAgentViaSdk: calls getModel with provider and modelId split from agent.
   assert.deepEqual(calls, [["anthropic", "claude-fable-5"]]);
 });
 
+test("runAgentViaSdk: warns and falls back when configured model is not in the registry", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  let capturedModel: unknown = "sentinel";
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = (() => undefined) as any;
+
+  await runAgentViaSdk(
+    makeAgent({ model: "nex-agi/nex-n2-mini" }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+  );
+
+  assert.equal(capturedModel, undefined);
+  assert.equal(warnSpy.mock.calls.length, 1);
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /nex-agi\/nex-n2-mini/);
+  assert.match(message, /provider "nex-agi"/);
+  assert.match(message, /falling back to the session default model/);
+});
+
+test("runAgentViaSdk: no warning when configured model resolves", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async () => ({ session: fakeSession as any });
+  const getModel = ((provider: string, modelId: string) => `${provider}/${modelId}`) as any;
+
+  await runAgentViaSdk(
+    makeAgent({ model: "openrouter/nex-agi/nex-n2-mini" }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+  );
+
+  assert.equal(warnSpy.mock.calls.length, 0);
+});
+
 test("runAgentViaSdk: forwards modelRegistry through to createSession unchanged", async () => {
   const registryMarker = { find: () => undefined } as any;
   let capturedRegistry: unknown = undefined;

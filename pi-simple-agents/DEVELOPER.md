@@ -362,7 +362,9 @@ interface RunAgentViaSdkOptions {
 
 - `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, `tools`, and `excludeTools` (from `agent.disallowedTools`).
 - `getModel` — resolver for `provider/modelId` syntax. Called when `agent.model` contains a `/`.
-  In the extension, this is `(provider, modelId) => modelRegistry.find(provider, modelId)`.
+  In the extension, this is `(provider, modelId) => modelRegistry.find(provider, modelId)`. If it
+  returns `undefined` for a well-formed `provider/modelId`, `resolveModel` logs a
+  `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onProgress` — receives text delta events from the session's subscription mechanism.
 

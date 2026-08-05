@@ -91,7 +91,8 @@ subagent tasks: [
 ```
 
 As with frontmatter `model`, registry existence isn't checked — a well-formed but unknown model
-silently falls back to the session default. A bare alias without a `/` (e.g. `"sonnet"`) is
+falls back to the session default, logging a `pi-simple-agents: ` warning naming the model and
+provider. A bare alias without a `/` (e.g. `"sonnet"`) is
 rejected outright — the whole `subagent` call fails with a validation error before any agent
 runs. Always use the full `provider/modelId` form — see [Model aliases](#model-aliases).
 
