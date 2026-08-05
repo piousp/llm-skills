@@ -78,13 +78,64 @@ function aggregateInertUsage(
   return { fields, tools, models };
 }
 
+const MANIFEST_FILENAME = "AGENT.md";
+
+interface AgentSource {
+  filePath: string;
+  fallbackName?: string;
+}
+
+async function resolveAgentSource(
+  agentsDir: string,
+  entry: fs.Dirent,
+): Promise<AgentSource | undefined> {
+  if (entry.name.endsWith(".md")) {
+    return { filePath: path.join(agentsDir, entry.name) };
+  }
+  const manifestPath = path.join(agentsDir, entry.name, MANIFEST_FILENAME);
+  try {
+    const stat = await fsPromises.stat(manifestPath);
+    if (!stat.isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { filePath: manifestPath, fallbackName: entry.name };
+}
+
 interface DiscoveredFileResult {
   warnings: string[];
   agent?: AgentConfig;
   frontmatterResult?: FrontmatterResult;
 }
 
-async function discoverAgentFile(filePath: string): Promise<DiscoveredFileResult> {
+/**
+ * First-wins dedup by resolved agent name: keeps the first agent seen for
+ * each name (in input order) and warns for every later duplicate.
+ */
+export function dedupeByResolvedName(agents: AgentConfig[]): AgentConfig[] {
+  const seenNames = new Map<string, string>(); // resolved name -> first filePath
+  const deduped: AgentConfig[] = [];
+
+  for (const agent of agents) {
+    const firstPath = seenNames.get(agent.name);
+    if (firstPath !== undefined) {
+      console.warn(
+        `${WARN_PREFIX}skipping duplicate agent "${agent.name}" `
+          + `at ${agent.filePath} — already defined at ${firstPath}`,
+      );
+      continue;
+    }
+    seenNames.set(agent.name, agent.filePath);
+    deduped.push(agent);
+  }
+
+  return deduped;
+}
+
+async function discoverAgentFile(
+  filePath: string,
+  fallbackName?: string,
+): Promise<DiscoveredFileResult> {
   let stat: fs.Stats;
   try {
     stat = await fsPromises.stat(filePath);
@@ -106,7 +157,8 @@ async function discoverAgentFile(filePath: string): Promise<DiscoveredFileResult
   const { frontmatter, body, warnings } = result;
   const fileWarnings = warnings.map((warning) => `pi-simple-agents: ${filePath}: ${warning}`);
 
-  if (!frontmatter.name || !frontmatter.description) {
+  const resolvedName = frontmatter.name ?? fallbackName;
+  if (!resolvedName || !frontmatter.description) {
     fileWarnings.push(
       `pi-simple-agents: skipping ${filePath} — missing required "name" or "description"`,
     );
@@ -114,7 +166,7 @@ async function discoverAgentFile(filePath: string): Promise<DiscoveredFileResult
   }
 
   const agent: AgentConfig = {
-    name: frontmatter.name,
+    name: resolvedName,
     description: frontmatter.description,
     tools: frontmatter.tools,
     disallowedTools: frontmatter.disallowedTools,
@@ -149,22 +201,26 @@ export function discoverAgents(
         return [];
       }
 
-      const mdEntries = entries.filter((entry) => entry.name.endsWith(".md"));
+      const sources = (
+        await Promise.all(entries.map((entry) => resolveAgentSource(agentsDir, entry)))
+      ).filter((s): s is AgentSource => s !== undefined);
 
       // Promise.all preserves input order in its result array regardless of
       // settlement order, so readdir entry order is preserved here for free.
       const fileResults = await Promise.all(
-        mdEntries.map((entry) => discoverAgentFile(path.join(agentsDir, entry.name))),
+        sources.map((s) => discoverAgentFile(s.filePath, s.fallbackName)),
       );
 
-      const agents: AgentConfig[] = [];
+      const candidateAgents: AgentConfig[] = [];
       const perFileResults: FrontmatterResult[] = [];
 
       for (const fileResult of fileResults) {
         for (const warning of fileResult.warnings) console.warn(warning);
         if (fileResult.frontmatterResult) perFileResults.push(fileResult.frontmatterResult);
-        if (fileResult.agent) agents.push(fileResult.agent);
+        if (fileResult.agent) candidateAgents.push(fileResult.agent);
       }
+
+      const agents = dedupeByResolvedName(candidateAgents);
 
       const warning = reportInertUsage(aggregateInertUsage(perFileResults), warnRegistry);
       if (warning) console.warn(warning);

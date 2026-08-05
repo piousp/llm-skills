@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.3 — 2026-08-06
+
+- **New: directory-style agent discovery.** `discoverAgents` (`src/agents.ts`) now also
+  discovers agents laid out as `<agentsDir>/<name>/AGENT.md` (a directory containing a manifest
+  file), alongside the existing flat `<agentsDir>/<name>.md` files. `name` resolves from the
+  manifest's frontmatter `name:`, falling back to the directory's basename when absent —
+  `description` still has no fallback, so a manifest without `description` is skipped exactly as
+  a flat file would be. Symlinking a directory into `agentsDir` also works, since the underlying
+  `fs/promises` `stat` follows symlinks.
+- **New: first-wins dedup by resolved agent name, with a warning.** When two sources (flat file
+  and/or directory manifest) resolve to the same agent `name`, `discoverAgents` now keeps only
+  the first one encountered (in `readdir` order) and logs a `console.warn` naming both file paths
+  of the duplicate. Previously, two same-named flat files would both be returned and the *last*
+  one silently won downstream (via `validate.ts`'s name-keyed `Map`) — this is a small, disclosed
+  behavior change on the pre-existing flat-file path. Not covered by a dedicated flat-vs-flat unit
+  test: only the flat-vs-directory collision case is tested (`test/unit/agents.test.ts`'s dedup
+  test), plus a direct unit test of the extracted `dedupeByResolvedName` helper.
+- **New (module-private, noted for maintainers):** `MANIFEST_FILENAME` constant, `AgentSource`
+  interface, and `resolveAgentSource` function in `src/agents.ts`, plus an exported
+  `dedupeByResolvedName` helper.
+- Docs: README.md gained a "Directory-style agents" subsection.
+- Public API unchanged: `discoverAgents`'s signature and `AgentConfig`'s shape are identical to
+  0.9.2.
+- **Known, documented gap:** the collision winner between two same-named sources depends on
+  OS-dependent `readdir` ordering — disclosed via the warning and in README, not made
+  deterministic.
+
 ## 0.9.2 — 2026-08-05
 
 - **An unknown `provider/modelId` model no longer fails silently.** `resolveModel`

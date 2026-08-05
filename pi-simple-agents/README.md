@@ -23,8 +23,15 @@ pi-simple-agents looks for these files in `~/.pi/agent/agents/` and exposes them
 
 Create a `.md` file in `~/.pi/agent/agents/`. The YAML frontmatter defines the configuration, and the body is the system prompt.
 
-You can also symlink claude-styled agents (directory/AGENT.md)
 See the `scout.md` example agent in [agents-examples/scout.md](agents-examples/scout.md)
+
+### Directory-style agents
+
+`<agentsDir>/<name>/AGENT.md` is discovered directly, no symlink required. The agent's name comes
+from frontmatter `name:`, falling back to the directory's basename if absent. You can also symlink
+a directory into `agentsDir` to reuse an agent defined elsewhere. If both a flat `<name>.md` and a
+directory `<name>/AGENT.md` resolve to the same name, one is kept (first in readdir order) and a
+warning is logged — don't define an agent both ways.
 
 
 ## Using the `subagent` tool
