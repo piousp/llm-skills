@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.2 — 2026-08-05
+
+- **An unknown `provider/modelId` model no longer fails silently.** `resolveModel`
+  (`src/run.ts`) now emits a `console.warn` (with the `pi-simple-agents: ` prefix) when
+  `getModel` returns `undefined` for a well-formed `provider/modelId` value, then falls back to
+  the session default model as before — the fallback previously happened without any
+  indication. Bare Claude Code aliases without a `/` (`sonnet`, `inherit`, ...) are unaffected:
+  they short-circuit before the registry lookup and never warn. Two new unit tests cover the
+  warn-and-fallback path and the no-warning path when the model resolves
+  (`test/unit/run.test.ts`).
+
+## 0.9.1 — 2026-07-30
+
+- README restructure: inline agent definitions replaced with links to the `examples/`
+  directory; new natural-language usage examples for the `subagent` tool. Version bump only —
+  no package code changes.
+
 ## 0.9.0 — 2026-07-30
 
 - **New optional `tools`/`skills` params on the `subagent` tool invocation**, extending the
