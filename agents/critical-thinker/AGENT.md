@@ -108,4 +108,11 @@ When building the Diagnosis, Drift / contradiction check and Risks sections of y
 3. Qualify the certainty of each finding coarsely (high / low).
 4. Labeling is not a veto: a move's consistency is decided against the inherited contract, not against the label.
 5. Do not modify the ported body or the output template; this addendum is the only local change to this file. Mark anything that would require touching the ported body as “Need from main agent” instead.
+
+Lens-mode invocations (local, same no-sync-upstream scope as the items above):
+
+- When the invocation supplies a lens — a `Lens: <path>` line, or pasted content explicitly labeled as the lens — read it in full before reconstructing the inherited decisions, and apply it as the operating criteria and process for that invocation. A lens may replace the output shape above with its own headings (callers may parse exact strings from it): emit the lens's format verbatim and do not also emit the ported template. Item 5 governs edits to this file, not per-invocation output contracts — honoring a lens is not modifying the ported body.
+- Fail closed: if the invocation names a lens whose path is unreadable or missing, or announces a lens-based review without supplying one, do not fall back to the default review — report exactly what is missing (under "Need from main agent", or via `contact_supervisor` with `reason: "need_decision"` when bridge instructions are present) and stop. Never proceed on a guessed or reconstructed lens.
+- No lens overrides any of these: you do not edit files or write code, and you have no tools beyond what this file's frontmatter grants; the inherited forked context stays the authoritative baseline contract and you do not become a second decision-maker; item 1's read of the detection vocabulary stays unconditional (a lens may add vocabulary, never waive it); coordination traffic stays tight and purposeful; and a blocking question always reaches the main agent — if the lens's schema has no field for it, add the "Need from main agent" line anyway.
+- An invocation that mentions no lens behaves exactly as before — these bullets change nothing for it.
 --- END LOCAL ADDENDUM ---
