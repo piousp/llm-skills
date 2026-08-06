@@ -34,12 +34,10 @@ agents live under `agents/<name>/AGENT.md`.
 |---|---|
 | [`analyst`](agents/analyst.md) | General-purpose, read-only analysis agent for any domain. Supports lens-mode invocations (`Lens: <path>`) — used as the vehicle for the `code-review-checklist` and `qa-adversary` skills in `iterative-design`, and standalone. |
 | [`planner`](agents/planner.md) | General-purpose, read-only planning agent for any domain; self-selects an internal lens (code/research/writing/task) or applies an external `Lens: <path>` when the invocation supplies one. |
-| [`worker`](agents/worker.md) | General-purpose executor agent for any delegated task — code, writing, research, shell. |
-| [`pablo-planner`](agents/pablo-planner/AGENT.md) | Read-only design subagent: explores the codebase and returns a two-section design (Plan / Technical) through the `pablo-code-philosophy` lens. Never implements. Standalone; `iterative-design` now uses the generic `planner` + `lens/planner-lens.md` instead. |
-| [`pablo-implementer`](agents/pablo-implementer/AGENT.md) | Code-writing subagent: TDD mode (one failing test, then minimal code, per seam), repair mode, and refactor mode. Never runs builds, tests, or subagents. Standalone; `iterative-design` now uses the generic `code-implementer` + `lens/code-implementer-lens.md` instead. |
-| [`code-review-checklist`](agents/code-review-checklist/AGENT.md) | Read-only reviewer: runs a strict checklist (red flags, data shape, complexity, boundaries, abstractions, structural smells, tests) against a diff and reports coverage gaps. Standalone; `iterative-design` now applies the same doctrine via `analyst` + the `code-review-checklist` skill lens. |
-| [`qa-adversary`](agents/qa-adversary/AGENT.md) | Read-only adversarial QA critic: hunts correctness bugs, regressions, and business-rule violations via a 7-lens process; never judges style, never runs tests. Standalone; `iterative-design` now applies the same doctrine via `analyst` + the `qa-adversary` skill lens. |
-| [`pablo-oracle`](agents/pablo-oracle/AGENT.md) | High-context, forked-context decision-consistency oracle: protects inherited state and catches drift against earlier decisions. Ported from `pi-subagents`' `oracle`. |
+| [`worker`](agents/worker.md) | General-purpose executor agent for any delegated task — code, writing, research, shell. Supports lens-mode invocations (`Lens: <path>`) that override its default method and output contract. |
+| [`scout`](agents/scout.md) | Fast, read-only codebase recon agent — finds files, symbols, patterns, and references without analysis or evaluation. Supports lens-mode invocations (`Lens: <path>`) that replace its default output format. |
+| [`web-scout`](agents/web-scout.md) | Fast web searcher — runs parallelizable queries, picks the best source, returns direct results. Accepts an optional lens file for structured multi-source output. |
+| [`critical-thinker`](agents/critical-thinker/AGENT.md) | Forked-context, antagonistic-but-unbiased critic of another agent's decisions — catches hidden, conflicting, or inconsistent choices without making decisions itself. Ported from `pi-subagents`; local addendum adds lens-mode invocations. |
 
 All agents also work standalone in chat, independent of `iterative-design`.
 

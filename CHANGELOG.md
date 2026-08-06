@@ -141,6 +141,19 @@ All notable changes to this repository are documented here.
   qualify certainty coarsely (high/low), and never treat a label as a veto. The ported
   body and output template remain verbatim.
 
+- `agents/scout.md`, `agents/worker.md`, `agents/critical-thinker/AGENT.md` — gain a
+  "Lens-mode invocations" section, matching `analyst`/`planner`/`web-scout`: a `Lens: <path>`
+  (or pasted labeled) lens replaces the agent's default output contract, with a per-agent
+  invariant list no lens may widen (`scout`: read-only recon, no interpretation, no invented
+  findings; `worker`: fixed tools, coordinator-owned scope, mandatory disclosure of every
+  filesystem change; `critical-thinker`: no writes, inherited context stays the baseline
+  contract, unconditional decision-checks read, "Need from main agent" always reachable).
+  `scout`/`worker` frontmatter `description` now advertises lens support; `critical-thinker`'s
+  addendum-only change keeps its frontmatter and ported body untouched.
+- `README.md` — agent table corrected: dropped five agents no longer present
+  (`pablo-planner`, `pablo-implementer`, `code-review-checklist`, `qa-adversary`,
+  `pablo-oracle`); added the previously-missing `scout`, `web-scout`, `critical-thinker` rows.
+
 ### Removed
 - `skills/revisor-textos/run_tests.py` — superseded by `evals/test_state.py`.
 
