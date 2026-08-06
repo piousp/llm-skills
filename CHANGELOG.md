@@ -5,6 +5,12 @@ All notable changes to this repository are documented here.
 ## [Unreleased]
 
 ### Added
+- `skills/thesis-planning/SKILL.md` — staged planning process for a thesis/dissertation:
+  exploratory reading through a research question, a thematic literature map, a working
+  table of contents, per-chapter drafting (skeleton → full draft), a reviewer/tutor feedback
+  loop with lightweight versioning, and reverse-outline verification. Includes
+  `lens/literature-scout-lens.md` and `lens/chapter-drafting-lens.md`, `scripts/state.py` and
+  `scripts/validate_sources.py`, and a layer-1 eval suite (`evals/`).
 - `pi-simple-agents/` — minimal Claude-Code-compatible subagent delegation tool for pi
   (`subagent` tool: single/parallel invocation, agent frontmatter parsing/validation,
   output parsing, result formatting), with unit tests.

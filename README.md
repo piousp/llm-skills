@@ -24,6 +24,7 @@ Skills live under `skills/<name>/SKILL.md`; agents live under `agents/<name>/AGE
 | [`writing-agent-skills`](skills/writing-agent-skills/SKILL.md) | Authoring, reviewing, or refactoring an agent Skill's `SKILL.md` and supporting files, adapted from Philipp Schmid's "8 Tips for Writing Agent Skills", with an `evals/` suite. |
 | [`evaluating-agent-skills`](skills/evaluating-agent-skills/SKILL.md) | Building an eval suite for an existing skill — success criteria, prompt set, and layered checks (offline tests, live CLI trajectory probes, LLM-as-judge). Expansion of `writing-agent-skills`' "test it before you ship it" step. |
 | [`revisor-textos`](skills/revisor-textos/SKILL.md) (ES) | Coordinator method for reviewing/correcting Spanish-language texts via delegated `analyst`/`worker` subagents; never evaluates or corrects directly. |
+| [`thesis-planning`](skills/thesis-planning/SKILL.md) | Staged planning process for a thesis/dissertation: exploratory reading → research question → thematic literature map → working table of contents → per-chapter drafting → reverse-outline verification. Includes `literature-scout`/`chapter-drafting` lenses, state/source-validation scripts, and a layer-1 eval suite. |
 
 ## Agents
 
