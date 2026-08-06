@@ -1,11 +1,13 @@
 # Goal Discovery
 
-Interview the user relentlessly about every aspect of this until we reach a shared understanding for
+**Interview the user relentlessly** about every aspect of this until we reach a shared understanding for
 the goal (the decision this work drives, not the task named). Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
 Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
 
 If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking the user. The *decisions*, though, are the user's — put each one to them and wait for their answer.
+
+[DO NOT] assume the user understands the full code. Always ask questions back to the user to validate their own understanding. The purpose of the goal discovery is to do it together: both human and LLM investigating to find the right answers.
 
 Do not act on it until the user confirms we have reached a shared understanding.
 

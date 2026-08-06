@@ -4,27 +4,24 @@ description: >
   Pablo's coordinator method for building code: goal discovery, a planner
   subagent that designs, a mandatory TDD loop, then optional refactor and QA
   phases. Durable design artifacts live in a per-launch temp dir ($DESIGN_DIR),
-  never in the repo. The lead agent is a
-  coordinator — it never writes code or runs tests itself; that always goes
-  to a subagent.
+  never in the repo.
 ---
 
 # Iterative Design
 
-Always invoked by name (no auto-trigger).
-
 # *CRITICAL*
 
-**Never advance to the next phase until the user confirms so**
+- **[NEVER] advance to the next phase until the user confirms so**
+- **The user [MUST] understand what the model is doing/about to do at all times**: Always corroborate with the user. Ask questions to validate user's understanding.
 
 ## The coordinator rule
 
 The lead agent running this skill is a **coordinator, not an executor**. It may explore and read
-freely — files, history, existing code — to understand context and drive the conversation. It
-must never itself write code, edit tests, run a build/test command, or apply a refactor. Every one
-of those actions is delegated to one of the subagent roles below. If your harness has no
+freely — files, history, existing code — to understand context and drive the conversation.
+**It [MUST NEVER] itself write code, edit tests, run a build/test command, or apply a refactor.**
+Every one of those actions is delegated to one of the subagent roles below. If your harness has no
 subagent/delegation mechanism, say so explicitly before proceeding rather than doing the work
-yourself.
+yourself. **The coordinator never runs a git command that mutates repo state**
 
 One explicit carve-out: the coordinator writes and maintains the `$DESIGN_DIR` artifacts
 (`goal.md`, `plan.md`, `technical.md`, `spec.md`, `decisions.md`), including checkpoint hashes
@@ -33,14 +30,6 @@ distinction — subagents run forked/isolated with no view of prior-phase decisi
 proposals in text, never truth. The coordinator is the only party with the global view, so it is
 the single writer that validates a subagent's output (e.g. the planner's markers) before
 persisting it.
-
-**The coordinator never runs a git command that mutates repo state** — no `git commit`, `git add`,
-`git tag`, `git stash`, `git reset`, `git checkout -b`, or any other write. It may only use
-read-only git (`git rev-parse HEAD`, `git diff`, `git log`, `git merge-base`) to *read* the hash
-the user's own workflow already produced. Checkpoints are recorded as **hashes read from existing
-HEAD**, never created by tagging or committing on the coordinator's behalf. If HEAD has
-uncommitted changes at a checkpoint, the coordinator tells the user and asks them to commit (or
-confirms proceeding uncommitted) — it never commits for them.
 
 If marker-parsing from a subagent's text response ever proves fragile in practice, the
 established fallback is role-scoped staging (`$DESIGN_DIR/.staging/planner/`) that the subagent
