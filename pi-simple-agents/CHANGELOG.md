@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.10.0 — 2026-08-06
+
+- **`maxTurns` is no longer inert — it is a real per-agent turn limit, configurable at every
+  layer the agent's config flows through.** Valid range is integer 1..100; any other value
+  (non-integer, `<= 0`, `> 100`, `NaN`, `Infinity`, non-numeric) resolves to "no limit" with a
+  `console.warn` (same warn-and-drop pattern as `resolveTimeoutMs`/`resolveConcurrency`).
+  Canonical constant `MAX_TURNS_LIMIT = 100` exported from `src/run.ts`. Precedence now covers
+  `maxTurns` alongside `model`/`tools`/`skills`: invocation > project settings
+  (`agentOverrides`) > user settings (`agentOverrides`) > frontmatter > no limit.
+  - **Frontmatter:** `maxTurns: 5` in an agent's `.md` is a hard per-run cap. Previously
+    (since 0.4.0) it was accepted but listed among the Claude-compat inert fields. Parsed
+    and normalized in `src/frontmatter.ts`; populated onto `AgentConfig.maxTurns` in
+    `src/agents.ts`.
+  - **Settings:** `agentOverrides[agent].maxTurns` in `settings.json` overrides the
+    frontmatter value through the existing `applyOverrides` merge (same channel as
+    `model`/`thinking`/`timeoutMs`).
+  - **Subagent tool invocation:** new optional `maxTurns` parameter on `subagent`, in single
+    mode as a top-level param, in parallel mode per-entry inside each `tasks[]` item
+    (top-level `maxTurns` alongside `tasks` is rejected, same placement rule as
+    `model`/`tools`/`skills`). Per-invocation `maxTurns` takes precedence over the agent's
+    configured value. `validate.ts` propagates the value through with a minimal
+    `typeof === "number"` type guard (non-numbers warn + drop); range checks live at the
+    use site.
+  - **On exceed:** when the resolved limit is reached, the run settles as
+    `status: "error"` with `error: "reached maxTurns limit of N"`, then
+    `agentSession.abort()`. Composes with timeout and `signal.abort()` through the existing
+    `settleOnce` dedupe (whichever fires first wins).
+  - **Turn counting is by model turn.** One `turn_start` event = one model response + its
+    tool batch = 1 turn (matches Claude Code's `maxTurns` semantics; counting tool starts
+    would be off by N on parallel-tool-batching runs). New `subscribeTurnCounter` helper in
+    `src/run.ts` (parallel to the existing `subscribeToolEvents`) subscribes only when the
+    limit resolves to a number, so agents with no `maxTurns` pay no extra overhead.
+- **`formatAgentParams` (the `subagent` tool's call display) gains a `maxTurns: <N>` segment**
+  (or `maxTurns: inherited` when unset), in the same shape as `model`/`thinking`/`tools`/
+  `skills`.
+- **`maxTurns` removed from `CLAUDE_INERT_FIELDS`** (`src/claude-compat.ts`); an agent that
+  sets it no longer triggers the aggregated inert-usage warning.
+- Docs updated: README.md (removed from the inert-fields list, added to the frontmatter field
+  table, new "Overriding maxTurns per invocation" section parallel to `model`/`tools`/`skills`,
+  precedence-rules paragraph updated, complete example extended), `skills/invoking-subagents/
+  SKILL.md` (new "Limiting subagent turns" section with precedence and error/edge-case
+  bullets), DEVELOPER.md (`AgentConfig.maxTurns` / `InvocationOverride.maxTurns` fields,
+  `applyInvocationOverride` presence-gated description, new `resolveMaxTurns` section, new
+  `runAgentViaSdk` turn-counting section, precedence section updated).
+
 ## 0.9.4 — 2026-08-06
 
 Follow-up fixes to 0.9.3's directory-style agent discovery.

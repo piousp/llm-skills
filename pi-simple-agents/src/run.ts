@@ -62,6 +62,30 @@ export function resolveConcurrency(value: unknown): number {
   return DEFAULT_CONCURRENCY;
 }
 
+export const MAX_TURNS_LIMIT = 100;
+
+// Shared predicate: the same valid-set check (positive integer up to the limit)
+// that resolveMaxTurns uses here and that normalizeMaxTurns in frontmatter.ts
+// uses with a different warn sink. Living in one place keeps the two
+// chokepoint's "what counts as a valid maxTurns" definitions in lockstep;
+// each chokepoint still owns its own warn and its own `number | undefined`
+// return shape.
+export function isValidMaxTurns(value: unknown): value is number {
+  return (
+    typeof value === "number"
+    && Number.isInteger(value)
+    && value >= 1
+    && value <= MAX_TURNS_LIMIT
+  );
+}
+
+export function resolveMaxTurns(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (isValidMaxTurns(value)) return value;
+  console.warn(`pi-simple-agents: invalid maxTurns ${value}, ignoring (no limit)`);
+  return undefined;
+}
+
 export function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,
@@ -124,6 +148,19 @@ function subscribeToolEvents(
   agentSession.subscribe((event) => {
     const toolEvent = toSubagentToolEvent(event);
     if (toolEvent) onToolEvent(toolEvent);
+  });
+}
+
+function subscribeTurnCounter(
+  agentSession: CreateAgentSessionResult["session"],
+  maxTurns: number,
+  onLimit: () => void,
+): void {
+  let turnCount = 0;
+  agentSession.subscribe((event) => {
+    if (event.type !== "turn_start") return;
+    turnCount += 1;
+    if (turnCount > maxTurns) onLimit();
   });
 }
 
@@ -202,6 +239,14 @@ export function runAgentViaSdk(
 
         subscribeToolEvents(agentSession, options.onToolEvent);
 
+        const maxTurns = resolveMaxTurns(agent.maxTurns);
+        if (maxTurns !== undefined) {
+          subscribeTurnCounter(agentSession, maxTurns, () => {
+            settleOnce(errorResult(ctx, `reached maxTurns limit of ${maxTurns}`));
+            Promise.resolve(agentSession.abort()).catch(() => { /* ignore */ });
+          });
+        }
+
         const timeoutMs = resolveTimeoutMs(agent.timeoutMs);
         await runWithTimeoutAndAbort(
           agentSession,
@@ -210,6 +255,18 @@ export function runAgentViaSdk(
           options.signal,
           () => settleOnce(errorResult(ctx, `timed out after ${timeoutMs}ms`)),
         );
+
+        // If the signal aborted during the prompt, the abort handler already
+        // unblocked agentSession.prompt() via agentSession.abort() but did not
+        // settle the run. Mirror the pre-abort check above so a mid-prompt
+        // signal abort settles as the same "run was aborted" error rather than
+        // falling through to the success block. settleOnce keeps this safe
+        // against races with the timeout or maxTurns paths (already-settled
+        // runs are no-ops here).
+        if (options.signal?.aborted) {
+          settleOnce(errorResult(ctx, "run was aborted"));
+          return;
+        }
 
         const finalText = agentSession.getLastAssistantText() ?? undefined;
 

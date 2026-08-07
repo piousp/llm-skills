@@ -8,12 +8,13 @@ export type TaskEntry = { agent: string; task: string } & InvocationOverride;
 // output (never present with an `undefined` value), matching
 // applyInvocationOverride's "no override fields present" fast path.
 export function invocationOverrideOf(
-  t: { model?: string; tools?: string[]; skills?: string[] },
+  t: { model?: string; tools?: string[]; skills?: string[]; maxTurns?: number },
 ): InvocationOverride {
   return {
     ...(t.model !== undefined ? { model: t.model } : {}),
     ...(t.tools !== undefined ? { tools: t.tools } : {}),
     ...(t.skills !== undefined ? { skills: t.skills } : {}),
+    ...(t.maxTurns !== undefined ? { maxTurns: t.maxTurns } : {}),
   };
 }
 
@@ -61,6 +62,25 @@ function validateStringArrayRef(value: unknown, label: string): string | undefin
   return `${label} must be an array of strings.`;
 }
 
+// Shared maxTurns type-guard: same condition (present and not a number) in
+// single-mode and tasks-mode paths, same warn text format with a location
+// suffix, and a single drop mechanism (destructure-rest) so the produced
+// value never carries a non-number maxTurns. Range/integer checks
+// intentionally live in resolveMaxTurns at the use site, not here.
+function warnAndDropNonNumberMaxTurns<T extends Record<string, unknown>>(
+  record: T,
+  label: string,
+): T {
+  if (record.maxTurns !== undefined && typeof record.maxTurns !== "number") {
+    console.warn(
+      `pi-simple-agents: invalid maxTurns ${JSON.stringify(record.maxTurns)} ${label}, ignoring`,
+    );
+    const { maxTurns: _dropped, ...rest } = record;
+    return rest as unknown as T;
+  }
+  return record;
+}
+
 function validateTaskEntry(entry: unknown, index: number): string | undefined {
   if (!isRecord(entry)) return `tasks[${index}] must be an object with "agent" and "task"`;
   if (!isNonEmptyString(entry.agent)) return `tasks[${index}].agent must be a non-empty string`;
@@ -93,21 +113,29 @@ function validateSingleMode(raw: Record<string, unknown>): ValidationResult<Suba
   if (skillsError) {
     return { ok: false, error: skillsError };
   }
+  // maxTurns: minimal type-guard at this validation seam. Numbers pass through
+  // unchanged; anything else (string, boolean, etc.) is warned and dropped, so
+  // resolveMaxTurns at the use site never sees a non-number. Range/integer
+  // checks intentionally live in resolveMaxTurns, not here.
+  const cleaned = warnAndDropNonNumberMaxTurns(raw, "in subagent params");
   return {
     ok: true,
     value: {
       agent: raw.agent,
       task: raw.task,
-      ...invocationOverrideOf(raw as { model?: string; tools?: string[]; skills?: string[] }),
+      ...invocationOverrideOf(
+        cleaned as { model?: string; tools?: string[]; skills?: string[]; maxTurns?: number },
+      ),
     },
   };
 }
 
 function validateTasksMode(raw: Record<string, unknown>): ValidationResult<SubagentParams> {
-  const topLevelOverrideFields: Array<["model" | "tools" | "skills", unknown]> = [
+  const topLevelOverrideFields: Array<["model" | "tools" | "skills" | "maxTurns", unknown]> = [
     ["model", raw.model],
     ["tools", raw.tools],
     ["skills", raw.skills],
+    ["maxTurns", raw.maxTurns],
   ];
   for (const [field, value] of topLevelOverrideFields) {
     if (value !== undefined) {
@@ -138,9 +166,21 @@ function validateTasksMode(raw: Record<string, unknown>): ValidationResult<Subag
     if (entryError) return { ok: false, error: entryError };
   }
 
+  // Drop non-number maxTurns from each entry, warning once per non-number
+  // value (see warnAndDropNonNumberMaxTurns). Entries with a numeric or
+  // absent maxTurns pass through unchanged. validateTaskEntry above
+  // guarantees every entry is a record with the required agent/task shape,
+  // so the casts are safe.
+  const validatedTasks: TaskEntry[] = raw.tasks.map((entry, i) =>
+    warnAndDropNonNumberMaxTurns(
+      entry as Record<string, unknown>,
+      `in tasks[${i}]`,
+    ) as unknown as TaskEntry
+  );
+
   return {
     ok: true,
-    value: { tasks: raw.tasks as TaskEntry[] },
+    value: { tasks: validatedTasks },
   };
 }
 

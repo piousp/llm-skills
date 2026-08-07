@@ -67,6 +67,11 @@ export const SubagentParams = Type.Object({
   skills: Type.Optional(Type.Array(Type.String(), {
     description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
   })),
+  maxTurns: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: 100,
+    description: 'Optional per-invocation maxTurns override (1-100). Limits the number of model turns (one turn = one model response + its tool batch) before the run settles as an error. Takes precedence over the agent\'s configured maxTurns. Omit to inherit.',
+  })),
   tasks: Type.Optional(
     Type.Array(
       Type.Object({
@@ -80,6 +85,11 @@ export const SubagentParams = Type.Object({
         })),
         skills: Type.Optional(Type.Array(Type.String(), {
           description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
+        })),
+        maxTurns: Type.Optional(Type.Integer({
+          minimum: 1,
+          maximum: 100,
+          description: 'Optional per-invocation maxTurns override (1-100). Limits the number of model turns (one turn = one model response + its tool batch) before the run settles as an error. Takes precedence over the agent\'s configured maxTurns. Omit to inherit.',
         })),
       }),
     ),

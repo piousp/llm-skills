@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { mapClaudeTools, normalizeClaudeModel, CLAUDE_INERT_FIELDS } from "./claude-compat.ts";
+import { isValidMaxTurns, MAX_TURNS_LIMIT } from "./run.ts";
 import { toErrorMessage } from "./warn.ts";
 
 const SYSTEM_PROMPT_MODES = ["append", "replace"] as const;
@@ -22,6 +23,7 @@ export interface ParsedFrontmatter {
   defaultContext?: DefaultContext;
   thinking?: string;
   skills?: string[];
+  maxTurns?: number;
   [key: string]: unknown;
 }
 
@@ -97,6 +99,17 @@ function normalizeBoolean(
   return undefined;
 }
 
+function normalizeMaxTurns(
+  value: unknown,
+  warnings: string[],
+): number | undefined {
+  if (isValidMaxTurns(value)) return value;
+  warnings.push(
+    `Field "maxTurns" must be an integer between 1 and ${MAX_TURNS_LIMIT}; got ${JSON.stringify(value)} - value ignored.`,
+  );
+  return undefined;
+}
+
 function normalizeTools(
   value: unknown,
   fieldName: string,
@@ -164,6 +177,10 @@ export function normalizeFrontmatterFields(
   for (const field of BOOLEAN_FIELDS) {
     if (raw[field] === undefined) continue;
     normalized[field] = normalizeBoolean(raw[field], field, warnings);
+  }
+
+  if (raw.maxTurns !== undefined) {
+    normalized.maxTurns = normalizeMaxTurns(raw.maxTurns, warnings);
   }
 
   return { normalized, modelAlias, inertTools: [...inertToolNames] };

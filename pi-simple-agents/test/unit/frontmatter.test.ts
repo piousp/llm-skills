@@ -286,6 +286,50 @@ body`;
   assert.match(warnings[0], /inheritSkills/);
 });
 
+// --- S1.3: maxTurns (integer 1..100) — valid values pass through; invalid values
+// drop to undefined with one warning naming the field and the value ---
+
+test("normalizeFrontmatterFields normalizes maxTurns: valid integer passes through; out-of-range, non-integer, and non-number values drop to undefined with one warning each", () => {
+  const cases: Array<{ name: string; input: unknown; valid: boolean }> = [
+    { name: "valid 5", input: 5, valid: true },
+    { name: "0 (below range)", input: 0, valid: false },
+    { name: "-1 (below range)", input: -1, valid: false },
+    { name: "101 (above range)", input: 101, valid: false },
+    { name: "2.5 (non-integer)", input: 2.5, valid: false },
+    { name: '"5" (string, not number)', input: "5", valid: false },
+  ];
+
+  for (const { name, input, valid } of cases) {
+    const warnings: string[] = [];
+    const { normalized } = normalizeFrontmatterFields({ maxTurns: input }, warnings);
+
+    if (valid) {
+      assert.equal(
+        normalized.maxTurns,
+        input,
+        `${name}: normalized.maxTurns should equal input`,
+      );
+      assert.equal(warnings.length, 0, `${name}: valid value should produce no warnings`);
+    } else {
+      assert.equal(
+        normalized.maxTurns,
+        undefined,
+        `${name}: invalid value should normalize to undefined`,
+      );
+      assert.equal(
+        warnings.length,
+        1,
+        `${name}: invalid value should produce exactly one warning, got: ${JSON.stringify(warnings)}`,
+      );
+      assert.match(warnings[0], /maxTurns/, `${name}: warning should name the field`);
+      assert.ok(
+        warnings[0].includes(String(input)),
+        `${name}: warning should include the invalid value, got: ${JSON.stringify(warnings[0])}`,
+      );
+    }
+  }
+});
+
 // --- S12: claude-compat wiring — tools/disallowedTools mapped through mapClaudeTools,
 // model normalized through normalizeClaudeModel, inert fields reported from CLAUDE_INERT_FIELDS ---
 
@@ -362,7 +406,7 @@ foo: bar
 body`;
   const { frontmatter, inertFields } = parseFrontmatter(content);
 
-  assert.deepEqual(inertFields, ["maxTurns", "permissionMode"]);
+  assert.deepEqual(inertFields, ["permissionMode"]);
   assert.equal(frontmatter.permissionMode, "acceptEdits");
   assert.equal(frontmatter.maxTurns, 5);
 });

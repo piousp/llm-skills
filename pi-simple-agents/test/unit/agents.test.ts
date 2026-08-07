@@ -380,6 +380,75 @@ test("applyInvocationOverride: model, tools, and skills all set together replace
   assert.equal(result.description, baseAgent.description);
 });
 
+test("applyInvocationOverride: maxTurns number returns a new config with only maxTurns replaced, original untouched", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { maxTurns: 7 });
+
+  assert.notEqual(result, baseAgent);
+  assert.equal(result.maxTurns, 7);
+  assert.equal(result.name, baseAgent.name);
+  assert.equal(result.description, baseAgent.description);
+  assert.deepEqual(result.tools, baseAgent.tools);
+  assert.equal(result.model, baseAgent.model);
+  assert.equal(result.systemPromptMode, baseAgent.systemPromptMode);
+  assert.equal(result.inheritProjectContext, baseAgent.inheritProjectContext);
+  assert.deepEqual(result.defaultReads, baseAgent.defaultReads);
+  assert.equal(result.source, baseAgent.source);
+  assert.equal(result.filePath, baseAgent.filePath);
+  assert.equal(result.systemPrompt, baseAgent.systemPrompt);
+  assert.equal(baseAgent.maxTurns, undefined);
+});
+
+test("applyInvocationOverride: empty override returns the same config (fast path with maxTurns field present in type)", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, {});
+
+  assert.equal(result, baseAgent);
+});
+
+test("applyInvocationOverride: maxTurns set to undefined is treated as not present and returns the same config", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { maxTurns: undefined });
+
+  assert.equal(result, baseAgent);
+});
+
 test("applyOverrides: project override wins over user override; user override wins over frontmatter when project doesn't touch the field", () => {
   const overrides: AgentOverrides = {
     scout: { model: "project-model", description: "User description" },
@@ -612,6 +681,83 @@ Body.
     assert.deepEqual(agent.tools, ["read", "find"]);
     assert.deepEqual(agent.disallowedTools, ["bash"]);
     assert.equal(agent.model, "sonnet");
+    assert.equal(agent.maxTurns, 5);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: populates maxTurns from frontmatter (in range) and leaves it undefined when absent", async () => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "bounded.md",
+      `---
+name: bounded
+description: Has a maxTurns limit
+maxTurns: 7
+---
+Body.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "unbounded.md",
+      `---
+name: unbounded
+description: No maxTurns configured
+---
+Body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 2);
+    const bounded = agents.find((agent) => agent.name === "bounded")!;
+    const unbounded = agents.find((agent) => agent.name === "unbounded")!;
+    assert.ok(bounded, "bounded agent should be discovered");
+    assert.ok(unbounded, "unbounded agent should be discovered");
+    assert.equal(bounded.maxTurns, 7);
+    assert.equal(unbounded.maxTurns, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: out-of-range maxTurns in frontmatter resolves to undefined and emits a per-file warning mentioning maxTurns", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "huge.md",
+      `---
+name: huge
+description: maxTurns above the limit
+maxTurns: 200
+---
+Body.
+`,
+    );
+
+    const warnSpy = t.mock.method(console, "warn", () => {});
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    assert.equal(agents.length, 1);
+    const agent = agents[0]!;
+    assert.equal(agent.name, "huge");
+    assert.equal(agent.maxTurns, undefined);
+
+    const maxTurnsWarnings = warnSpy.mock.calls.filter((call) => {
+      const message = call.arguments[0];
+      return typeof message === "string" && /maxTurns/.test(message);
+    });
+    assert.ok(
+      maxTurnsWarnings.length > 0,
+      "expected at least one console.warn mentioning maxTurns",
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -4,6 +4,7 @@ import {
   validateSubagentParams,
   resolveAgents,
   normalizeTasks,
+  invocationOverrideOf,
   MAX_PARALLEL_TASKS,
 } from "../../src/validate.ts";
 import type { AgentConfig } from "../../src/agents.ts";
@@ -392,6 +393,52 @@ test("validateSubagentParams: top-level skills combined with tasks is rejected, 
   }
 });
 
+test("validateSubagentParams: top-level maxTurns combined with tasks is rejected, naming maxTurns and pointing at per-entry placement", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "x", task: "y" }],
+    maxTurns: 5,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.error, /maxTurns/);
+    assert.match(result.error, /per entry/);
+    assert.doesNotMatch(result.error, /tasks\[\d+\]\.maxTurns/);
+  }
+});
+
+test("validateSubagentParams: tasks mode entry with a numeric maxTurns carries it through on that entry", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", maxTurns: 5 }],
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      tasks: [{ agent: "scout", task: "find things", maxTurns: 5 }],
+    },
+  });
+});
+
+test("validateSubagentParams: tasks mode entry with a non-number maxTurns drops the field and warns once, leaving the rest of the entry intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", maxTurns: "5" }],
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, {
+      tasks: [{ agent: "scout", task: "find things" }],
+    });
+    assert.ok(!("maxTurns" in result.value.tasks[0]), "maxTurns should not be on the entry");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-number maxTurns");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /maxTurns/);
+});
+
 test("normalizeTasks: single mode with tools and skills carries both through on the single produced entry", () => {
   const result = normalizeTasks({
     agent: "scout",
@@ -403,6 +450,19 @@ test("normalizeTasks: single mode with tools and skills carries both through on 
   assert.deepStrictEqual(result, [
     { agent: "scout", task: "find things", tools: ["read"], skills: ["tdd"] },
   ]);
+});
+
+test("normalizeTasks: single mode with a numeric maxTurns carries it through on the single produced entry", () => {
+  const result = normalizeTasks({ agent: "scout", task: "find things", maxTurns: 5 });
+
+  assert.deepStrictEqual(result, [{ agent: "scout", task: "find things", maxTurns: 5 }]);
+});
+
+test("normalizeTasks: single mode without maxTurns produces no maxTurns key on the produced entry (absent-fields-stay-absent)", () => {
+  const result = normalizeTasks({ agent: "scout", task: "find things" });
+
+  assert.deepStrictEqual(result, [{ agent: "scout", task: "find things" }]);
+  assert.ok(!("maxTurns" in result[0]), "maxTurns should not be on the entry when input has none");
 });
 
 test("validateSubagentParams: single mode with model, tools, and skills all set carries all three through", () => {
@@ -424,6 +484,86 @@ test("validateSubagentParams: single mode with model, tools, and skills all set 
       skills: ["tdd"],
     },
   });
+});
+
+test("validateSubagentParams: single mode with a numeric maxTurns carries it through in the returned value", () => {
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    maxTurns: 5,
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      agent: "scout",
+      task: "find things",
+      maxTurns: 5,
+    },
+  });
+});
+
+test("validateSubagentParams: single mode with a non-number maxTurns drops the field and warns once, leaving the rest of the value intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    maxTurns: "5",
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, { agent: "scout", task: "find things" });
+    assert.ok(!("maxTurns" in result.value), "maxTurns should not be on the returned value");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-number maxTurns");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /maxTurns/);
+});
+
+test("validateSubagentParams: single mode lets numeric maxTurns (0, 101, 2.5) pass through untouched — no warn at this layer (range/integer check lives in resolveMaxTurns)", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  for (const value of [0, 101, 2.5]) {
+    const result = validateSubagentParams({
+      agent: "scout",
+      task: "find things",
+      maxTurns: value,
+    });
+
+    assert.equal(result.ok, true, `expected maxTurns: ${value} to validate ok`);
+    if (result.ok) {
+      assert.deepStrictEqual(
+        result.value,
+        { agent: "scout", task: "find things", maxTurns: value },
+      );
+    }
+  }
+
+  assert.equal(
+    warnSpy.mock.callCount(),
+    0,
+    "validate.ts must not warn about out-of-range or non-integer maxTurns — that lives at the use site",
+  );
+});
+
+test("invocationOverrideOf: a present maxTurns is carried through to the returned override", () => {
+  const result = invocationOverrideOf({ maxTurns: 5 });
+
+  assert.deepStrictEqual(result, { maxTurns: 5 });
+});
+
+test("invocationOverrideOf: input without maxTurns produces no maxTurns key on the returned override", () => {
+  const result = invocationOverrideOf({});
+
+  assert.ok(!("maxTurns" in result));
+});
+
+test("invocationOverrideOf: an explicit undefined maxTurns is treated the same as an absent one, producing no key", () => {
+  const result = invocationOverrideOf({ maxTurns: undefined });
+
+  assert.ok(!("maxTurns" in result));
 });
 
 test("resolveAgents: known agent names resolve to their full AgentConfig entries", () => {
