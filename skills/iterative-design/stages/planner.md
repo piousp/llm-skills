@@ -59,11 +59,12 @@ edits code.
       iteration budget: max 2 attempts). If still malformed but `<!-- BEGIN TECHNICAL -->`
       exists, split at that marker (before = plan, after = technical), strip marker lines, and
       note the anomaly in `$DESIGN_DIR/decisions.md`. Otherwise escalate to the user.
-4. Review both files with the user: surface every load-bearing decision (seam boundaries, chosen
-   approach where multiple were viable, sequencing) and get explicit confirmation before Phase 3
-   starts building against them. Append the chosen approach and rejected alternatives to
-   `$DESIGN_DIR/decisions.md`. User-requested amendments may be applied by the coordinator directly
-   to the two files (they are design docs) or re-delegated if substantial.
+4. Present a synthesis of both files' key findings and decisions in the chat (seam boundaries,
+   chosen approach where multiple were viable, sequencing), then get explicit confirmation before
+   Phase 3 starts building against them (coordinator rule, `SKILL.md`). Append the chosen approach
+   and rejected alternatives to `$DESIGN_DIR/decisions.md`. User-requested amendments may be
+   applied by the coordinator directly to the two files (they are design docs) or re-delegated if
+   substantial.
 5. If the design reveals the goal (Phase 1) was underspecified, stop and go back to Phase 1 rather
    than letting the planner guess.
 

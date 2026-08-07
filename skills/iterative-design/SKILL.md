@@ -23,12 +23,15 @@ freely — files, history, existing code — to understand context and drive the
 **It [MUST NEVER] itself write code, edit tests, run a build/test command, or apply a refactor.**
 Every one of those actions is delegated to one of the subagent roles below. If your harness has no
 subagent/delegation mechanism, say so explicitly before proceeding rather than doing the work
-yourself. **The coordinator never runs a git command that mutates repo state**
+yourself. **The method never depends on version control**: no git commands, no hashes, no commits — freeze bookkeeping is plain text in `$DESIGN_DIR` (per `stages/tdd.md` Freeze).
 
 One explicit carve-out: the coordinator writes and maintains the `$DESIGN_DIR` artifacts
-(`goal.md`, `plan.md`, `technical.md`, `spec.md`, `decisions.md`), including checkpoint hashes
-(e.g. the Phase 3 freeze) — subagents run forked/isolated and return proposals in text, so the
+(`goal.md`, `plan.md`, `technical.md`, `spec.md`, `decisions.md`), including the Phase 3 freeze
+record (per `stages/tdd.md` Freeze)
+— subagents run forked/isolated and return proposals in text, so the
 coordinator alone validates and persists their output.
+
+The coordinator presents a synthesis of every design artifact. Whenever the coordinator writes or updates a design artifact — `$DESIGN_DIR/goal.md`, `plan.md`, `technical.md`, `spec.md`, and every appended entry of `decisions.md` — it must immediately present, in the chat, a concise synthesis of that artifact's key findings/ideas/decisions before asking for the user's confirmation. Never advance with a bare "plan done, continue" (or any equivalent that shows no artifact content): the user must see what the artifact actually says. "Writes or updates" means persisting the output of a delegated role — the planner's returned document split into `plan.md`/`technical.md`, the co-designed spec, the discovery outcome, a decisions entry — it never licenses the coordinator to author design content itself. If the harness has no delegation mechanism, announce it (see the coordinator rule above) and do not write `plan.md`, `technical.md`, or `spec.md` design content on your own: the design happens in the conversation, and persistence waits for what a delegated role produced. The stages reference this rule at each artifact's write point; the rule itself lives here so the references can stay one-liners.
 
 ## Subagent cast
 
@@ -77,14 +80,13 @@ working repo, not the skill dir).
 ## Control flow: `scripts/state.py`
 
 Phase sequencing, gate status, and checkpoint bookkeeping are mechanical — a
-pure function of what's on disk in `$DESIGN_DIR` and git HEAD, not a judgment
+pure function of what's on disk in `$DESIGN_DIR`, not a judgment
 call. Rather than re-deriving "what phase are we in" from context every turn,
-run `python3 <skill-dir>/scripts/state.py next --dir <repo-root> --design-dir
+run `python3 <skill-dir>/scripts/state.py next --design-dir
 $DESIGN_DIR` at phase boundaries (after closing a phase, or when unsure what
-comes next). It reads `$DESIGN_DIR/*.md` and git HEAD **read-only** and
+comes next). It reads `$DESIGN_DIR/*.md` **read-only** and
 prints JSON: `phase`, `next_action`, `actor`, `required_inputs`,
-`gate_status`, `blocked_reason`. `--dir` (repo root) is used only for git
-HEAD — checkpoint hashes always read the real repo, never `$DESIGN_DIR`.
+`gate_status`, `blocked_reason`.
 
 This script is advisory, not enforcing: it never prompts the user, never
 writes anything, and never invokes a subagent itself — it only reports what
@@ -112,10 +114,9 @@ phases — the gate" below.
 
 Before anything else, resolve where this launch's design artifacts live:
 
-1. Run `python3 <skill-dir>/scripts/state.py sessions` (its own `--dir`, if
-   given, only feeds git HEAD lookups for phase derivation — the session key
-   is always `basename(cwd)`, matching step 2 below exactly, never
-   `--dir`/repo root). It lists candidate prior `<PID>/` design dirs under
+1. Run `python3 <skill-dir>/scripts/state.py sessions` (no arguments — the
+   session key is always `basename(cwd)`, matching step 2 below exactly). It
+   lists candidate prior `<PID>/` design dirs under
    that key (mtime + last-derived phase each), read-only — it never prompts
    or picks for you.
 2. If the list is **empty** — this is a fresh launch. Set
@@ -167,7 +168,9 @@ and why, and what was deliberately not done.
 `scripts/state.py` also parses `decisions.md` (and `phase3-green` in particular) to derive
 pipeline state mechanically — this makes four specific strings a **contract**, not just
 audit-trail prose, and drifting from them silently breaks phase detection rather than just the
-record: (1) the `phase3-green` token recorded at the Phase 3 freeze; (2) a gate entry's `## `
+record: (1) the `phase3-green` token recorded at the Phase 3 freeze — that entry must also list
+the files Phase 3 touched (repo-relative paths), which become the Phase 4/5 review scope (see
+`stages/tdd.md` Freeze); (2) a gate entry's `## `
 header must contain both the phase label ("Phase 4" / "Phase 5") and the word "gate" — e.g.
 `## Phase 4 — gate: skip (<date>)`, fitting the general format above; (3) Phase 4's completion
 entry must contain "Phase 4" and either "complete" or "combined review" in its header (see
@@ -184,7 +187,7 @@ user, using exactly this shape, and do nothing until answered:
 
 - **Phase 4 gate**:
 
-  > Phase 3 is green, frozen, and checkpointed at `phase3-green` (commit `<hash>`). Phase 4
+  > Phase 3 is green and frozen — checkpoint `phase3-green` recorded in `$DESIGN_DIR/decisions.md`, frozen tests listed in `$DESIGN_DIR/spec.md`. Phase 4
   > (refactor + one `code-review-checklist` pass) is optional. Run Phase 4, or skip to Phase 5?
   > [run / skip]
 

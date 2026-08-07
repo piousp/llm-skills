@@ -90,10 +90,7 @@ def run_trial() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo)
         (repo / "math_utils.py").write_text("# math utilities\n")
-        subprocess.run(["git", "add", "-A"], cwd=repo)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo)
 
         design_dir = Path(tmp) / "design"
         design_dir.mkdir()
@@ -119,8 +116,11 @@ def run_trial() -> dict:
 
         prompt3 = (
             "Confirmed, the spec looks good. Proceed: delegate this seam to "
-            "code-implementer for the TDD loop (RED then GREEN), and freeze/record "
-            "the phase3-green checkpoint once it's done."
+            "code-implementer for the TDD loop (RED then GREEN), and once it's done "
+            "record the phase3-green freeze without any version control (per "
+            "`stages/tdd.md` Freeze: the `phase3-green` token in "
+            "`$DESIGN_DIR/decisions.md` plus a 'Frozen tests' section in "
+            "`$DESIGN_DIR/spec.md`)."
         )
         tool_calls_3, text_3, stderr_3 = run_pi(repo, prompt3, session)
 
@@ -146,6 +146,9 @@ def run_trial() -> dict:
             "spec_written": artifacts["spec.md"] is not None,
             "phase3_green_recorded": bool(
                 artifacts["decisions.md"] and "phase3-green" in artifacts["decisions.md"].lower()
+            ),
+            "frozen_tests_in_spec": bool(
+                artifacts["spec.md"] and "Frozen tests" in artifacts["spec.md"]
             ),
             "repo_code_changed": "is_even" in repo_code,
             "test_file_exists": len(test_files) > 0,

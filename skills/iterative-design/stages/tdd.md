@@ -23,7 +23,8 @@ correct, minimal, green implementation of agreed seams that already conforms to
    which seams get tested, check placement, reuse, explicit business rules, cohesion, surface
    area. Apply `pablo-code-philosophy` to these choices as you make them — not as a later pass.
    **The coordinator writes the spec to `$DESIGN_DIR/spec.md`** (a design doc — coordinator carve-out
-   applies), not just chat. Confirm the spec with the user before delegating the first seam.
+   applies), not just chat. Present a synthesis of the spec's key decisions in the chat, then
+   confirm the spec with the user before delegating the first seam (coordinator rule, `SKILL.md`).
 3. Before writing anything new, search the codebase (via the coordinator's free exploration, or a
    delegated search subagent) for existing implementations. Flag duplication: "this already exists
    at X — reuse it."
@@ -64,17 +65,17 @@ correct, minimal, green implementation of agreed seams that already conforms to
 ## Freeze
 
 Freeze the test set and persist the test selector in `$DESIGN_DIR/spec.md` (append a "Frozen tests"
-section) — it travels to Phase 4 and Phase 5 as a file, not a chat message. Record the checkpoint
-named `phase3-green` as a **hash read from the existing HEAD** — read-only via `git rev-parse
-HEAD`; never `git commit` or `git tag`. Append that hash and the pre-work base commit (merge-base
-with the main branch, or the commit before Phase 3 began, also read-only) to
-`$DESIGN_DIR/decisions.md` — Phase 4 and Phase 5 diffs are defined relative to these recorded hashes.
-If HEAD has uncommitted changes when freezing, tell the user and ask them to commit or explicitly
-confirm proceeding with an uncommitted checkpoint — never commit on their behalf.
+section) — it travels to Phase 4 and Phase 5 as a file, not a chat message. Then close the
+checkpoint named `phase3-green` **without version control**: append a `## Phase 3 — freeze:
+phase3-green (<date>)` entry to `$DESIGN_DIR/decisions.md` containing the literal token
+`phase3-green`, a one-line reference to the "Frozen tests" selector, and a `- Files touched:` line
+listing every file Phase 3 created or modified (repo-relative paths — the test file(s) and the
+implementation file(s)). No hashes, no git commands, no user question: the freeze is automatic
+once the frozen tests are green and both records are written. Phase 4 and Phase 5 review prompts
+are scoped by this recorded file list, never by diffs.
 
-After recording the `phase3-green` checkpoint hash, apply the **Phase 4 gate** from `SKILL.md` —
-Phase 4 is optional.
-Do not open `stages/refactor.md` without the user's explicit gate answer, recorded in
+After recording the `phase3-green` freeze, apply the **Phase 4 gate** from `SKILL.md` — Phase 4 is
+optional. Do not open `stages/refactor.md` without the user's explicit gate answer, recorded in
 `$DESIGN_DIR/decisions.md`.
 
 ## Exit criteria

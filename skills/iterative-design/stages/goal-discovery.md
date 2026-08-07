@@ -17,4 +17,6 @@ Goal is discovered and 100% understood and unambiguous.
 
 On confirmation, the coordinator writes `$DESIGN_DIR/goal.md` — the original prompt verbatim plus
 the discovery outcome — and seeds `$DESIGN_DIR/decisions.md` with its first entry (goal confirmed,
-plus any load-bearing decisions taken during discovery).
+plus any load-bearing decisions taken during discovery). Then present a synthesis of the discovery
+outcome (key decisions, constraints, facts) in the chat before asking for confirmation (coordinator
+rule, `SKILL.md`).

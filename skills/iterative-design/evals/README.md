@@ -28,6 +28,13 @@ For a coordinator/process skill, "success" is **process fidelity**, not
   by the coordinator.
 - `$DESIGN_DIR` artifacts and `decisions.md`'s append-only format are
   honored as durable files, not chat messages.
+- Freeze-without-git record: the Phase 3 freeze is recorded per
+  `stages/tdd.md` Freeze (plain token entry in `decisions.md` + 'Frozen
+  tests' section in `spec.md` + `- Files touched:` list) — no hashes, no
+  version control.
+- The coordinator synthesis obligation: every design artifact
+  write/update is followed by a chat synthesis of key findings before
+  asking confirmation.
 
 ## A first-class environment finding
 
@@ -49,7 +56,8 @@ end-to-end. See "Known limitations" below.
 
 `test_state.py`: a `unittest` suite over `scripts/state.py` — phase
 derivation (1→2→3), gate detection, the 4 contract strings, and `sessions`
-keying by `basename(cwd)` (never `--dir`). No LLM calls, runs in under a
+keying by `basename(cwd)`; the CLI takes no `--dir` argument. No LLM
+calls, runs in under a
 second, safe to run on every change to `state.py`.
 
 ```bash
@@ -112,6 +120,10 @@ confirmation" rule applies at the Phase 2→3 boundary and again at the
 co-designed spec before delegating a seam), this harness drives a **multi-
 turn** conversation via `--session <path>` across separate `pi` subprocess
 calls — not a single `-p` shot.
+
+The harnesses no longer seed git repos — plain dirs suffice — and the 2b
+pipeline now checks `frozen_tests_in_spec` (the "Frozen tests" section in
+`spec.md`) alongside `phase3_green_recorded`.
 
 Costs real, multi-minute, real-token delegation (planner on fable-5/xhigh,
 implementer on sonnet). Start with N=1 before considering repeated trials:

@@ -82,7 +82,9 @@ def gate_wording_matches_phase4(text: str) -> bool:
     has_phase4 = "phase 4" in low or "fase 4" in low
     has_optional = "optional" in low
     has_phase5_ref = "phase 5" in low or "fase 5" in low
-    return has_phase4 and (has_optional or has_phase5_ref)
+    has_freeze_ref = "frozen" in low or "phase3-green" in low or "checkpoint" in low
+    has_no_hash_ref = "commit" not in low and "hash" not in low
+    return has_phase4 and (has_optional or has_phase5_ref) and has_freeze_ref and has_no_hash_ref
 
 
 def invoked_state_script(tool_calls) -> bool:
@@ -98,10 +100,7 @@ def probe_refuses_without_delegation() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo)
         (repo / "utils.py").write_text("# placeholder\n")
-        subprocess.run(["git", "add", "-A"], cwd=repo)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo)
 
         design_dir = Path(tmp) / "design"
         design_dir.mkdir()
@@ -132,8 +131,6 @@ def probe_gate_wording_faithful() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo)
-        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
 
         design_dir = Path(tmp) / "design"
         design_dir.mkdir()
@@ -163,8 +160,6 @@ def probe_state_derivation_is_mechanical() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo)
-        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
 
         design_dir = Path(tmp) / "design"
         design_dir.mkdir()

@@ -16,8 +16,9 @@ Self-contained prompt; pick the variant matching the Phase 4 gate decision:
 > (e.g. `mde-qa-context` for MDE repos), add: "Additional context lens: `<path>` — read after the
 > main lens."] Frozen tests (Phase 3 artifact): <selector>. Current implementation (after Phase 4's
 > refactor):
-> <path>. Diff since the `phase3-green` checkpoint hash (cumulative Phase 4 diff — the same diff
-> `code-review-checklist` reviewed): <diff or commit range>. QA this change: hunt for correctness
+> <path>. Files this phase touched (cumulative Phase 4 set — the same set `code-review-checklist`
+> reviewed, from the Phase 4 files-touched record in `$DESIGN_DIR/decisions.md`): <explicit
+> list>. QA this change: hunt for correctness
 > bugs, data-handling mistakes, business-rule violations, regressions, and check integration test
 > coverage. Give your PASS or BLOCK verdict with findings.
 
@@ -27,11 +28,8 @@ Self-contained prompt; pick the variant matching the Phase 4 gate decision:
 > stop and report — run no default review. [If the working repo has a domain QA-context skill
 > (e.g. `mde-qa-context` for MDE repos), add: "Additional context lens: `<path>` — read after the
 > main lens."] Frozen tests (Phase 3 artifact): <selector>. Current implementation (Phase 3 output — Phase 4
-> was skipped): <path>. Implementation diff, anchored on the full change since before Phase 3
-> began: `<base>..<phase3-green hash>`, where `<base>` is the pre-work baseline recorded in
-> `$DESIGN_DIR/decisions.md` at the Phase 3 freeze (merge-base with the main branch; if unavailable,
-> the commit before Phase 3 began) — both read-only via `git rev-parse`/`git merge-base`, never a
-> tag or commit created for this purpose — not `<phase3-green hash>..HEAD`, which would be empty.
+> was skipped): <path>. Files Phase 3 touched (the full Phase 3 change set, from the
+> `phase3-green` freeze entry in `$DESIGN_DIR/decisions.md`): <explicit list>.
 > This code
 > has NOT been through the `code-review-checklist` lens — you are its first reviewer. QA
 > this change: hunt for correctness bugs, data-handling mistakes, business-rule violations,
@@ -48,4 +46,5 @@ reversal to `$DESIGN_DIR/decisions.md`. Counts toward the shared iteration budge
 
 On a **PASS** verdict, append `## Phase 5 — complete (<date>)` to `$DESIGN_DIR/decisions.md` —
 `scripts/state.py` keys on this marker to report `phase: "done"`; without it the pipeline keeps
-reporting Phase 5 as active forever. On BLOCK, do NOT write this marker.
+reporting Phase 5 as active forever. Present a synthesis of the verdict and its key findings in
+the chat (coordinator rule, `SKILL.md`). On BLOCK, do NOT write this marker.
