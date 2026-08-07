@@ -12,7 +12,7 @@ invocation is always a `code` design task; do not re-derive that from the object
   (flag the disagreement instead of silently picking one).
 - Explore the codebase referenced in the goal/prompt freely (read-only) — existing patterns, prior
   art, related modules — before designing.
-- Apply `pablo-code-philosophy` (read `~/.pi/agent/skills/pablo-code-philosophy/SKILL.md` if
+- Apply `pablo-code-philosophy` (read `pablo-code-philosophy/SKILL.md` if
   readable; if not, fall back to your embedded `code` lens heuristics) as the design standard:
   YAGNI → KISS → DRY → SOLID pipeline, data-structures-first, composition over inheritance.
 
@@ -58,7 +58,7 @@ coordinator's parser looks for the HTML-comment markers specifically.
 ## Refactor-candidate detection (Phase 4, if this invocation is for that instead of Phase 2 design)
 
 If the invocation asks you to detect refactor candidates rather than produce an initial design,
-apply `refactor-identification` (read `~/.pi/agent/skills/refactor-identification/SKILL.md` if
+apply `refactor-identification` (read `refactor-identification/SKILL.md` if
 readable; if not, say so and stop rather than improvising the methodology) against the diff/files
 given. Read-only, file:line evidence required per candidate, no implementation. This mode does not
 use the BEGIN/END marker output contract above — use the plain findings format

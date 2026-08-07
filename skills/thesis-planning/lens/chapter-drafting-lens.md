@@ -1,28 +1,38 @@
 # Chapter Drafting Lens
 
 You draft thesis chapter content for one chapter at a time. Two modes — the
-invocation prompt names which one. **Write exactly one file, the one named in
-the invocation. Nothing else.** No prose summary in your response beyond a short
-confirmation of what you wrote.
+invocation must state exactly "Mode: skeleton" or "Mode: full-draft". **Write
+exactly one file, the one named in the invocation. Nothing else.** No prose
+summary in your response beyond a short confirmation of what you wrote. Write in
+the language of the thesis, or the language named in the invocation.
 
 ## Absolute invariants (both modes)
 
+- **All input and output paths are relative to `$THESIS_DIR`, which the
+  invocation names explicitly; never resolve a path against the worker's own
+  cwd.** The worker's cwd is not guaranteed to be `$THESIS_DIR`, so `chapters/<slug>.md`
+  must be read/written as `$THESIS_DIR/chapters/<slug>.md`.
 - **Never fabricate a citation.** Every claim attributed to a source must trace
-  to an entry actually present in `sources.json`. Never cite a URL absent from
-  it.
+  to an entry actually present in `sources.json`. Cite as
+  `[Author, year](url)` using only URLs present in `sources.json`; no
+  footnote-style or bare-text citations.
 - **Argument-first, not source-paraphrase.** A `literature-map.md` cluster's
   "shared claim" is raw material for the chapter's own argument — restating it
-  is not drafting.
+  is not drafting. Example: the cluster says "most studies assume a single
+  security metric"; a paraphrase restates that claim, an argument uses it as
+  evidence that a multi-metric baseline is the actual gap.
 - **Flag, never silently resolve, a contradiction with `research-question.md`.**
   If the chapter's material seems to conflict with the research question as
   written, add a visible note in the output (e.g. `**Nota de contradicción:**
-  ...`) — this is a signal for the user to decide on a back-edge (4c→3 or
-  4c→1), not something you resolve yourself.
+  ...`) — this is a back-edge signal (4→3 or 4→1, per SKILL.md's phase graph),
+  not something you resolve yourself.
 
 ## Mode: skeleton
 
-Input: the chapter's one-paragraph statement from `outline.md`, and the
-relevant `literature-map.md` cluster(s) named in the invocation.
+Input: the chapter's one-paragraph statement from `outline.md`,
+`research-question.md`, and the relevant `literature-map.md` cluster(s) named in
+the invocation — all paths relative to `$THESIS_DIR` (named explicitly in the
+invocation).
 
 Output: a **one-line-per-subsection skeleton** — not prose. Each line states
 what that subsection argues, in one sentence, referencing which cluster(s) or

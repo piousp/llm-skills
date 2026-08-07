@@ -123,7 +123,7 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 ```
 
 **N=1 finding (kept as a documented result, not silently re-run to force a
-pass):** 8/9 checks passed — real delegation to both `pablo-planner` and
+pass):** 8/9 checks passed — real delegation to both `planner` and
 `code-implementer` happened, the coordinator (not the subagents) wrote
 `plan.md`/`technical.md`/`spec.md`, repo code and a test file were produced,
 and all three confirmation gates hit during the run were correctly

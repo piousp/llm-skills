@@ -4,7 +4,8 @@ description: >
   Pablo's coordinator method for building code: goal discovery, a planner
   subagent that designs, a mandatory TDD loop, then optional refactor and QA
   phases. Durable design artifacts live in a per-launch temp dir ($DESIGN_DIR),
-  never in the repo.
+  never in the repo. Invoked only by explicit name — never auto-triggered; the
+  description is informational, not a trigger.
 ---
 
 # Iterative Design
@@ -13,6 +14,7 @@ description: >
 
 - **[NEVER] advance to the next phase until the user confirms so**
 - **The user [MUST] understand what the model is doing/about to do at all times**: Always corroborate with the user. Ask questions to validate user's understanding.
+- **This is a preference skill, invoked by explicit name only — never auto-triggered.**
 
 ## The coordinator rule
 
@@ -25,28 +27,19 @@ yourself. **The coordinator never runs a git command that mutates repo state**
 
 One explicit carve-out: the coordinator writes and maintains the `$DESIGN_DIR` artifacts
 (`goal.md`, `plan.md`, `technical.md`, `spec.md`, `decisions.md`), including checkpoint hashes
-(e.g. the Phase 3 freeze). This is ownership of shared durable state, not a document-vs-code
-distinction — subagents run forked/isolated with no view of prior-phase decisions and return
-proposals in text, never truth. The coordinator is the only party with the global view, so it is
-the single writer that validates a subagent's output (e.g. the planner's markers) before
-persisting it.
-
-If marker-parsing from a subagent's text response ever proves fragile in practice, the
-established fallback is role-scoped staging (`$DESIGN_DIR/.staging/planner/`) that the subagent
-writes and the coordinator promotes after validation — keeps single-writer ownership, drops the
-chat round-trip. Not adopted by default; only if `stages/planner.md`'s marker re-delegate/fallback
-proves insufficient.
+(e.g. the Phase 3 freeze) — subagents run forked/isolated and return proposals in text, so the
+coordinator alone validates and persists their output.
 
 ## Subagent cast
 
-Three roles, all running on generic agents (`planner`, `code-implementer`, `analyst`) that carry
+Four roles over three generic agents (`planner`, `code-implementer`, `analyst`) that carry
 no method knowledge of their own — each invocation names its lens file by path (fail-closed: no
-lens, no work) and passes an explicit `model` (plus, where noted, `tools`/`skills`) for the role's
+lens, no work) and passes, where noted, `tools`/`skills` for the role's
 tier. If a named agent isn't available, fall back to the generic role description and delegate
 however your harness does work (a subagent tool, a task/agent call, etc.) — the role is what
 matters, not the syntax.
 
-- **planner** (concrete: **`planner`**, lens: `~/.pi/agent/skills/iterative-design/lens/planner-lens.md`)
+- **planner** (concrete: **`planner`**, lens: `lens/planner-lens.md`)
   — the most capable model/subagent available. Read-only: explores the codebase and designs, but
   never implements. In Phase 2 it returns **one document with two delimited sections** (Plan /
   Technical) that the **coordinator** splits and persists as `$DESIGN_DIR/plan.md` and
@@ -56,8 +49,7 @@ matters, not the syntax.
   which already attempts to load `pablo-code-philosophy` — the invocation's `Lens:` path (this
   method's own lens) carries the output-contract, seam-sizing, and goal-precedence rules on top of
   that; invocation prompts don't need to repeat any of it, only the design inputs (goal,
-  constraints, prior decisions). Pass `model:` the most capable model/subagent your harness offers
-  (nothing else guarantees that tier), `skills: []` (the lens arrives by path, never by skill
+  constraints, prior decisions). Pass `skills: []` (the lens arrives by path, never by skill
   discovery).
 - **implementer** (concrete: **`code-implementer`**, lens: `lens/code-implementer-lens.md`) — writes
   tests and code, applies refactors; the coordinator runs the build/test cycle separately (via
@@ -67,15 +59,20 @@ matters, not the syntax.
   Exactly one mode per invocation, stated in the prompt. `code-implementer` does **not** embed
   `tdd`/`pablo-code-philosophy` in its own system prompt — the lens carries them, so every
   invocation prompt must reference
-  `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md` by path (never repeat the
+  `lens/code-implementer-lens.md` by path (never repeat the
   doctrine inline). Still no git/shell — prompts must pass explicit file lists where the lens
-  requires them. Pass `model: anthropic/claude-sonnet-5`,
-  `tools: ["read","grep","find","ls","write","edit"]`, `skills: []` on every invocation.
-- **code review** (concrete: **`analyst`** + the `~/.pi/agent/skills/code-review-checklist/SKILL.md`
-  lens) — used in Phase 4. `model: anthropic/claude-sonnet-5`, `skills: []`.
-- **qa** (concrete: **`analyst`** + the `~/.pi/agent/skills/qa-adversary/SKILL.md` lens) — used in
-  Phase 5: read-only, never runs tests, never edits. `model: anthropic/claude-opus-4-8`,
-  `skills: []`.
+  requires them. Pass `tools: ["read","grep","find","ls","write","edit"]`, `skills: []` on every
+  invocation.
+- **code review** (concrete: **`analyst`** + the `code-review-checklist/SKILL.md`
+  lens) — used in Phase 4. `skills: []`.
+- **qa** (concrete: **`analyst`** + the `qa-adversary/SKILL.md` lens) — used in
+  Phase 5: read-only, never runs tests, never edits. `skills: []`.
+
+**Path resolution.** All skill-internal paths in this document and its stages/lenses are relative to
+this skill's directory (the dir containing `SKILL.md`), for portability — e.g. `lens/planner-lens.md`,
+`code-review-checklist/SKILL.md`. [ALWAYS] resolve them against that directory before using them, and
+[MUST] pass the resolved absolute path in any delegation prompt sent to a subagent (its cwd is the
+working repo, not the skill dir).
 
 ## Control flow: `scripts/state.py`
 
@@ -135,9 +132,8 @@ Before anything else, resolve where this launch's design artifacts live:
    session: pass it explicitly to every `state.py next --design-dir` call
    and every artifact read/write below.
 
-Note: `$DESIGN_DIR` is keyed by `basename(cwd)` only, not the full repo path
-— two repos sharing a basename collide on the same key. Accepted tradeoff
-(readability over uniqueness), not resolved further.
+Note: `$DESIGN_DIR` is keyed by `basename(cwd)` only — accepted tradeoff (readability over
+uniqueness).
 
 Then, before anything else, set up a durable task list for the phases ahead (Phase 1 through 5,
 plus their sub-steps). If your harness exposes a native TODO/task-tracking tool, use it. If it
@@ -146,19 +142,8 @@ keep it updated as phases and sub-steps complete.
 
 ## The design directory (`$DESIGN_DIR`)
 
-All durable design artifacts this skill controls live in a **per-launch temp directory**, never in
-the repo:
-
-    $DESIGN_DIR = /tmp/iterative-design/<basename(cwd)>/<PPID>
-    (falling back to ${TMPDIR:-/tmp} only if /tmp is unusable)
-
-resolved once in Phase 0 (see above) and reused for the rest of the session. There is no nested
-`.design/` subdir — the files below live directly in `$DESIGN_DIR`. The coordinator creates the
-directory on first write and owns every file in it. Artifacts are files, never chat messages. Being
-outside the repo, `$DESIGN_DIR` is never committed or gitignored — that question doesn't apply
-anymore. Tradeoffs accepted (see Phase 0 for the basename-collision one): a new launch gets a new
-`$PPID` and cannot rediscover a prior session's `$DESIGN_DIR` on its own (mitigated by the
-`sessions` resume-or-fresh prompt, not eliminated); `/tmp` does not survive a reboot.
+Resolved once in Phase 0, then reused for the whole session; the coordinator owns every file in
+it. Artifacts are files, never chat messages.
 
 | File                    | Written by  | When                                                        | Content |
 |-------------------------|-------------|--------------------------------------------------------------|---------|
@@ -180,7 +165,7 @@ a fresh coordinator reading `$DESIGN_DIR` must be able to tell which phases ran,
 and why, and what was deliberately not done.
 
 `scripts/state.py` also parses `decisions.md` (and `phase3-green` in particular) to derive
-pipeline state mechanically — this makes three specific strings a **contract**, not just
+pipeline state mechanically — this makes four specific strings a **contract**, not just
 audit-trail prose, and drifting from them silently breaks phase detection rather than just the
 record: (1) the `phase3-green` token recorded at the Phase 3 freeze; (2) a gate entry's `## `
 header must contain both the phase label ("Phase 4" / "Phase 5") and the word "gate" — e.g.

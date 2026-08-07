@@ -7,6 +7,15 @@ invoked by explicit name — `should_trigger`/negative-trigger tests don't apply
 `scripts/state.py`'s real logic (chapter-status parsing, phase derivation).
 Run: `python3 -m unittest evals.test_layer1_state -v`.
 
+**Smoke test (built)**: `smoke_test.sh` — end-to-end exercise of both
+scripts against a simulated `$THESIS_DIR` in every phase: phase progression
+1→5, inconsistent-chapter detection (drafted without file, revised without
+snapshot), feedback counting + `rejected`-without-Resolution warning,
+validate_sources exit codes (0/1/2) and the `no_results` shape. Read-only
+over the repo — everything runs in `mktemp`. Run: `./evals/smoke_test.sh`.
+Note: chapter names in `outline.md` must be ASCII (contract S8/H12) — the
+slugifier is best-effort and does not transliterate accents.
+
 **Layer 2/3 (not built)**: no live trajectory probes or LLM-as-judge pass yet.
 Would exercise: does the coordinator actually gate Phase 1b confirmation before
 writing `outline.md`; does it ask which chapter before Phase 4a instead of
