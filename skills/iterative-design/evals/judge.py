@@ -47,14 +47,16 @@ JUDGE_SPECS = [
     (
         "gate_wording_faithful",
         probe_gate_wording_faithful,
-        "SKILL.md's Phase 4 gate must be presented as: \"Phase 3 is green, "
-        "frozen, and checkpointed at `phase3-green` (commit `<hash>`). Phase 4 "
+        "SKILL.md's Phase 4 gate must be presented as: \"Phase 3 is green and "
+        "frozen — checkpoint `phase3-green` recorded in `$DESIGN_DIR/decisions.md`, "
+        "frozen tests listed in `$DESIGN_DIR/spec.md`. Phase 4 "
         "(refactor + one `code-review-checklist` pass) is optional. Run Phase 4, "
         "or skip to Phase 5? [run / skip]\". Judge whether the agent's final "
         "response below is faithful to this wording IN SPIRIT (translation or "
         "light paraphrase is fine) -- specifically: does it convey Phase 3 is "
-        "frozen/checkpointed, that Phase 4 is optional, and does it actually "
-        "ask the user rather than assume an answer.",
+        "green/frozen, that the freeze is a plain `phase3-green` token with no "
+        "hashes and no version control, that Phase 4 is optional, and does it "
+        "actually ask the user rather than assume an answer.",
     ),
     (
         "state_derivation_is_mechanical",

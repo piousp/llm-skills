@@ -6,7 +6,7 @@ Covers the phase-derivation contract the skill itself calls load-bearing:
 - The 4 contract strings: `phase3-green`, gate headers (phase label + "gate"),
   Phase 4 completion ("complete"/"combined review"), Phase 5 completion
   ("complete").
-- `sessions` keyed by basename(cwd), never by --dir/repo_root.
+- `sessions` keyed by basename(cwd); the CLI takes no `--dir`.
 - decisions.md gate-block isolation (an incidental "Phase 4" mention in prose
   must not be mistaken for the gate's own entry).
 
@@ -14,6 +14,8 @@ Run: python3 -m unittest evals.test_state -v   (from the skill's root dir)
   or: python3 evals/test_state.py
 """
 import importlib.util
+import io
+import json
 import sys
 import tempfile
 import unittest
@@ -34,7 +36,6 @@ class DeriveStateTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.design_dir = Path(self._tmp.name) / "design"
         self.design_dir.mkdir()
-        self.repo_root = Path(self._tmp.name)  # no .git -> git_head() returns None, fine
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -43,7 +44,7 @@ class DeriveStateTests(unittest.TestCase):
         (self.design_dir / name).write_text(content, encoding="utf-8")
 
     def next(self):
-        return state.derive_state(self.repo_root, self.design_dir)
+        return state.derive_state(self.design_dir)
 
     # --- phase 1 -> 2 -> 3 ---
 
@@ -86,6 +87,40 @@ class DeriveStateTests(unittest.TestCase):
         self.write("decisions.md", "phase3-green at abc123\n")
         s = self.next()
         self.assertEqual(s["phase"], 3)
+
+    def test_phase3_state_has_no_git_head_field(self):
+        # Guard: the git_head key is gone from every phase dict, including
+        # the phase-3 dict that used to carry it.
+        for f in ("goal.md", "plan.md", "technical.md"):
+            self.write(f)
+        s = self.next()
+        self.assertNotIn("git_head", s)
+
+    def test_git_head_removed_from_module(self):
+        # Guard: the git_head helper itself is gone from the module.
+        self.assertFalse(hasattr(state, "git_head"))
+
+    # --- CLI ---
+
+    def test_next_cli_design_dir_only_returns_zero_and_no_git_head(self):
+        # CLI contract: `next --design-dir <dir>` exits 0 and the printed
+        # JSON has no git_head key (the phase-3 dict used to carry it).
+        for f in ("goal.md", "plan.md", "technical.md"):
+            self.write(f)
+        with mock.patch("sys.argv", ["state.py", "next", "--design-dir", str(self.design_dir)]), \
+             mock.patch("sys.stdout", io.StringIO()) as stdout:
+            rc = state.main()
+        self.assertEqual(rc, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertNotIn("git_head", payload)
+
+    def test_next_cli_rejects_dir_flag(self):
+        # `--dir` no longer exists on `next`: argparse must reject it with
+        # SystemExit rather than accept it silently.
+        with mock.patch("sys.argv", ["state.py", "next", "--dir", ".", "--design-dir", str(self.design_dir)]), \
+             mock.patch("sys.stdout", io.StringIO()):
+            with self.assertRaises(SystemExit):
+                state.main()
 
     # --- Phase 4 gate ---
 
@@ -293,24 +328,28 @@ class SessionsTests(unittest.TestCase):
         self._os.chdir(self._orig_cwd)
         self._tmp.cleanup()
 
-    def test_sessions_keyed_by_basename_cwd_not_dir_arg(self):
+    def test_sessions_keyed_by_basename_cwd(self):
         base = self._tmp_root / "iterative-design" / "myrepo"
         pid_dir = base / "12345"
         pid_dir.mkdir(parents=True)
         (pid_dir / "goal.md").write_text("x")
 
-        # --dir points somewhere unrelated; the session key must still be
-        # basename(cwd) == "myrepo", never derived from --dir.
-        unrelated_dir = self._tmp_root / "unrelated-repo-name"
-        unrelated_dir.mkdir()
-        sessions = state.list_sessions(unrelated_dir)
+        # The key is always basename(cwd) == "myrepo": a session under a
+        # different basename key must not be listed, and there is no --dir
+        # to override the key.
+        other_base = self._tmp_root / "iterative-design" / "other-repo"
+        other_pid_dir = other_base / "99999"
+        other_pid_dir.mkdir(parents=True)
+        (other_pid_dir / "goal.md").write_text("x")
+
+        sessions = state.list_sessions()
 
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0]["pid"], "12345")
         self.assertEqual(sessions[0]["phase"], 2)  # goal.md exists, plan/technical don't
 
     def test_sessions_empty_when_no_prior_launches(self):
-        sessions = state.list_sessions(self._tmp_root)
+        sessions = state.list_sessions()
         self.assertEqual(sessions, [])
 
     def test_sessions_sorted_newest_first(self):
@@ -324,8 +363,28 @@ class SessionsTests(unittest.TestCase):
         newer.mkdir(parents=True)
         (newer / "goal.md").write_text("x")
 
-        sessions = state.list_sessions(self._tmp_root)
+        sessions = state.list_sessions()
         self.assertEqual([s["pid"] for s in sessions], ["222", "111"])
+
+    # --- CLI ---
+
+    def test_sessions_cli_no_args_returns_zero(self):
+        # CLI contract: `sessions` with no arguments exits 0 and prints the
+        # candidate list as JSON (keyed by basename(cwd); no --dir to
+        # override the key).
+        with mock.patch("sys.argv", ["state.py", "sessions"]), \
+             mock.patch("sys.stdout", io.StringIO()) as stdout:
+            rc = state.main()
+        self.assertEqual(rc, 0)
+        self.assertIsInstance(json.loads(stdout.getvalue()), list)
+
+    def test_sessions_cli_rejects_dir_flag(self):
+        # `--dir` no longer exists on `sessions`: argparse must reject it
+        # with SystemExit.
+        with mock.patch("sys.argv", ["state.py", "sessions", "--dir", "."]), \
+             mock.patch("sys.stdout", io.StringIO()):
+            with self.assertRaises(SystemExit):
+                state.main()
 
 
 if __name__ == "__main__":
