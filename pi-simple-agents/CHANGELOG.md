@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0 — 2026-08-07
+
+- **Requires pi `>= 0.83`.** The SDK renamed `CreateAgentSessionOptions.modelRegistry` to
+  `modelRuntime`; this plugin now requires the new shape. This is a hard cut — no dual-version
+  support for older pi releases.
+- **`peerDependencies` floor raised to `>=0.84.1`** for `@earendil-works/pi-coding-agent` and
+  `@earendil-works/pi-tui` (previously `*`). Breaking for consumers pinned below that version.
+- **Behavior change: subagents now share one `ModelRuntime`, constructed once when the
+  extension loads,** instead of a registry object that was silently ignored by the SDK on pi
+  >=0.83 (i.e. this fixes a real bug, not just a type error — subagents were already
+  unknowingly building their own runtime from disk on affected pi versions; now that's explicit
+  and shared instead of ignored). If `ModelRuntime.create()` fails at load, the `subagent` tool
+  still registers but every invocation returns a clear "failed to initialize model runtime: ..."
+  error until `/reload`.
+- **User-facing caveat: a `/login` performed after this extension loads is not picked up by
+  subagents until `/reload`** (the extension's `ModelRuntime` snapshot is frozen at load time).
+  This same frozen snapshot is also used for model-name resolution (`getModel`, the
+  `provider/modelId` lookup path), so a provider or model that only became available after load
+  won't resolve until `/reload` either.
+
 ## 0.10.0 — 2026-08-06
 
 - **`maxTurns` is no longer inert — it is a real per-agent turn limit, configurable at every

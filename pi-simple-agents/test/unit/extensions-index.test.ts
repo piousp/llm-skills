@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DefaultResourceLoader, type ExtensionAPI, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { DefaultResourceLoader, type ExtensionAPI, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import extensionFactory, { runSingleTask, SubagentParams } from "../../extensions/index.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
@@ -16,14 +16,14 @@ function textOf(component: unknown): string {
   return (component as { text: string }).text;
 }
 
-async function loadExtension(): Promise<any> {
+async function loadExtension(createModelRuntime?: () => Promise<ModelRuntime>): Promise<any> {
   let captured: any;
   const fakePi = {
     registerTool: (cfg: any) => {
       captured = cfg;
     },
   } as unknown as ExtensionAPI;
-  await extensionFactory(fakePi);
+  await extensionFactory(fakePi, createModelRuntime);
   return captured;
 }
 
@@ -133,7 +133,7 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
       runSingleTask({ agent: "scout", task: "do it" }, agent, 0, tracker, {
         cwd: process.cwd(),
         signal: undefined,
-        modelRegistry: {} as unknown as ModelRegistry,
+        modelRuntime: {} as unknown as ModelRuntime,
         callerSessionFile: undefined,
       }),
     /reload failed/,
@@ -141,4 +141,54 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
 
   assert.equal(doneSpy.mock.callCount(), 1);
   assert.deepEqual(doneSpy.mock.calls[0].arguments, [0]);
+});
+
+// (g)
+// Mechanism note: runSingleTask's getModel closure delegates straight to
+// modelRuntime.getModel(provider, modelId) (RF-2). To observe that call
+// without triggering a real session/network call, resourceLoader.reload()
+// is mocked to resolve (same idiom as the (e) test above, success instead
+// of rejection, so the flow proceeds far enough to reach the closure) and
+// the fake getModel throws right after recording its arguments — the throw
+// is caught by runAgentViaSdk's own try/catch (src/run.ts), settling the
+// run as an error result before options.createSession is ever invoked.
+test("runSingleTask: getModel resolver calls modelRuntime.getModel with the parsed provider and modelId", async (t) => {
+  t.mock.method(DefaultResourceLoader.prototype, "reload", () => Promise.resolve());
+
+  const agent = makeAgent({ model: "anthropic/claude-fable-5" });
+  const captured: Array<[string, string]> = [];
+  const fakeModelRuntime = {
+    getModel: (provider: string, modelId: string) => {
+      captured.push([provider, modelId]);
+      throw new Error("stop before session creation");
+    },
+  } as unknown as ModelRuntime;
+
+  await runSingleTask({ agent: "scout", task: "do it" }, agent, 0, undefined, {
+    cwd: process.cwd(),
+    signal: undefined,
+    modelRuntime: fakeModelRuntime,
+    callerSessionFile: undefined,
+  });
+
+  assert.deepEqual(captured, [["anthropic", "claude-fable-5"]]);
+});
+
+// (f)
+test("execute: when ModelRuntime.create() rejects, the tool still registers and every invocation returns a clear error", async () => {
+  const captured = await loadExtension(() => Promise.reject(new Error("boom")));
+
+  assert.ok(captured);
+
+  const result = await captured.execute(
+    "call-3",
+    { agent: "scout", task: "find things" },
+    undefined,
+    undefined,
+    { cwd: process.cwd() },
+  );
+
+  assert.equal(result.isError, true);
+  const text = result.content[0].text as string;
+  assert.match(text, /failed to initialize model runtime/);
 });

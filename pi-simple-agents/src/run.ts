@@ -109,11 +109,11 @@ export function mapWithConcurrencyLimit<TIn, TOut>(
 
 type CreateSessionOpts = Pick<
   CreateAgentSessionOptions,
-  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
+  "modelRuntime" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
 >;
 
 export interface RunAgentViaSdkOptions {
-  modelRegistry: CreateAgentSessionOptions["modelRegistry"];
+  modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
   createSession: (opts: CreateSessionOpts) => Promise<Pick<CreateAgentSessionResult, "session">>;
   resourceLoader: CreateAgentSessionOptions["resourceLoader"];
   sessionManager: CreateAgentSessionOptions["sessionManager"];
@@ -222,7 +222,7 @@ export function runAgentViaSdk(
           : undefined;
 
         const { session: agentSession } = await options.createSession({
-          modelRegistry: options.modelRegistry,
+          modelRuntime: options.modelRuntime,
           model,
           thinkingLevel,
           tools: agent.tools,

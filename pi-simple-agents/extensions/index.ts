@@ -9,7 +9,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
-import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../src/agents.ts";
 import { applyInvocationOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
@@ -17,12 +17,12 @@ import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "..
 import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents, normalizeTasks, invocationOverrideOf } from "../src/validate.ts";
-import type { TaskEntry } from "../src/validate.ts";
+import type { TaskEntry, ValidationResult } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
 import { buildLoaderOptions } from "../src/loader-config.ts";
 import { createSubagentSessionManager } from "../src/subagent-session.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
-import { emitWarnings } from "../src/warn.ts";
+import { emitWarnings, toErrorMessage } from "../src/warn.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
 const SUBAGENT_SESSIONS_DIR = path.join(os.homedir(), ".pi/agent/sessions/subagents");
@@ -134,7 +134,7 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 interface RunTasksOptions {
   cwd: string;
   signal: AbortSignal | undefined;
-  modelRegistry: ModelRegistry;
+  modelRuntime: ModelRuntime;
   callerSessionFile: string | undefined;
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined;
   concurrency: number;
@@ -150,7 +150,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: Omit<RunTasksOptions, "onUpdate" | "concurrency">,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRegistry, callerSessionFile } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
 
   try {
@@ -170,12 +170,12 @@ export async function runSingleTask(
       effectiveAgent,
       t.task,
       {
-        modelRegistry,
+        modelRuntime,
         signal,
         createSession: createAgentSession,
         resourceLoader,
         sessionManager: manager,
-        getModel: (provider, modelId) => modelRegistry.find(provider, modelId),
+        getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
         onToolEvent: tracker ? (event) => tracker.onToolEvent(index, event) : undefined,
       },
     );
@@ -195,14 +195,14 @@ async function runTasks(
   resolvedAgents: AgentConfig[],
   options: RunTasksOptions,
 ): Promise<AgentRunResult[]> {
-  const { cwd, signal, modelRegistry, callerSessionFile, onUpdate, concurrency } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, onUpdate, concurrency } = options;
 
   const tracker = onUpdate
     ? createProgressTracker(tasks.map((t) => t.agent), (details) => onUpdate({ content: [], details }))
     : undefined;
 
   return mapWithConcurrencyLimit(tasks, concurrency, (t, index) =>
-    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRegistry, callerSessionFile }),
+    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRuntime, callerSessionFile }),
   );
 }
 
@@ -227,7 +227,17 @@ function renderSubagentResult(
   return new Text(content ? theme.fg("toolOutput", content) : "", 0, 0);
 }
 
-export default async function (pi: ExtensionAPI): Promise<void> {
+export default async function (
+  pi: ExtensionAPI,
+  createModelRuntime: () => Promise<ModelRuntime> = () => ModelRuntime.create(),
+): Promise<void> {
+  let modelRuntimeResult: ValidationResult<ModelRuntime>;
+  try {
+    modelRuntimeResult = { ok: true, value: await createModelRuntime() };
+  } catch (error) {
+    modelRuntimeResult = { ok: false, error: toErrorMessage(error) };
+  }
+
   const { agents } = await registry.load(process.cwd());
   const description = buildSubagentToolDescription(agents);
   pi.registerTool({
@@ -238,6 +248,10 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     renderCall: renderSubagentCall,
     renderResult: renderSubagentResult,
     execute: async (_toolCallId, rawParams, signal, onUpdate, ctx) => {
+      if (!modelRuntimeResult.ok) {
+        return errorResult(`failed to initialize model runtime: ${modelRuntimeResult.error}`);
+      }
+
       const parsedParams = validateSubagentParams(rawParams);
       if (!parsedParams.ok) {
         return errorResult(parsedParams.error);
@@ -254,7 +268,7 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       const results = await runTasks(tasks, resolved.value, {
         cwd: ctx.cwd,
         signal,
-        modelRegistry: ctx.modelRegistry,
+        modelRuntime: modelRuntimeResult.value,
         callerSessionFile: ctx.sessionManager.getSessionFile(),
         onUpdate,
         concurrency,

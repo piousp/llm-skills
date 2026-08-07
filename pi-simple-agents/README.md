@@ -453,6 +453,15 @@ in this repository.
   see [Concurrency](#concurrency)); it can never exceed the 8-task-per-call limit above.
 - Agents run inside a pi SDK session with proper resource handling, context management, and cleanup.
 
+## Known limitations
+
+- Subagents share a `ModelRuntime` snapshot taken when the extension loads. This affects two
+  things: (a) performing `/login` later in the same session requires running `/reload` before
+  subagents will see the new credentials, and (b) resolving an agent's `model: "provider/modelId"`
+  config value against a provider or model that only became available after extension load (e.g.
+  a provider registered after load, or a newly available model) also won't resolve until
+  `/reload` — both share the same frozen `ModelRuntime` snapshot.
+
 ## For developers
 
 If you're integrating `pi-simple-agents` programmatically (importing its internal functions,
