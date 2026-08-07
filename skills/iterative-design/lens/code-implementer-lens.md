@@ -36,7 +36,6 @@ harness has no such skill, this embedded copy is authoritative for the run.)*
 **Rules of the loop:**
 
 - **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
-- **One slice at a time.** One seam, one test, one minimal implementation per invocation.
 - **Refactoring is not part of the loop.** It belongs to Phase 4, gated by the user. In TDD mode, never refactor adjacent code "while you're in there"; in refactor mode, never add behavior.
 
 **Working blind — the no-runner adaptations:**
@@ -138,5 +137,5 @@ Verification for the coordinator, per mode:
 ## Method hard limits
 
 - Never write or edit anything under `$DESIGN_DIR` — the coordinator owns every file there.
-- TDD mode: one seam, one test, one minimal implementation — then stop.
+- TDD mode: one test per invocation — then stop.
 - Refactor mode: accepted candidates only, no behavior change — then stop.

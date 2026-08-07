@@ -54,16 +54,15 @@ selects or adjudicates on the user's behalf.
 
 | Phase | Delegate to | Why |
 |---|---|---|
-| 1a (recon) | `web-scout` + `Lens: skills/thesis-planning/lens/literature-scout-lens.md` (by path, named in the invocation prompt), 2–4 parallel tasks (one per research axis, always incl. feasibility, max 5 sources each) | Mechanical, parallelizable, context-free. Lens mode overrides `web-scout`'s default "no metadata, 1 read" behavior with the bibliography schema + one-read-per-reported-source rule; the agent's own 10-call abort ceiling and no-fabrication invariant still apply |
+| 1a (recon) | `web-scout` + `Lens: lens/literature-scout-lens.md` (by path, named in the invocation prompt), 2–4 parallel tasks (one per research axis, always incl. feasibility, max 5 sources each) | Mechanical, parallelizable, context-free. Lens mode overrides `web-scout`'s default "no metadata, 1 read" behavior with the bibliography schema + one-read-per-reported-source rule; the agent's own 10-call abort ceiling and no-fabrication invariant still apply |
 | 1a (validation) | `scripts/validate_sources.py`, coordinator runs it, never a subagent | Deterministic; rejects malformed records, quarantines unverified ones, before anything is persisted |
 | 1b (research question) | `planner` proposes 2–4 candidate framings from `sources-initial.md` (read-only); **user selects**; coordinator persists | Proposal generation is delegable; selection isn't |
 | 1b (optional) | `critical-thinker` stress-tests the *selected* question before the gate closes | Adversarial pressure on a decision already made, not a substitute for making it |
 | 2 (gap-filling sources) | Same `literature-scout-lens.md` delegation + validation as 1a | Same as 1a |
 | 2 (thematic clustering) | `analyst` first-pass proposal is advisory input; **user + coordinator confirm** the map | Clustering is interpretive; proposing it is delegable, finalizing it isn't |
 | 3 (outline) | `planner` proposes candidate outlines/decompositions; **user selects**; coordinator persists | Same pattern as 1b |
-| 4a (chapter skeleton) | `worker` + `lens/chapter-drafting-lens.md` (skeleton mode, by path); writes `chapters/<slug>.skeleton.md` directly — one file, nothing else | Proposal generation is delegable, same as 1b/3 |
+| 4a/4b (skeleton → draft) | `worker` + `lens/chapter-drafting-lens.md` (Mode: skeleton / Mode: full-draft, named by path; all paths relative to `$THESIS_DIR`, named explicitly in the invocation); writes directly to `$THESIS_DIR/chapters/` | Proposal generation and drafting are delegable, same as 1b/3. Contradictions with `research-question.md` are flagged for the user, never silently resolved |
 | 4a (gate) | **User confirms/edits the skeleton** before full drafting starts | Selection at a gate is never delegated |
-| 4b (full chapter draft) | `worker` + `lens/chapter-drafting-lens.md` (full-draft mode, by path); reads the confirmed skeleton + `outline.md` + `literature-map.md` + `sources.json`; writes `chapters/<slug>.md` directly | Drafting is delegable — see rationale above. Contradictions with `research-question.md` are flagged for the user, never silently resolved by the drafter |
 | 4c (feedback logging) | Coordinator persists reviewer comments verbatim into `chapters/<slug>.feedback.md` or `feedback-general.md` | Mechanical transcription, not judgment |
 | 4c (adjudication) | **Not delegated** — coordinator + user mark each entry `addressed`/`rejected` (with reason) | The user's judgment on whether their own response satisfies the reviewer |
 | 5 (reverse outline) | `analyst`, read-only | An agent that didn't write the chapter is better at spotting drift from stated intent |
@@ -96,6 +95,10 @@ Artifacts live inside the thesis project directory, not `/tmp` — unlike code
 design docs, these are the user's actual long-lived work product (spans months,
 must survive reboots).
 
+Lens paths in delegations are named relative to the skill's own root
+(`lens/<name>.md`) — always that form, never a path rooted at `skills/` or a
+bare filename.
+
 ## Phase 1a — delegated recon
 
 - Delegate to `web-scout`: 2–4 parallel tasks, each covering one research axis (e.g.
@@ -106,7 +109,7 @@ must survive reboots).
   legal/access constraints? Skipping this axis produces a question that looks
   answerable on paper but isn't once Phase 1b tries to scope it.
 - Invoke `web-scout` with the lens named by path in the task prompt (`Lens:
-  skills/thesis-planning/lens/literature-scout-lens.md`) — the lens carries the
+  lens/literature-scout-lens.md`) — the lens carries the
   structured-output schema (`url`, `doi`, `title`, `authors`, `abstract`,
   `keywords`, `relevance`, `relevance_reason`, `verified_by_read`) and the
   one-`web_read`-per-source rule. No `tools:` override needed — `web-scout`
@@ -114,17 +117,20 @@ must survive reboots).
 - Coordinator runs `scripts/validate_sources.py` on the returned JSON before
   persisting anything. Malformed records are rejected; records with
   `verified_by_read: false` are quarantined, never silently kept as verified.
+- If validation reports `no_results` (web-scout's legitimate empty-axis shape),
+  record the note verbatim and either split the axis into narrower queries or
+  proceed with zero new sources — an empty axis is a valid outcome, not an error.
 - `$THESIS_DIR/sources.json` is the machine-readable source of truth;
   `sources-initial.md` is generated from it for human reading — don't
   hand-maintain both, they drift.
 
-## Phase 1b — research question (not delegated)
+## Phase 1b — research question (selection not delegated)
 
-- From Phase 1a's output, coordinator + user formulate `research-question.md`: the
-  specific question the thesis answers, why it's a gap, and why it's answerable
-  with available sources.
-- Offer 2–3 concrete phrasings at different scopes — let the user pick or steer.
-  Never pick for them.
+- Delegate proposal generation to `planner`: 2–4 candidate phrasings from
+  `sources-initial.md` at different scopes — let the user pick or steer. The
+  coordinator never generates the phrasings itself (see the [NEVER] rule).
+- Coordinator + user formulate `research-question.md`: the specific question the
+  thesis answers, why it's a gap, and why it's answerable with available sources.
 - **Gate**: the user confirms the question is answerable and scoped before Phase 2
   starts. Do not proceed on an implicit or partial confirmation.
 
@@ -158,11 +164,15 @@ must survive reboots).
 - **Never implicit "next chapter."** Ask the user which chapter to draft.
   Chapters can be drafted out of order — drafting one must never require another
   chapter to already exist.
-- Delegate to `worker` + `lens/chapter-drafting-lens.md` (skeleton mode, named by
-  path in the prompt): from the chapter's paragraph in `outline.md` and the
-  relevant `literature-map.md` cluster(s), propose a one-line-per-subsection
-  skeleton. The agent writes `chapters/<slug>.skeleton.md` directly — exactly
-  that one file, nothing else.
+- Delegate to `worker` + `lens/chapter-drafting-lens.md`
+  (Mode: skeleton, named by path in the prompt): from the chapter's paragraph in
+  `outline.md`, `research-question.md`, and the relevant `literature-map.md`
+  cluster(s) — all paths relative to `$THESIS_DIR` (named explicitly in the
+  invocation) — propose a one-line-per-subsection skeleton. The agent writes
+  `chapters/<slug>.skeleton.md` under `$THESIS_DIR` directly — exactly that one
+  file, nothing else.
+- If the skeleton's material conflicts with `research-question.md`, the agent
+  flags it (visible note), never resolves it silently.
 - **Gate**: the user confirms or edits the skeleton before Phase 4b starts. This
   is the layer Snowflake and Ahrens both use to bridge "one paragraph of intent"
   to "full prose" — dogfooding found it missing when this skill first shipped
@@ -171,17 +181,27 @@ must survive reboots).
 
 ## Phase 4b — full chapter draft (delegated)
 
-- Delegate to `worker` + `lens/chapter-drafting-lens.md` (full-draft mode, named
-  by path): reads the confirmed skeleton, `outline.md`'s paragraph,
-  `literature-map.md`'s relevant cluster(s), and `sources.json`. Argument-first,
-  not source-paraphrase — a cluster's "shared claim" is raw material for the
-  chapter's own argument, not text to restate. Never cite a URL absent from
-  `sources.json`. The agent writes `chapters/<slug>.md` directly — exactly that
-  one file, nothing else; the coordinator verifies the file exists before
-  flipping status.
+- Delegate to `worker` + `lens/chapter-drafting-lens.md`
+  (Mode: full-draft, named by path): reads the confirmed skeleton (state in the
+  invocation that it is confirmed), `outline.md`'s paragraph,
+  `literature-map.md`'s relevant cluster(s), `research-question.md`, and
+  `sources.json` — all paths relative to `$THESIS_DIR` (named explicitly in the
+  invocation). Argument-first, not source-paraphrase — a cluster's "shared
+  claim" is raw material for the chapter's own argument, not text to restate.
+  Never cite a URL absent from `sources.json`; citations use
+  `[Author, year](url)`. The agent writes `chapters/<slug>.md` under
+  `$THESIS_DIR` directly — exactly that one file, nothing else. Optionally add
+  `verification reads allowed` to the invocation if claims need checking
+  against sources already in `sources.json`. The coordinator verifies the file
+  exists and spot-checks 2–3 claims trace to `sources.json` and argue the
+  chapter's position rather than restating cluster claims, before flipping
+  status.
 - If the draft surfaces a contradiction with `research-question.md`, the drafter
   flags it in the file (a visible note) rather than silently resolving it — that
   is a back-edge signal for the user, not the drafter's call.
+- Before flipping status to `drafted`, verify no other files were created or
+  modified in `$THESIS_DIR` (e.g. `git status` if the project is versioned, or
+  compare a file listing captured before the delegation).
 - Update `outline.md`'s status to `drafted` once the file exists and the
   coordinator has verified it.
 - If drafting exposes an outline problem, go back to Phase 3. If it exposes a
@@ -200,11 +220,14 @@ where reviewer/tutor feedback gets a durable, traceable home.
   field, so don't drift from this shape):
 
   ```
-  ## <date> | <reviewer> | <version, e.g. v01> | <open|addressed|rejected>
+  ## YYYY-MM-DD | <reviewer> | vNN | <open|addressed|rejected>
   Scope: <section, or "general">
   Comment: <verbatim, the reviewer's own words>
   Resolution: <empty while open; required one-line reason if rejected>
   ```
+  Date is ISO (`YYYY-MM-DD`), version zero-padded (`v01`). `scripts/state.py`
+  only counts headers matching exactly this shape — a header out of this shape
+  is silently ignored, so the coordinator must not drift from it.
 
 - **Adjudication is never delegated.** The coordinator transcribes a comment
   verbatim (mechanical), but marking it `addressed` or `rejected` — and writing
@@ -240,6 +263,10 @@ where reviewer/tutor feedback gets a durable, traceable home.
 
 Run `python3 <skill-dir>/scripts/state.py --dir $THESIS_DIR` to check which
 artifacts exist and what chapters remain, instead of re-deriving it from context.
+Name chapter files with the ASCII slug `state.py` derives from the outline name
+(accents and punctuation become `-`, e.g. `Marco conceptual` →
+`marco-conceptual.md`); a filename that deviates from that slug shows up as a
+spurious `inconsistent` warning.
 It is read-only and advisory — it never writes, never prompts, never picks a phase
 for you. It has no git dependency (unlike `iterative-design`'s `state.py`): thesis
 state is artifact existence and chapter status, not commit history.

@@ -3,13 +3,13 @@
 Optional phase — enter only on an explicit "run" at the Phase 4 gate (`SKILL.md`), with the
 answer already recorded in `$DESIGN_DIR/decisions.md`. If the user chose "skip", none of this file
 runs: no candidates, no simplification, no combined review pass — Phase 5 (if run) diffs
-directly from the `phase3-green` tag.
+directly from the `phase3-green` checkpoint hash.
 
 Single refactor phase over the green implementation (Phase 3). The **planner** detects candidates
 (read-only); the **implementer** applies them and simplifies (delegate to **`code-implementer`**,
-`Mode: refactor`, with `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md` as its lens;
-`model: "anthropic/claude-sonnet-5"`, `tools: ["read", "grep", "find", "ls", "write", "edit"]`,
-`skills: []` per invocation — see `stages/tdd.md` step 4 for why, same reinforcement rule); one
+`Mode: refactor`, with `lens/code-implementer-lens.md` as its lens;
+`tools: ["read", "grep", "find", "ls", "write", "edit"]`, `skills: []` per invocation — see
+`SKILL.md`'s Subagent cast for why, same reinforcement rule); one
 frozen-test re-run and one combined review pass (**`analyst`** applying the `code-review-checklist`
 skill) close the phase.
 
@@ -20,12 +20,11 @@ skill) close the phase.
 
 ## How to run
 
-1. **Detect.** Delegate to the **`planner`** subagent (`model:` the most capable model/subagent
-   your harness offers, `skills: []`) to run `refactor-identification`
+1. **Detect.** Delegate to the **`planner`** subagent (`skills: []`) to run `refactor-identification`
    (read-only) against the green implementation and the frozen tests (Phase 3 artifacts) — do not
    modify tests. Self-contained prompt:
 
-   > Lens: read and apply `~/.pi/agent/skills/iterative-design/lens/planner-lens.md` before analyzing;
+   > Lens: read and apply `lens/planner-lens.md` before analyzing;
    > if you cannot read it, make no changes and say so. This invocation is the lens's
    > refactor-candidate detection mode, not initial design.
    >
@@ -46,7 +45,7 @@ skill) close the phase.
    over inheritance, low complexity) as it goes. No behavior change. Compartmentalize: apply
    **the first bucket only**, then stop at a checkpoint for review. Prompt:
 
-   > Mode: refactor. Lens: ~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md. Accepted
+   > Mode: refactor. Lens: lens/code-implementer-lens.md. Accepted
    > candidates (user-approved, file:line evidence each): <paste>. Frozen tests (do not modify):
    > <selector>. Simplification pass: NOT in scope for this invocation. Apply the first bucket
    > only, then stop.
@@ -57,7 +56,7 @@ skill) close the phase.
    standalone refactor-mode invocation — the prompt must explicitly list the files this phase
    touched (it cannot compute that itself, no git/shell). Prompt:
 
-   > Mode: refactor. Lens: ~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md. No
+   > Mode: refactor. Lens: lens/code-implementer-lens.md. No
    > candidates in this invocation — standalone simplification pass over exactly these files this
    > phase touched: <explicit list>.
 
@@ -65,11 +64,11 @@ skill) close the phase.
 
 1. Delegate the frozen-test selector (Phase 3 artifact) to your build/test subagent — a regression
    here must be fixed before moving to Phase 5.
-2. Delegate once to **`analyst`** (`model: "anthropic/claude-sonnet-5"`, `skills: []` — the lens
+2. Delegate once to **`analyst`** (`skills: []` — the lens
    arrives by path below, not by skill discovery; no `tools` param, analyst's own frontmatter is
    right for this and its read-only discipline is doctrine, not a tool filter):
 
-   > Lens: read and apply `~/.pi/agent/skills/code-review-checklist/SKILL.md`; if unreadable, stop
+   > Lens: read and apply `code-review-checklist/SKILL.md`; if unreadable, stop
    > and report — run no default review. Review the cumulative diff since the `phase3-green`
    > checkpoint: `<hash>..HEAD` — the single combined review covering the applied candidates and
    > the simplification pass together. Use the lens's output format and verdict scheme (READY |

@@ -29,18 +29,10 @@ correct, minimal, green implementation of agreed seams that already conforms to
    at X — reuse it."
 4. Delegate implementation to the **`code-implementer`** subagent (TDD mode), one seam at a time
    (vertical slice, per the `tdd` skill). On every invocation pass:
-   `model: "anthropic/claude-sonnet-5"` (or your harness's strong coding model),
-   `tools: ["read", "grep", "find", "ls", "write", "edit"]`, and `skills: []`. The `tools` list
-   mirrors the agent's own frontmatter on purpose — it is redundant reinforcement of the execution
-   boundary (the agent's `disallowedTools` still denies `bash`/`subagent` even if a caller widens
-   `tools`), and the call display shows the effective set so you can see the boundary held.
-   `skills: []` is deliberate: the lens is delivered by path in the prompt, never via skill
-   discovery — an empty whitelist keeps unrelated skills from auto-triggering. If your harness's
-   subagent mechanism predates per-invocation `tools`/`skills` (pi-simple-agents < 0.9.0 ignores
-   them silently — verify once, don't assume), omit both; the agent's frontmatter remains the
-   boundary. Self-contained prompt per seam:
+   `tools: ["read", "grep", "find", "ls", "write", "edit"]`, and `skills: []`. Self-contained
+   prompt per seam:
 
-   > Mode: TDD. Lens: read and apply `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md`
+   > Mode: TDD. Lens: read and apply `lens/code-implementer-lens.md`
    > before touching anything; if you cannot read it, make no changes and say so. Technical design
    > (Phase 2): `$DESIGN_DIR/technical.md` <paste>. Spec (this phase):
    > `$DESIGN_DIR/spec.md` <paste>. Current seam: <name/description>.
@@ -55,10 +47,10 @@ correct, minimal, green implementation of agreed seams that already conforms to
       failure against the stated Predicted RED (defined in the lens).
    b. Confirm the minimal implementation is green. If it isn't, re-delegate to `code-implementer`
       in **repair mode**: same seam, plus the actual failure output pasted verbatim (counts toward
-      the iteration budget: max 2 attempts total for this seam). Same `model`/`tools`/`skills`
+      the iteration budget: max 2 attempts total for this seam). Same `tools`/`skills`
       params. Prompt:
 
-      > Mode: repair. Lens: `~/.pi/agent/skills/iterative-design/lens/code-implementer-lens.md`.
+      > Mode: repair. Lens: `lens/code-implementer-lens.md`.
       > Seam: <name/description>. Actual failure output (verbatim): <paste>.
    c. Confirm green with the user, then move to the next seam.
 5. Compartmentalize: **the first bucket only**, then stop at a checkpoint for review — repeat step 4

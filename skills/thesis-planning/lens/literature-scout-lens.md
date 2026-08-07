@@ -59,6 +59,6 @@ Return a JSON array, one object per source:
 
 - Only `web_search` and `web_read`. No write, no bash, no other tool.
 - Do not modify any files.
-- No source without `verified_by_read: true` unless you explicitly mark it
-  `"relevance": "low"` with `relevance_reason` stating it's unread — the
-  coordinator will quarantine unverified entries, not silently keep them.
+- You may include an unread source **only** by marking it `relevance: low` with
+  `relevance_reason` stating it is unread — the coordinator will quarantine it
+  regardless; it is never kept as verified.

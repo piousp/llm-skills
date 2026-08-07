@@ -7,7 +7,7 @@ Ask the questions one at a time, waiting for feedback on each question before co
 
 If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking the user. The *decisions*, though, are the user's — put each one to them and wait for their answer.
 
-[DO NOT] assume the user understands the full code. Always ask questions back to the user to validate their own understanding. The purpose of the goal discovery is to do it together: both human and LLM investigating to find the right answers.
+[DO NOT] assume the user understands the full code. Always ask questions back to the user to validate their own understanding.
 
 Do not act on it until the user confirms we have reached a shared understanding.
 

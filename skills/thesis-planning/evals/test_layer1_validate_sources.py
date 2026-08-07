@@ -65,6 +65,21 @@ class ValidateRecordTest(unittest.TestCase):
         errors = vs.validate_record(rec, 0)
         self.assertTrue(any("verified_by_read must be a boolean" in e for e in errors))
 
+    def test_venue_wrong_type_rejected(self):
+        rec = dict(GOOD_RECORD, venue=123)
+        errors = vs.validate_record(rec, 0)
+        self.assertTrue(any("venue" in e for e in errors))
+
+    def test_abstract_none_rejected(self):
+        rec = dict(GOOD_RECORD, abstract=None)
+        errors = vs.validate_record(rec, 0)
+        self.assertTrue(any("abstract" in e for e in errors))
+
+    def test_author_non_string_rejected(self):
+        rec = dict(GOOD_RECORD, authors=["A", 42])
+        errors = vs.validate_record(rec, 0)
+        self.assertTrue(any("authors" in e for e in errors))
+
 
 class MainReportTest(unittest.TestCase):
     def run_validate(self, records):
@@ -105,6 +120,33 @@ class MainReportTest(unittest.TestCase):
         report, code = self.run_validate([rec])
         self.assertEqual(code, 1)
         self.assertEqual(report["rejected"], 1)
+
+    def test_no_results_shape_is_valid_outcome(self):
+        payload = {
+            "result": "no_results",
+            "queries_tried": ["q1"],
+            "urls_attempted": [],
+            "ceiling_hit": False,
+            "note": "axis too narrow; split into two queries",
+        }
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump(payload, f)
+            path = f.name
+        sys.argv = ["validate_sources.py", path]
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        exit_code = None
+        with contextlib.redirect_stdout(buf):
+            try:
+                vs.main()
+            except SystemExit as e:
+                exit_code = e.code
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(buf.getvalue())["result"], "no_results")
 
 
 if __name__ == "__main__":

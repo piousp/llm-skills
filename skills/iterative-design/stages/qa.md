@@ -3,8 +3,7 @@
 Entered only on an explicit "run" at the Phase 5 gate, already recorded in `$DESIGN_DIR/decisions.md`
 (see `SKILL.md`'s "Optional phases — the gate" for the gate question itself).
 
-Delegate to **`analyst`** with the `qa-adversary` skill as its lens (`model:
-"anthropic/claude-opus-4-8"`, or your harness's most capable reasoning model, `skills: []`) — the
+Delegate to **`analyst`** with the `qa-adversary` skill as its lens (`skills: []`) — the
 lens is read-only doctrine: never runs or delegates tests, never edits. `skills: []` on this
 invocation is load-bearing: domain context (e.g. `mde-qa-context`) reaches the analyst only as an
 explicit path in this prompt, never via skill auto-triggering — if it matters, pass the path.
@@ -12,7 +11,7 @@ Self-contained prompt; pick the variant matching the Phase 4 gate decision:
 
 **If Phase 4 ran:**
 
-> Lens: read and apply `~/.pi/agent/skills/qa-adversary/SKILL.md` first; if you cannot read it,
+> Lens: read and apply `qa-adversary/SKILL.md` first; if you cannot read it,
 > stop and report — run no default review. [If the working repo has a domain QA-context skill
 > (e.g. `mde-qa-context` for MDE repos), add: "Additional context lens: `<path>` — read after the
 > main lens."] Frozen tests (Phase 3 artifact): <selector>. Current implementation (after Phase 4's
@@ -24,7 +23,7 @@ Self-contained prompt; pick the variant matching the Phase 4 gate decision:
 
 **If Phase 4 was skipped:**
 
-> Lens: read and apply `~/.pi/agent/skills/qa-adversary/SKILL.md` first; if you cannot read it,
+> Lens: read and apply `qa-adversary/SKILL.md` first; if you cannot read it,
 > stop and report — run no default review. [If the working repo has a domain QA-context skill
 > (e.g. `mde-qa-context` for MDE repos), add: "Additional context lens: `<path>` — read after the
 > main lens."] Frozen tests (Phase 3 artifact): <selector>. Current implementation (Phase 3 output — Phase 4

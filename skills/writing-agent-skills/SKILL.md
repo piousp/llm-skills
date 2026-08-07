@@ -9,67 +9,72 @@ description: >
 
 # Writing Agent Skills
 
-Adapted from Philipp Schmid's "8 Tips for Writing Agent Skills" —
-https://www.philschmid.de/agent-skills-tips (2026-04-13). See Source at the bottom.
+When writing the skill, one rule overrides all others:
+
+- [NEVER] write meta references, self-thoughts, or anything that isn't an instruction
 
 ## 1. Know what a skill is
 
-A skill is a folder: `SKILL.md` (required) + optional `scripts/`, `references/`, `assets/`.
+A skill is a folder: `SKILL.md` (required) + optional `scripts/`, `references/`, `assets/`, `stages/`.
 Three loading layers:
 - Always loaded: `name` + `description` frontmatter.
 - Loaded on trigger: the `SKILL.md` body.
-- Loaded on demand: files under `scripts/`, `references/`, `assets/`.
+- Loaded on demand: files under `scripts/`, `references/`, `assets/`, `stages/`.
+- [ALWAYS] use relative paths for referencing these files (ie. "read stages/first.md")
 
 Classify the skill before writing it:
 - **Capability skill** — teaches a task the base model can't do consistently (e.g. PDF form
-  filling). Expect it to become unnecessary as models improve; re-eval periodically (see §8).
+  filling).
 - **Preference skill** — encodes a specific workflow/process. Durable, but must stay in sync
   with the actual process it encodes.
 
 ## 2. Nail the description
 
-The `description` is the trigger. Write both the **what** and the **when**, and a negative case
-if the topic is easily confused with something adjacent.
+The `description` is the trigger. Write both the **what** the skill does and the **when** to use it. Also add a negative case: when *NOT* to trigger. For example:
 
-- ❌ "Helps with documents" / "API helper"
-- ✅ "Create, edit, and analyze .docx files — tracked changes, comments, formatting, text
-  extraction"
+- {BAD} "Helps with documents" / "API helper"
+- {GOOD} "Create, edit, and analyze .docx files; tracks changes, comments, formatting, text
+  extraction. Trigger whenever the user is working with docx files. [DO NOT] trigger when working with any other file types"
 
 If a skill is only ever invoked by explicit name (never auto-triggered), say so plainly in the
 body — the description then only needs to be accurate, not optimized for triggering.
 
-## 3. Write instructions, not essays
+## 3. Writing format
 
-State what the agent doesn't already know. Use directives ("Always use X"), not trivia ("X is
-recommended"). Lead with a short example over a long explanation. When a rule needs a reason,
-give one short line — don't pad it into a paragraph. Don't overfit instructions to pass a
-handful of test prompts; they must generalize.
+- Use directives ("[Always] use X")
+- Be direct, less is more
+- Lead with a short example over a long explanation.
+- When a rule needs a reason, give one short line — don't pad it into a paragraph.
+- KISS principle: simplicity is the primary goal, not a side effect; easier to read for
+  both humans and agents.
+- NO emojis
+- Write impersonally, third person neutral. Skills are written for LLM agents to use directly.
+- Highlight keywords with `**` and/or `[]` brackets to increase the weight of the instruction.
+  - Enforcement keys: [ALWAYS], [MUST], [DO], [FOLLOW]
+  - Negative rules: [NEVER], [DO NOT]
+  - Combine `**` and `[]` for an even stronger petition; other verbs are allowed too.
 
 ## 4. Keep it lean
 
-Body of `SKILL.md` under ~500 lines. Split multi-topic skills into separate `references/*.md`
-files the agent loads only when needed. If a reference file exceeds 500 lines, put a table of
-contents with line hints at the top.
+Every line carries weight: it costs tokens, affects model behavior, and has a maintenance cost.
+- Body of `SKILL.md` under ~500 lines.
+- Split multi-topic skills into separate `references/*.md` files the agent loads only when needed.
+- If a reference file exceeds 500 lines, put a table of contents with line hints at the top.
+- If the skill is multi-staged, separate the stages in files `stages/*.md` and reference them from the main SKILL.md with relative path.
 
 ## 5. Set the right level of freedom
 
-Describe the goal, not a rigid step sequence, unless order genuinely matters:
-- ❌ "Step 1: read the file. Step 2: parse JSON. Step 3: update the port. Step 4: write it back."
-- ✅ "Update the database port in the config file to the value the user specifies."
+**Describe the goal**, not a rigid step sequence, unless order genuinely matters:
+- {BAD} "Step 1: read the file. Step 2: parse JSON. Step 3: update the port. Step 4: write it back."
+- {GOOD} "Update the database port in the config file to the value the user specifies."
 
-Prefer constraints over procedures: "Always run tests before opening a PR. Never push to main" —
+**Prefer constraints over procedures**: "Always run tests before opening a PR. Never push to main" —
 not a scripted checklist of git commands.
 
-**If exact step order is truly load-bearing (fragile if step 3 runs before step 2), that's not a
-skill problem — write a script** and have the skill call it.
+If exact step order is truly critical (fragile if step 3 runs before step 2), that's not a
+skill problem — **write a script** and have the skill call it. Scripts live in `scripts/*.*`
 
-## 6. Don't skip negative cases
-
-State explicitly when the skill should NOT fire, especially if its topic overlaps something
-broader — e.g. "Use for PDF files. Do NOT use for general document editing, spreadsheets, or
-plain text." A skill with no negative case risks hijacking unrelated requests.
-
-## 7. Test it before you ship it
+## 6. Should be tested/testable
 
 - Run it manually a handful of times with varied prompts; watch for skipped steps or assumed
   dependencies.
@@ -82,11 +87,11 @@ plain text." A skill with no negative case risks hijacking unrelated requests.
 - If something's wrong, fix the description first — most failures are trigger failures, not
   instruction failures.
 
-## 8. Know when to retire a skill
+## 7. Naming the skill
 
-Periodically run the skill's eval prompts *without* the skill loaded. If they still pass, the
-base model has absorbed the capability — retire the skill. Applies mainly to capability skills;
-preference skills don't get obsoleted by model improvement, only by process changes.
+- Propose 3 alternatives to the user, [NEVER] pick one yourself (but give your recommendation)
+- Name in frontmatter and directory [MUST] be equal (eg. `my-test-skill/SKILL.md` → "name: my-test-skill")
+- Use kebab-case: lowercase letters and hyphens
 
 ## Source
 

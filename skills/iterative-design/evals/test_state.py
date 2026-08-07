@@ -18,6 +18,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 STATE_PY = SKILL_DIR / "scripts" / "state.py"
@@ -274,22 +275,22 @@ class SessionsTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self._tmp_root = Path(self._tmp.name)
-        self._orig_environ_tmpdir = None
         import os
         self._os = os
-        self._orig_environ_tmpdir = os.environ.get("TMPDIR")
-        os.environ["TMPDIR"] = str(self._tmp_root)
         self._orig_cwd = Path.cwd()
         self.repo_dir = self._tmp_root / "myrepo"
         self.repo_dir.mkdir()
         self._os.chdir(self.repo_dir)
+        # tmp_root_dir() prefers /tmp whenever it exists and is writable, so
+        # TMPDIR cannot isolate these tests; mock the session base instead.
+        self._tmp_root_patch = mock.patch.object(
+            state, "tmp_root_dir", return_value=self._tmp_root
+        )
+        self._tmp_root_patch.start()
 
     def tearDown(self):
+        self._tmp_root_patch.stop()
         self._os.chdir(self._orig_cwd)
-        if self._orig_environ_tmpdir is None:
-            self._os.environ.pop("TMPDIR", None)
-        else:
-            self._os.environ["TMPDIR"] = self._orig_environ_tmpdir
         self._tmp.cleanup()
 
     def test_sessions_keyed_by_basename_cwd_not_dir_arg(self):

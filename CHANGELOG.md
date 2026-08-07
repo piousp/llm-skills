@@ -57,6 +57,12 @@ All notable changes to this repository are documented here.
   of `skills/revisor-textos` to the decision domain: one-line definition, decision-domain
   diagnostic question, adapted detection signals, source-catalog reference, and native-category
   mapping (`drift` / `contradiction` / `hidden assumption` / `pivot risk`) per entry.
+- `skills/thesis-planning/evals/smoke_test.sh` — end-to-end smoke test exercising both
+  `scripts/state.py` and `scripts/validate_sources.py` against a simulated `$THESIS_DIR`
+  across phases 1→5: phase progression, inconsistent-chapter detection (drafted without
+  file, revised without snapshot), feedback counting and the `rejected`-without-`Resolution`
+  warning, `validate_sources` exit codes (0/1/2) and the `no_results` shape. Read-only over
+  the repo — everything runs in `mktemp`.
 
 ### Changed
 - `pi-simple-agents/` — version bumped to 0.3.0. Migrated from child-process-based subagent
@@ -159,6 +165,57 @@ All notable changes to this repository are documented here.
 - `README.md` — agent table corrected: dropped five agents no longer present
   (`pablo-planner`, `pablo-implementer`, `code-review-checklist`, `qa-adversary`,
   `pablo-oracle`); added the previously-missing `scout`, `web-scout`, `critical-thinker` rows.
+- `skills/thesis-planning/SKILL.md` — research-question proposal (Phase 1b) now delegated to
+  `planner` (2–4 candidate phrasings from `sources-initial.md`; the user selects; the
+  coordinator never generates the phrasings itself); Phase 4a/4b merged into one delegated
+  skeleton→draft row; all delegation paths switched to skill-relative (`lens/<name>.md`)
+  with chapter paths `$THESIS_DIR`-relative and named explicitly in the invocation;
+  citation contract `[Author, year](url)` (URLs only from `sources.json`); optional
+  `verification reads allowed`; the coordinator spot-checks 2–3 claims trace to
+  `sources.json` and verifies no other files were created/modified before flipping status;
+  `no_results` documented as a valid empty-axis outcome in Phase 1a; feedback header
+  contract tightened to `## YYYY-MM-DD | <reviewer> | vNN | <status>` (ISO date,
+  zero-padded version) — `state.py` only counts headers matching exactly; ASCII-slug
+  contract for chapter filenames.
+- `skills/thesis-planning/scripts/state.py` — `FEEDBACK_HEADER_RE` tightened to the
+  ISO/vNN contract so a `Comment:` line starting with `##` can no longer be miscounted as
+  a feedback entry (H17 regression); new advisory `warn_rejected_without_resolution()`
+  emitting a stderr warning for `rejected` entries lacking a non-empty `Resolution:` line;
+  unrecognized `##` headers in feedback files now warn to stderr instead of being silently
+  ignored.
+- `skills/thesis-planning/scripts/validate_sources.py` — new field-type validations
+  (`venue` string-or-null, `abstract` string, `authors` list of strings); a top-level
+  `{"result": "no_results", ...}` payload is now a valid outcome (exit 0, structured
+  report) instead of a validation error.
+- `skills/thesis-planning/evals/` — 10 new layer-1 regression tests: feedback-header
+  parsing edge cases (hash-prefixed comment lines, status not in final position, malformed
+  headers, cross-entry `Resolution:` leakage), `rejected`-without-`Resolution` warning,
+  venue/abstract/authors type checks, and the `no_results` report shape.
+- `skills/thesis-planning/lens/chapter-drafting-lens.md` — mode must be stated verbatim as
+  `Mode: skeleton` / `Mode: full-draft`; all input/output paths relative to `$THESIS_DIR`
+  (the worker's cwd is not guaranteed to be the thesis dir); citations as
+  `[Author, year](url)`; argument-vs-paraphrase example; contradiction notes keep a
+  visible format.
+- `skills/thesis-planning/lens/literature-scout-lens.md` — unread sources may be reported
+  only with `relevance: low` + a reason; quarantine rule clarified.
+- `skills/iterative-design/` — portability/model-agnosticism pass: hardcoded model names
+  removed from the subagent cast and `stages/*.md` (no `model:` param — the harness picks
+  the tier); all skill-internal lens/skill paths switched from `~/.pi/...` absolute paths
+  to skill-relative ones with a new "Path resolution" contract (resolve against the skill
+  dir, pass the resolved absolute path in delegation prompts); `SKILL.md` and stages now
+  declare the skill invoked by explicit name only (never auto-triggered); `$DESIGN_DIR`
+  explanation simplified and the `.staging` fallback paragraph dropped;
+  `lens/code-implementer-lens.md` TDD rule relaxed to "one test per invocation";
+  `evals/test_state.py` sessions tests mock `tmp_root_dir()` instead of relying on
+  `TMPDIR` (the script prefers `/tmp` whenever it exists and is writable).
+- `skills/writing-agent-skills/SKILL.md` — restructured: new top rule "[NEVER] write meta
+  references, self-thoughts, or anything that isn't an instruction"; section 3 rewritten as
+  "Writing format" with the enforcement-key vocabulary ([ALWAYS]/[MUST]/[DO]/[FOLLOW],
+  [NEVER]/[DO NOT], `**`+`[]` emphasis), KISS, no-emoji and impersonal third-person rules;
+  section 4 gains `stages/*.md` guidance; the negative-case rule moved into section 2
+  (description) where it belongs; section 8 "Know when to retire a skill" replaced by
+  "Naming the skill" (propose 3 alternatives to the user, name = directory, kebab-case);
+  `{BAD}`/`{GOOD}` markers replace `❌`/`✅`.
 
 ### Removed
 - `skills/revisor-textos/run_tests.py` — superseded by `evals/test_state.py`.

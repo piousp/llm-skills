@@ -17,8 +17,10 @@ CHAPTER_STATUSES = {"pending", "drafting", "drafted", "revised"}
 DONE_STATUSES = {"drafted", "revised"}
 SLUG_RE = re.compile(r"[^a-z0-9]+")
 FEEDBACK_HEADER_RE = re.compile(
-    r"^##.*\|\s*(open|addressed|rejected)\s*$", re.IGNORECASE
+    r"^## \d{4}-\d{2}-\d{2} \| .+? \| v\d+ \| (open|addressed|rejected)\s*$",
+    re.IGNORECASE,
 )
+RESOLUTION_RE = re.compile(r"^Resolution:\s*(.+)$")
 
 
 def read(path):
@@ -70,6 +72,40 @@ def slugify(name):
     return SLUG_RE.sub("-", name.strip().lower()).strip("-")
 
 
+def warn_rejected_without_resolution(thesis_dir, slug):
+    """Emit a stderr warning for each 'rejected' entry missing a non-empty
+    Resolution: line.
+
+    The feedback contract (SKILL.md Phase 4c) requires a one-line reason when
+    a reviewer comment is rejected; nothing in the script checks it, so a
+    'rejected' status could pass silently. Advisory only — never changes exit
+    codes.
+    """
+    path = os.path.join(thesis_dir, "chapters", f"{slug}.feedback.md")
+    text = read(path)
+    if not text:
+        return
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        m = FEEDBACK_HEADER_RE.match(stripped)
+        if not m or m.group(1).lower() != "rejected":
+            continue
+        block = lines[i + 1 :]
+        end = len(block)
+        for j, l in enumerate(block):
+            if l.strip().startswith("##"):
+                end = j
+                break
+        has_resolution = any(RESOLUTION_RE.match(l.strip()) for l in block[:end])
+        if not has_resolution:
+            print(
+                f"warning: 'rejected' entry in {slug}.feedback.md lacks a "
+                f"non-empty Resolution: line: {stripped!r}",
+                file=sys.stderr,
+            )
+
+
 def count_open_feedback(thesis_dir, slug):
     """Count 'open' entries in chapters/<slug>.feedback.md.
 
@@ -82,9 +118,18 @@ def count_open_feedback(thesis_dir, slug):
         return 0
     open_count = 0
     for line in text.splitlines():
-        m = FEEDBACK_HEADER_RE.match(line.strip())
+        stripped = line.strip()
+        if not stripped.startswith("##"):
+            continue
+        m = FEEDBACK_HEADER_RE.match(stripped)
         if m and m.group(1).lower() == "open":
             open_count += 1
+        elif m is None:
+            print(
+                f"warning: unrecognized feedback header in {slug}.feedback.md: "
+                f"{stripped!r} (expected '## YYYY-MM-DD | reviewer | vNN | status')",
+                file=sys.stderr,
+            )
     return open_count
 
 
@@ -126,6 +171,7 @@ def check_chapter_files(chapters, thesis_dir):
         on_disk = f"{slug}.md" in existing_files
         versions = count_snapshots(thesis_dir, slug)
         open_feedback = count_open_feedback(thesis_dir, slug)
+        warn_rejected_without_resolution(thesis_dir, slug)
 
         c["on_disk"] = on_disk
         c["has_skeleton"] = f"{slug}.skeleton.md" in existing_files

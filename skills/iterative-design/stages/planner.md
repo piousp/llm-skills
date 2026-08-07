@@ -8,23 +8,15 @@ edits code.
 
 ## How to run
 
-1. Delegate to the **`planner`** subagent, passing `model:` the most capable model/subagent your
-   harness offers explicitly at invocation (since nothing else guarantees that tier), `skills: []`
-   (the lens arrives by path below, never via skill discovery). It runs in a **fresh context**
+1. Delegate to the **`planner`** subagent, passing `skills: []`. It runs in a **fresh context**
    (`systemPromptMode: replace`) — it has not seen the Phase 1 conversation. The prompt must be
    fully self-contained: paste the goal verbatim (not a summary), every constraint/decision
    already made in Phase 1, and any facts already discovered (relevant file paths, existing
    patterns).
 
-   The `planner` agent self-selects its internal `code` lens for this kind of task and already
-   attempts to load `pablo-code-philosophy` on top of it — do not paste that skill's content
-   separately, it would just duplicate what the agent already tries to load. The invocation's own
-   `Lens:` line (below) is this method's lens, layered on top: it carries the four-marker output
-   contract, the seam-sizing discipline, and the goal.md-vs-pasted-goal precedence rule —
-   everything generic enough to belong in the agent's own system prompt would defeat the point of
-   keeping the agent method-agnostic.
+   Do not paste `pablo-code-philosophy` separately — the planner already tries to load it itself.
 
-   > Lens: read and apply `~/.pi/agent/skills/iterative-design/lens/planner-lens.md` before planning;
+   > Lens: read and apply `lens/planner-lens.md` before planning;
    > if you cannot read it, make no changes and say so.
    >
    > Confirmed goal (Phase 1): <paste `$DESIGN_DIR/goal.md` verbatim — original prompt + discovery

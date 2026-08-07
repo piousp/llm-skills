@@ -47,6 +47,15 @@ def validate_record(rec, idx):
     if not isinstance(rec["keywords"], list):
         errors.append(f"record {idx}: keywords must be a list")
 
+    if rec["venue"] is not None and not isinstance(rec["venue"], str):
+        errors.append(f"record {idx}: venue must be string or null")
+
+    if not isinstance(rec["abstract"], str):
+        errors.append(f"record {idx}: abstract must be a string")
+
+    if not all(isinstance(a, str) for a in rec["authors"]):
+        errors.append(f"record {idx}: authors must be a list of strings")
+
     if rec["relevance"] not in RELEVANCE_VALUES:
         errors.append(
             f"record {idx}: relevance must be one of {sorted(RELEVANCE_VALUES)}"
@@ -76,6 +85,18 @@ def main():
 
     with open(args.json_file, encoding="utf-8") as f:
         records = json.load(f)
+
+    if isinstance(records, dict) and records.get("result") == "no_results":
+        report = {
+            "result": "no_results",
+            "note": records.get("note"),
+            "queries_tried": records.get("queries_tried", []),
+            "ceiling_hit": records.get("ceiling_hit", False),
+            "total": 0, "verified": 0, "quarantined": 0, "rejected": 0,
+        }
+        json.dump(report, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        sys.exit(0)
 
     if not isinstance(records, list):
         print("ERROR: top-level JSON must be an array", file=sys.stderr)

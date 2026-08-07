@@ -84,6 +84,91 @@ class FeedbackAndSnapshotHelpersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(state.count_open_feedback(d, "chapter-a"), 0)
 
+    def test_comment_line_starting_with_hash_not_counted(self):
+        # Regression for H17: a Comment line starting with "##" that ends in
+        # "| open" must not count as an open feedback entry.
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## 2026-08-01 | Prof. X | v01 | open\n"
+                "## A comment line that ends with | open\n",
+            )
+            self.assertEqual(state.count_open_feedback(d, "chapter-a"), 1)
+
+    def test_status_not_in_final_position_not_counted(self):
+        # Regression for H17: a status not in final position is malformed and
+        # must not be counted as open (previously it was silently ignored).
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## 2026-08-01 | open | Prof. X | v01\n",
+            )
+            self.assertEqual(state.count_open_feedback(d, "chapter-a"), 0)
+
+    def test_malformed_header_still_ignored_not_crash(self):
+        # Malformed headers now also print a stderr warning, but never crash.
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## not a valid header at all\nsome prose\n",
+            )
+            self.assertEqual(state.count_open_feedback(d, "chapter-a"), 0)
+
+    def test_rejected_without_resolution_warns(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## 2026-08-01 | Prof. X | v01 | rejected\n"
+                "Scope: general\nComment: no\nResolution: \n",
+            )
+            import io
+            import contextlib
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                state.warn_rejected_without_resolution(d, "chapter-a")
+            self.assertIn("lacks a non-empty Resolution", err.getvalue())
+
+    def test_rejected_with_resolution_no_warning(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## 2026-08-01 | Prof. X | v01 | rejected\n"
+                "Scope: general\nComment: no\nResolution: user declined; out of scope\n",
+            )
+            import io
+            import contextlib
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                state.warn_rejected_without_resolution(d, "chapter-a")
+            self.assertEqual(err.getvalue(), "")
+
+    def test_resolution_on_next_entry_not_counted_for_previous(self):
+        # A Resolution line belonging to the *next* entry must not satisfy the
+        # previous 'rejected' entry.
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "chapters"))
+            write(
+                os.path.join(d, "chapters", "chapter-a.feedback.md"),
+                "## 2026-08-01 | Prof. X | v01 | rejected\n"
+                "Scope: general\nComment: no\n\n"
+                "## 2026-08-02 | Prof. X | v01 | addressed\n"
+                "Scope: general\nComment: ok\nResolution: fixed\n",
+            )
+            import io
+            import contextlib
+
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                state.warn_rejected_without_resolution(d, "chapter-a")
+            self.assertIn("lacks a non-empty Resolution", err.getvalue())
+
     def test_count_snapshots(self):
         with tempfile.TemporaryDirectory() as d:
             history = os.path.join(d, "chapters", "history")
