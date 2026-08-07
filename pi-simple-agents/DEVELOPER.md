@@ -375,16 +375,16 @@ function runAgentViaSdk(
 ```typescript
 type CreateSessionOpts = Pick<
   CreateAgentSessionOptions,
-  "modelRegistry" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
+  "modelRuntime" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
 >;
 
-interface RunAgentViaSdkOptions {
-  modelRegistry: CreateAgentSessionOptions["modelRegistry"];
+export interface RunAgentViaSdkOptions {
+  modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
   createSession: (opts: CreateSessionOpts) => Promise<Pick<CreateAgentSessionResult, "session">>;
   resourceLoader: CreateAgentSessionOptions["resourceLoader"];
   sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
-  onProgress?: (text: string) => void;
+  onToolEvent?: (event: SubagentToolEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
 }
 ```
@@ -395,11 +395,11 @@ interface RunAgentViaSdkOptions {
 
 - `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, `tools`, and `excludeTools` (from `agent.disallowedTools`).
 - `getModel` — resolver for `provider/modelId` syntax. Called when `agent.model` contains a `/`.
-  In the extension, this is `(provider, modelId) => modelRegistry.find(provider, modelId)`. If it
+  In the extension, this is `(provider, modelId) => modelRuntime.getModel(provider, modelId)`. If it
   returns `undefined` for a well-formed `provider/modelId`, `resolveModel` logs a
   `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
-- `onProgress` — receives text delta events from the session's subscription mechanism.
+- `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting.
 
 ### AgentRunResult
 
@@ -718,12 +718,16 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 }
 ```
 
-6. Resolves models via `ctx.modelRegistry.find(provider, modelId)` (passed through as `getModel`)
+6. Resolves models via `modelRuntime.getModel(provider, modelId)` (passed through as `getModel`)
    and runs agents via `runAgentViaSdk` with a configurable concurrency (default 4, resolved via
    `resolveConcurrency`) via `mapWithConcurrencyLimit` — no longer a hardcoded `4`. The value comes
    from `registry.load(ctx.cwd)`'s resolved `concurrency` field, threaded through
-   `RunTasksOptions.concurrency: number`. `ctx.modelRegistry` is forwarded to `runAgentViaSdk`
-   unchanged as `modelRegistry`.
+   `RunTasksOptions.concurrency: number`. A separate, extension-level `ModelRuntime` — built once,
+   eagerly, via `ModelRuntime.create()` at extension load — is what's forwarded to
+   `runAgentViaSdk`/`createSession` as `modelRuntime`, and is also used to build the `getModel`
+   resolver (resolving `"provider/modelId"` config strings) passed to `createSession`. Because
+   this `ModelRuntime` snapshot is frozen at extension-load time, a `/login` performed later in
+   the session requires a `/reload` before subagents pick up the new credentials.
 7. Formats results via `formatRunResults`.
 
 `runTasks`'s per-task worker, `runSingleTask` (resource loader creation/reload, session manager

@@ -290,7 +290,7 @@ test("runAgentViaSdk: resolves success with finalText from session", async () =>
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
@@ -305,7 +305,7 @@ test("runAgentViaSdk: resolves error when session.prompt throws", async () => {
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "error");
@@ -322,7 +322,7 @@ test("runAgentViaSdk: dispose called in finally even on error", async () => {
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(disposed, true);
@@ -335,7 +335,7 @@ test("runAgentViaSdk: resolves abort-named error when signal is already aborted"
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession: async () => ({ session: new FakeAgentSession("x") as any }), resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
+    { createSession: async () => ({ session: new FakeAgentSession("x") as any }), modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
   );
 
   assert.equal(result.status, "error");
@@ -355,7 +355,7 @@ test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into Subag
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
   );
 
   assert.deepEqual(events, [
@@ -375,7 +375,7 @@ test("runAgentViaSdk: no onToolEvent means no subscription happens at all", asyn
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(fakeSession.subscribeCallCount, 0);
@@ -395,7 +395,7 @@ test("runAgentViaSdk: tool_execution_update events are ignored, not translated",
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
   );
 
   assert.deepEqual(events, [
@@ -416,7 +416,7 @@ test("runAgentViaSdk: resolves model from getModel when agent.model is set", asy
   await runAgentViaSdk(
     makeAgent({ model: "openrouter/gpt-4" }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
@@ -434,7 +434,7 @@ test("runAgentViaSdk: calls getModel with provider and modelId split from agent.
   await runAgentViaSdk(
     makeAgent({ model: "anthropic/claude-fable-5" }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.deepEqual(calls, [["anthropic", "claude-fable-5"]]);
@@ -453,7 +453,7 @@ test("runAgentViaSdk: warns and falls back when configured model is not in the r
   await runAgentViaSdk(
     makeAgent({ model: "nex-agi/nex-n2-mini" }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(capturedModel, undefined);
@@ -473,28 +473,30 @@ test("runAgentViaSdk: no warning when configured model resolves", async (t) => {
   await runAgentViaSdk(
     makeAgent({ model: "openrouter/nex-agi/nex-n2-mini" }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(warnSpy.mock.calls.length, 0);
 });
 
-test("runAgentViaSdk: forwards modelRegistry through to createSession unchanged", async () => {
-  const registryMarker = { find: () => undefined } as any;
-  let capturedRegistry: unknown = undefined;
+test("runAgentViaSdk: forwards modelRuntime through to createSession by identity, and never sends modelRegistry", async () => {
+  const runtimeSentinel = { find: () => undefined } as any;
+  let captured: any = undefined;
   const fakeSession = new FakeAgentSession("done");
   const createSession = async (opts: any) => {
-    capturedRegistry = opts.modelRegistry;
+    captured = opts;
     return { session: fakeSession as any };
   };
 
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: registryMarker, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { modelRuntime: runtimeSentinel, createSession, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
-  assert.equal(capturedRegistry, registryMarker);
+  assert.equal(captured.modelRuntime, runtimeSentinel);
+  assert.notEqual(captured.modelRuntime, null);
+  assert.equal("modelRegistry" in captured, false);
 });
 
 test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
@@ -508,7 +510,7 @@ test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
   await runAgentViaSdk(
     makeAgent({ thinking: "high" } as any),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(capturedThinkingLevel, "high");
@@ -525,7 +527,7 @@ test("runAgentViaSdk: passes tools from agent.tools", async () => {
   await runAgentViaSdk(
     makeAgent({ tools: ["read", "write"] }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.deepEqual(capturedTools, ["read", "write"]);
@@ -542,7 +544,7 @@ test("runAgentViaSdk: forwards agent.disallowedTools as excludeTools", async () 
   await runAgentViaSdk(
     makeAgent({ disallowedTools: ["grep"] }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.deepEqual(capturedExcludeTools, ["grep"]);
@@ -559,7 +561,7 @@ test("runAgentViaSdk: agent.disallowedTools undefined forwards excludeTools as u
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(capturedExcludeTools, undefined);
@@ -596,7 +598,7 @@ test("runAgentViaSdk: model override via applyOverrides flows through getModel",
   await runAgentViaSdk(
     overridden!,
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
@@ -634,7 +636,7 @@ test("runAgentViaSdk: precedence chain — invocation override wins over setting
   await runAgentViaSdk(
     afterInvocationOverride,
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
   assert.deepEqual(capturedModel, { provider: "anthropic", modelId: "claude-opus-4-8" });
@@ -649,7 +651,7 @@ test("runAgentViaSdk: timeoutMs elapses, settles error and aborts+disposes the s
   const result = await runAgentViaSdk(
     makeAgent({ timeoutMs: 20 }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "error");
@@ -679,7 +681,7 @@ test("runAgentViaSdk: large timeoutMs does not interfere with a fast successful 
   const result = await runAgentViaSdk(
     makeAgent({ timeoutMs: 5000 }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
@@ -692,7 +694,7 @@ test("runAgentViaSdk: no timeoutMs configured still succeeds on a fast run (defa
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
@@ -713,7 +715,7 @@ test("runAgentViaSdk: when maxTurns is set and turn_start events exceed it, sett
   const result = await runAgentViaSdk(
     makeAgent({ maxTurns: 2 }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "error");
@@ -755,7 +757,7 @@ test("runAgentViaSdk: when maxTurns fires first with a long timeoutMs set, maxTu
   const result = await runAgentViaSdk(
     makeAgent({ maxTurns: 1, timeoutMs: 5000 }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "error");
@@ -792,7 +794,7 @@ test("runAgentViaSdk: maxTurns (unreached) + signal abort mid-prompt settles wit
   const promise = runAgentViaSdk(
     makeAgent({ maxTurns: 100 }),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
   );
   // Let the IIFE enter runWithTimeoutAndAbort (which registers the abort
   // listener) before aborting — mirrors the "signal abort mid-prompt" test.
@@ -821,7 +823,7 @@ test("runAgentViaSdk: no maxTurns + many turn_start events settles success, neve
   const result = await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
@@ -850,8 +852,8 @@ test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the to
     makeAgent(),
     "find things",
     {
-      modelRegistry: {} as any,
       createSession,
+      modelRuntime: {} as any,
       resourceLoader: {} as any,
       sessionManager: {} as any,
       onToolEvent: (e) => { collected.push(e); },
