@@ -170,6 +170,34 @@ already resolved." This has the same limitation as the frontmatter `skills` fiel
 [Frontmatter fields](#frontmatter-fields) above): the whitelist narrows *which* skills are
 available, but doesn't preload the named skills' content into the subagent's context.
 
+### Overriding maxTurns per invocation
+
+Both modes accept an optional `maxTurns` param — an integer from 1 to 100 that bounds the number
+of model turns (one model response + its batch of tool calls = 1 turn) for that call. When the
+limit is exceeded, the run settles as an error (`"reached maxTurns limit of N"`) and the session
+is aborted.
+
+In single mode, `maxTurns` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", maxTurns: 5
+```
+
+In parallel mode, `maxTurns` goes inside each entry of `tasks[]` — a top-level `maxTurns`
+alongside `tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", maxTurns: 5
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+Invocation-level `maxTurns` takes precedence over the agent's configured value (frontmatter or
+settings-level `agentOverrides`). An invalid value (0, negative, > 100, `NaN`, `Infinity`,
+non-integer, or non-numeric) is warned and treated as "no limit" for that call — same fallback
+as at the frontmatter layer.
+
 ### Bundled skill: `invoking-subagents`
 
 The package ships a self-discovering Agent Skill at
@@ -199,6 +227,7 @@ within one agent are possible), or `done` (the task has settled).
 | `defaultContext` | `forked` or `fresh` | `fresh` | `fresh`: starts with an empty conversation (default). `forked`: attempts to copy the parent session's conversation history via a real persisted session under `~/.pi/agent/sessions/subagents/`. If the parent session isn't persisted, or the fork fails, it falls back to `fresh` with a warning — a subagent run never fails because of this. |
 | `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `skills` | list | *inherited* | Explicit whitelist of skills to load, matched by exact, case-sensitive name against the inherited set. When set, overrides automatic inheritance; requested names with no match produce a warning per run. Setting `skills` together with `inheritSkills: false` is contradictory config — it produces a warning and the filter is ignored. **Limitation:** the filter narrows *which* skills are available, but still doesn't preload the named skills' content into the subagent's context — this is not the same as Claude Code's skill-preload semantics. |
+| `maxTurns` | integer 1–100 | *no limit* | Max number of model turns (one model response + its batch of tool calls = 1 turn) before the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted. Out-of-range or non-integer values (≤ 0, > 100, `NaN`, `Infinity`, non-integer like 2.5) are warned and ignored, falling back to no limit. |
 
 ## Claude Code compatibility
 
@@ -255,14 +284,14 @@ instead of `sonnet` or `claude-sonnet-4-20250514`.
 ### Inert fields
 
 These Claude Code frontmatter fields are accepted without error and their values are preserved on
-the parsed frontmatter, but they have no functional effect in pi: `permissionMode`, `maxTurns`,
+the parsed frontmatter, but they have no functional effect in pi: `permissionMode`,
 `mcpServers`, `hooks`, `memory`, `background`, `isolation`, `color`, `effort`, `initialPrompt`.
 
 Inert fields, inert tool names, and model aliases are reported together in one aggregated
 `console.warn`, at most once per 60 seconds (not per file), e.g.:
 
 ```
-pi-simple-agents: accepted but inert in pi — fields: maxTurns, permissionMode; tools: Task;
+pi-simple-agents: accepted but inert in pi — fields: permissionMode, hooks; tools: Task;
 model aliases: sonnet (Claude Code compatibility)
 ```
 
@@ -342,9 +371,10 @@ Invocation (subagent call)  >  Project settings  >  User settings  >  Frontmatte
 Merge is field-level: each present field replaces independently, and any field left absent falls
 through to the next-lower precedence layer. Invocation-level overrides cover `model` (see
 [Overriding the model per invocation](#overriding-the-model-per-invocation)), `tools` (see
-[Overriding tools per invocation](#overriding-tools-per-invocation)), and `skills` (see
-[Overriding skills per invocation](#overriding-skills-per-invocation)) — each overrides only its
-own field for that one call. `thinking` and `disallowedTools` are **not** overridable at
+[Overriding tools per invocation](#overriding-tools-per-invocation)), `skills` (see
+[Overriding skills per invocation](#overriding-skills-per-invocation)), and `maxTurns` (see
+[Overriding maxTurns per invocation](#overriding-maxturns-per-invocation)) — each overrides only
+its own field for that one call. `thinking` and `disallowedTools` are **not** overridable at
 invocation level — they can only be changed via settings-level `agentOverrides` or frontmatter,
 which can override any field, including those two.
 
@@ -358,6 +388,7 @@ name: scout
 description: Code explorer
 tools: read, grep, find, ls
 model: openrouter/anthropic/claude-haiku-4-5
+maxTurns: 10
 ---
 ...
 ```
@@ -394,6 +425,7 @@ model: openrouter/anthropic/claude-haiku-4-5
 **Final result for scout:**
 - `model` → `openrouter/gpt-4o` (from project, wins by precedence)
 - `thinking` → `low` (from user, project didn't touch it)
+- `maxTurns` → `10` (from frontmatter, no override modified it)
 - `tools`, `description`, etc. → from frontmatter (no override modified them)
 
 ## Example agents

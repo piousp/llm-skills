@@ -24,7 +24,6 @@ export const CLAUDE_INERT_TOOLS: ReadonlySet<string> = new Set([
 
 export const CLAUDE_INERT_FIELDS: ReadonlySet<string> = new Set([
   "permissionMode",
-  "maxTurns",
   "mcpServers",
   "hooks",
   "memory",
@@ -92,14 +91,23 @@ export function claimUnwarned(
   return claimed;
 }
 
+// Filter names down to those the inert set recognises and tag each with a
+// `prefix:` so downstream sorting/claim logic can tell the groups apart.
+// Same filter+map shape across fields/tools/models, so it lives here once.
+function inertKeysFor<T>(set: ReadonlySet<T>, names: Iterable<T>, prefix: string): string[] {
+  return [...names]
+    .filter((name) => set.has(name))
+    .map((name) => `${prefix}:${name}`);
+}
+
 export function reportInertUsage(
   usage: { fields: Iterable<string>; tools: Iterable<string>; models: Iterable<string> },
   registry: Map<string, number>,
 ): string | undefined {
   const inertKeys = [
-    ...[...usage.fields].map((name) => `field:${name}`),
-    ...[...usage.tools].map((name) => `tool:${name}`),
-    ...[...usage.models].map((alias) => `model:${alias}`),
+    ...inertKeysFor(CLAUDE_INERT_FIELDS, usage.fields, "field"),
+    ...inertKeysFor(CLAUDE_INERT_TOOLS, usage.tools, "tool"),
+    ...inertKeysFor(CLAUDE_MODEL_ALIASES, usage.models, "model"),
   ];
   const claimed = claimUnwarned(inertKeys, registry);
 

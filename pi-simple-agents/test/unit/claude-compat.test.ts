@@ -79,8 +79,8 @@ test("claimUnwarned returns and marks a fresh key on first call", () => {
 test("claimUnwarned excludes a key already warned within the ttl window", () => {
   const registry = new Map<string, number>();
 
-  claimUnwarned(["maxTurns"], registry);
-  const second = claimUnwarned(["maxTurns"], registry);
+  claimUnwarned(["hooks"], registry);
+  const second = claimUnwarned(["hooks"], registry);
 
   assert.deepEqual(second, []);
 });
@@ -107,13 +107,13 @@ test("reportInertUsage formats a single-group message for one inert field", () =
   const registry = new Map<string, number>();
 
   const warning = reportInertUsage(
-    { fields: ["maxTurns"], tools: [], models: [] },
+    { fields: ["permissionMode"], tools: [], models: [] },
     registry,
   );
 
   assert.equal(
     warning,
-    "pi-simple-agents: accepted but inert in pi \u2014 fields: maxTurns",
+    "pi-simple-agents: accepted but inert in pi \u2014 fields: permissionMode",
   );
 });
 
@@ -122,7 +122,7 @@ test("reportInertUsage formats a combined message when all three groups are pres
 
   const warning = reportInertUsage(
     {
-      fields: ["maxTurns", "permissionMode"],
+      fields: ["hooks", "permissionMode"],
       tools: ["Task"],
       models: ["sonnet"],
     },
@@ -131,16 +131,27 @@ test("reportInertUsage formats a combined message when all three groups are pres
 
   assert.equal(
     warning,
-    "pi-simple-agents: accepted but inert in pi \u2014 fields: maxTurns, permissionMode; tools: Task; model aliases: sonnet (Claude Code compatibility)",
+    "pi-simple-agents: accepted but inert in pi \u2014 fields: hooks, permissionMode; tools: Task; model aliases: sonnet (Claude Code compatibility)",
   );
 });
 
 test("reportInertUsage returns undefined when the registry has already claimed all the keys", () => {
   const registry = new Map<string, number>();
-  reportInertUsage({ fields: ["maxTurns"], tools: ["Task"], models: [] }, registry);
+  reportInertUsage({ fields: ["permissionMode"], tools: ["Task"], models: [] }, registry);
 
   const warning = reportInertUsage(
-    { fields: ["maxTurns"], tools: ["Task"], models: [] },
+    { fields: ["permissionMode"], tools: ["Task"], models: [] },
+    registry,
+  );
+
+  assert.equal(warning, undefined);
+});
+
+test("reportInertUsage returns undefined for maxTurns (no longer in CLAUDE_INERT_FIELDS)", () => {
+  const registry = new Map<string, number>();
+
+  const warning = reportInertUsage(
+    { fields: ["maxTurns"], tools: [], models: [] },
     registry,
   );
 

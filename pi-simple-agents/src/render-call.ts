@@ -100,6 +100,7 @@ export function formatAgentParams(agent: AgentConfig, override?: InvocationOverr
   const thinking = agent.thinking ?? "inherited";
   const tools = formatList(effective.tools);
   const skills = formatList(effective.skills);
+  const maxTurns = effective.maxTurns ?? "inherited";
 
-  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills}`;
+  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills} · maxTurns: ${maxTurns}`;
 }

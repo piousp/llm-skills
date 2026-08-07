@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
@@ -9,16 +9,18 @@ class FakeAgentSession {
   private _listeners: Array<(event: any) => void> = [];
   private _resolvePrompt?: () => void;
   private _toolEvents: any[];
+  private _turnEvents: any[];
   shouldThrow = false;
   hangUntilAbort = false;
   abortCalled = false;
   subscribeCallCount = 0;
   _dispose?: () => void;
 
-  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[] } = {}) {
+  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[]; turnEvents?: any[] } = {}) {
     this._lastAssistantText = text;
     this.hangUntilAbort = opts.hangUntilAbort ?? false;
     this._toolEvents = opts.toolEvents ?? [];
+    this._turnEvents = opts.turnEvents ?? [];
   }
 
   subscribe(listener: (event: any) => void): () => void {
@@ -32,6 +34,10 @@ class FakeAgentSession {
     if (this.hangUntilAbort) {
       await new Promise<void>((resolve) => { this._resolvePrompt = resolve; });
       return;
+    }
+    // Order is deterministic: turnEvents fire before toolEvents (a turn starts, then its tool batch runs).
+    for (const event of this._turnEvents) {
+      this._listeners.forEach((l) => l(event));
     }
     for (const event of this._toolEvents) {
       this._listeners.forEach((l) => l(event));
@@ -158,6 +164,30 @@ test("resolveConcurrency: non-number falls back to default with warning", (t) =>
   const warnSpy = t.mock.method(console, "warn", () => {});
   assert.equal(resolveConcurrency("4"), DEFAULT_CONCURRENCY);
   assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveMaxTurns: passes through undefined and valid 1..100 with no warning; invalid inputs warn once and resolve to undefined", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  // undefined and integer 1..100 pass through, no warn.
+  assert.equal(resolveMaxTurns(undefined), undefined);
+  assert.equal(resolveMaxTurns(1), 1);
+  assert.equal(resolveMaxTurns(50), 50);
+  assert.equal(resolveMaxTurns(100), 100);
+  assert.equal(warnSpy.mock.callCount(), 0);
+
+  // Every other value: undefined + one warn naming "maxTurns" and the bad value.
+  for (const value of [0, -1, 101, 2.5, NaN, Infinity, "5"]) {
+    const before = warnSpy.mock.callCount();
+    assert.equal(resolveMaxTurns(value), undefined);
+    assert.equal(warnSpy.mock.callCount(), before + 1);
+    const message = warnSpy.mock.calls[before]!.arguments[0] as string;
+    assert.match(message, /maxTurns/);
+    assert.ok(
+      message.includes(String(value)),
+      `expected warning to mention the invalid value ${String(value)}; got: ${message}`,
+    );
+  }
 });
 
 test("mapWithConcurrencyLimit: empty input returns empty array", async () => {
@@ -666,4 +696,193 @@ test("runAgentViaSdk: no timeoutMs configured still succeeds on a fast run (defa
   );
 
   assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: when maxTurns is set and turn_start events exceed it, settles with maxTurns error, aborts, and disposes the session", async () => {
+  let disposed = false;
+  const fakeSession = new FakeAgentSession("ignored", {
+    turnEvents: [
+      { type: "turn_start" },
+      { type: "turn_start" },
+      { type: "turn_start" },
+    ],
+  });
+  fakeSession._dispose = () => { disposed = true; };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ maxTurns: 2 }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal((result as any).error, "reached maxTurns limit of 2");
+  assert.equal(fakeSession.abortCalled, true);
+
+  // settleOnce resolves the outer promise synchronously from the listener,
+  // but the IIFE's finally block (which calls dispose) runs in a later
+  // microtask. Poll for it, bounded, instead of asserting on a race — the
+  // existing timeout test uses the same shape.
+  await new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + 200;
+    const check = () => {
+      if (disposed) return resolve();
+      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of maxTurns limit"));
+      setTimeout(check, 0);
+    };
+    check();
+  });
+  assert.equal(disposed, true);
+});
+
+test("runAgentViaSdk: when maxTurns fires first with a long timeoutMs set, maxTurns wins: settles maxTurns error, aborts, disposes, and the timer is cleaned up", async () => {
+  // Composition contract: whichever of (turnStart-past-limit, timeout) fires
+  // first wins via the existing settleOnce dedupe. Here the turn fires first
+  // (the fake's prompt() resolves normally after firing the events, so the
+  // 5000ms timer never actually elapses); the run settles via the maxTurns
+  // path and the runWithTimeoutAndAbort finally still clears its timer.
+  let disposed = false;
+  const fakeSession = new FakeAgentSession("ignored", {
+    turnEvents: [
+      { type: "turn_start" },
+      { type: "turn_start" },
+    ],
+  });
+  fakeSession._dispose = () => { disposed = true; };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ maxTurns: 1, timeoutMs: 5000 }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal((result as any).error, "reached maxTurns limit of 1");
+  assert.equal(fakeSession.abortCalled, true);
+
+  // settleOnce resolves the outer promise from the listener, but the IIFE's
+  // finally block (which calls dispose) runs in a later microtask. Poll for
+  // it, bounded, instead of asserting on a race — the existing timeout test
+  // uses the same shape.
+  await new Promise<void>((resolve, reject) => {
+    const deadline = Date.now() + 200;
+    const check = () => {
+      if (disposed) return resolve();
+      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of maxTurns-composes-with-timeout path"));
+      setTimeout(check, 0);
+    };
+    check();
+  });
+  assert.equal(disposed, true);
+});
+
+test("runAgentViaSdk: maxTurns (unreached) + signal abort mid-prompt settles with abort error, aborts, and does not produce a maxTurns error", async () => {
+  // Composition contract: when maxTurns is set high enough that the limit is
+  // never hit, and the run is hanging on prompt, aborting the signal must win
+  // over the (non-existent) maxTurns path. The run settles with the existing
+  // signal-abort error and the turn counter never fires. This proves the
+  // settleOnce dedupe is correct in the maxTurns+signal composition: only one
+  // path can settle, and the signal path is the one that wins.
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  const controller = new AbortController();
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent({ maxTurns: 100 }),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
+  );
+  // Let the IIFE enter runWithTimeoutAndAbort (which registers the abort
+  // listener) before aborting — mirrors the "signal abort mid-prompt" test.
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  const result = await promise;
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error ?? "", /abort/i);
+  assert.doesNotMatch((result as any).error ?? "", /maxTurns/);
+  assert.equal(fakeSession.abortCalled, true);
+});
+
+test("runAgentViaSdk: no maxTurns + many turn_start events settles success, never aborts, and never subscribes a turn counter", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    turnEvents: [
+      { type: "turn_start", turnIndex: 0 },
+      { type: "turn_start", turnIndex: 1 },
+      { type: "turn_start", turnIndex: 2 },
+      { type: "turn_start", turnIndex: 3 },
+      { type: "turn_start", turnIndex: 4 },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { modelRegistry: {} as any, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal((result as any).finalText, "done");
+  assert.equal(fakeSession.abortCalled, false);
+  // No maxTurns and no onToolEvent -> no subscription happens at all. The
+  // if (maxTurns !== undefined) guard in runAgentViaSdk is what keeps the
+  // turn-counter subscriber from being registered.
+  assert.equal(fakeSession.subscribeCallCount, 0);
+});
+
+test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the tool-events subscriber (no turn counter)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    turnEvents: [
+      { type: "turn_start", turnIndex: 0 },
+      { type: "turn_start", turnIndex: 1 },
+      { type: "turn_start", turnIndex: 2 },
+      { type: "turn_start", turnIndex: 3 },
+      { type: "turn_start", turnIndex: 4 },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+  const collected: SubagentToolEvent[] = [];
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      modelRegistry: {} as any,
+      createSession,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      onToolEvent: (e) => { collected.push(e); },
+    },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal(fakeSession.abortCalled, false);
+  // Exactly one subscription: the tool-events one. The turn counter is gated
+  // on maxTurns !== undefined, so with no maxTurns it must NOT register a
+  // second subscriber. If the guard were missing this would be 2.
+  assert.equal(fakeSession.subscribeCallCount, 1);
+  // Sanity: 5 turn_start events fired to the one subscriber and none of them
+  // had any side effect (no settle, no abort, no extra onToolEvent call).
+  assert.deepEqual(collected, []);
+});
+
+test("FakeAgentSession: turnEvents option fires configured turn_start events in order to subscribers", async () => {
+  const events: any[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    turnEvents: [
+      { type: "turn_start", turnIndex: 0 },
+      { type: "turn_start", turnIndex: 1 },
+      { type: "turn_start", turnIndex: 2 },
+    ],
+  });
+  fakeSession.subscribe((event: any) => events.push(event));
+  await fakeSession.prompt("find things");
+  assert.deepEqual(events, [
+    { type: "turn_start", turnIndex: 0 },
+    { type: "turn_start", turnIndex: 1 },
+    { type: "turn_start", turnIndex: 2 },
+  ]);
 });

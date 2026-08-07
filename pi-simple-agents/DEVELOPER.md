@@ -68,6 +68,7 @@ interface AgentConfig {
   inheritExtensions?: boolean;
   defaultContext?: "forked" | "fresh";
   skills?: string[];
+  maxTurns?: number;
 }
 ```
 
@@ -83,19 +84,25 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
   below): it filters the inherited skill set down to the named subset. It still does not preload
   the named skills' content into the subagent's context — not the same as Claude Code's
   skill-preload semantics.
+- `maxTurns` — optional turn-count cap, integer 1..100 (constant `MAX_TURNS_LIMIT` in
+  `src/run.ts`). Parsed from frontmatter by `parseFrontmatter` and validated at the use site by
+  `resolveMaxTurns` (see below); a `0`, negative, non-integer, `NaN`/`Infinity`, or out-of-range
+  value is warned-and-dropped (resolves to `undefined` = no limit), mirroring
+  `resolveTimeoutMs`/`resolveConcurrency`.
 
 ## InvocationOverride and applyInvocationOverride
 
 Per-invocation override applied on top of an already-configured `AgentConfig`, distinct from the
 settings-level `AgentOverrides` merged by `applyOverrides` above: this one comes from the
-`subagent` tool call's own arguments (single-mode `{model, tools, skills}`, or a `tasks[]` entry's
-own `model`/`tools`/`skills`), not from `settings.json`.
+`subagent` tool call's own arguments (single-mode `{model, tools, skills, maxTurns}`, or a
+`tasks[]` entry's own `model`/`tools`/`skills`/`maxTurns`), not from `settings.json`.
 
 ```typescript
 interface InvocationOverride {
   model?: string;
   tools?: string[];
   skills?: string[];
+  maxTurns?: number;
 }
 
 function applyInvocationOverride(
@@ -107,8 +114,8 @@ function applyInvocationOverride(
 Pure merge, presence-gated per field: only fields actually present (not `undefined`) on `override`
 replace the corresponding field on `agent` — `tools: []`/`skills: []` are valid and replace with an
 empty array; only `undefined` means "leave this field alone". When `override` has no fields set at
-all (`model`, `tools`, and `skills` all `undefined`), `applyInvocationOverride` returns the SAME
-`agent` reference, not a copy.
+all (`model`, `tools`, `skills`, and `maxTurns` all `undefined`), `applyInvocationOverride` returns
+the SAME `agent` reference, not a copy.
 
 Used at two call sites: `extensions/index.ts`'s `runSingleTask`, which computes one
 `effectiveAgent` reused for the whole run (see [Extension internals](#extension-internals)), and
@@ -409,6 +416,41 @@ call are factored into a module-private `runWithTimeoutAndAbort` helper (not exp
 out of `runAgentViaSdk` to keep the outer function's own promise-settlement/dispose logic
 readable. No behavior change; not part of the public API.
 
+### Turn counting
+
+`runAgentViaSdk` enforces `agent.maxTurns` (resolved once at the top of the function via
+`resolveMaxTurns`, see [resolveMaxTurns](#resolvemaxturns) above) by attaching a small
+`subscribeTurnCounter(session, maxTurns, onLimit)` helper alongside the existing
+`subscribeToolEvents` helper. The two helpers are deliberately separate: each subscribes to the
+session's event stream for one purpose only, matching the single-responsibility shape of
+`subscribeToolEvents`. `subscribeTurnCounter` keeps a closure-local `turnCount` and listens for
+`turn_start` events on the session's subscription — one `turn_start` per model response (a turn
+is "one model response + its batch of tool calls", per Claude Code's `maxTurns` semantics), so
+counting `turn_start` matches the spec exactly and stays correct under parallel tool batching
+(counting `tool_execution_start` would be off by N when the model emits multiple tool calls in one
+turn). When `turnCount > maxTurns`, the helper fires `onLimit`; `runAgentViaSdk` then
+settle-then-aborts:
+
+```typescript
+settleOnce(errorResult(ctx, `reached maxTurns limit of ${maxTurns}`));
+Promise.resolve(agentSession.abort()).catch(() => { /* ignore */ });
+```
+
+This mirrors the existing `onTimeout` callback's settle-then-abort sequence inside
+`runWithTimeoutAndAbort` exactly — same `settleOnce` first, then the same `agentSession.abort()`
+fire-and-forget — so the three termination paths (timeout, maxTurns, signal-abort) compose via
+the same `settleOnce` dedupe: whichever path fires first wins, and the others become no-ops. The
+`resolveMaxTurns` return of `undefined` short-circuits the entire subscriber, so a run without a
+cap adds zero overhead (no extra `subscribe` call).
+
+Because the abort listener registered by `runWithTimeoutAndAbort` unblocks
+`agentSession.prompt()` via `agentSession.abort()` but does not itself settle the run, a second
+`options.signal?.aborted` check runs immediately after `runWithTimeoutAndAbort` resolves. This
+mirrors the pre-prompt abort check (which settles the run before the prompt is even issued) and
+guarantees that a signal aborted mid-prompt settles as the same `"run was aborted"` error rather
+than falling through to the success block. The `settleOnce` guard keeps this safe against races
+with the timeout or maxTurns paths — an already-settled run is a no-op.
+
 ## mapWithConcurrencyLimit
 
 Processes an array with a configurable concurrency cap. Preserves input order.
@@ -437,6 +479,22 @@ Validates the raw `concurrency` value read from settings (see `loadSettings` abo
 value, then `DEFAULT_CONCURRENCY`. No upper cap of its own — `mapWithConcurrencyLimit` already
 clamps to `[1, items.length]`, and the `subagent` tool's own `MAX_PARALLEL_TASKS` (8) bounds
 `items.length`, so an effective ceiling of 8 applies at the tool layer, not inside this function.
+
+## resolveMaxTurns
+
+```typescript
+const MAX_TURNS_LIMIT = 100;
+
+function resolveMaxTurns(value: unknown): number | undefined;
+```
+
+Pure use-site validation of the `maxTurns` value on an `AgentConfig` (see [AgentConfig](#agentconfig)
+and [runAgentViaSdk turn counting](#turn-counting) below). Mirrors `resolveConcurrency` above but
+resolves to `undefined` (no limit) instead of a default, since the absence of a cap is itself a
+valid configuration. `undefined` → `undefined`. An integer in `[1, MAX_TURNS_LIMIT]` → returned
+unchanged. Anything else (`0`, negative, `> 100`, `NaN`, `Infinity`, non-integer, non-number) →
+`console.warn` naming the invalid value, then `undefined` (= no limit). No hard error — same
+warn-and-fall-through discipline as `resolveTimeoutMs` and `resolveConcurrency`.
 
 ## clampThinkingLevel
 
@@ -476,10 +534,10 @@ type SubagentParams =
 ```
 
 Both call shapes intersect `InvocationOverride` (see above): single mode carries `model`/`tools`/
-`skills` directly on the top-level object, `tasks` mode carries them per entry via `TaskEntry`.
-`invocationOverrideOf(t)` (`src/validate.ts`) extracts just the present override fields off either
-shape (a `TaskEntry`, or validated single-mode args) into a plain `InvocationOverride`, for feeding
-to `applyInvocationOverride`.
+`skills`/`maxTurns` directly on the top-level object, `tasks` mode carries them per entry via
+`TaskEntry`. `invocationOverrideOf(t)` (`src/validate.ts`) extracts just the present override
+fields off either shape (a `TaskEntry`, or validated single-mode args) into a plain
+`InvocationOverride`, for feeding to `applyInvocationOverride`.
 
 Validation rules:
 - Exactly one of `{agent, task, ...}` or `{tasks: [...]}` must be provided (not both, not neither).
@@ -492,9 +550,9 @@ Validation rules:
 - In single mode, a top-level `model` must be a `"provider/modelId"` string (rejected otherwise
   with a message naming the required format); top-level `tools`/`skills` must each be an array of
   strings.
-- In `tasks` mode, top-level `model`/`tools`/`skills` are rejected outright (checked via a small
-  loop over the three fields before validating `tasks` itself) with an error naming the field and
-  pointing at the per-entry equivalent — overrides only apply per task in this mode.
+- In `tasks` mode, top-level `model`/`tools`/`skills`/`maxTurns` are rejected outright (checked
+  via a small loop over the four fields before validating `tasks` itself) with an error naming
+  the field and pointing at the per-entry equivalent — overrides only apply per task in this mode.
 
 ### ValidationResult
 
@@ -674,10 +732,11 @@ creation, the SDK run, and progress-tracker teardown), is exported from `extensi
 API, just a visibility change for testability. `runSingleTask` computes ONE
 `effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t))` per task and reuses
 that single reference across all three of its call sites — `createMinimalResourceLoader`,
-`createSubagentSessionManager`, and `runAgentViaSdk` — so a per-invocation `model`/`tools`/`skills`
-override (the task's own override fields, see [InvocationOverride](#invocationoverride-and-applyinvocationoverride)
-above) applies consistently to resource loading, session naming/forking, and the actual SDK run —
-not just to model resolution.
+`createSubagentSessionManager`, and `runAgentViaSdk` — so a per-invocation `model`/`tools`/`skills`/
+`maxTurns` override (the task's own override fields, see
+[InvocationOverride](#invocationoverride-and-applyinvocationoverride) above) applies consistently
+to resource loading, session naming/forking, and the actual SDK run — not just to model
+resolution.
 
 As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
 `buildLoaderOptions` (`src/loader-config.ts`), which composes `resolveDefaultReads` and
@@ -779,14 +838,14 @@ up the named agent(s) in `paramAgents` and, when found, appends a dim parameter 
 `formatAgentParams`.
 
 - `formatAgentParams` merges `agent` with `override` via `applyInvocationOverride` first, then
-  renders the *effective* (post-invocation-override) `model`/`tools`/`skills` — not the agent's
-  raw configured values. This is deliberate: before this module took its current shape, the render
-  showed the agent's configured values even when an invocation override changed what would
-  actually run, which was misleading.
+  renders the *effective* (post-invocation-override) `model`/`tools`/`skills`/`maxTurns` — not the
+  agent's raw configured values. This is deliberate: before this module took its current shape,
+  the render showed the agent's configured values even when an invocation override changed what
+  would actually run, which was misleading.
 - `thinking` has no `InvocationOverride` field, so unlike `model`/`tools`/`skills` it's always read
   directly off `agent.thinking` — never merged through `applyInvocationOverride`.
 - The rendered param line has the fixed shape
-  `model: ... · thinking: ... · tools: ... · skills: ...`.
+  `model: ... · thinking: ... · tools: ... · skills: ... · maxTurns: ...`.
 - `formatList` (private, generalized from an earlier `formatTools`) renders both the `tools` and
   `skills` segments: `undefined` → `"inherited"`, empty array → `"none"`, otherwise the first
   `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer.
