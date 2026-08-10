@@ -67,12 +67,11 @@ requires explicit user confirmation of the synthesis.
 
 ## Text markers
 
-KISS, plain text. Emoji markers for readability (scope: grilling rounds only;
-frontmatter and prose stay plain):
+KISS, plain text. Emoji markers for readability:
 
 - 🧭 `Round N - frontier:` - round header
 - ❓ `Q<N> - <title>:` - question
-- 🔹 `Option: <text>` - a listed answer option (when options are spelled out)
+- 🔹 `Option<N>: <text>` - a numbered listed answer option (when options are spelled out)
 - ✅ `Recommendation: <text>` - recommended answer
 - 💡 `Fact: <text>` - fact the coordinator looked up via subagent
 
@@ -124,3 +123,8 @@ Natural follow-ups: `pablo-code-planning` (design from the confirmed goal) or
 `pablo-tdd` (directly, no plan, with the goal as bare input). [DO NOT]
 auto-dispatch - present the follow-ups as a list; the user names the next
 skill.
+
+## **CRITICAL**
+
+**[NEVER]** proceed to implementation if this skill is called.
+**[NEVER]** skip the grilling, that's *the whole point* of this skill
