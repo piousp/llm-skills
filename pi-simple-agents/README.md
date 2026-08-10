@@ -198,12 +198,67 @@ settings-level `agentOverrides`). An invalid value (0, negative, > 100, `NaN`, `
 non-integer, or non-numeric) is warned and treated as "no limit" for that call — same fallback
 as at the frontmatter layer.
 
+### Overriding thinking per invocation
+
+Both modes accept an optional `thinking` param — one of `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max` — that sets the thinking-budget level for that call.
+
+In single mode, `thinking` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", thinking: "high"
+```
+
+In parallel mode, `thinking` goes inside each entry of `tasks[]` — a top-level `thinking`
+alongside `tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", thinking: "low"
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+Invocation-level `thinking` takes precedence over the agent's configured value (frontmatter or
+settings-level `agentOverrides`). It's a free string, not validated at the tool boundary — an
+unrecognized level is warned and ignored at run time, falling back to the agent's otherwise-
+resolved thinking level, the same fallback the frontmatter/settings layers already use.
+
+### Overriding timeoutMs per invocation
+
+Both modes accept an optional `timeoutMs` param — a positive number of milliseconds bounding how
+long that call may run before it's aborted.
+
+In single mode, `timeoutMs` is a top-level param:
+
+```
+subagent agent: "scout", task: "Find all functions that use fetch() in src/", timeoutMs: 120000
+```
+
+In parallel mode, `timeoutMs` goes inside each entry of `tasks[]` — a top-level `timeoutMs`
+alongside `tasks` is rejected:
+
+```
+subagent tasks: [
+  agent: "scout", task: "List all .ts files in src/", timeoutMs: 120000
+  agent: "web-scout", task: "Find the latest version of the API docs"
+]
+```
+
+Invocation-level `timeoutMs` takes precedence over the agent's configured value (frontmatter or
+settings-level `agentOverrides`), and over the 10-minute default when nothing else sets it. A
+value above the 2-hour ceiling (`7200000` ms) is **clamped** to that ceiling with a
+`console.warn`, not rejected. A non-number, `<= 0`, `NaN`, or `Infinity` value is warned and falls
+back to the 10-minute default. On expiry, the run settles as an error
+(`"timed out after <N>ms"`) and any partial output is discarded.
+
 ### Bundled skill: `invoking-subagents`
 
 The package ships a self-discovering Agent Skill at
 [skills/invoking-subagents/SKILL.md](./skills/invoking-subagents/SKILL.md) that teaches single and
-parallel invocation and the `model`, `tools`, and `skills` overrides. It loads automatically once
-the package is installed, and can also be invoked explicitly as `/skill:invoking-subagents`.
+parallel invocation and the `model`, `tools`, `skills`, `thinking`, `maxTurns`, and `timeoutMs`
+overrides. It loads automatically once the package is installed, and can also be invoked
+explicitly as `/skill:invoking-subagents`.
 
 While a subagent runs, the `subagent` tool's call display shows a live status line per task:
 `<agent> · tools: <N> · <status>`, where `<status>` is `working…` (no tool started yet),
@@ -228,6 +283,7 @@ within one agent are possible), or `done` (the task has settled).
 | `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `skills` | list | *inherited* | Explicit whitelist of skills to load, matched by exact, case-sensitive name against the inherited set. When set, overrides automatic inheritance; requested names with no match produce a warning per run. Setting `skills` together with `inheritSkills: false` is contradictory config — it produces a warning and the filter is ignored. **Limitation:** the filter narrows *which* skills are available, but still doesn't preload the named skills' content into the subagent's context — this is not the same as Claude Code's skill-preload semantics. |
 | `maxTurns` | integer 1–100 | *no limit* | Max number of model turns (one model response + its batch of tool calls = 1 turn) before the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted. Out-of-range or non-integer values (≤ 0, > 100, `NaN`, `Infinity`, non-integer like 2.5) are warned and ignored, falling back to no limit. |
+| `timeoutMs` | number (ms) | `600000` (10 min) | Bounds how long a subagent run may take before it's aborted. A value above the 2-hour ceiling (`7200000` ms) is clamped to it with a warning. A non-number, `<= 0`, `NaN`, or `Infinity` value falls back to the 10-minute default with a warning. On expiry, the run settles as an error (`"timed out after <N>ms"`) and any partial output is discarded. |
 
 ## Claude Code compatibility
 
@@ -334,9 +390,12 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
 > [Claude Code compatibility](#claude-code-compatibility).
 
 > `timeoutMs` (number, milliseconds) bounds how long a subagent run may take before it's aborted.
-> It's settings-only — there's no frontmatter equivalent. Default when unset: `600000` (10
-> minutes). An invalid value (`0`, negative, `NaN`, `Infinity`, or a non-numeric value from raw
-> JSON) falls back to the default with a `console.warn`. On expiry, the run settles as an error
+> It can be set at any layer — frontmatter, settings-level `agentOverrides`, or per invocation
+> (see [Overriding timeoutMs per invocation](#overriding-timeoutms-per-invocation)). Default when
+> unset: `600000` (10 minutes). A ceiling of `7200000` ms (2 hours) applies everywhere: a finite
+> value above it is clamped to the ceiling with a `console.warn`, not rejected. An invalid value
+> (`0`, negative, `NaN`, `Infinity`, or a non-numeric value from raw JSON) falls back to the
+> default with a `console.warn`. On expiry, the run settles as an error
 > (`"timed out after <N>ms"`) and any partial output is discarded — it is not returned as a
 > truncated success. The example above raises `planner`'s timeout to 30 minutes for a
 > heavy-thinking, long-running agent. It bounds only the model/prompt execution phase — session
@@ -372,11 +431,13 @@ Merge is field-level: each present field replaces independently, and any field l
 through to the next-lower precedence layer. Invocation-level overrides cover `model` (see
 [Overriding the model per invocation](#overriding-the-model-per-invocation)), `tools` (see
 [Overriding tools per invocation](#overriding-tools-per-invocation)), `skills` (see
-[Overriding skills per invocation](#overriding-skills-per-invocation)), and `maxTurns` (see
-[Overriding maxTurns per invocation](#overriding-maxturns-per-invocation)) — each overrides only
-its own field for that one call. `thinking` and `disallowedTools` are **not** overridable at
-invocation level — they can only be changed via settings-level `agentOverrides` or frontmatter,
-which can override any field, including those two.
+[Overriding skills per invocation](#overriding-skills-per-invocation)), `thinking` (see
+[Overriding thinking per invocation](#overriding-thinking-per-invocation)), `maxTurns` (see
+[Overriding maxTurns per invocation](#overriding-maxturns-per-invocation)), and `timeoutMs` (see
+[Overriding timeoutMs per invocation](#overriding-timeoutms-per-invocation)) — each overrides only
+its own field for that one call. `disallowedTools` is the only field **not** overridable at
+invocation level — it can only be changed via settings-level `agentOverrides` or frontmatter,
+which can override any field, including that one.
 
 ### Complete example
 

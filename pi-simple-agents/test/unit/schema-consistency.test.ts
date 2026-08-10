@@ -10,8 +10,8 @@ import { SubagentParams } from "../../extensions/index.ts";
 // the same list a human updates by hand alongside either shape definition —
 // so adding/removing a field on one side without the other fails loudly.
 
-const EXPECTED_TOP_LEVEL_KEYS = ["agent", "task", "model", "tools", "skills", "tasks", "maxTurns"];
-const EXPECTED_TASKS_ITEM_KEYS = ["agent", "task", "model", "tools", "skills", "maxTurns"];
+const EXPECTED_TOP_LEVEL_KEYS = ["agent", "task", "model", "tools", "skills", "thinking", "tasks", "maxTurns", "timeoutMs"];
+const EXPECTED_TASKS_ITEM_KEYS = ["agent", "task", "model", "tools", "skills", "thinking", "maxTurns", "timeoutMs"];
 
 test("SubagentParams schema top-level keys match the hand-written validator's known fields", () => {
   assert.deepStrictEqual(

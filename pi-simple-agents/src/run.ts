@@ -45,10 +45,15 @@ export function clampThinkingLevel(level: string): ThinkingLevel | undefined {
 }
 
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min, per Phase 1 decision.
+export const MAX_TIMEOUT_MS = 7_200_000; // 2h ceiling, enforced here for every layer (frontmatter/settings/param).
 
 export function resolveTimeoutMs(value: unknown): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    if (value <= MAX_TIMEOUT_MS) return value;
+    console.warn(`pi-simple-agents: timeoutMs ${value} exceeds the maximum of ${MAX_TIMEOUT_MS}ms, clamping`);
+    return MAX_TIMEOUT_MS;
+  }
   console.warn(`pi-simple-agents: invalid timeoutMs ${value}, falling back to default`);
   return DEFAULT_TIMEOUT_MS;
 }

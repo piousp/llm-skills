@@ -286,6 +286,30 @@ body`;
   assert.match(warnings[0], /inheritSkills/);
 });
 
+// --- timeoutMs (number, ms) — a typeof-guard only; range/ceiling is
+// resolveTimeoutMs's job, not this layer's ---
+
+test("normalizeFrontmatterFields normalizes timeoutMs: valid number passes through with no warning, including values above the 2h ceiling (ceiling is not this layer's concern)", () => {
+  const cases = [900_000, 999_999_999];
+
+  for (const input of cases) {
+    const warnings: string[] = [];
+    const { normalized } = normalizeFrontmatterFields({ timeoutMs: input }, warnings);
+
+    assert.equal(normalized.timeoutMs, input, `${input}: should pass through unchanged`);
+    assert.equal(warnings.length, 0, `${input}: should produce no warnings`);
+  }
+});
+
+test("normalizeFrontmatterFields normalizes timeoutMs: non-number value drops to undefined with one warning naming the field", () => {
+  const warnings: string[] = [];
+  const { normalized } = normalizeFrontmatterFields({ timeoutMs: "900000" }, warnings);
+
+  assert.equal(normalized.timeoutMs, undefined);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /timeoutMs/);
+});
+
 // --- S1.3: maxTurns (integer 1..100) — valid values pass through; invalid values
 // drop to undefined with one warning naming the field and the value ---
 

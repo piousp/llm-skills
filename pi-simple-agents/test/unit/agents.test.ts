@@ -449,6 +449,71 @@ test("applyInvocationOverride: maxTurns set to undefined is treated as not prese
   assert.equal(result, baseAgent);
 });
 
+test("applyInvocationOverride: thinking string returns a new config with only thinking replaced, original untouched", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    thinking: "low",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { thinking: "max" });
+
+  assert.notEqual(result, baseAgent);
+  assert.equal(result.thinking, "max");
+  assert.equal(result.model, baseAgent.model);
+  assert.equal(baseAgent.thinking, "low");
+});
+
+test("applyInvocationOverride: timeoutMs number returns a new config with only timeoutMs replaced, original untouched", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    timeoutMs: 60_000,
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { timeoutMs: 20 });
+
+  assert.notEqual(result, baseAgent);
+  assert.equal(result.timeoutMs, 20);
+  assert.equal(result.model, baseAgent.model);
+  assert.equal(baseAgent.timeoutMs, 60_000);
+});
+
+test("applyInvocationOverride: empty override returns the same config (fast path with thinking and timeoutMs fields present in type)", () => {
+  const baseAgent: AgentConfig = {
+    name: "scout",
+    description: "Frontmatter description",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/fake/scout.md",
+    systemPrompt: "Frontmatter body.",
+  };
+
+  const result = applyInvocationOverride(baseAgent, { thinking: undefined, timeoutMs: undefined });
+
+  assert.equal(result, baseAgent);
+});
+
 test("applyOverrides: project override wins over user override; user override wins over frontmatter when project doesn't touch the field", () => {
   const overrides: AgentOverrides = {
     scout: { model: "project-model", description: "User description" },
@@ -721,6 +786,44 @@ Body.
     assert.ok(unbounded, "unbounded agent should be discovered");
     assert.equal(bounded.maxTurns, 7);
     assert.equal(unbounded.maxTurns, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("discoverAgents: populates timeoutMs from frontmatter and leaves it undefined when absent", async () => {
+  const dir = makeTmpDir();
+  try {
+    writeAgentFile(
+      dir,
+      "timed.md",
+      `---
+name: timed
+description: Has a timeoutMs
+timeoutMs: 60000
+---
+Body.
+`,
+    );
+    writeAgentFile(
+      dir,
+      "untimed.md",
+      `---
+name: untimed
+description: No timeoutMs configured
+---
+Body.
+`,
+    );
+
+    const agents = await discoverAgents(dir, undefined, new Map<string, number>());
+
+    const timed = agents.find((agent) => agent.name === "timed")!;
+    const untimed = agents.find((agent) => agent.name === "untimed")!;
+    assert.ok(timed, "timed agent should be discovered");
+    assert.ok(untimed, "untimed agent should be discovered");
+    assert.equal(timed.timeoutMs, 60_000);
+    assert.equal(untimed.timeoutMs, undefined);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

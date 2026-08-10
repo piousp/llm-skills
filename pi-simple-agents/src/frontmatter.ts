@@ -24,6 +24,7 @@ export interface ParsedFrontmatter {
   thinking?: string;
   skills?: string[];
   maxTurns?: number;
+  timeoutMs?: number;
   [key: string]: unknown;
 }
 
@@ -110,6 +111,22 @@ function normalizeMaxTurns(
   return undefined;
 }
 
+// Type-guard only — deliberately no range/ceiling check here. "What is a valid
+// timeoutMs" (including the 2h ceiling) is owned solely by resolveTimeoutMs
+// in run.ts, the single chokepoint every layer (frontmatter/settings/param)
+// flows through; duplicating that knowledge here would be a second source of
+// truth for the same invariant.
+function normalizeTimeoutMs(
+  value: unknown,
+  warnings: string[],
+): number | undefined {
+  if (typeof value === "number") return value;
+  warnings.push(
+    `Field "timeoutMs" must be a number; got ${JSON.stringify(value)} - value ignored.`,
+  );
+  return undefined;
+}
+
 function normalizeTools(
   value: unknown,
   fieldName: string,
@@ -181,6 +198,10 @@ export function normalizeFrontmatterFields(
 
   if (raw.maxTurns !== undefined) {
     normalized.maxTurns = normalizeMaxTurns(raw.maxTurns, warnings);
+  }
+
+  if (raw.timeoutMs !== undefined) {
+    normalized.timeoutMs = normalizeTimeoutMs(raw.timeoutMs, warnings);
   }
 
   return { normalized, modelAlias, inertTools: [...inertToolNames] };

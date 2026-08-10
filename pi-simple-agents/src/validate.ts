@@ -7,27 +7,21 @@ export type TaskEntry = { agent: string; task: string } & InvocationOverride;
 // that ride alongside it. Absent fields on the input stay absent on the
 // output (never present with an `undefined` value), matching
 // applyInvocationOverride's "no override fields present" fast path.
-export function invocationOverrideOf(
-  t: { model?: string; tools?: string[]; skills?: string[]; maxTurns?: number },
-): InvocationOverride {
+export function invocationOverrideOf(t: InvocationOverride): InvocationOverride {
   return {
     ...(t.model !== undefined ? { model: t.model } : {}),
     ...(t.tools !== undefined ? { tools: t.tools } : {}),
     ...(t.skills !== undefined ? { skills: t.skills } : {}),
+    ...(t.thinking !== undefined ? { thinking: t.thinking } : {}),
     ...(t.maxTurns !== undefined ? { maxTurns: t.maxTurns } : {}),
+    ...(t.timeoutMs !== undefined ? { timeoutMs: t.timeoutMs } : {}),
   };
 }
 
 export type SubagentParams =
   | ({ agent: string; task: string; tasks?: undefined } & InvocationOverride)
-  | {
-      agent?: undefined;
-      task?: undefined;
-      model?: undefined;
-      tools?: undefined;
-      skills?: undefined;
-      tasks: TaskEntry[];
-    };
+  | ({ agent?: undefined; task?: undefined; tasks: TaskEntry[] }
+      & Partial<Record<keyof InvocationOverride, undefined>>);
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -62,23 +56,34 @@ function validateStringArrayRef(value: unknown, label: string): string | undefin
   return `${label} must be an array of strings.`;
 }
 
-// Shared maxTurns type-guard: same condition (present and not a number) in
+// Shared type-guard for the scalar invocation-override fields (maxTurns,
+// timeoutMs, thinking): same condition (present and wrong type) across
 // single-mode and tasks-mode paths, same warn text format with a location
 // suffix, and a single drop mechanism (destructure-rest) so the produced
-// value never carries a non-number maxTurns. Range/integer checks
-// intentionally live in resolveMaxTurns at the use site, not here.
-function warnAndDropNonNumberMaxTurns<T extends Record<string, unknown>>(
+// value never carries an ill-typed field. Range/integer/level-validity
+// checks intentionally live at each field's own use site (resolveMaxTurns,
+// resolveTimeoutMs, clampThinkingLevel), not here.
+const OVERRIDE_TYPE_SPEC: ReadonlyArray<readonly [field: "maxTurns" | "timeoutMs" | "thinking", expected: "number" | "string"]> = [
+  ["maxTurns", "number"],
+  ["timeoutMs", "number"],
+  ["thinking", "string"],
+];
+
+function warnAndDropIllTypedOverrides<T extends Record<string, unknown>>(
   record: T,
   label: string,
 ): T {
-  if (record.maxTurns !== undefined && typeof record.maxTurns !== "number") {
-    console.warn(
-      `pi-simple-agents: invalid maxTurns ${JSON.stringify(record.maxTurns)} ${label}, ignoring`,
-    );
-    const { maxTurns: _dropped, ...rest } = record;
-    return rest as unknown as T;
+  let result = record;
+  for (const [field, expected] of OVERRIDE_TYPE_SPEC) {
+    if (result[field] !== undefined && typeof result[field] !== expected) {
+      console.warn(
+        `pi-simple-agents: invalid ${field} ${JSON.stringify(result[field])} ${label}, ignoring`,
+      );
+      const { [field]: _dropped, ...rest } = result;
+      result = rest as unknown as T;
+    }
   }
-  return record;
+  return result;
 }
 
 function validateTaskEntry(entry: unknown, index: number): string | undefined {
@@ -113,29 +118,29 @@ function validateSingleMode(raw: Record<string, unknown>): ValidationResult<Suba
   if (skillsError) {
     return { ok: false, error: skillsError };
   }
-  // maxTurns: minimal type-guard at this validation seam. Numbers pass through
-  // unchanged; anything else (string, boolean, etc.) is warned and dropped, so
-  // resolveMaxTurns at the use site never sees a non-number. Range/integer
-  // checks intentionally live in resolveMaxTurns, not here.
-  const cleaned = warnAndDropNonNumberMaxTurns(raw, "in subagent params");
+  // maxTurns/timeoutMs/thinking: minimal type-guard at this validation seam.
+  // Correctly-typed values pass through unchanged; anything else is warned
+  // and dropped, so each field's use site never sees the wrong type.
+  // Range/integer/level checks intentionally live at those use sites, not here.
+  const cleaned = warnAndDropIllTypedOverrides(raw, "in subagent params");
   return {
     ok: true,
     value: {
       agent: raw.agent,
       task: raw.task,
-      ...invocationOverrideOf(
-        cleaned as { model?: string; tools?: string[]; skills?: string[]; maxTurns?: number },
-      ),
+      ...invocationOverrideOf(cleaned as InvocationOverride),
     },
   };
 }
 
 function validateTasksMode(raw: Record<string, unknown>): ValidationResult<SubagentParams> {
-  const topLevelOverrideFields: Array<["model" | "tools" | "skills" | "maxTurns", unknown]> = [
+  const topLevelOverrideFields: Array<[keyof InvocationOverride, unknown]> = [
     ["model", raw.model],
     ["tools", raw.tools],
     ["skills", raw.skills],
+    ["thinking", raw.thinking],
     ["maxTurns", raw.maxTurns],
+    ["timeoutMs", raw.timeoutMs],
   ];
   for (const [field, value] of topLevelOverrideFields) {
     if (value !== undefined) {
@@ -166,13 +171,13 @@ function validateTasksMode(raw: Record<string, unknown>): ValidationResult<Subag
     if (entryError) return { ok: false, error: entryError };
   }
 
-  // Drop non-number maxTurns from each entry, warning once per non-number
-  // value (see warnAndDropNonNumberMaxTurns). Entries with a numeric or
-  // absent maxTurns pass through unchanged. validateTaskEntry above
-  // guarantees every entry is a record with the required agent/task shape,
-  // so the casts are safe.
+  // Drop ill-typed override fields from each entry, warning once per bad
+  // value (see warnAndDropIllTypedOverrides). Entries with correctly-typed or
+  // absent fields pass through unchanged. validateTaskEntry above guarantees
+  // every entry is a record with the required agent/task shape, so the casts
+  // are safe.
   const validatedTasks: TaskEntry[] = raw.tasks.map((entry, i) =>
-    warnAndDropNonNumberMaxTurns(
+    warnAndDropIllTypedOverrides(
       entry as Record<string, unknown>,
       `in tasks[${i}]`,
     ) as unknown as TaskEntry

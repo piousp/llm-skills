@@ -22,7 +22,9 @@ export interface AgentConfig {
   inheritExtensions?: boolean;
   defaultContext?: "forked" | "fresh";
   skills?: string[];
-  /** Max wall-clock time for one run's prompt execution, in ms. Settings-only (agentOverrides). */
+  /** Max wall-clock time for one run's prompt execution, in ms. Resolvable from
+      frontmatter, settings (agentOverrides), or a per-invocation override;
+      range/ceiling enforced solely by resolveTimeoutMs in run.ts. */
   timeoutMs?: number;
   /** Max number of model turns (one turn = one model response + its tool batch)
       before the run settles as an error. Frontmatter or settings-level
@@ -196,6 +198,7 @@ async function discoverAgentFile(
     defaultContext: frontmatter.defaultContext,
     skills: frontmatter.skills,
     maxTurns: frontmatter.maxTurns,
+    timeoutMs: frontmatter.timeoutMs,
   };
 
   return { warnings: fileWarnings, agent, frontmatterResult: result };
@@ -333,10 +336,20 @@ export interface InvocationOverride {
   model?: string;
   tools?: string[];
   skills?: string[];
+  /** Per-invocation thinking-level override. Presence-gated like the other
+      override fields: undefined means "inherit", any string replaces the
+      frontmatter/settings value (invalid levels warn at the clampThinkingLevel
+      chokepoint, not here). */
+  thinking?: string;
   /** Per-invocation maxTurns override (1..100). Presence-gated like the
       other override fields: undefined means "inherit", any integer 1..100
       replaces the frontmatter/settings value. */
   maxTurns?: number;
+  /** Per-invocation timeoutMs override, in ms. Presence-gated like the other
+      override fields: undefined means "inherit", any value replaces the
+      frontmatter/settings value (range/ceiling enforced at the
+      resolveTimeoutMs chokepoint, not here). */
+  timeoutMs?: number;
 }
 
 export function applyInvocationOverride(
@@ -347,7 +360,9 @@ export function applyInvocationOverride(
     override.model === undefined
     && override.tools === undefined
     && override.skills === undefined
+    && override.thinking === undefined
     && override.maxTurns === undefined
+    && override.timeoutMs === undefined
   ) {
     return agent;
   }
@@ -356,7 +371,9 @@ export function applyInvocationOverride(
   if (override.model !== undefined) result.model = override.model;
   if (override.tools !== undefined) result.tools = override.tools;
   if (override.skills !== undefined) result.skills = override.skills;
+  if (override.thinking !== undefined) result.thinking = override.thinking;
   if (override.maxTurns !== undefined) result.maxTurns = override.maxTurns;
+  if (override.timeoutMs !== undefined) result.timeoutMs = override.timeoutMs;
   return result;
 }
 
