@@ -97,10 +97,11 @@ function buildSingleCallText(
 export function formatAgentParams(agent: AgentConfig, override?: InvocationOverride): string {
   const effective = applyInvocationOverride(agent, override ?? {});
   const model = effective.model ?? "inherited";
-  const thinking = agent.thinking ?? "inherited";
+  const thinking = effective.thinking ?? "inherited";
   const tools = formatList(effective.tools);
   const skills = formatList(effective.skills);
   const maxTurns = effective.maxTurns ?? "inherited";
+  const timeoutMs = effective.timeoutMs ?? "inherited";
 
-  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills} · maxTurns: ${maxTurns}`;
+  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills} · maxTurns: ${maxTurns} · timeoutMs: ${timeoutMs}`;
 }

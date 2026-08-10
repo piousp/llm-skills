@@ -68,6 +68,7 @@ interface AgentConfig {
   inheritExtensions?: boolean;
   defaultContext?: "forked" | "fresh";
   skills?: string[];
+  timeoutMs?: number;
   maxTurns?: number;
 }
 ```
@@ -89,20 +90,27 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
   `resolveMaxTurns` (see below); a `0`, negative, non-integer, `NaN`/`Infinity`, or out-of-range
   value is warned-and-dropped (resolves to `undefined` = no limit), mirroring
   `resolveTimeoutMs`/`resolveConcurrency`.
+- `timeoutMs` — optional wall-clock bound (ms) on a run's prompt execution, now parsed from
+  frontmatter too (previously settings-only). Resolvable from frontmatter, settings-level
+  `agentOverrides`, or a per-invocation override, in that ascending precedence. Range/ceiling is
+  enforced solely at the `resolveTimeoutMs` use site in `src/run.ts` (see below), not during
+  frontmatter parsing or override merging — both of those layers just pass the raw value through.
 
 ## InvocationOverride and applyInvocationOverride
 
 Per-invocation override applied on top of an already-configured `AgentConfig`, distinct from the
 settings-level `AgentOverrides` merged by `applyOverrides` above: this one comes from the
-`subagent` tool call's own arguments (single-mode `{model, tools, skills, maxTurns}`, or a
-`tasks[]` entry's own `model`/`tools`/`skills`/`maxTurns`), not from `settings.json`.
+`subagent` tool call's own arguments (single-mode `{model, tools, skills, thinking, maxTurns,
+timeoutMs}`, or a `tasks[]` entry's own copy of the same six fields), not from `settings.json`.
 
 ```typescript
 interface InvocationOverride {
   model?: string;
   tools?: string[];
   skills?: string[];
+  thinking?: string;
   maxTurns?: number;
+  timeoutMs?: number;
 }
 
 function applyInvocationOverride(
@@ -114,8 +122,14 @@ function applyInvocationOverride(
 Pure merge, presence-gated per field: only fields actually present (not `undefined`) on `override`
 replace the corresponding field on `agent` — `tools: []`/`skills: []` are valid and replace with an
 empty array; only `undefined` means "leave this field alone". When `override` has no fields set at
-all (`model`, `tools`, `skills`, and `maxTurns` all `undefined`), `applyInvocationOverride` returns
-the SAME `agent` reference, not a copy.
+all (all six of `model`, `tools`, `skills`, `thinking`, `maxTurns`, `timeoutMs` `undefined`),
+`applyInvocationOverride` returns the SAME `agent` reference, not a copy.
+
+`thinking` and `timeoutMs` are presence-gated the same way as the other four fields, but do no
+range/level validation of their own here: an out-of-range `timeoutMs` or an unrecognized
+`thinking` level still overrides the agent's field at this layer, and is only caught downstream
+at its own resolution chokepoint (`resolveTimeoutMs`, `clampThinkingLevel`, both in `src/run.ts`)
+when the run actually executes.
 
 Used at two call sites: `extensions/index.ts`'s `runSingleTask`, which computes one
 `effectiveAgent` reused for the whole run (see [Extension internals](#extension-internals)), and
@@ -480,6 +494,25 @@ value, then `DEFAULT_CONCURRENCY`. No upper cap of its own — `mapWithConcurren
 clamps to `[1, items.length]`, and the `subagent` tool's own `MAX_PARALLEL_TASKS` (8) bounds
 `items.length`, so an effective ceiling of 8 applies at the tool layer, not inside this function.
 
+## resolveTimeoutMs
+
+```typescript
+const DEFAULT_TIMEOUT_MS = 600_000; // 10 min
+const MAX_TIMEOUT_MS = 7_200_000;   // 2h ceiling
+
+function resolveTimeoutMs(value: unknown): number;
+```
+
+Pure use-site validation of the `timeoutMs` value on an `AgentConfig` (frontmatter, settings
+`agentOverrides`, or invocation override — all three flow through the same `AgentConfig.timeoutMs`
+field by the time this runs). `undefined` → `DEFAULT_TIMEOUT_MS`. A finite number `> 0` and
+`<= MAX_TIMEOUT_MS` → returned unchanged. A finite number `> 0` but exceeding `MAX_TIMEOUT_MS`
+→ **clamped** to `MAX_TIMEOUT_MS` with a `console.warn` (not dropped to the default — the caller's
+intent to run long is honored up to the ceiling). Anything else (non-number, `<= 0`, `NaN`,
+`Infinity`) → `console.warn` naming the invalid value, then `DEFAULT_TIMEOUT_MS`. `MAX_TIMEOUT_MS`
+is enforced only here, so every layer that can set `timeoutMs` (frontmatter, settings, invocation)
+inherits the same 2-hour ceiling for free.
+
 ## resolveMaxTurns
 
 ```typescript
@@ -523,21 +556,25 @@ type TaskEntry = { agent: string; task: string } & InvocationOverride;
 
 type SubagentParams =
   | ({ agent: string; task: string; tasks?: undefined } & InvocationOverride)
-  | {
-      agent?: undefined;
-      task?: undefined;
-      model?: undefined;
-      tools?: undefined;
-      skills?: undefined;
-      tasks: TaskEntry[];
-    };
+  | ({ agent?: undefined; task?: undefined; tasks: TaskEntry[] }
+      & Partial<Record<keyof InvocationOverride, undefined>>);
 ```
 
+The tasks-mode branch's override side is now a **self-maintaining mapped type**
+(`Partial<Record<keyof InvocationOverride, undefined>>`) instead of a hand-written list of
+`field?: undefined` lines. This closes a real drift bug: the hand-written union had been missing
+`maxTurns` in this branch since 0.10.0 added it to `InvocationOverride` (only `model`/`tools`/
+`skills` were listed), so tasks-mode's type never actually forbade a stray top-level `maxTurns`
+at the type level, even though the runtime check in `validateTasksMode` always rejected it
+correctly. Mapping the type off `InvocationOverride`'s own keys means every future field added to
+`InvocationOverride` (like this release's `thinking`/`timeoutMs`) is automatically reflected here
+too, with no separate list to keep in sync.
+
 Both call shapes intersect `InvocationOverride` (see above): single mode carries `model`/`tools`/
-`skills`/`maxTurns` directly on the top-level object, `tasks` mode carries them per entry via
-`TaskEntry`. `invocationOverrideOf(t)` (`src/validate.ts`) extracts just the present override
-fields off either shape (a `TaskEntry`, or validated single-mode args) into a plain
-`InvocationOverride`, for feeding to `applyInvocationOverride`.
+`skills`/`thinking`/`maxTurns`/`timeoutMs` directly on the top-level object, `tasks` mode carries
+them per entry via `TaskEntry`. `invocationOverrideOf(t)` (`src/validate.ts`) extracts just the
+present override fields off either shape (a `TaskEntry`, or validated single-mode args) into a
+plain `InvocationOverride`, for feeding to `applyInvocationOverride`.
 
 Validation rules:
 - Exactly one of `{agent, task, ...}` or `{tasks: [...]}` must be provided (not both, not neither).
@@ -549,10 +586,14 @@ Validation rules:
   configured value", `[]` means "override to empty".
 - In single mode, a top-level `model` must be a `"provider/modelId"` string (rejected otherwise
   with a message naming the required format); top-level `tools`/`skills` must each be an array of
-  strings.
-- In `tasks` mode, top-level `model`/`tools`/`skills`/`maxTurns` are rejected outright (checked
-  via a small loop over the four fields before validating `tasks` itself) with an error naming
-  the field and pointing at the per-entry equivalent — overrides only apply per task in this mode.
+  strings. `thinking`/`maxTurns`/`timeoutMs` get a minimal type guard (`typeof` check) at this
+  same seam — an ill-typed value is warned and dropped, not a hard validation error; range/level
+  checks live at each field's own use site (`resolveMaxTurns`, `resolveTimeoutMs`,
+  `clampThinkingLevel`), not here.
+- In `tasks` mode, top-level `model`/`tools`/`skills`/`thinking`/`maxTurns`/`timeoutMs` are
+  rejected outright (checked via a small loop over all six fields before validating `tasks`
+  itself) with an error naming the field and pointing at the per-entry equivalent — overrides
+  only apply per task in this mode.
 
 ### ValidationResult
 
@@ -737,7 +778,7 @@ API, just a visibility change for testability. `runSingleTask` computes ONE
 `effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t))` per task and reuses
 that single reference across all three of its call sites — `createMinimalResourceLoader`,
 `createSubagentSessionManager`, and `runAgentViaSdk` — so a per-invocation `model`/`tools`/`skills`/
-`maxTurns` override (the task's own override fields, see
+`thinking`/`maxTurns`/`timeoutMs` override (the task's own override fields, see
 [InvocationOverride](#invocationoverride-and-applyinvocationoverride) above) applies consistently
 to resource loading, session naming/forking, and the actual SDK run — not just to model
 resolution.
@@ -842,14 +883,15 @@ up the named agent(s) in `paramAgents` and, when found, appends a dim parameter 
 `formatAgentParams`.
 
 - `formatAgentParams` merges `agent` with `override` via `applyInvocationOverride` first, then
-  renders the *effective* (post-invocation-override) `model`/`tools`/`skills`/`maxTurns` — not the
-  agent's raw configured values. This is deliberate: before this module took its current shape,
-  the render showed the agent's configured values even when an invocation override changed what
-  would actually run, which was misleading.
-- `thinking` has no `InvocationOverride` field, so unlike `model`/`tools`/`skills` it's always read
-  directly off `agent.thinking` — never merged through `applyInvocationOverride`.
+  renders the *effective* (post-invocation-override) `model`/`thinking`/`tools`/`skills`/
+  `maxTurns`/`timeoutMs` — not the agent's raw configured values. This is deliberate: before this
+  module took its current shape, the render showed the agent's configured values even when an
+  invocation override changed what would actually run, which was misleading. `thinking` now goes
+  through the same merge as the other fields — it has its own `InvocationOverride.thinking` field
+  (added alongside `timeoutMs` in this release), so it is no longer read directly off
+  `agent.thinking`.
 - The rendered param line has the fixed shape
-  `model: ... · thinking: ... · tools: ... · skills: ... · maxTurns: ...`.
+  `model: ... · thinking: ... · tools: ... · skills: ... · maxTurns: ... · timeoutMs: ...`.
 - `formatList` (private, generalized from an earlier `formatTools`) renders both the `tools` and
   `skills` segments: `undefined` → `"inherited"`, empty array → `"none"`, otherwise the first
   `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer.

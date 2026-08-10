@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
+import { invocationOverrideOf } from "../../src/validate.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
 class FakeAgentSession {
@@ -118,6 +119,30 @@ test("resolveTimeoutMs: Infinity falls back to default with warning", (t) => {
 test("resolveTimeoutMs: string value falls back to default with warning", (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   assert.equal(resolveTimeoutMs("600000"), DEFAULT_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: exactly MAX_TIMEOUT_MS passes through silently", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 0);
+});
+
+test("resolveTimeoutMs: finite value over the ceiling clamps to MAX_TIMEOUT_MS with warning", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(MAX_TIMEOUT_MS + 1), MAX_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: very large finite value clamps to MAX_TIMEOUT_MS", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(1e12), MAX_TIMEOUT_MS);
+  assert.equal(warnSpy.mock.callCount(), 1);
+});
+
+test("resolveTimeoutMs: Infinity still falls back to default, not the ceiling", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  assert.equal(resolveTimeoutMs(Infinity), DEFAULT_TIMEOUT_MS);
   assert.equal(warnSpy.mock.callCount(), 1);
 });
 
@@ -514,6 +539,56 @@ test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {
   );
 
   assert.equal(capturedThinkingLevel, "high");
+});
+
+// Reachability: composes invocationOverrideOf + applyInvocationOverride exactly
+// as runSingleTask (extensions/index.ts) does, then feeds the resulting
+// effectiveAgent into runAgentViaSdk — proving a per-invocation thinking
+// override (not just a directly-configured agent.thinking) reaches
+// createSession's thinkingLevel.
+test("runAgentViaSdk: a per-invocation thinking override reaches thinkingLevel via the same composition runSingleTask uses", async () => {
+  let capturedThinkingLevel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedThinkingLevel = opts.thinkingLevel;
+    return { session: fakeSession as any };
+  };
+
+  const baseAgent = makeAgent({ thinking: "low" } as any);
+  const effectiveAgent = applyInvocationOverride(
+    baseAgent,
+    invocationOverrideOf({ thinking: "max" }),
+  );
+
+  await runAgentViaSdk(
+    effectiveAgent,
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(capturedThinkingLevel, "max");
+});
+
+// Same composition, proving a per-invocation timeoutMs override (not just a
+// directly-configured agent.timeoutMs) actually drives the real timer.
+test("runAgentViaSdk: a per-invocation timeoutMs override drives the real timer via the same composition runSingleTask uses", async () => {
+  const fakeSession = new FakeAgentSession("done", { hangUntilAbort: true });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const baseAgent = makeAgent({ timeoutMs: 5000 } as any);
+  const effectiveAgent = applyInvocationOverride(
+    baseAgent,
+    invocationOverrideOf({ timeoutMs: 20 }),
+  );
+
+  const result = await runAgentViaSdk(
+    effectiveAgent,
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal((result as any).status, "error");
+  assert.match((result as any).error, /timed out after 20ms/);
 });
 
 test("runAgentViaSdk: passes tools from agent.tools", async () => {

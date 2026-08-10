@@ -118,7 +118,13 @@ this pass.
   agent picked a model actually *in the sonnet family* when translating a
   bare "sonnet" alias; that would need either a curated alias→family map
   or an L3 judge, neither built here).
-- **No coverage of `agentOverrides`/settings-level precedence** — this
-  skill's `SKILL.md` only documents the invocation-level `model` param, so
-  the eval doesn't drive settings.json overrides either; out of scope by
-  design (see `SKILL.md`'s own "Not covered here").
+- **No coverage of `agentOverrides`/settings-level precedence** — the eval
+  doesn't drive settings.json overrides for any of the six invocation-level
+  params `SKILL.md` documents (`model`, `tools`, `skills`, `thinking`,
+  `maxTurns`, `timeoutMs`); out of scope by design (see `SKILL.md`'s own
+  "Not covered here").
+- **No coverage of `thinking`, `maxTurns`, or `timeoutMs` overrides** —
+  `prompt_set.json`'s 9 cases only exercise `model`/`tools`/`skills`
+  placement and the mode/cap/trigger checks; the three newer per-invocation
+  params have no dedicated prompt case yet. Out of scope for this pass
+  (adding cases is live-gated and token-costly).

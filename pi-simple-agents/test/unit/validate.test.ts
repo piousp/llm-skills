@@ -566,6 +566,256 @@ test("invocationOverrideOf: an explicit undefined maxTurns is treated the same a
   assert.ok(!("maxTurns" in result));
 });
 
+test("validateSubagentParams: top-level thinking combined with tasks is rejected, naming thinking and pointing at per-entry placement", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "x", task: "y" }],
+    thinking: "max",
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.error, /thinking/);
+    assert.match(result.error, /per entry/);
+    assert.doesNotMatch(result.error, /tasks\[\d+\]\.thinking/);
+  }
+});
+
+test("validateSubagentParams: top-level timeoutMs combined with tasks is rejected, naming timeoutMs and pointing at per-entry placement", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "x", task: "y" }],
+    timeoutMs: 60_000,
+  });
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.error, /timeoutMs/);
+    assert.match(result.error, /per entry/);
+    assert.doesNotMatch(result.error, /tasks\[\d+\]\.timeoutMs/);
+  }
+});
+
+test("validateSubagentParams: tasks mode entry with a string thinking carries it through on that entry", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", thinking: "max" }],
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      tasks: [{ agent: "scout", task: "find things", thinking: "max" }],
+    },
+  });
+});
+
+test("validateSubagentParams: tasks mode entry with a non-string thinking drops the field and warns once, leaving the rest of the entry intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", thinking: 5 }],
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, {
+      tasks: [{ agent: "scout", task: "find things" }],
+    });
+    assert.ok(!("thinking" in result.value.tasks[0]), "thinking should not be on the entry");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-string thinking");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /thinking/);
+});
+
+test("validateSubagentParams: single mode with a string thinking carries it through in the returned value", () => {
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    thinking: "low",
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      agent: "scout",
+      task: "find things",
+      thinking: "low",
+    },
+  });
+});
+
+test("validateSubagentParams: single mode lets an unrecognized thinking level pass through untouched — no warn at this layer (level validity check lives in clampThinkingLevel)", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    thinking: "adaptative",
+  });
+
+  assert.equal(result.ok, true, "expected an unrecognized thinking level to validate ok");
+  if (result.ok) {
+    assert.deepStrictEqual(
+      result.value,
+      { agent: "scout", task: "find things", thinking: "adaptative" },
+    );
+  }
+
+  assert.equal(
+    warnSpy.mock.callCount(),
+    0,
+    "validate.ts must not warn about an unrecognized thinking level — that lives at the use site",
+  );
+});
+
+test("validateSubagentParams: single mode with a non-string thinking drops the field and warns once, leaving the rest of the value intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    thinking: 5,
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, { agent: "scout", task: "find things" });
+    assert.ok(!("thinking" in result.value), "thinking should not be on the returned value");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-string thinking");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /thinking/);
+});
+
+test("validateSubagentParams: tasks mode entry with a numeric timeoutMs carries it through on that entry", () => {
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", timeoutMs: 60_000 }],
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      tasks: [{ agent: "scout", task: "find things", timeoutMs: 60_000 }],
+    },
+  });
+});
+
+test("validateSubagentParams: tasks mode entry with a non-number timeoutMs drops the field and warns once, leaving the rest of the entry intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    tasks: [{ agent: "scout", task: "find things", timeoutMs: "60000" }],
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, {
+      tasks: [{ agent: "scout", task: "find things" }],
+    });
+    assert.ok(!("timeoutMs" in result.value.tasks[0]), "timeoutMs should not be on the entry");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-number timeoutMs");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /timeoutMs/);
+});
+
+test("validateSubagentParams: single mode with a numeric timeoutMs carries it through in the returned value", () => {
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    timeoutMs: 60_000,
+  });
+
+  assert.deepStrictEqual(result, {
+    ok: true,
+    value: {
+      agent: "scout",
+      task: "find things",
+      timeoutMs: 60_000,
+    },
+  });
+});
+
+test("validateSubagentParams: single mode with a non-number timeoutMs drops the field and warns once, leaving the rest of the value intact", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  const result = validateSubagentParams({
+    agent: "scout",
+    task: "find things",
+    timeoutMs: "60000",
+  });
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.deepStrictEqual(result.value, { agent: "scout", task: "find things" });
+    assert.ok(!("timeoutMs" in result.value), "timeoutMs should not be on the returned value");
+  }
+  assert.equal(warnSpy.mock.callCount(), 1, "expected exactly one console.warn for the non-number timeoutMs");
+  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
+  assert.match(message, /timeoutMs/);
+});
+
+test("validateSubagentParams: single mode lets numeric timeoutMs (0, 1e12) pass through untouched — no warn at this layer (range/ceiling check lives in resolveTimeoutMs)", (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+
+  for (const value of [0, 1e12]) {
+    const result = validateSubagentParams({
+      agent: "scout",
+      task: "find things",
+      timeoutMs: value,
+    });
+
+    assert.equal(result.ok, true, `expected timeoutMs: ${value} to validate ok`);
+    if (result.ok) {
+      assert.deepStrictEqual(
+        result.value,
+        { agent: "scout", task: "find things", timeoutMs: value },
+      );
+    }
+  }
+
+  assert.equal(
+    warnSpy.mock.callCount(),
+    0,
+    "validate.ts must not warn about out-of-range timeoutMs — that lives at the use site",
+  );
+});
+
+test("invocationOverrideOf: a present thinking is carried through to the returned override", () => {
+  const result = invocationOverrideOf({ thinking: "max" });
+
+  assert.deepStrictEqual(result, { thinking: "max" });
+});
+
+test("invocationOverrideOf: input without thinking produces no thinking key on the returned override", () => {
+  const result = invocationOverrideOf({});
+
+  assert.ok(!("thinking" in result));
+});
+
+test("invocationOverrideOf: an explicit undefined thinking is treated the same as an absent one, producing no key", () => {
+  const result = invocationOverrideOf({ thinking: undefined });
+
+  assert.ok(!("thinking" in result));
+});
+
+test("invocationOverrideOf: a present timeoutMs is carried through to the returned override", () => {
+  const result = invocationOverrideOf({ timeoutMs: 60_000 });
+
+  assert.deepStrictEqual(result, { timeoutMs: 60_000 });
+});
+
+test("invocationOverrideOf: input without timeoutMs produces no timeoutMs key on the returned override", () => {
+  const result = invocationOverrideOf({});
+
+  assert.ok(!("timeoutMs" in result));
+});
+
+test("invocationOverrideOf: an explicit undefined timeoutMs is treated the same as an absent one, producing no key", () => {
+  const result = invocationOverrideOf({ timeoutMs: undefined });
+
+  assert.ok(!("timeoutMs" in result));
+});
+
 test("resolveAgents: known agent names resolve to their full AgentConfig entries", () => {
   const scout = makeAgent({ name: "scout" });
   const reviewer = makeAgent({ name: "reviewer" });

@@ -13,7 +13,7 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, ModelRuntime
 import type { AgentConfig } from "../src/agents.ts";
 import { applyInvocationOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
-import { runAgentViaSdk, mapWithConcurrencyLimit, type AgentRunResult } from "../src/run.ts";
+import { runAgentViaSdk, mapWithConcurrencyLimit, MAX_TIMEOUT_MS, type AgentRunResult } from "../src/run.ts";
 import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents, normalizeTasks, invocationOverrideOf } from "../src/validate.ts";
@@ -67,10 +67,18 @@ export const SubagentParams = Type.Object({
   skills: Type.Optional(Type.Array(Type.String(), {
     description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
   })),
+  thinking: Type.Optional(Type.String({
+    description: 'Optional per-invocation thinking-level override (e.g. "off", "minimal", "low", "medium", "high", "xhigh", "max"). Takes precedence over the agent\'s configured thinking level. An unrecognized level is warned and ignored at run time, falling back to the agent\'s configured level. Omit to inherit.',
+  })),
   maxTurns: Type.Optional(Type.Integer({
     minimum: 1,
     maximum: 100,
     description: 'Optional per-invocation maxTurns override (1-100). Limits the number of model turns (one turn = one model response + its tool batch) before the run settles as an error. Takes precedence over the agent\'s configured maxTurns. Omit to inherit.',
+  })),
+  timeoutMs: Type.Optional(Type.Integer({
+    minimum: 1,
+    maximum: MAX_TIMEOUT_MS,
+    description: `Optional per-invocation timeout override, in milliseconds (max ${MAX_TIMEOUT_MS}, i.e. 2 hours — values above this are clamped with a warning). Limits how long the run's prompt execution may take before it settles as an error. Takes precedence over the agent's configured timeoutMs. Omit to inherit.`,
   })),
   tasks: Type.Optional(
     Type.Array(
@@ -86,10 +94,18 @@ export const SubagentParams = Type.Object({
         skills: Type.Optional(Type.Array(Type.String(), {
           description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
         })),
+        thinking: Type.Optional(Type.String({
+          description: 'Optional per-invocation thinking-level override (e.g. "off", "minimal", "low", "medium", "high", "xhigh", "max"). Takes precedence over the agent\'s configured thinking level. An unrecognized level is warned and ignored at run time, falling back to the agent\'s configured level. Omit to inherit.',
+        })),
         maxTurns: Type.Optional(Type.Integer({
           minimum: 1,
           maximum: 100,
           description: 'Optional per-invocation maxTurns override (1-100). Limits the number of model turns (one turn = one model response + its tool batch) before the run settles as an error. Takes precedence over the agent\'s configured maxTurns. Omit to inherit.',
+        })),
+        timeoutMs: Type.Optional(Type.Integer({
+          minimum: 1,
+          maximum: MAX_TIMEOUT_MS,
+          description: `Optional per-invocation timeout override, in milliseconds (max ${MAX_TIMEOUT_MS}, i.e. 2 hours — values above this are clamped with a warning). Limits how long the run's prompt execution may take before it settles as an error. Takes precedence over the agent's configured timeoutMs. Omit to inherit.`,
         })),
       }),
     ),

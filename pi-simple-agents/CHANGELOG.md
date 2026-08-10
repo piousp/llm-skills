@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.12.0
+
+- **New optional `thinking` param on the `subagent` tool invocation.** Same placement rule as
+  `model`/`tools`/`skills`/`maxTurns`: a top-level field in single mode, per-entry inside each
+  `tasks[]` item in parallel mode (top-level `thinking` alongside `tasks` is rejected). A free
+  string, not validated at the tool boundary — an unrecognized level is warned and ignored at run
+  time by the existing `clampThinkingLevel` (`src/run.ts`), falling back to the agent's
+  otherwise-resolved level, not a validation error. Precedence: invocation `thinking` > settings
+  `agentOverrides[agent].thinking` > agent frontmatter `thinking` > session default.
+- **New optional `timeoutMs` param on the `subagent` tool invocation**, same placement rule as the
+  other five override fields. Precedence: invocation `timeoutMs` > settings
+  `agentOverrides[agent].timeoutMs` > agent frontmatter `timeoutMs` > the existing 10-minute
+  default (`DEFAULT_TIMEOUT_MS`).
+- **`timeoutMs` is no longer settings-only — it's now also a real agent frontmatter field.**
+  Parsed and normalized by `src/frontmatter.ts`, populated onto `AgentConfig.timeoutMs` the same
+  way `maxTurns` was connected in 0.10.0.
+- **New 2-hour ceiling on `timeoutMs`: `MAX_TIMEOUT_MS = 7_200_000` ms, enforced once at the
+  `resolveTimeoutMs` chokepoint (`src/run.ts`) for every layer** (frontmatter, settings,
+  invocation). A finite value above the ceiling is **clamped** to it with a `console.warn`, not
+  dropped to the default — the caller's intent to run long is honored up to the ceiling. The
+  existing fallback for non-number/`<= 0`/`NaN`/`Infinity` values (warn, fall back to the
+  10-minute default) is unchanged.
+- **Fix: the `subagent` tool's call display (`src/render-call.ts`) now renders the effective
+  (post-invocation-override) `thinking` value, and gains a new `timeoutMs: ...` segment.**
+  Previously `thinking` had no `InvocationOverride` field and was always read directly off the
+  agent's raw configured value, so a call overriding `thinking` rendered the *pre-override*
+  level — the same class of bug already fixed for `model`/`tools`/`skills` in 0.9.0 and for
+  `maxTurns` in 0.10.0. `thinking` now merges through `applyInvocationOverride` like every other
+  field; `timeoutMs` was not rendered at all before this release.
+- **Fix: `SubagentParams`' tasks-mode branch (`src/validate.ts`) was silently missing `maxTurns`
+  since 0.10.0.** The hand-written union that forbids top-level override fields alongside a
+  top-level `tasks` array listed only `model`/`tools`/`skills` as `?: undefined`, so `maxTurns`
+  never actually appeared in that type even though the runtime check in `validateTasksMode`
+  always rejected it correctly — a type-only drift, not a runtime bug. Replaced with a
+  self-maintaining `Partial<Record<keyof InvocationOverride, undefined>>` mapped type, so this
+  class of drift can't recur as new override fields (like this release's `thinking`/`timeoutMs`)
+  are added to `InvocationOverride`.
+- Docs updated: README.md (new "Overriding thinking per invocation" / "Overriding timeoutMs per
+  invocation" sections, `timeoutMs` added to the frontmatter field table, corrected
+  precedence-rules paragraph, corrected `agentOverrides.timeoutMs` note), `skills/
+  invoking-subagents/SKILL.md` (restructured per-param sections into one "Per-invocation
+  parameters" section covering all six fields), DEVELOPER.md (`AgentConfig.timeoutMs`,
+  `InvocationOverride.thinking`/`timeoutMs`, new `resolveTimeoutMs` section, corrected
+  `render-call.ts`/`SubagentParams` descriptions).
+
 ## 0.11.0 — 2026-08-07
 
 - **Requires pi `>= 0.83`.** The SDK renamed `CreateAgentSessionOptions.modelRegistry` to
