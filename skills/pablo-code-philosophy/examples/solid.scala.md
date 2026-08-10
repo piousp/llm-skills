@@ -1,6 +1,6 @@
-# SOLID — Code Examples (Scala)
+# SOLID - Code Examples (Scala)
 
-### S — Single Responsibility: Shipping calculator
+### S - Single Responsibility: Shipping calculator
 
 ```scala
 // Two reasons to change: shipping rules AND logging
@@ -18,7 +18,7 @@ class CalculationLogger {
 }
 ```
 
-### O — Open/Closed: Payment processing
+### O - Open/Closed: Payment processing
 
 ```scala
 // Violation: modify every time a new type appears
@@ -33,7 +33,7 @@ class CreditShipping extends ShippingStrategy { def calculate(o: Order) = ??? }
 class PayPalShipping extends ShippingStrategy { def calculate(o: Order) = ??? }
 ```
 
-### L — Liskov Substitution: Bird hierarchy
+### L - Liskov Substitution: Bird hierarchy
 
 ```scala
 // Violation: Ostrich extends Bird with fly() but can't fly
@@ -46,7 +46,7 @@ class Sparrow extends Bird with Flyable
 class Ostrich extends Bird // no fly
 ```
 
-### I — Interface Segregation: Document processing
+### I - Interface Segregation: Document processing
 
 ```scala
 // Violation: fat interface
@@ -58,7 +58,7 @@ trait DocumentWriter { def write(): Unit }
 trait DocumentPrinter { def print(): Unit }
 ```
 
-### D — Dependency Inversion: Database access
+### D - Dependency Inversion: Database access
 
 ```scala
 // Violation: depends on concrete

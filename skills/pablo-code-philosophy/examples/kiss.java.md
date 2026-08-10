@@ -1,4 +1,4 @@
-# KISS — Code Examples (Java)
+# KISS - Code Examples (Java)
 
 ### Over-engineered
 
@@ -44,7 +44,7 @@ public Response handle(Request req) {
 }
 private Response process(Request req) { return authorize(req) ? execute(req) : deny(req); }
 
-// Flat, early-return — the control flow is visible at the top level
+// Flat, early-return - the control flow is visible at the top level
 public Response handle(Request req) {
     if (!validate(req)) return reject(req);
     if (!authorize(req)) return deny(req);

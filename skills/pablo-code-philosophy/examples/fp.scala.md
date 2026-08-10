@@ -1,4 +1,4 @@
-# FP — Code Examples (Scala)
+# FP - Code Examples (Scala)
 
 ### Imperative, hides the failure path
 
@@ -16,7 +16,7 @@ def findUser(id: String): User = {
 def findUser(id: String): Option[User] = repository.get(id)
 ```
 
-The caller decides how to handle absence — `.getOrElse()`, `.map()`, propagate the `Option` —
+The caller decides how to handle absence - `.getOrElse()`, `.map()`, propagate the `Option`  - 
 instead of being forced into a try/catch for an expected outcome.
 
 ### Observable mutation vs. no mutation at all
@@ -33,7 +33,7 @@ def sumTotals(orders: List[Order]): Double =
   orders.foldLeft(0.0)((total, o) => total + o.amount)
 ```
 
-Scala rarely even needs the "local var is fine" exception — `foldLeft` replaces the
+Scala rarely even needs the "local var is fine" exception - `foldLeft` replaces the
 accumulator pattern outright.
 
 ### Composition replacing a nested-conditional mess
@@ -56,7 +56,7 @@ val names = customers
   .map(_.name.toUpperCase)
 ```
 
-Worth it here: three real steps (filter, filter, map) — see FP.md's `FP vs KISS` note before
+Worth it here: three real steps (filter, filter, map) - see [references/interactions.md](../references/interactions.md)'s `FP vs KISS` row before
 reaching for a chain on a two-step transform.
 
 ### Typed failure for a multi-step expected outcome

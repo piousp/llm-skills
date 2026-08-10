@@ -1,18 +1,8 @@
 [
   {
-    "id": "trigger_write_new_service",
-    "prompt": "Escribe un servicio nuevo desde cero en TypeScript que exponga un endpoint para crear usuarios.",
-    "expected_checks": ["tests_planned"]
-  },
-  {
     "id": "trigger_add_endpoint_existing_api",
     "prompt": "Añade un endpoint GET /orders/{id} a la API existente en server.js.",
     "expected_checks": ["no_unrelated_edits:server.js"]
-  },
-  {
-    "id": "trigger_implement_scala_function",
-    "prompt": "Implementa una función en Scala que valide si un rango de fechas es correcto.",
-    "expected_checks": []
   },
   {
     "id": "trigger_dry_extract_decision",
@@ -30,11 +20,6 @@
     "expected_checks": ["no_file_edits"]
   },
   {
-    "id": "trigger_suggest_tests",
-    "prompt": "Sugiere qué tests debería agregar para el cambio que acabo de hacer en messy_module.py.",
-    "expected_checks": ["mentions_keywords:test|edge case|boundary|null"]
-  },
-  {
     "id": "edge_yagni_refactor_cutoff",
     "prompt": "Estoy por refactorizar messy_module.py, pero no estoy seguro si vale la pena extraer esta parte todavía o si es prematuro.",
     "expected_checks": ["mentions_keywords:yagni|premature|strikes"]
@@ -48,5 +33,20 @@
     "id": "edge_clean_file_surgical",
     "prompt": "Limpia messy_module.py, se ve desordenado.",
     "expected_checks": ["no_unrelated_edits"]
+  },
+  {
+    "id": "core_pipeline_decision_order",
+    "prompt": "Voy a implementar una feature nueva de pagos. ¿Qué decisiones de diseño tomo y en qué orden, antes de escribir el código?",
+    "expected_checks": ["mentions_keywords:yagni|kiss|dry|solid|pipeline"]
+  },
+  {
+    "id": "core_precedence_kiss_dry_solid",
+    "prompt": "Encontré una abstracción elegante con interfaces que elimina toda la duplicación, pero hace el código mucho más difícil de leer. ¿La aplico de todos modos?",
+    "expected_checks": ["mentions_keywords:kiss|dry|solid|precedence|simpl"]
+  },
+  {
+    "id": "core_conflict_matrix_resolution",
+    "prompt": "Dos clases comparten un bloque de validación, pero los motivos por los que cada una cambia son distintos. ¿Extraigo el bloque a un helper compartido?",
+    "expected_checks": ["mentions_keywords:srp|dry|kiss|reason|change"]
   }
 ]

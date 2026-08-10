@@ -1,6 +1,6 @@
-# SOLID — Code Examples (Java)
+# SOLID - Code Examples (Java)
 
-### S — Single Responsibility: Shipping calculator
+### S - Single Responsibility: Shipping calculator
 
 ```java
 // Two reasons to change: shipping rules AND logging
@@ -18,7 +18,7 @@ public class CalculationLogger {
 }
 ```
 
-### O — Open/Closed: Payment processing
+### O - Open/Closed: Payment processing
 
 ```java
 // Violation: modify every time a new type appears
@@ -33,7 +33,7 @@ class CreditShipping implements ShippingStrategy { }
 class PayPalShipping implements ShippingStrategy { }
 ```
 
-### L — Liskov Substitution: Bird hierarchy
+### L - Liskov Substitution: Bird hierarchy
 
 ```java
 // Violation: Ostrich extends Bird with fly() but can't fly
@@ -48,7 +48,7 @@ class Sparrow extends Bird implements Flyable { public void fly() { /* ... */ } 
 class Ostrich extends Bird { } // no fly
 ```
 
-### I — Interface Segregation: Document processing
+### I - Interface Segregation: Document processing
 
 ```java
 // Violation: fat interface
@@ -60,7 +60,7 @@ interface DocumentWriter { void write(); }
 interface DocumentPrinter { void print(); }
 ```
 
-### D — Dependency Inversion: Database access
+### D - Dependency Inversion: Database access
 
 ```java
 // Violation: depends on concrete

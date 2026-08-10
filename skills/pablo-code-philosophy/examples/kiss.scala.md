@@ -1,4 +1,4 @@
-# KISS — Code Examples (Scala)
+# KISS - Code Examples (Scala)
 
 ### Over-engineered
 
@@ -37,12 +37,11 @@ def handle(req: Request): Response =
 def process(req: Request): Response =
   if (authorize(req)) execute(req) else deny(req)
 
-// Flat, early-return — the control flow is visible at the top level
-def handle(req: Request): Response = {
-  if (!validate(req)) return reject(req)
-  if (!authorize(req)) return deny(req)
-  execute(req)
-}
+// Flat, guard-clause style - the control flow is visible at the top level
+def handle(req: Request): Response =
+  if (!validate(req)) reject(req)
+  else if (!authorize(req)) deny(req)
+  else execute(req)
 ```
 
 ### Fix the data shape, kill the conditionals

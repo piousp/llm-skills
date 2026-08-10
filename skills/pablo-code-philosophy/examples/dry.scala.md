@@ -1,6 +1,6 @@
-# DRY — Code Examples (Scala)
+# DRY - Code Examples (Scala)
 
-### Violation — same business rule in two places
+### Violation - same business rule in two places
 
 ```scala
 // In controller
@@ -25,18 +25,18 @@ class LeaveAutoApproval {
 }
 ```
 
-### Following DRY — single source of truth
+### Following DRY - single source of truth
 
 ```scala
 case class Employee(probationEndDate: LocalDate, employmentStatus: String) {
   def isEligibleForLeave: Boolean =
-    probationEndDate.isBefore(LocalDate.now()) && employmentStatus == "Active"
+    !probationEndDate.isAfter(LocalDate.now()) && employmentStatus == "Active"
 }
 ```
 
 Both call sites now use `employee.isEligibleForLeave`. The business rule lives in one place.
 
-### Structural duplication — abstract at 2
+### Structural duplication
 
 ```scala
 // Two functions, same algorithm, different types → abstract now
@@ -52,10 +52,10 @@ def parse[T](raw: List[T], rule: Rule[T]): List[T] =
 
 This is not a "maybe" abstraction. The algorithm is identical. The only difference is the type.
 
-### Accidental duplication — do NOT merge
+### Accidental duplication - do NOT merge
 
 ```scala
-// Looks like duplication — is not. Different fields, different rules that evolve separately.
+// Looks like duplication - is not. Different fields, different rules that evolve separately.
 def isValidEmail(email: String): Boolean = email != null && email.contains("@")
 def isValidPhone(phone: String): Boolean = phone != null && phone.matches("\\d{10}")
 ```

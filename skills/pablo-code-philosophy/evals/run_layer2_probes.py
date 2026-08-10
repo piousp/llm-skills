@@ -2,23 +2,22 @@
 """
 Layer 2 (outcome) probes for `pablo-code-philosophy`.
 
-Reclassification (post N=1 eval): this skill is **name-only invocation** —
-loaded only via explicit delegation (see AGENTS.md), never auto-triggered.
-A prior N=1 run of this exact harness in auto-discovery mode (bare `pi -ne`,
-no `--skill`) showed 0/10 real auto-triggers on generic codegen/review
-prompts, confirming pi's discovery mechanism does not reliably pick this
-skill up on its description alone (other skills DID load in their own
-probes, so the mechanism itself works — this skill specifically doesn't
-trigger).
+Post-split state (OQ2, 2025-08-08): the skill's frontmatter description is
+auto-trigger-capable ("Trigger when:" clause, [DO NOT] negative case,
+[ALWAYS]/[DO NOT] enforcement keys), like its two new siblings
+`pablo-tdd` and `pablo-code-planning`. Empirical validation of the
+auto-trigger and the corresponding eval updates are deferred to a separate
+step (explicit deferral) -- this harness adds no trigger probes.
 
-Consequence for these probes: `should_trigger`/negative controls are
-meaningless for a name-only skill (nobody accidentally invokes it by name),
-so this harness now FORCES the skill to load via `--skill <SKILL_DIR>` and
-measures *behavioral outcome* instead of discovery — did the response/tool
-calls actually reflect the skill's rules (surgical edits, test-planning,
-stated YAGNI/KISS/DRY rationale) once loaded. This is the same pattern as
-the generic `templates/run_layer2_probes.py` in evaluating-agent-skills, not
-the auto-discovery pattern used for trigger-based skills.
+Consequence for these probes: `should_trigger`/negative controls are out of
+scope while trigger validation is deferred, so this harness FORCES the skill
+to load via `--skill <SKILL_DIR>` and measures *behavioral outcome* instead
+of discovery -- did the response/tool calls actually reflect the skill's
+rules (surgical edits, stated YAGNI/KISS/DRY/SOLID rationale, pipeline
+order, precedence, conflict-matrix resolutions) once loaded. This is the
+same pattern as the generic `templates/run_layer2_probes.py` in
+evaluating-agent-skills, not the auto-discovery pattern used for
+trigger-based skills.
 
 SANDBOXING: every trial runs inside its own temp dir; fixture files
 (messy_module.py, other_module.py, server.js, order_service.py,
@@ -40,13 +39,12 @@ import tempfile
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-SKILL_MD_SUFFIX = "pablo-code-philosophy/SKILL.md"
 PROMPT_SET_PATH = Path(__file__).resolve().parent / "prompt_set.json"
 
 
 def run_pi(cwd: Path, prompt: str, timeout: int = 240) -> tuple[list[dict], str]:
-    """`pi` with `--skill <SKILL_DIR>` forced -- we no longer measure
-    discovery (this skill is name-only), we measure behavior once loaded.
+    """`pi` with `--skill <SKILL_DIR>` forced -- trigger validation is
+    deferred (OQ2), so we measure behavior once loaded, not discovery.
     Returns (tool_calls, final_response_text)."""
     proc = subprocess.run(
         ["pi", "-ne", "--skill", str(SKILL_DIR), "--mode", "json", "-p", prompt],
@@ -81,8 +79,7 @@ def seed_env(tmp: Path) -> Path:
     a real skill or real repo file (SKILL.md step 5). Each fixture is coherent
     with the prompt that uses it -- prior N=1 run flagged fixture/prompt
     mismatches as noise (an existing-API prompt with no API, a diff over a
-    nonexistent file, a "change I just made" prompt with no repo, an FP/Scala
-    prompt with no .scala file)."""
+    nonexistent file, an FP/Scala prompt with no .scala file)."""
     workdir = tmp / "work"
     workdir.mkdir()
 
@@ -123,8 +120,8 @@ def seed_env(tmp: Path) -> Path:
     )
 
     # messy_module.py -- committed baseline, then an uncommitted change on
-    # top, inside a real git repo, so trigger_suggest_tests has an actual
-    # "change I just made" to reason about (was no repo at all before)
+    # top, inside a real git repo, giving the refactor and clean-file probes
+    # a realistic repo context (was no repo at all before)
     (workdir / "messy_module.py").write_text(
         "def calc(a,b):\n"
         "    x=a+b\n"
@@ -180,32 +177,12 @@ def _reads_skill_md(tool_calls: list[dict], suffix: str) -> bool:
 def mentions_keywords(tool_calls, final_text, keywords=(), **ctx) -> bool:
     """Behavioral stand-in for 'the skill's judgment layer was applied':
     the response names at least one of the relevant principle/edge-case
-    keywords instead of jumping straight to code/approval with no stated
-    rationale. Deliberately a simple substring check -- no LLM-as-judge,
-    per YAGNI (L3 is explicitly deferred, see README)."""
+    keywords (e.g. yagni|kiss|dry|solid, pipeline, srp, premature) instead
+    of jumping straight to code/approval with no stated rationale.
+    Deliberately a simple substring check -- no LLM-as-judge, per YAGNI
+    (L3 is explicitly deferred, see README)."""
     text = final_text.lower()
     return any(kw.lower() in text for kw in keywords)
-
-
-def tests_planned(tool_calls, final_text, **ctx) -> bool:
-    """Passes if the model planned/wrote tests via ANY of: (a) a write/edit
-    tool call whose path matches test|spec, (b) a write whose content
-    mentions test/prueba, or (c) final_text mentions test/prueba (EN/ES).
-    Prefers tool_call evidence over final_text per the check-registry
-    pattern -- a prior check here only grepped final_text and produced
-    untrustworthy false negatives."""
-    import re
-    path_re = re.compile(r"test|spec", re.IGNORECASE)
-    content_re = re.compile(r"test|prueba", re.IGNORECASE)
-    for tc in tool_calls:
-        if tc["name"] not in ("write", "edit"):
-            continue
-        args = tc.get("arguments", {})
-        if path_re.search(str(args.get("path", ""))):
-            return True
-        if content_re.search(str(args.get("content", ""))):
-            return True
-    return bool(content_re.search(final_text))
 
 
 def no_unrelated_edits(tool_calls, final_text, allowed_files=("messy_module.py",), **ctx) -> bool:
@@ -236,7 +213,6 @@ def sibling_loaded(tool_calls, final_text, sibling: str = "", **ctx) -> bool:
 
 CHECK_REGISTRY = {
     "mentions_keywords": mentions_keywords,
-    "tests_planned": tests_planned,
     "no_unrelated_edits": no_unrelated_edits,
     "no_file_edits": no_file_edits,
     "sibling_loaded": sibling_loaded,
@@ -282,7 +258,7 @@ def run_probe(case: dict) -> dict:
 
 def main() -> int:
     if os.environ.get("PI_LIVE_EVAL") != "1":
-        print("Skipped (set PI_LIVE_EVAL=1 to run — costs real LLM tokens).")
+        print("Skipped (set PI_LIVE_EVAL=1 to run - costs real LLM tokens).")
         return 0
 
     prompt_set = json.loads(PROMPT_SET_PATH.read_text())

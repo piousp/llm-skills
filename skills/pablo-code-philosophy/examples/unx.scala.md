@@ -1,4 +1,4 @@
-# UNIX — Code Examples (Scala)
+# UNIX - Code Examples (Scala)
 
 ### Transparency
 
@@ -83,7 +83,7 @@ def exportReport(order: Order): String = {
 ### Least Surprise
 
 ```scala
-// Before: surprising — "get" implies read-only
+// Before: surprising - "get" implies read-only
 class UserService {
   def get(userId: String): User =
     repo.find(userId).getOrElse(repo.create(userId)) // side effect!

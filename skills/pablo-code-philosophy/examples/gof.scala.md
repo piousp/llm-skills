@@ -1,6 +1,6 @@
-# GoF — Code Examples (Scala)
+# GoF - Code Examples (Scala)
 
-### Premature Strategy — one implementation, no second in sight
+### Premature Strategy - one implementation, no second in sight
 
 ```scala
 trait DiscountStrategy { def apply(price: BigDecimal): BigDecimal }
@@ -10,7 +10,7 @@ class StandardDiscount extends DiscountStrategy {
 // One implementation, no plan for a second.
 ```
 
-### FP subsumes GoF — no shared state, a function replaces the hierarchy
+### FP subsumes GoF - no shared state, a function replaces the hierarchy
 
 ```scala
 type Discount = BigDecimal => BigDecimal
@@ -20,7 +20,7 @@ val loyalty: Discount = price => price - 5
 ```
 
 Reach for the trait-per-variant hierarchy only when a variant needs to carry state or when
-there are ≥3 real, current implementations — otherwise a `Function1` value is the natural
+there are ≥3 real, current implementations - otherwise a `Function1` value is the natural
 expression of Strategy in Scala.
 
 ### Named/default parameters subsume Builder
