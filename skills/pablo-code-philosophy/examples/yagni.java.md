@@ -1,6 +1,6 @@
-# YAGNI — Code Examples (Java)
+# YAGNI - Code Examples (Java)
 
-### Violation — speculative abstraction
+### Violation - speculative abstraction
 
 ```java
 public interface PaymentProcessor {
@@ -53,7 +53,7 @@ public List<Item> search(String query) { return fuzzySearch(query); }
 ### Unused extension hooks
 
 ```java
-// Hooks "for subclasses later" — no subclass exists
+// Hooks "for subclasses later" - no subclass exists
 public abstract class ReportGenerator {
     public Report generate() {
         Report r = build();

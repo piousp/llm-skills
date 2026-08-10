@@ -1,6 +1,6 @@
-# DRY — Code Examples (Java)
+# DRY - Code Examples (Java)
 
-### Violation — same business rule in two places
+### Violation - same business rule in two places
 
 ```java
 // In controller
@@ -31,7 +31,7 @@ public class LeaveAutoApproval {
 }
 ```
 
-### Following DRY — single source of truth
+### Following DRY - single source of truth
 
 ```java
 public class Employee {
@@ -39,7 +39,7 @@ public class Employee {
     private final String employmentStatus;
 
     public boolean isEligibleForLeave() {
-        return probationEndDate.isBefore(LocalDate.now())
+        return !probationEndDate.isAfter(LocalDate.now())
             && "Active".equals(employmentStatus);
     }
 }
@@ -48,7 +48,7 @@ public class Employee {
 Both call sites now use `employee.isEligibleForLeave()`. The business rule lives in one place.
 When the rule changes, one file changes.
 
-### Structural duplication — abstract at 2
+### Structural duplication
 
 ```java
 // Two functions, same algorithm, different types → abstract now
@@ -66,12 +66,12 @@ public <T> List<T> parse(List<T> raw, Rule<T> rule) {
 ```
 
 This is not a "maybe" abstraction. The algorithm is identical. The only difference is the type.
-The generic is the natural, simpler expression of the code — and it's easier to test.
+The generic is the natural, simpler expression of the code - and it's easier to test.
 
-### Accidental duplication — do NOT merge
+### Accidental duplication - do NOT merge
 
 ```java
-// Looks like duplication — is not. Different fields, different rules that evolve separately.
+// Looks like duplication - is not. Different fields, different rules that evolve separately.
 public boolean isValidEmail(String email) {
     return email != null && email.contains("@");
 }

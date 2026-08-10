@@ -1,4 +1,4 @@
-# UNIX — Code Examples (Java)
+# UNIX - Code Examples (Java)
 
 ### Transparency
 
@@ -89,7 +89,7 @@ public String exportReport(Order order) {
 ### Least Surprise
 
 ```java
-// Before: surprising — "get" implies read-only
+// Before: surprising - "get" implies read-only
 public class UserService {
     public User get(String userId) {
         User user = repo.find(userId);

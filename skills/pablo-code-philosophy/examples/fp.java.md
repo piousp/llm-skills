@@ -1,4 +1,4 @@
-# FP — Code Examples (Java)
+# FP - Code Examples (Java)
 
 ### Imperative, hides the failure path
 
@@ -20,7 +20,7 @@ public Optional<User> findUser(String id) {
 }
 ```
 
-The caller decides how to handle absence — `.orElseThrow()`, `.map()`, a default — instead of
+The caller decides how to handle absence - `.orElseThrow()`, `.map()`, a default - instead of
 being forced into a try/catch for an expected outcome.
 
 ### Observable mutation vs. local mutation
@@ -65,7 +65,7 @@ List<String> names = customers.stream()
 ```
 
 Worth it here: three real steps (filter, filter, map). A single filter-then-map wouldn't earn
-a stream chain over a plain loop — see FP.md's `FP vs KISS` note.
+a stream chain over a plain loop - see [references/interactions.md](../references/interactions.md)'s `FP vs KISS` row.
 
 ### Typed failure for a multi-step expected outcome
 

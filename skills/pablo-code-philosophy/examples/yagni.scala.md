@@ -1,6 +1,6 @@
-# YAGNI — Code Examples (Scala)
+# YAGNI - Code Examples (Scala)
 
-### Violation — speculative abstraction
+### Violation - speculative abstraction
 
 ```scala
 trait PaymentProcessor { def processPayment(order: Order): Unit }
@@ -42,7 +42,7 @@ def search(query: String): List[Item] = fuzzySearch(query)
 ### Unused extension hooks
 
 ```scala
-// Hooks "for subclasses later" — no subclass exists
+// Hooks "for subclasses later" - no subclass exists
 abstract class ReportGenerator {
   def generate(): Report = {
     val r = build()
