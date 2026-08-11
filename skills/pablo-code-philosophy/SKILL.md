@@ -21,6 +21,20 @@ pattern catalog, refactor detection, and test planning lives in
 `functional-programming`, `gof-design-patterns`, `refactor-identification`, and
 `pablo-tdd` respectively.
 
+## Session working directory
+
+All pablo-* skills share the current pi session's working directory for
+session-scoped artifacts. Resolve it once at the start of the pass:
+
+```bash
+SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
+```
+
+`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
+sessions keep artifacts next to the session file
+(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
+back to `/tmp/pi/session/<PI_SESSION_ID>`.
+
 # Code Manifesto
 
 - **Simple and readable code** over elegant and terse.

@@ -17,6 +17,20 @@ files changed in this session, and findings from agent responses. Everything
 is relative to the current session - the task in progress, wherever it lives
 (pi-simple-agents, skills, documents) - not to any skill.
 
+## Session working directory
+
+All pablo-* skills share the current pi session's working directory for
+session-scoped artifacts. Resolve it once at the start of the pass:
+
+```bash
+SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
+```
+
+`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
+sessions keep artifacts next to the session file
+(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
+back to `/tmp/pi/session/<PI_SESSION_ID>`.
+
 ## Scope: session-relative
 
 - The toolkit tracks the current session's file changes: what the session

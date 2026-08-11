@@ -22,6 +22,20 @@ TDD is the red → green loop. Apply it so tests are worth keeping: know what a 
 
 **Exception: bare snippet request.** A bare snippet request with no repo/change context → Surgical Changes wins, no test plan. When the user asks for a standalone snippet with no repository and no change context to test against, [DO NOT] invent a test plan; follow the `pablo-code-philosophy` Surgical Changes contract and deliver the snippet.
 
+## Session working directory
+
+All pablo-* skills share the current pi session's working directory for
+session-scoped artifacts. Resolve it once at the start of the pass:
+
+```bash
+SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
+```
+
+`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
+sessions keep artifacts next to the session file
+(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
+back to `/tmp/pi/session/<PI_SESSION_ID>`.
+
 ## What a good test is
 
 A good test verifies behavior through public interfaces, not implementation details, so it reads like a specification and survives refactors.
