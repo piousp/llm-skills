@@ -3,7 +3,7 @@ import { applyInvocationOverride } from "./agents.ts";
 import { invocationOverrideOf } from "./validate.ts";
 
 const MAX_ITEMS_SHOWN = 5;
-const MAX_PREVIEW_WIDTH = 80;
+export const MAX_PREVIEW_WIDTH = 80;
 
 function formatList(items: string[] | undefined): string {
   if (items === undefined) return "inherited";
@@ -27,11 +27,11 @@ export interface CallTheme {
   bold(text: string): string;
 }
 
-function firstLine(text: string): string {
+export function firstLine(text: string): string {
   return text.trim().split("\n", 1)[0] ?? "";
 }
 
-function truncate(text: string): string {
+export function truncate(text: string): string {
   return text.length > MAX_PREVIEW_WIDTH
     ? `${text.slice(0, MAX_PREVIEW_WIDTH - 1)}\u2026`
     : text;

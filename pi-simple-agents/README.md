@@ -265,6 +265,28 @@ While a subagent runs, the `subagent` tool's call display shows a live status li
 `running: <tool1, tool2, ...>` (tools currently executing, in start order — parallel tool calls
 within one agent are possible), or `done` (the task has settled).
 
+### Expanding the live stream (Ctrl+O)
+
+Ctrl+O (`app.tools.expand`) toggles the `subagent` tool box's body between collapsed and expanded,
+with different content depending on whether the task is still running or has settled:
+
+- **Collapsed, in progress:** unchanged — just the status line per agent, as above.
+- **Expanded, in progress:** the status line per agent, followed by an indented stream with one
+  line per tool call that agent has fired so far, in order — the name and a short summary of its
+  arguments, never the tool call's result/output (this keeps memory bounded even for a
+  long-running subagent that, say, `read`s large files).
+- **Collapsed, once settled:** shows nothing — no output.
+- **Expanded, once settled:** shows the agent's/agents' full final output, same as the always-on
+  behavior before this toggle existed.
+
+Expanded, in-progress example:
+
+```
+scout · tools: 2 · running: read
+  read src/foo.ts:10-40
+  $ ls -la
+```
+
 ## Frontmatter fields
 
 | Field | Type | Default | Description |

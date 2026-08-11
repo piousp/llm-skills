@@ -384,7 +384,7 @@ test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into Subag
   );
 
   assert.deepEqual(events, [
-    { type: "tool_start", toolCallId: "t1", toolName: "read" },
+    { type: "tool_start", toolCallId: "t1", toolName: "read", summary: "read" },
     { type: "tool_end", toolCallId: "t1" },
   ]);
 });
@@ -424,7 +424,7 @@ test("runAgentViaSdk: tool_execution_update events are ignored, not translated",
   );
 
   assert.deepEqual(events, [
-    { type: "tool_start", toolCallId: "t1", toolName: "read" },
+    { type: "tool_start", toolCallId: "t1", toolName: "read", summary: "read" },
     { type: "tool_end", toolCallId: "t1" },
   ]);
 });

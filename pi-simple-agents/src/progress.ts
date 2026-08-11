@@ -1,12 +1,18 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { formatToolCall } from "./format-tool-call.ts";
 
 export type SubagentToolEvent =
-  | { type: "tool_start"; toolCallId: string; toolName: string }
+  | { type: "tool_start"; toolCallId: string; toolName: string; summary: string }
   | { type: "tool_end"; toolCallId: string };
 
 export function toSubagentToolEvent(event: AgentSessionEvent): SubagentToolEvent | undefined {
   if (event.type === "tool_execution_start") {
-    return { type: "tool_start", toolCallId: event.toolCallId, toolName: event.toolName };
+    return {
+      type: "tool_start",
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      summary: formatToolCall(event.toolName, event.args),
+    };
   }
   if (event.type === "tool_execution_end") {
     return { type: "tool_end", toolCallId: event.toolCallId };
@@ -21,21 +27,21 @@ export interface RunningTool {
 
 export interface TaskProgress {
   agent: string;
-  toolCount: number;
   runningTools: RunningTool[];
+  history: readonly string[];
   done: boolean;
 }
 
 export function initialTaskProgress(agent: string): TaskProgress {
-  return { agent, toolCount: 0, runningTools: [], done: false };
+  return { agent, runningTools: [], history: [], done: false };
 }
 
 export function applyToolEvent(progress: TaskProgress, event: SubagentToolEvent): TaskProgress {
   if (event.type === "tool_start") {
     return {
       ...progress,
-      toolCount: progress.toolCount + 1,
       runningTools: [...progress.runningTools, { toolCallId: event.toolCallId, toolName: event.toolName }],
+      history: [...progress.history, event.summary],
     };
   }
   return {
@@ -91,10 +97,19 @@ function statusFor(progress: TaskProgress): string {
 
 function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string {
   const agent = theme.fg("accent", progress.agent);
-  const detail = theme.fg("dim", `\u00b7 tools: ${progress.toolCount} \u00b7 ${statusFor(progress)}`);
+  const detail = theme.fg("dim", `\u00b7 tools: ${progress.history.length} \u00b7 ${statusFor(progress)}`);
   return `${agent} ${detail}`;
 }
 
 export function buildProgressLines(progress: readonly TaskProgress[], theme: ProgressTheme): string {
   return progress.map((p) => buildProgressLine(p, theme)).join("\n");
+}
+
+export function buildProgressStream(progress: readonly TaskProgress[], theme: ProgressTheme): string {
+  return progress
+    .map((p) => {
+      const lines = p.history.map((s) => `  ${theme.fg("dim", s)}`);
+      return [buildProgressLine(p, theme), ...lines].join("\n");
+    })
+    .join("\n");
 }

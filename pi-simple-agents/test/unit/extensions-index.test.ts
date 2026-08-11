@@ -4,7 +4,8 @@ import { DefaultResourceLoader, type ExtensionAPI, type ModelRuntime } from "@ea
 import extensionFactory, { runSingleTask, SubagentParams } from "../../extensions/index.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
-import { createProgressTracker } from "../../src/progress.ts";
+import { createProgressTracker, type TaskProgress } from "../../src/progress.ts";
+import { buildSubagentResultText } from "../../src/render-result.ts";
 import type { AgentConfig } from "../../src/agents.ts";
 
 const fakeTheme = {
@@ -111,6 +112,56 @@ test("renderResult: isPartial with content:[] and details:undefined renders an e
   const rendered = textOf(component);
 
   assert.equal(rendered, "");
+});
+
+// (d2)
+test("renderResult: isPartial+expanded with progress delegates to buildSubagentResultText", async () => {
+  const captured = await loadExtension();
+
+  const progress: TaskProgress[] = [
+    { agent: "scout", runningTools: [{ toolCallId: "a", toolName: "read" }], history: ["read foo.ts"], done: false },
+  ];
+  const result = { content: [], details: { progress }, isError: false };
+  const options = { expanded: true, isPartial: true };
+
+  const component = captured.renderResult(result, options, fakeTheme, {});
+  const rendered = textOf(component);
+
+  const expected = buildSubagentResultText(
+    { isPartial: true, expanded: true, progress, content: "" },
+    fakeTheme,
+  );
+  assert.equal(rendered, expected);
+});
+
+// (d3)
+test("renderResult: final+collapsed renders nothing, delegating to buildSubagentResultText", async () => {
+  const captured = await loadExtension();
+
+  const result = { content: [{ type: "text" as const, text: "the full agent output" }], details: { runs: [] }, isError: false };
+  const options = { expanded: false, isPartial: false };
+
+  const component = captured.renderResult(result, options, fakeTheme, {});
+  const rendered = textOf(component);
+
+  assert.equal(rendered, "");
+});
+
+// (d4)
+test("renderResult: final+expanded renders divider + full content, delegating to buildSubagentResultText", async () => {
+  const captured = await loadExtension();
+
+  const result = { content: [{ type: "text" as const, text: "the full agent output" }], details: { runs: [] }, isError: false };
+  const options = { expanded: true, isPartial: false };
+
+  const component = captured.renderResult(result, options, fakeTheme, {});
+  const rendered = textOf(component);
+
+  const expected = buildSubagentResultText(
+    { isPartial: false, expanded: true, progress: undefined, content: "the full agent output" },
+    fakeTheme,
+  );
+  assert.equal(rendered, expected);
 });
 
 // (e)

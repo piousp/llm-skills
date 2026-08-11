@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.13.0
+
+- **The `subagent` tool's call display now respects the host's `expanded` flag (Ctrl+O /
+  `app.tools.expand`), with different rules while a task is still running vs. once it has
+  settled.**
+  - **In progress, collapsed** (unchanged): one status line per agent — `<agent> · tools: <N> ·
+    <status>`.
+  - **In progress, expanded:** the same status line, followed by an indented stream with one
+    line per tool call the subagent fired, in order, formatted as a short `toolName + args`
+    summary (e.g. `read foo.ts:10-40`, `$ ls -la`, `grep /pattern/ in src`). The stream **never**
+    shows a tool call's raw result/output — only the action (name + args) — so an expanded,
+    long-running subagent doesn't accumulate large payloads (e.g. a full `read`'s file contents)
+    in memory.
+  - **Final result, collapsed:** shows nothing (empty body) — previously the subagent's full
+    output was always shown.
+  - **Final result, expanded:** shows the subagent's/subagents' full output, same as the
+    historical always-on behavior.
+  - A muted divider line (`───`) separates the header (agent/task/params, unchanged) from the
+    body whenever the body has content; no divider is rendered when the body is empty (collapsed
+    final result).
+  - In parallel mode (`tasks[]`), there is still a single tool box per invocation, not one per
+    subagent; the expanded in-progress stream renders one block per agent, each with its own
+    status line followed by its own tool-call history.
+- Docs updated: README.md (new "Expanding the live stream (Ctrl+O)" section under "Using the
+  `subagent` tool"), DEVELOPER.md (`onToolEvent`/`SubagentToolEvent.tool_start.summary` note, new
+  `src/format-tool-call.ts` and `src/render-result.ts` sections).
+
 ## 0.12.0
 
 - **New optional `thinking` param on the `subagent` tool invocation.** Same placement rule as
