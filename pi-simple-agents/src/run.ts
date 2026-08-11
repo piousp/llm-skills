@@ -3,11 +3,13 @@ import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earen
 import type { SubagentToolEvent } from "./progress.ts";
 import { toSubagentToolEvent } from "./progress.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
+import { applyUsageEvent, emptyUsage, toRunUsage, type RunUsage } from "./usage.ts";
 
 interface AgentRunResultBase {
   agent: string;
   task: string;
   durationMs: number;
+  usage?: RunUsage;
 }
 
 export type AgentRunResult =
@@ -210,12 +212,21 @@ export function runAgentViaSdk(
 
   return new Promise((resolve) => {
     let settled = false;
-    let session: any = null;
+    let session: CreateAgentSessionResult["session"] | null = null;
+    let usageAcc = emptyUsage();
 
+    // Snapshot whatever usage has accumulated so far and attach it to the
+    // result, regardless of which path settles the run (success, error,
+    // timeout, maxTurns, or abort) — the tokens were already spent.
     const settleOnce: SettleFn = (result) => {
       if (settled) return;
       settled = true;
-      resolve(result);
+      const usage = toRunUsage(
+        usageAcc,
+        session?.getContextUsage(),
+        (provider) => options.modelRuntime.isUsingSubscription(provider),
+      );
+      resolve({ ...result, usage } as AgentRunResult);
     };
 
     (async () => {
@@ -241,6 +252,9 @@ export function runAgentViaSdk(
           settleOnce(errorResult(ctx, "run was aborted"));
           return;
         }
+
+        // Unconditional: usage accumulation does not depend on onToolEvent.
+        agentSession.subscribe((event) => { usageAcc = applyUsageEvent(usageAcc, event); });
 
         subscribeToolEvents(agentSession, options.onToolEvent);
 

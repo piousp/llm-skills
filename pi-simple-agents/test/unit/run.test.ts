@@ -5,23 +5,38 @@ import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../..
 import { invocationOverrideOf } from "../../src/validate.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
 
+function assistantMessageEnd(usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }, provider = "anthropic") {
+  return {
+    type: "message_end",
+    message: { role: "assistant", provider, usage: { ...usage, cost: { total: usage.cost } } },
+  };
+}
+
 class FakeAgentSession {
   private _lastAssistantText: string;
   private _listeners: Array<(event: any) => void> = [];
   private _resolvePrompt?: () => void;
   private _toolEvents: any[];
   private _turnEvents: any[];
+  private _messageEvents: any[];
+  private _contextUsage: any;
   shouldThrow = false;
   hangUntilAbort = false;
   abortCalled = false;
   subscribeCallCount = 0;
+  _getContextUsageHook?: () => void;
   _dispose?: () => void;
 
-  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[]; turnEvents?: any[] } = {}) {
+  throwAfterEvents = false;
+
+  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[]; turnEvents?: any[]; messageEvents?: any[]; contextUsage?: any; throwAfterEvents?: boolean } = {}) {
     this._lastAssistantText = text;
     this.hangUntilAbort = opts.hangUntilAbort ?? false;
     this._toolEvents = opts.toolEvents ?? [];
     this._turnEvents = opts.turnEvents ?? [];
+    this._messageEvents = opts.messageEvents ?? [];
+    this._contextUsage = opts.contextUsage;
+    this.throwAfterEvents = opts.throwAfterEvents ?? false;
   }
 
   subscribe(listener: (event: any) => void): () => void {
@@ -32,13 +47,19 @@ class FakeAgentSession {
 
   async prompt(_text: string): Promise<void> {
     if (this.shouldThrow) throw new Error("prompt failed");
+    // Order is deterministic: messageEvents (usage lands first), then
+    // turnEvents (may trigger maxTurns mid-stream), then an optional
+    // post-events failure, then an optional hang, then toolEvents.
+    for (const event of this._messageEvents) {
+      this._listeners.forEach((l) => l(event));
+    }
+    for (const event of this._turnEvents) {
+      this._listeners.forEach((l) => l(event));
+    }
+    if (this.throwAfterEvents) throw new Error("boom after events");
     if (this.hangUntilAbort) {
       await new Promise<void>((resolve) => { this._resolvePrompt = resolve; });
       return;
-    }
-    // Order is deterministic: turnEvents fire before toolEvents (a turn starts, then its tool batch runs).
-    for (const event of this._turnEvents) {
-      this._listeners.forEach((l) => l(event));
     }
     for (const event of this._toolEvents) {
       this._listeners.forEach((l) => l(event));
@@ -47,6 +68,11 @@ class FakeAgentSession {
 
   getLastAssistantText(): string {
     return this._lastAssistantText;
+  }
+
+  getContextUsage(): any {
+    this._getContextUsageHook?.();
+    return this._contextUsage;
   }
 
   dispose(): void {
@@ -389,7 +415,7 @@ test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into Subag
   ]);
 });
 
-test("runAgentViaSdk: no onToolEvent means no subscription happens at all", async () => {
+test("runAgentViaSdk: no onToolEvent still subscribes once, for usage accumulation", async () => {
   const fakeSession = new FakeAgentSession("done", {
     toolEvents: [
       { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
@@ -403,7 +429,8 @@ test("runAgentViaSdk: no onToolEvent means no subscription happens at all", asyn
     { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
-  assert.equal(fakeSession.subscribeCallCount, 0);
+  // Usage accumulation subscribes unconditionally, independent of onToolEvent.
+  assert.equal(fakeSession.subscribeCallCount, 1);
 });
 
 test("runAgentViaSdk: tool_execution_update events are ignored, not translated", async () => {
@@ -904,10 +931,10 @@ test("runAgentViaSdk: no maxTurns + many turn_start events settles success, neve
   assert.equal(result.status, "success");
   assert.equal((result as any).finalText, "done");
   assert.equal(fakeSession.abortCalled, false);
-  // No maxTurns and no onToolEvent -> no subscription happens at all. The
-  // if (maxTurns !== undefined) guard in runAgentViaSdk is what keeps the
-  // turn-counter subscriber from being registered.
-  assert.equal(fakeSession.subscribeCallCount, 0);
+  // No maxTurns and no onToolEvent -> only the unconditional usage-accumulation
+  // subscription happens. The if (maxTurns !== undefined) guard is what keeps
+  // the turn-counter subscriber from being registered.
+  assert.equal(fakeSession.subscribeCallCount, 1);
 });
 
 test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the tool-events subscriber (no turn counter)", async () => {
@@ -937,10 +964,10 @@ test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the to
 
   assert.equal(result.status, "success");
   assert.equal(fakeSession.abortCalled, false);
-  // Exactly one subscription: the tool-events one. The turn counter is gated
-  // on maxTurns !== undefined, so with no maxTurns it must NOT register a
-  // second subscriber. If the guard were missing this would be 2.
-  assert.equal(fakeSession.subscribeCallCount, 1);
+  // Two subscriptions: the unconditional usage-accumulation one, plus the
+  // tool-events one for onToolEvent. The turn counter is gated on
+  // maxTurns !== undefined, so with no maxTurns it must NOT register a third.
+  assert.equal(fakeSession.subscribeCallCount, 2);
   // Sanity: 5 turn_start events fired to the one subscriber and none of them
   // had any side effect (no settle, no abort, no extra onToolEvent call).
   assert.deepEqual(collected, []);
@@ -962,4 +989,164 @@ test("FakeAgentSession: turnEvents option fires configured turn_start events in 
     { type: "turn_start", turnIndex: 1 },
     { type: "turn_start", turnIndex: 2 },
   ]);
+});
+
+test("runAgentViaSdk: accumulates usage from message_end assistant events across the run and attaches it on success", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      assistantMessageEnd({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01 }),
+      assistantMessageEnd({ input: 20, output: 8, cacheRead: 100, cacheWrite: 0, cost: 0.02 }),
+    ],
+    contextUsage: { tokens: 500, contextWindow: 200000, percent: 0.25 },
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+  assert.deepEqual(result.usage, {
+    input: 30, output: 13, cacheRead: 100, cacheWrite: 0, cost: 0.03,
+    isSubscription: false,
+    context: { percent: 0.25, window: 200000 },
+  });
+});
+
+test("runAgentViaSdk: usage accumulated before the throw is still attached when prompt() fails", async () => {
+  const messageEvents = [assistantMessageEnd({ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005 })];
+  const fakeSession = new FakeAgentSession("ignored", { messageEvents, throwAfterEvents: true });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal(result.usage?.input, 7);
+  assert.equal(result.usage?.output, 3);
+});
+
+test("runAgentViaSdk: usage accumulated before a timeout is still attached", async () => {
+  const messageEvents = [assistantMessageEnd({ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005 })];
+  const fakeSession = new FakeAgentSession("ignored", { messageEvents, hangUntilAbort: true });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ timeoutMs: 10 }),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal(result.usage?.input, 7);
+  assert.equal(result.usage?.output, 3);
+});
+
+test("runAgentViaSdk: usage accumulated before hitting maxTurns is still attached", async () => {
+  const messageEvents = [assistantMessageEnd({ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005 })];
+  const fakeSession = new FakeAgentSession("ignored", {
+    messageEvents,
+    turnEvents: [{ type: "turn_start" }, { type: "turn_start" }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ maxTurns: 1 }),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal(result.usage?.input, 7);
+  assert.equal(result.usage?.output, 3);
+});
+
+test("runAgentViaSdk: usage accumulated before a signal abort is still attached", async () => {
+  const messageEvents = [assistantMessageEnd({ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005 })];
+  const fakeSession = new FakeAgentSession("ignored", { messageEvents, hangUntilAbort: true });
+  const createSession = async () => ({ session: fakeSession as any });
+  const controller = new AbortController();
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  const result = await promise;
+
+  assert.equal(result.status, "error");
+  assert.equal(result.usage?.input, 7);
+  assert.equal(result.usage?.output, 3);
+});
+
+test("runAgentViaSdk: createSession throwing before a session exists attaches zeroed usage with no context", async () => {
+  const createSession = async (): Promise<any> => { throw new Error("boom"); };
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.deepEqual(result.usage, {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+    isSubscription: false,
+    context: undefined,
+  });
+});
+
+test("runAgentViaSdk: isUsingSubscription is invoked with the provider of the last assistant message", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [assistantMessageEnd({ input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0 }, "kimi-coding")],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+  let seenProvider: string | undefined;
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: (p: string) => { seenProvider = p; return true; } } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(seenProvider, "kimi-coding");
+  assert.equal(result.usage?.isSubscription, true);
+});
+
+test("runAgentViaSdk: no assistant messages means isUsingSubscription is never invoked", async () => {
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async () => ({ session: fakeSession as any });
+  let called = false;
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => { called = true; return true; } } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(called, false);
+  assert.equal(result.usage?.isSubscription, false);
+});
+
+test("runAgentViaSdk: getContextUsage is read before the session is disposed", async () => {
+  const order: string[] = [];
+  const fakeSession = new FakeAgentSession("done", { contextUsage: { tokens: 10, contextWindow: 200000, percent: 0.01 } });
+  fakeSession._getContextUsageHook = () => order.push("getContextUsage");
+  fakeSession._dispose = () => order.push("dispose");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.deepEqual(order, ["getContextUsage", "dispose"]);
 });

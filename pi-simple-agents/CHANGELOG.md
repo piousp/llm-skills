@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.13.1
+
+- **Each subagent run now shows a one-line consumption footer** (tokens, cache, cost, context %),
+  in the same format as pi's own status-bar footer: `↑<input> ↓<output> R<cache-read>
+  W<cache-write> CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`. Fields at zero are omitted. Cache-hit
+  % is cumulative over the whole run, not just the last turn (unlike pi's own footer).
+  - Appears on the live progress line once a task settles (`<agent> · tools: N · done · <footer>`),
+    and on the final result, **both collapsed and expanded** — the Ctrl+O toggle only gates the
+    full output/tool-call stream, not this one-line summary.
+  - In a parallel `tasks[]` batch, each task gets its own footer line; there is no aggregated
+    total across tasks.
+  - Shown on every outcome — success, error, timeout, maxTurns, and abort — since the tokens were
+    spent regardless.
+  - New `src/usage.ts` module (pure accumulation + formatting); usage is accumulated from the
+    session's own message events during the run, not from `AgentSession.getSessionStats()`, so a
+    `defaultContext: "forked"` agent's inherited history never contaminates its own run's numbers.
+
 ## 0.13.0
 
 - **The `subagent` tool's call display now respects the host's `expanded` flag (Ctrl+O /

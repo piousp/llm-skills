@@ -1,5 +1,6 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { formatToolCall } from "./format-tool-call.ts";
+import { formatRunUsage, type RunUsage } from "./usage.ts";
 
 export type SubagentToolEvent =
   | { type: "tool_start"; toolCallId: string; toolName: string; summary: string }
@@ -30,6 +31,7 @@ export interface TaskProgress {
   runningTools: RunningTool[];
   history: readonly string[];
   done: boolean;
+  usage?: RunUsage;
 }
 
 export function initialTaskProgress(agent: string): TaskProgress {
@@ -50,8 +52,9 @@ export function applyToolEvent(progress: TaskProgress, event: SubagentToolEvent)
   };
 }
 
-export function markDone(progress: TaskProgress): TaskProgress {
-  return { ...progress, done: true, runningTools: [] };
+export function markDone(progress: TaskProgress, usage?: RunUsage): TaskProgress {
+  const done = { ...progress, done: true, runningTools: [] };
+  return usage ? { ...done, usage } : done;
 }
 
 // Orchestrates the per-task progress fold/emit cycle for `runTasks`: holds the
@@ -61,7 +64,7 @@ export function markDone(progress: TaskProgress): TaskProgress {
 // shallow copy of the array on every change so callers can render a live feed.
 export interface ProgressTracker {
   onToolEvent(index: number, event: SubagentToolEvent): void;
-  markTaskDone(index: number): void;
+  markTaskDone(index: number, usage?: RunUsage): void;
 }
 
 export function createProgressTracker(
@@ -76,8 +79,8 @@ export function createProgressTracker(
       progress[index] = applyToolEvent(progress[index], event);
       emit({ progress: [...progress] });
     },
-    markTaskDone(index) {
-      progress[index] = markDone(progress[index]);
+    markTaskDone(index, usage) {
+      progress[index] = markDone(progress[index], usage);
       emit({ progress: [...progress] });
     },
   };
@@ -97,7 +100,11 @@ function statusFor(progress: TaskProgress): string {
 
 function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string {
   const agent = theme.fg("accent", progress.agent);
-  const detail = theme.fg("dim", `\u00b7 tools: ${progress.history.length} \u00b7 ${statusFor(progress)}`);
+  // The usage footer only ever appears once the task is done — it's a
+  // post-mortem of the run's consumption, not a live counter.
+  const footer = progress.done && progress.usage ? formatRunUsage(progress.usage) : "";
+  const segments = [`tools: ${progress.history.length}`, statusFor(progress), ...(footer ? [footer] : [])];
+  const detail = theme.fg("dim", `\u00b7 ${segments.join(" \u00b7 ")}`);
   return `${agent} ${detail}`;
 }
 
