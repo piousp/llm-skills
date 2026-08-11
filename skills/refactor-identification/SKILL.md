@@ -2,7 +2,7 @@
 name: refactor-identification
 description: >
   Evidence-based detection of structural refactor candidates within the current branch's diff
-  (Java, Scala). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
+  (Java, Scala, JavaScript, TypeScript). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
   duplication), (A2) weak encapsulation, (A3) poor data types (primitives, clumps, null-checks
   instead of Option/Either/ADT), (A4) flags/switch where a sealed ADT fits. Findings need
   file:line evidence + a When-NOT-to-report (YAGNI/KISS) gate; rejects listed too. Identifies
@@ -60,7 +60,7 @@ This skill never scans a whole repository. It only looks at what the current bra
 A class or function carries more than one reason to change, or the same shape of logic is
 copy-pasted with only the types or literals differing.
 
-| Smell | Detection cue (Java / Scala) | Evidence to record | Threshold |
+| Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
 | Structural duplication (same algorithm, different type) | Two methods/functions identical modulo types: same pipeline shape (`stream().filter().collect` / `map`/`fold` chains), same control flow, only types/field-accessors differ. At least one copy in a changed hunk; count the rest repo-wide. | Both `file:line` spans + "identical modulo type: `<T1>` vs `<T2>`" | ≥2 occurrences (DRY structural rule — abstract at 2) |
 | Business-rule duplication | Same domain decision (same predicate over the same domain fields) encoded in multiple places; literals/field names match even if syntax differs. | All `file:line` sites + the rule in one sentence | ≥3 occurrences (3-strikes), ≥1 touched by the branch |
@@ -73,7 +73,7 @@ copy-pasted with only the types or literals differing.
 State that should be private and self-protecting is instead exposed, mutable, or trusted to be
 validated by every caller.
 
-| Smell | Detection cue (Java / Scala) | Evidence to record | Threshold |
+| Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
 | Public mutable field | Java: non-final `public`/package-private field. Scala: `var` in a public class/case class or trait member. | `file:line` of the declaration | 1 |
 | Mutable internals escaping | Getter returning an internal mutable collection/array without defensive copy or immutable wrapper (`return this.list;` where field is `ArrayList`; Scala: exposing `mutable.Buffer`/`Map` fields). | Getter `file:line` + field `file:line` + "escapes: `<type>`" | 1 |
@@ -86,11 +86,11 @@ validated by every caller.
 Domain concepts are carried by bare primitives or `null`, or expected outcomes are signaled by
 throwing instead of by the return type.
 
-| Smell | Detection cue (Java / Scala) | Evidence to record | Threshold |
+| Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
 | Primitive obsession | `String`/`int`/`long`/`double` carrying domain meaning (id, ISO code, currency, email, status) crossing method signatures; or the same primitive format-validated in multiple places. | Each signature `file:line` + the domain concept name | Crosses ≥3 signatures in scope, OR validated in ≥2 places (calibrable) |
 | Stringly-typed state | Field compared against string literals to branch (`"Active".equals(status)` / `status == "Active"`). | Each comparison `file:line` + the literal set observed | ≥2 distinct literal comparisons on the same field |
-| null as domain absence | Java: method returns `null` for an expected "not found"/"missing" outcome; callers null-check. Scala: any `null`, `Option.get`, `.getOrElse(null)`. | Producer `file:line` + each null-checking caller `file:line` | Java: ≥2 null-checks on the same value; Scala: 1 |
+| null as domain absence | Java: method returns `null` for an expected "not found"/"missing" outcome; callers null-check. Scala: any `null`, `Option.get`, `.getOrElse(null)`. JS/TS: return of null/undefined for an expected "not found", callers guarding with ?./??/!x; TS: also optional ? members and non-null assertions | Producer `file:line` + each null-checking caller `file:line` | Java: ≥2 null-checks on the same value; Scala: 1; JS/TS: ≥2 guards, or 1 for a ! assertion |
 | Exceptions as control flow | `throw` for an expected domain outcome (validation failed, not found) with a caller that catches to branch on it. | `throw` `file:line` + catching caller `file:line` | 1 (throw+catch pair present) |
 | Data clump | The same group of ≥3 parameters traveling together through multiple signatures (same names/types in the same order). | Each signature `file:line` + the clump members | Group of ≥3 params in ≥2 touched signatures |
 
@@ -99,11 +99,11 @@ throwing instead of by the return type.
 A discriminator drives behavior that varies by case, in a shape that a sealed ADT + pattern
 matching would express more directly and exhaustively.
 
-| Smell | Detection cue (Java / Scala) | Evidence to record | Threshold |
+| Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
 | Boolean parameter selects behavior | Touched signature takes a `boolean`/`Boolean` that branches the method body into two behaviors. | Signature `file:line` + the branching `if` `file:line` | 1 |
 | Duplicated dispatch over the same enum/flag | ≥2 `switch`/`match`/if-else chains over the same enum/int-flag/string discriminator, where variants carry different data or behavior → sealed ADT candidate. Count extra dispatch sites repo-wide once anchored. | Each dispatch `file:line` + the discriminator + variant count | ≥2 dispatch sites (structural-dup-at-2 rule) |
-| Type-check cascade on unsealed hierarchy | Java: `instanceof` chains. Scala: `isInstanceOf`/`case x: T` matches on a non-sealed trait/class. | Cascade `file:line` + branch count + "hierarchy not sealed: `<root>`" | ≥2 branches |
+| Type-check cascade on unsealed hierarchy | Java: `instanceof` chains. Scala: `isInstanceOf`/`case x: T` matches on a non-sealed trait/class. JS/TS: typeof/instanceof/Array.isArray cascades, or a union with no discriminant and no never check | Cascade `file:line` + branch count + "hierarchy not sealed: `<root>`" | ≥2 branches |
 | Mode field checked across methods | A status/mode field checked at the top of several methods of a touched class (State candidate — direction only). | Field `file:line` + each checking method `file:line` | ≥3 methods check the same field |
 | Nullable-fields-as-variants | Class where certain fields are only meaningful for some values of a discriminator (null-guards conditioned on it; comments like "only set when..."). | Class `file:line` + discriminator + the conditional fields' lines | 1 class with ≥2 discriminator-dependent fields |
 
@@ -146,7 +146,7 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
    `git diff main...HEAD` (full branch); ask for the parent branch only if invoked standalone
    and it isn't obvious.
    Verify: you can list every changed file with its hunks.
-2. Build the scope table: one row per changed file — path, language (Java/Scala), changed
+2. Build the scope table: one row per changed file — path, language (Java/Scala/JavaScript/TypeScript), changed
    line ranges.
    Verify: row count == changed-file count.
 3. Expand context, 1 hop max: for each changed symbol you may read (a) its full containing
@@ -217,6 +217,8 @@ implementer reads the recipe from its source of truth.
 
 - **Java** → `references/java.md` — grep-able cues per category.
 - **Scala** → `references/scala.md` — grep-able cues per category.
+- **JavaScript** → references/javascript.md — grep-able cues per category.
+- **TypeScript** → references/typescript.md — grep-able cues per category. Read javascript.md first: the TS file is a type-system delta.
 
 ## Worked examples
 
