@@ -18,6 +18,20 @@ Coordinator-only: no subagent cast beyond fact-lookup scouts.
 Grilling method sourced from mattpocock/skills; adapted (recommendation-first,
 emoji markers, no auto-advance).
 
+## Session working directory
+
+All pablo-* skills share the current pi session's working directory for
+session-scoped artifacts. Resolve it once at the start of the pass:
+
+```bash
+SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
+```
+
+`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
+sessions keep artifacts next to the session file
+(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
+back to `/tmp/pi/session/<PI_SESSION_ID>`.
+
 ## Entry conditions
 
 - The user named `goal-discovery`, or the task matches this description and
@@ -96,10 +110,10 @@ Non-blocking by design.
 
 ## Artifact writes (coordinator carve-outs)
 
-- `$DESIGN_DIR/goal.md` - created. The confirmed goal.
-- `$DESIGN_DIR/decisions.md` - created with the first entry.
+- `$SESSION_DIR/goal.md` - created. The confirmed goal.
+- `$SESSION_DIR/decisions.md` - created with the first entry.
 - Both are coordinator carve-outs. [NEVER] delegate the write; [NEVER] let a
-  subagent write into `$DESIGN_DIR`.
+  subagent write into `$SESSION_DIR`.
 
 ## Reporting
 

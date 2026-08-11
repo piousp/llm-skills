@@ -22,6 +22,20 @@ Planning is a three-phase pass: Analyze → Decide → Specify. The phases
 are ordered; the plan is complete only when all three have produced
 their part of the output.
 
+## Session working directory
+
+All pablo-* skills share the current pi session's working directory for
+session-scoped artifacts. Resolve it once at the start of the pass:
+
+```bash
+SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
+```
+
+`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
+sessions keep artifacts next to the session file
+(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
+back to `/tmp/pi/session/<PI_SESSION_ID>`.
+
 ## Phase 1 - Analyze
 
 Read the code to be touched before planning. Two analyses produce the
