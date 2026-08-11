@@ -413,7 +413,7 @@ export interface RunAgentViaSdkOptions {
   returns `undefined` for a well-formed `provider/modelId`, `resolveModel` logs a
   `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
-- `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting.
+- `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting. The `tool_start` variant now also carries a `summary: string`, pre-formatted by `formatToolCall` (`src/format-tool-call.ts`) from the tool's `toolName`/`args`. The event's underlying `result`/`partialResult` is never captured — only `toolName` and the formatted `args` summary flow through `SubagentToolEvent` — so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
 
 ### AgentRunResult
 
@@ -899,6 +899,66 @@ up the named agent(s) in `paramAgents` and, when found, appends a dim parameter 
   `tools`/`skills`/`model` override is looked up via `invocationOverrideOf(t)` and merged via
   `applyInvocationOverride` independently per task/line — one task's override never bleeds into
   another task's rendered line.
+
+### src/format-tool-call.ts
+
+```typescript
+function formatToolCall(toolName: string, args: unknown): string;
+```
+
+Formats a single tool call into a short, bounded (≤80 chars, via `render-call.ts`'s exported
+`truncate`) human-readable line, used to build `TaskProgress.history` entries for the expanded
+in-progress stream (see [src/render-result.ts](#srcrender-resultts) below).
+
+- Known tools get a purpose-built one-liner: `read path:offset-limit` (or `path:offset+` /
+  `path:1-limit` when only one of `offset`/`limit` is set, or bare `path` when neither is set),
+  `write path`, `edit path (N edits)`, `$ <first line of command>` (via `firstLine`, for `bash`),
+  `grep /pattern/ in path (glob)` (path/glob segments omitted when absent), `find pattern in path`
+  (or bare `find pattern` without a path), `ls path` (defaults to `.` when no path is given).
+- Any other tool name falls back to `toolName + JSON.stringify(args)` (dropped entirely, leaving
+  just `toolName`, if `args` doesn't stringify or stringifies to nothing).
+- **`write`'s `content` and `edit`'s `edits[].oldText`/`newText` are never read or included** —
+  only `path` and, for `edit`, the edit count. This is deliberate: these summaries are retained in
+  `TaskProgress.history` for the lifetime of a running subagent, so including full file contents
+  there would defeat the point of not capturing tool results (see the `onToolEvent` note above).
+- Pure, total, never throws (`args` that isn't an object is treated as `{}` for the known-tool
+  formatters, and `safeJson` catches non-serializable `args` for the fallback).
+
+### src/render-result.ts
+
+```typescript
+export const DIVIDER = "\u2500\u2500\u2500"; // ───
+
+interface ResultTheme {
+  fg(color: "accent" | "dim" | "muted" | "toolOutput", text: string): string;
+}
+
+interface SubagentResultView {
+  isPartial: boolean;
+  expanded: boolean;
+  progress: readonly TaskProgress[] | undefined;
+  content: string;
+}
+
+function buildSubagentResultText(view: SubagentResultView, theme: ResultTheme): string;
+```
+
+Pure function that decides the `subagent` tool box's body text — everything below the header
+built by `buildSubagentCallText` (`src/render-call.ts`) — for the host's `expanded` flag (Ctrl+O /
+`app.tools.expand`). `extensions/index.ts`'s `renderSubagentResult` delegates to this function
+instead of carrying its own `isPartial`/`expanded` branching, so the four-state matrix below lives
+in one tested, side-effect-free place.
+
+| `isPartial` | `expanded` | Body |
+|---|---|---|
+| `true` | `false` | `buildProgressLines(progress, theme)` — one status line per agent (unchanged from before this change). |
+| `true` | `true` | `buildProgressStream(progress, theme)` (`src/progress.ts`) — the status line per agent, each followed by its indented `history` of tool-call summaries. |
+| `false` | `false` | Empty string — no output shown. |
+| `false` | `true` | The subagent's/subagents' full `content`, colored `toolOutput`. |
+
+In every case except the `false`/`false` row (and the `true` row with no `progress` at all, which
+also returns `""`), the body is prefixed with `${theme.fg("muted", DIVIDER)}\n` — the divider only
+appears when there's something to separate it from the header.
 
 ### src/skills-filter.ts
 

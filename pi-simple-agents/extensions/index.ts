@@ -14,7 +14,8 @@ import type { AgentConfig } from "../src/agents.ts";
 import { applyInvocationOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
 import { runAgentViaSdk, mapWithConcurrencyLimit, MAX_TIMEOUT_MS, type AgentRunResult } from "../src/run.ts";
-import { createProgressTracker, buildProgressLines, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
+import { createProgressTracker, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
+import { buildSubagentResultText } from "../src/render-result.ts";
 import { formatRunResults } from "../src/format-results.ts";
 import { validateSubagentParams, resolveAgents, normalizeTasks, invocationOverrideOf } from "../src/validate.ts";
 import type { TaskEntry, ValidationResult } from "../src/validate.ts";
@@ -228,19 +229,16 @@ function renderSubagentResult(
   theme: Theme,
   _context: { lastComponent?: Component },
 ): Text {
-  // During progress, render the live tool-progress feed once an update with
-  // `details.progress` has arrived (see src/progress.ts); before the first
-  // update there is nothing to show yet, so fall back to empty text.
-  if (options.isPartial) {
-    const progress = result.details && "progress" in result.details ? result.details.progress : undefined;
-    return new Text(progress ? buildProgressLines(progress, theme) : "", 0, 0);
-  }
-
-  // Final result: show the full content.
+  const progress = result.details && "progress" in result.details ? result.details.progress : undefined;
   const content = result.content
     .map((c) => (c.type === "text" ? c.text : ""))
     .join("\n");
-  return new Text(content ? theme.fg("toolOutput", content) : "", 0, 0);
+
+  return new Text(
+    buildSubagentResultText({ isPartial: options.isPartial, expanded: options.expanded, progress, content }, theme),
+    0,
+    0,
+  );
 }
 
 export default async function (
