@@ -7,6 +7,13 @@ import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker, type TaskProgress } from "../../src/progress.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
 import type { AgentConfig } from "../../src/agents.ts";
+import type { RunUsage } from "../../src/usage.ts";
+
+const sampleUsage: RunUsage = {
+  input: 12500, output: 840, cacheRead: 1_200_000, cacheWrite: 3000,
+  cost: 0.4123, isSubscription: false,
+  context: { percent: 12.34, window: 200000 },
+};
 
 const fakeTheme = {
   fg: (c: string, t: string) => `<${c}>${t}</${c}>`,
@@ -164,6 +171,24 @@ test("renderResult: final+expanded renders divider + full content, delegating to
   assert.equal(rendered, expected);
 });
 
+// (d5)
+test("renderResult: final+expanded with runs carrying usage delegates runs through to buildSubagentResultText", async () => {
+  const captured = await loadExtension();
+
+  const runs = [{ agent: "scout", task: "find things", durationMs: 10, status: "success" as const, usage: sampleUsage }];
+  const result = { content: [{ type: "text" as const, text: "the full agent output" }], details: { runs }, isError: false };
+  const options = { expanded: true, isPartial: false };
+
+  const component = captured.renderResult(result, options, fakeTheme, {});
+  const rendered = textOf(component);
+
+  const expected = buildSubagentResultText(
+    { isPartial: false, expanded: true, progress: undefined, content: "the full agent output", runs },
+    fakeTheme,
+  );
+  assert.equal(rendered, expected);
+});
+
 // (e)
 // Mechanism note: runAgentViaSdk never rejects (it catches internally and
 // always resolves), and createSession is hardcoded — neither is a reachable
@@ -191,7 +216,44 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
   );
 
   assert.equal(doneSpy.mock.callCount(), 1);
-  assert.deepEqual(doneSpy.mock.calls[0].arguments, [0]);
+  // markTaskDone treats an explicit `undefined` usage the same as an omitted
+  // one, so only the index and the absence of usage matter here — not
+  // whether the second argument was passed at all.
+  const [index, usage] = doneSpy.mock.calls[0].arguments;
+  assert.equal(index, 0);
+  assert.equal(usage, undefined);
+});
+
+// (e2)
+// Same mechanism as (g) below: getModel throws before createSession is ever
+// called, so runAgentViaSdk settles an error result whose usage is the
+// zeroed default (no session, no messages) — still a real RunUsage object,
+// not undefined. This proves runSingleTask forwards result.usage to the
+// tracker rather than dropping it.
+test("runSingleTask: forwards the run's usage snapshot to tracker.markTaskDone", async (t) => {
+  t.mock.method(DefaultResourceLoader.prototype, "reload", () => Promise.resolve());
+
+  const agent = makeAgent({ model: "anthropic/claude-fable-5" });
+  const tracker = createProgressTracker(["scout"], () => {});
+  const doneSpy = t.mock.method(tracker, "markTaskDone");
+  const fakeModelRuntime = {
+    getModel: () => { throw new Error("stop before session creation"); },
+  } as unknown as ModelRuntime;
+
+  await runSingleTask({ agent: "scout", task: "do it" }, agent, 0, tracker, {
+    cwd: process.cwd(),
+    signal: undefined,
+    modelRuntime: fakeModelRuntime,
+    callerSessionFile: undefined,
+  });
+
+  assert.equal(doneSpy.mock.callCount(), 1);
+  const [index, usage] = doneSpy.mock.calls[0].arguments;
+  assert.equal(index, 0);
+  assert.deepEqual(usage, {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+    isSubscription: false, context: undefined,
+  });
 });
 
 // (g)

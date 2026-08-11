@@ -169,6 +169,7 @@ export async function runSingleTask(
 ): Promise<AgentRunResult> {
   const { cwd, signal, modelRuntime, callerSessionFile } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
+  let usage: AgentRunResult["usage"];
 
   try {
     const resourceLoader = createMinimalResourceLoader(effectiveAgent, cwd);
@@ -183,7 +184,7 @@ export async function runSingleTask(
     );
     emitWarnings(warnings);
 
-    return await runAgentViaSdk(
+    const result = await runAgentViaSdk(
       effectiveAgent,
       t.task,
       {
@@ -196,8 +197,13 @@ export async function runSingleTask(
         onToolEvent: tracker ? (event) => tracker.onToolEvent(index, event) : undefined,
       },
     );
+    usage = result.usage;
+    return result;
   } finally {
-    tracker?.markTaskDone(index);
+    // usage is only set once runAgentViaSdk actually resolves; a throw before
+    // that (e.g. resourceLoader.reload() rejecting) leaves it undefined, which
+    // markTaskDone treats identically to the argument being omitted.
+    tracker?.markTaskDone(index, usage);
   }
 }
 
@@ -230,12 +236,13 @@ function renderSubagentResult(
   _context: { lastComponent?: Component },
 ): Text {
   const progress = result.details && "progress" in result.details ? result.details.progress : undefined;
+  const runs = result.details && "runs" in result.details ? result.details.runs : undefined;
   const content = result.content
     .map((c) => (c.type === "text" ? c.text : ""))
     .join("\n");
 
   return new Text(
-    buildSubagentResultText({ isPartial: options.isPartial, expanded: options.expanded, progress, content }, theme),
+    buildSubagentResultText({ isPartial: options.isPartial, expanded: options.expanded, progress, content, runs }, theme),
     0,
     0,
   );

@@ -287,6 +287,24 @@ scout · tools: 2 · running: read
   $ ls -la
 ```
 
+### Usage footer
+
+Once a task settles, its status/result line gets a one-line consumption footer appended, in the
+same format as pi's own status-bar footer: `↑<input> ↓<output> R<cache-read> W<cache-write>
+CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`. Fields at zero are omitted (no cache activity means no
+`R`/`W`/`CH`); `$` only shows when cost is non-zero or the model is subscription-backed.
+Cache-hit % is cumulative over the whole run, not just the last turn. The footer is visible in
+both collapsed and expanded views — the Ctrl+O toggle only gates the full output/tool-call
+stream, not this one-line summary. It also appears on error/timeout/maxTurns runs: the tokens
+were spent regardless of the outcome.
+
+```
+scout · tools: 2 · done · ↑13k ↓840 R1.2M W3.0k CH98.7% $0.412 12.3%/200k
+```
+
+In a parallel `tasks[]` batch, each task gets its own footer — there is no aggregated total
+across tasks.
+
 ## Frontmatter fields
 
 | Field | Type | Default | Description |

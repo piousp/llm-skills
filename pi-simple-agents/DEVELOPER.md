@@ -419,11 +419,19 @@ export interface RunAgentViaSdkOptions {
 
 ```typescript
 type AgentRunResult =
-  | { status: "success"; agent: string; task: string; durationMs: number; finalText?: string }
-  | { status: "error";   agent: string; task: string; durationMs: number; error: string };
+  | { status: "success"; agent: string; task: string; durationMs: number; usage?: RunUsage; finalText?: string }
+  | { status: "error";   agent: string; task: string; durationMs: number; usage?: RunUsage; error: string };
 ```
 
 Session disposal is guaranteed in a `finally` block regardless of success or error.
+
+`usage` (`RunUsage`, see [src/usage.ts](#srcusagets)) is attached in the single `settleOnce`
+chokepoint, so it's present on every settlement path — success, error, timeout, maxTurns, and
+abort — not just success. It reflects only the tokens/cost accumulated *during this run*, via a
+plain `agentSession.subscribe` listener registered unconditionally alongside the tool-event and
+turn-counter subscriptions (not via the SDK's `AgentSession.getSessionStats()`, which would
+include the caller's forked history for `defaultContext: "forked"` agents). `getContextUsage()` is
+read from the session before it's disposed.
 
 Internally, the abort-listener registration, timeout scheduling, and the `agentSession.prompt(task)`
 call are factored into a module-private `runWithTimeoutAndAbort` helper (not exported) — extracted
@@ -924,6 +932,67 @@ in-progress stream (see [src/render-result.ts](#srcrender-resultts) below).
 - Pure, total, never throws (`args` that isn't an object is treated as `{}` for the known-tool
   formatters, and `safeJson` catches non-serializable `args` for the fallback).
 
+### src/usage.ts
+
+```typescript
+interface UsageAccumulator {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cost: number;
+  readonly provider: string | undefined;
+}
+
+interface RunUsage {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cost: number;
+  readonly isSubscription: boolean;
+  readonly context: { readonly percent: number | null; readonly window: number } | undefined;
+}
+
+function emptyUsage(): UsageAccumulator;
+function applyUsageEvent(acc: UsageAccumulator, event: AgentSessionEvent): UsageAccumulator;
+function toRunUsage(
+  acc: UsageAccumulator,
+  context: ContextUsage | undefined,
+  isUsingSubscription: (provider: string) => boolean,
+): RunUsage;
+function formatTokens(count: number): string;
+function formatRunUsage(usage: RunUsage): string;
+```
+
+Pure functions backing the per-subagent-run consumption footer (tokens, cache, cost, context %).
+
+- `applyUsageEvent` is a fold over `AgentSessionEvent`s, mirroring `applyToolEvent`
+  (`src/progress.ts`)'s shape: only `message_end` carries a message's *final* usage.
+  `message_start`/`turn_end` re-emit the same message and are ignored to avoid double-counting.
+  Both `assistant` and `toolResult` messages contribute; the accumulator's `provider` tracks the
+  last assistant message seen (used later for the subscription-cost tag).
+- `toRunUsage` maps the accumulator plus the session's `ContextUsage` (read via
+  `AgentSession.getContextUsage()`, see [AgentRunResult](#agentrunresult)) into the immutable
+  `RunUsage` snapshot attached to `AgentRunResult`. The subscription predicate
+  (`ModelRuntime.isUsingSubscription`) is injected as a plain function and is only invoked when a
+  provider was actually captured — a run with zero assistant messages never calls it.
+- `formatTokens` is a local reimplementation of pi's own footer-formatting helper. It isn't
+  importable: it lives in an internal, non-exported path of `@earendil-works/pi-coding-agent`
+  (`dist/modes/interactive/components/footer.js`).
+- `formatRunUsage` renders `RunUsage` into the one-line footer string:
+  `↑<input> ↓<output> R<cacheRead> W<cacheWrite> CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`.
+  Each field is included only when non-zero (`$` also shows when `isSubscription` is true even at
+  zero cost); an all-zero, no-context `RunUsage` formats to `""`. Cache-hit % is
+  `cacheRead / (input + cacheRead + cacheWrite)`, computed over the **whole run's** accumulated
+  totals — not just the last turn, unlike pi's own status-bar footer (a deliberate deviation: pi's
+  version mixes cumulative token counts with a last-turn-only hit rate in the same line, which this
+  module avoids).
+
+`MessageUsage` is a structural (not imported) shape matching the SDK's `Usage` type
+(`@earendil-works/pi-ai`), which isn't resolvable from this package (nested under
+`pi-coding-agent`'s own `node_modules`).
+
 ### src/render-result.ts
 
 ```typescript
@@ -933,11 +1002,17 @@ interface ResultTheme {
   fg(color: "accent" | "dim" | "muted" | "toolOutput", text: string): string;
 }
 
+interface RunUsageSource {
+  agent: string;
+  usage?: RunUsage;
+}
+
 interface SubagentResultView {
   isPartial: boolean;
   expanded: boolean;
   progress: readonly TaskProgress[] | undefined;
   content: string;
+  runs?: readonly RunUsageSource[];
 }
 
 function buildSubagentResultText(view: SubagentResultView, theme: ResultTheme): string;
@@ -946,19 +1021,24 @@ function buildSubagentResultText(view: SubagentResultView, theme: ResultTheme): 
 Pure function that decides the `subagent` tool box's body text — everything below the header
 built by `buildSubagentCallText` (`src/render-call.ts`) — for the host's `expanded` flag (Ctrl+O /
 `app.tools.expand`). `extensions/index.ts`'s `renderSubagentResult` delegates to this function
-instead of carrying its own `isPartial`/`expanded` branching, so the four-state matrix below lives
-in one tested, side-effect-free place.
+instead of carrying its own `isPartial`/`expanded` branching, so the state matrix below lives in
+one tested, side-effect-free place.
 
 | `isPartial` | `expanded` | Body |
 |---|---|---|
-| `true` | `false` | `buildProgressLines(progress, theme)` — one status line per agent (unchanged from before this change). |
+| `true` | `false` | `buildProgressLines(progress, theme)` — one status line per agent, including each task's usage footer once it's `done` (see `src/progress.ts`). |
 | `true` | `true` | `buildProgressStream(progress, theme)` (`src/progress.ts`) — the status line per agent, each followed by its indented `history` of tool-call summaries. |
-| `false` | `false` | Empty string — no output shown. |
-| `false` | `true` | The subagent's/subagents' full `content`, colored `toolOutput`. |
+| `false` | `false` | One `formatRunUsage` footer line per entry in `runs` that has non-empty usage — empty string if `runs` is absent or every run's usage is empty. No divider, no `content`. |
+| `false` | `true` | The subagent's/subagents' full `content` (colored `toolOutput`), preceded by the divider, followed by the same per-run footer lines as the collapsed case. |
 
-In every case except the `false`/`false` row (and the `true` row with no `progress` at all, which
-also returns `""`), the body is prefixed with `${theme.fg("muted", DIVIDER)}\n` — the divider only
-appears when there's something to separate it from the header.
+`RunUsageSource` is a deliberately minimal structural view (`agent` + `usage`) rather than importing `AgentRunResult`'s full union — this module only ever reads those two fields. The usage
+footer is visible in **both** collapsed and expanded final states; only the full `content` (and,
+symmetrically, the live tool-call stream in the `isPartial` rows) is gated behind the `expanded`
+toggle — a one-line consumption summary isn't the large payload the toggle exists to hide.
+In the `true`/`false` and `true`/`true` rows (and the `true` row with no `progress` at all, which
+returns `""`), the body is prefixed with `${theme.fg("muted", DIVIDER)}\n`; the collapsed-final
+row never gets a divider even when it renders footer lines, since there's no content above them to
+separate from.
 
 ### src/skills-filter.ts
 

@@ -11,6 +11,14 @@ import {
   type TaskProgress,
   type ProgressTheme,
 } from "../../src/progress.ts";
+import type { RunUsage } from "../../src/usage.ts";
+
+const sampleUsage: RunUsage = {
+  input: 12500, output: 840, cacheRead: 1_200_000, cacheWrite: 3000,
+  cost: 0.4123, isSubscription: false,
+  context: { percent: 12.34, window: 200000 },
+};
+const sampleUsageFooter = "\u219113k \u2193840 R1.2M W3.0k CH98.7% $0.412 12.3%/200k";
 
 const fakeTheme: ProgressTheme = {
   fg: (c, t) => `<${c}>${t}</${c}>`,
@@ -61,6 +69,20 @@ test("markDone: sets done true, clears runningTools, preserves history", () => {
   assert.equal(done.agent, p.agent);
   assert.deepEqual(done.history, p.history);
   assert.deepEqual(done.runningTools, []);
+});
+
+test("markDone: called without usage does not add the usage key", () => {
+  const p = initialTaskProgress("scout");
+  const done = markDone(p);
+  assert.equal("usage" in done, false);
+});
+
+test("markDone: called with usage attaches it, history stays intact", () => {
+  let p = initialTaskProgress("scout");
+  p = applyToolEvent(p, { type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
+  const done = markDone(p, sampleUsage);
+  assert.equal(done.usage, sampleUsage);
+  assert.deepEqual(done.history, p.history);
 });
 
 test("applyToolEvent: returns a new object and does not mutate the original runningTools array", () => {
@@ -123,6 +145,36 @@ test("buildProgressLines: done true renders done regardless of runningTools", ()
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 3 \u00b7 done</dim>");
 });
 
+test("buildProgressLines: done with usage appends the usage footer after the status", () => {
+  const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: true, usage: sampleUsage };
+
+  const result = buildProgressLines([p], fakeTheme);
+
+  assert.equal(
+    result,
+    `<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 done \u00b7 ${sampleUsageFooter}</dim>`,
+  );
+});
+
+test("buildProgressLines: not done with usage does not render the footer (footer only appears once settled)", () => {
+  const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false, usage: sampleUsage };
+
+  const result = buildProgressLines([p], fakeTheme);
+
+  assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 working\u2026</dim>");
+});
+
+test("buildProgressLines: done with a usage that renders empty omits the footer segment", () => {
+  const emptyRunUsage: RunUsage = {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, isSubscription: false, context: undefined,
+  };
+  const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: true, usage: emptyRunUsage };
+
+  const result = buildProgressLines([p], fakeTheme);
+
+  assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 done</dim>");
+});
+
 test("buildProgressLines: two tasks render two lines joined by newline in input order", () => {
   const p1: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false };
   const p2: TaskProgress = { agent: "web-scout", runningTools: [], history: ["read a.ts", "read b.ts"], done: true };
@@ -173,6 +225,24 @@ test("buildProgressStream: two tasks render each block in input order", () => {
     "<accent>scout</accent> <dim>\u00b7 tools: 1 \u00b7 working\u2026</dim>\n"
       + "  <dim>read a.ts</dim>\n"
       + "<accent>web-scout</accent> <dim>\u00b7 tools: 0 \u00b7 done</dim>",
+  );
+});
+
+test("buildProgressStream: done with usage puts the footer on the header line, history lines untouched", () => {
+  const p: TaskProgress = {
+    agent: "scout",
+    runningTools: [],
+    history: ["read foo.ts"],
+    done: true,
+    usage: sampleUsage,
+  };
+
+  const result = buildProgressStream([p], fakeTheme);
+
+  assert.equal(
+    result,
+    `<accent>scout</accent> <dim>\u00b7 tools: 1 \u00b7 done \u00b7 ${sampleUsageFooter}</dim>\n`
+      + "  <dim>read foo.ts</dim>",
   );
 });
 
@@ -254,4 +324,15 @@ test("createProgressTracker: markTaskDone only marks its own slot done", () => {
   const last = emitted[emitted.length - 1];
   assert.equal(last[0].done, false);
   assert.equal(last[1].done, true);
+});
+
+test("createProgressTracker: markTaskDone with usage attaches usage only to its own slot", () => {
+  const emitted: Array<readonly TaskProgress[]> = [];
+  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
+
+  tracker.markTaskDone(1, sampleUsage);
+
+  const last = emitted[emitted.length - 1];
+  assert.equal("usage" in last[0], false);
+  assert.equal(last[1].usage, sampleUsage);
 });
