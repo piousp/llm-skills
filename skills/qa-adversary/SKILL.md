@@ -192,6 +192,10 @@ For the changed path, report one of:
 - PASS: no confirmed defect; state residual risk and any NOT COVERED paths explicitly.
 ```
 
+- Report standard: before writing findings, read `references/findings-examples.md` (well-formed
+  findings, one or two per lens, doubt vs finding) and `references/bad-findings-examples.md`
+  (bad findings and how to report them right).
+
 ## Rules
 
 - Every finding needs a **concrete, reproducible failure scenario** — inputs → wrong result.
@@ -203,6 +207,9 @@ For the changed path, report one of:
 - Never modify code. Never run or delegate tests. Bash stays read-only.
 - Stay out of code-review-checklist's lane (quality/style/unit-coverage skeletons).
 - Report `file:line` for everything. Keep it scannable.
+- The reference examples fix the reporting discipline, not a bug taxonomy. A finding must come
+  from the diff in front of you. If you are matching an example instead of constructing a
+  scenario, you are manufacturing.
 
 ## References (the conglomerate)
 
