@@ -27,6 +27,8 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
 2. Read the diff carefully. For each changed file, also read the corresponding test file if one exists.
 3. Focus on the diff only — don't review unchanged code.
 4. Run every checklist section against the diff. Report ONLY violations.
+   No praise: this lens reports defects only, by design. Review Communication's
+   "Recognize good work" applies to human reviewers, not to this automated lens.
 5. Analyze test coverage gaps.
 6. Suggest missing tests.
 
@@ -34,11 +36,13 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
 
 ## Severity
 
-Every violation gets exactly one tier — tag each reported line with it:
+Every comment gets exactly one tier; tag each reported line with it:
 
-- **Blocker** — Red Flags only. Any single Blocker fails the review outright.
-- **Major** — a real checklist violation; must be fixed before merge, but doesn't alone fail the review.
-- **Nit** — optional, author's judgment call (naming, comments, local-style consistency).
+- **Blocker**: Red Flags only. Any single Blocker fails the review outright.
+- **Major**: a real checklist violation; must be fixed before merge, but doesn't alone fail the review.
+- **Nit**: optional, author's judgment call (naming, comments, local-style consistency).
+- **Question**: missing context the author should clarify; not a violation by itself
+- **FYI**: informational point, no action required
 
 ## Checklist
 
@@ -49,6 +53,20 @@ Every violation gets exactly one tier — tag each reported line with it:
 - Test suite broken (removed assertions, broken imports)
 - Non-deterministic code (uncontrolled randomness, race conditions)
 - Hidden mutable shared state added
+- Examples for the two ambiguous items (non-determinism, hidden shared state): read
+  `references/redflags.scala.md`, `references/redflags.java.md`, `references/redflags.ts.md`
+
+### Design & Functionality (Major)
+
+- Duplicate functionality: the same behavior already exists in a library or module the change
+  should reuse
+- Abstraction-level mismatch: generic code embedded in a specific module where it can't be reused
+- New architectural pattern where the project already has an established one
+- Feature or abstraction added before it's needed (YAGNI); ask the "right time" question
+- Functionality doesn't do what the author intends: edge cases, error paths, concurrency,
+  user-visible behavior
+- Examples per language: read `references/design-functionality.scala.md`,
+  `references/design-functionality.java.md`, `references/design-functionality.ts.md`
 
 ### Data Shape (Major)
 
@@ -57,6 +75,8 @@ Every violation gets exactly one tier — tag each reported line with it:
 - Inheritance where composition suffices (excluding ADTs)
 - Special-case insanity: a pile of conditionals patching around a data model that should encode
   the case directly
+- Examples per language: read `references/datashape.scala.md`, `references/datashape.java.md`,
+  `references/datashape.ts.md`
 
 ### Complexity (Major)
 
@@ -68,6 +88,8 @@ Every violation gets exactly one tier — tag each reported line with it:
   they're needed
 - Hack upon hack: a new workaround layered on an existing workaround instead of fixing the root
   cause
+- Examples per language: read `references/complexity.scala.md`, `references/complexity.java.md`,
+  `references/complexity.ts.md`
 
 ### Boundaries (Major)
 
@@ -76,6 +98,8 @@ Every violation gets exactly one tier — tag each reported line with it:
 - Implicit dependency instead of explicit injection
 - Brain-damaged API: interface shape makes the common case awkward to call correctly
 - Object orgy: a caller reaches through an object's internals instead of going through its interface
+- Examples per language: read `references/boundaries.scala.md`, `references/boundaries.java.md`,
+  `references/boundaries.ts.md`
 
 ### Scope Discipline (Major)
 
@@ -90,6 +114,8 @@ Every violation gets exactly one tier — tag each reported line with it:
 - Generic utility for a single call site
 - Error handling for a scenario that cannot occur
 - Enterprise sludge: factories/builders/managers/config knobs layered onto a trivial task
+- Examples per language: read `references/abstractions.scala.md`, `references/abstractions.java.md`,
+  `references/abstractions.ts.md`
 
 ### Config vs Code (Major)
 
@@ -101,6 +127,8 @@ Every violation gets exactly one tier — tag each reported line with it:
 - Mutable variable where const/final/readonly works
 - Function modifies its input arguments
 - Exception thrown for domain error that should be in the return type
+- Examples per language: read `references/immutability-fp.scala.md`,
+  `references/immutability-fp.java.md`, `references/immutability-fp.ts.md`
 
 ### Error Handling & Resources (Major)
 
@@ -108,6 +136,8 @@ Every violation gets exactly one tier — tag each reported line with it:
   `Using` / equivalent)
 - Caught exception swallowed, logged-and-ignored, or rethrown as a less specific type
 - Retry/timeout/backoff added with no bound (could loop or block indefinitely)
+- Examples per language: read `references/error-handling.scala.md`,
+  `references/error-handling.java.md`, `references/error-handling.ts.md`
 
 ### Structural Code Smells (Major)
 
@@ -132,6 +162,8 @@ already covered under Red Flags.
 
 - Comment explains *what* the code does instead of *why* (redundant with the code itself)
 - Public API/README/doc behavior changed but the doc/comment wasn't updated to match
+- Docs not updated when the change alters build, test, interaction, release, deletion, or
+  deprecation behavior
 
 ### Consistency (Nit)
 
@@ -145,13 +177,29 @@ already covered under Red Flags.
 
 ### Tests (Major, unless it's purely a naming nit)
 
+- Tests ship with the production change in the same CL (except emergencies)
 - Should be scientific: reproducible, falsifiable, testing the hypothesis.
+- Falsifiability check: for each test, ask "if this code were broken, would this test catch
+  it?" A test that can't fail on broken code verifies nothing. Examples per language:
+  read `references/falsifiability.scala.md`, `references/falsifiability.java.md`,
+  `references/falsifiability.ts.md`
 - Are testing boundaries and test cases
 - Are simple, straightforward, with the fewest assumptions possible.
 - Names correspond to what the test is testing.
 - Should not test other than the added code
 - Should not test code from libraries — except contract/serialization tests that verify the
   integration boundary itself, not the library's own logic
+- Test that asserts nothing: tautological, only checks an exception type exists, or passes
+  while exercising no behavior
+- Test that duplicates the implementation logic instead of validating behavior
+- Test coupled to internals: private methods, field order, fragile data structures
+- Over-mocking: mocks that prevent testing real integration or behavior
+- Flaky by design: timing, sleeps, randomness, network or filesystem assumptions
+- For concurrent or parallel changes: race conditions, deadlocks, ordering assumptions, and
+  non-determinism in the tests themselves. Examples per language:
+  read `references/concurrency.scala.md`, `references/concurrency.java.md`,
+  `references/concurrency.ts.md`
+- Test forcing the implementation to expose internals unnecessarily
 - Hand-wavy bullshit: a claim about performance, safety, or correctness in a comment/PR description
   with no test or benchmark backing it
 
@@ -166,6 +214,10 @@ Identify what the changes do that existing tests don't cover:
 - Changed behavior in existing methods where tests only cover the old behavior
 - Edge cases: nulls, empty collections, boundary values, error paths
 
+Coverage metrics: line/branch coverage find untested code, but do not prove correctness or
+good assertions. Do not treat a hard coverage threshold as a gate; teams optimize the metric
+with trivial tests. Mutation testing is a stronger signal of test strength.
+
 ## Suggest Missing Tests
 
 For each gap found, provide:
@@ -173,6 +225,18 @@ For each gap found, provide:
 - A concrete test method name (following the repo's naming convention)
 - What it should assert
 - A skeleton implementation if the user asks for it
+
+## Review Communication
+
+- Comment the code, not the person
+- Give the reason behind the comment, not just the instruction
+- Prefer questions over commands when context is unclear: "Was edge case X considered?" instead
+  of "Fix this"
+- Name the concrete impact: correctness, readability, maintainability, testability, security,
+  or project convention. Avoid vague verdicts like "bad", "ugly", "wrong"
+- Do not block on personal style preference; tag it as a Nit and let the author decide
+- Recognize good work; a review is not only criticism. Applies to human reviewers, not to
+  this lens (see Process 4)
 
 ---
 
@@ -183,6 +247,9 @@ For each gap found, provide:
 
 ### Red Flags: pass | FAIL
 - [Blocker] file:line — violation
+
+### Design & Functionality: pass | FAIL
+- [Major] file:line — description
 
 ### Data Shape: pass | FAIL
 - [Major] file:line — description
@@ -232,7 +299,7 @@ For each gap found, provide:
 - `testMethodName` — asserts <what>
 - ...
 
-### Verdict: READY | NEEDS WORK (B blockers, N major, M nits, K coverage gaps)
+### Verdict: READY | NEEDS WORK (B blockers, N major, M nits, Q questions, K coverage gaps)
 ```
 
 ## Rules
