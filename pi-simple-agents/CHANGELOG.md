@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+
+- Rewrite README: short introduction aimed at new users, advanced usage moved to
+  `docs/REFERENCE.md`.
+- Add `docs/REFERENCE.md` with the full frontmatter reference, Claude Code compatibility notes,
+  settings overrides, limits, and known limitations.
+
 ## 0.14.0
 
 - **Subagents can now use MCP tools (and any other extension that depends on the `session_start`
