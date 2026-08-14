@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# install-tesis.sh — sync this repo's academia/skills into a project's .pi/skills
-# (por defecto: ~/Proyectos/Tesis). Additive/update only: never deletes or
-# prunes items this script didn't install.
+# install-tesis.sh — sync this repo's academia/skills into a project's
+# .agents/skills dir inside the git repo (por defecto:
+# ~/Proyectos/Tesis/documentos_ucr/.agents/skills). Pi discovers .agents/skills
+# by walking ancestors from the cwd up to the git root, so this location makes
+# the skills visible from any subdirectory of the repo. A compat symlink
+# ~/Proyectos/Tesis/.pi/skills -> <that dir> keeps them visible when launching
+# pi from the project root.
+# Additive/update only: never deletes or prunes items this script didn't install.
 # Portable: bash 3.2 compatible (macOS default /bin/bash), no associative arrays.
 set -euo pipefail
 
@@ -18,7 +23,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=0
 ASSUME_YES=0
 FORCE=0
-PROJECT_DIR="${PROJECT:-$HOME/Proyectos/Tesis/.pi/skills}"
+TESIS_PROJECT="$HOME/Proyectos/Tesis"
+DEFAULT_AGENTS_SKILLS="$TESIS_PROJECT/documentos_ucr/.agents/skills"
+LEGACY_SKILLS_LINK="$TESIS_PROJECT/.pi/skills"
+PROJECT_DIR="${PROJECT:-$DEFAULT_AGENTS_SKILLS}"
 
 usage() {
   cat <<'EOF'
@@ -29,8 +37,10 @@ Options:
   --yes               Skip confirmation prompt
   --force             Replace a foreign symlink pointing outside this repo.
                       WARNING: this deletes the existing foreign symlink first.
-  --project=DIR       Target project .pi/skills dir (default: $HOME/Proyectos/Tesis/.pi/skills,
+  --project=DIR       Target skills dir (default: $HOME/Proyectos/Tesis/documentos_ucr/.agents/skills,
                       or $PROJECT env var)
+  When the default target is used, the compat symlink
+  ~/Proyectos/Tesis/.pi/skills -> <target> is also ensured.
   -h, --help          Show this help
 EOF
 }
@@ -103,6 +113,25 @@ echo "LLMs repo: $REPO_ROOT"
 echo "Project:   $PROJECT_DIR"
 echo
 
+# ---------- compat symlink state (default layout only) ----------
+COMPAT_ACTION=""  # '', 'create' or 'replace'
+if [ "$PROJECT_DIR" = "$DEFAULT_AGENTS_SKILLS" ]; then
+  if [ -L "$LEGACY_SKILLS_LINK" ]; then
+    if [ "$(realpath_portable "$LEGACY_SKILLS_LINK")" = "$DEFAULT_AGENTS_SKILLS" ]; then
+      skip "compat link ok  $LEGACY_SKILLS_LINK"
+    else
+      warn "compat link points elsewhere: $LEGACY_SKILLS_LINK (use --force to replace)"
+      [ "$FORCE" -eq 1 ] && COMPAT_ACTION="replace"
+    fi
+  elif [ -e "$LEGACY_SKILLS_LINK" ]; then
+    warn "real path at $LEGACY_SKILLS_LINK, not a symlink (use --force to replace)"
+    [ "$FORCE" -eq 1 ] && COMPAT_ACTION="replace"
+  else
+    plan "link $LEGACY_SKILLS_LINK -> $DEFAULT_AGENTS_SKILLS"
+    COMPAT_ACTION="create"
+  fi
+fi
+
 QUEUE=""
 while IFS= read -r p; do
   [ -n "$p" ] || continue
@@ -138,6 +167,7 @@ for _e in "${_entries[@]}"; do
       ;;
   esac
 done
+[ -n "$COMPAT_ACTION" ] && ACTIONABLE=1
 
 if [ "$ACTIONABLE" -eq 0 ]; then
   echo "Everything already up to date."
@@ -173,3 +203,16 @@ for _e in "${_entries[@]}"; do
       ;;
   esac
 done
+
+case "$COMPAT_ACTION" in
+  create)
+    mkdir -p "$DEFAULT_AGENTS_SKILLS"
+    ln -s "$DEFAULT_AGENTS_SKILLS" "$LEGACY_SKILLS_LINK"
+    ok "created compat link $LEGACY_SKILLS_LINK"
+    ;;
+  replace)
+    rm -rf "$LEGACY_SKILLS_LINK"
+    ln -s "$DEFAULT_AGENTS_SKILLS" "$LEGACY_SKILLS_LINK"
+    ok "replaced compat link $LEGACY_SKILLS_LINK"
+    ;;
+esac
