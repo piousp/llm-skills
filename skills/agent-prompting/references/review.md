@@ -79,8 +79,8 @@ digests at the coordinator.
   while running qa-adversary, or to "also look for bugs" while running
   code-review-checklist.
 - A lens may forbid tools the analyst otherwise has (qa-adversary never runs
-  or delegates test runs; bash stays read-only). The prompt reinforces the
-  lens's limits: read-only, no test runs, no edits.
+  or delegates test runs; bash stays read-only). The lens enforces its own
+  limits; the prompt does not restate them.
 - Context block: what changed, intent source (ticket, goal, or baseline),
   frozen tests, and prior gates (for example, "this code has NOT been
   through code-review-checklist; you are its first reviewer").
@@ -113,7 +113,6 @@ severity and a concrete failure scenario. No style comments. If nothing
 critical, say so in one line and stop.
 
 Limits:
-- Read-only. No test runs, no edits.
 - Review only this change, not surrounding code.
 - Do not cross lanes: one lens per invocation.
 ```
@@ -157,7 +156,6 @@ with severity. No style comments, no naming nits, no minor improvements.
 If nothing critical, say so in one line and stop.
 
 Limits:
-- Read-only. No test runs, no edits.
 - Review only this change, not surrounding code.
 - Do not cross lanes: one lens per invocation.
 ```

@@ -28,15 +28,20 @@ produces a prompt carrying the skill's load-bearing elements.
   rule for bounded work (`has_stop_rule`), and the skill's scaffolding is
   present at all (`auto_triggered`).
 - **Mechanism rules** — the web-scout contract is INLINE, never a local
-  lens path (`contract_inline_for_web`, from the process finding: web-only
-  agents cannot read local files); lens-based delegation is fail-closed
-  (`fail_closed_lens`); one lens per invocation (`lens_single`).
+  lens path (`contract_inline_for_web`; the process finding showed an
+  unreadable lens stalling the delegation, and inline keeps the contract
+  visible in the transparency preview and portable to any web-only
+  agent; read was later granted to web-scout but inline stays by
+  design); lens-based delegation is fail-closed (`fail_closed_lens`);
+  planning is case-fail-closed (`case_fail_closed`: contracts the goal
+does not support surface as open questions); one lens per invocation
+(`lens_single`).
 - **Meta-coordination** — the transparency step shows the exact prompt
   before sending (`prompt_sent_is_shown`).
 - **Guardrails** — the fixture repo is never mutated (`no_mutation`) and
   preparation scans stay bounded (`scan_bounded`).
 
-All 11 check IDs are implemented in `run_layer2_probes.py`'s
+All 12 check IDs are implemented in `run_layer2_probes.py`'s
 `CHECK_REGISTRY`, one pure function per ID, per
 `evaluating-agent-skills/references/check-registry-pattern.md`.
 
@@ -91,6 +96,12 @@ with a clear message, since both cost real LLM tokens/time and must never
 run as part of a default/offline test suite.
 
 ## Known limitations
+
+- **The green live run is pre-composition.** The 6/6 L2 + 3/3 L3 run
+  predates the composition adjustments (T1 with role preamble, T2 with a
+  forced lens path, T-scout with duplicated limits). Those adjustments
+  (T1 slim, T-scout slim, T2 option a, `case_fail_closed`) have static
+  verification only; the next live run validates them.
 
 - **N=1 during development.** Every probe has been reasoned about at
   single-trial granularity; widen to 3–5 trials once the harness is

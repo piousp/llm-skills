@@ -202,17 +202,14 @@ BLOCKED).
 Limits:
 - One seam per invocation.
 - No gold-plating, no refactors beyond the seam.
-- Stop on failure and report the error; do not improvise unverified
-  workarounds.
-- Leave the tree clean; remove temporary files you created.
 ```
 
 TDD variant:
 
 ```text
 Mode: TDD.
-Lens: read and apply pablo-tdd before touching anything. If you cannot
-read it, make no changes and say so.
+Lens: read and apply <path to pablo-tdd SKILL.md> before touching
+anything. If you cannot read it, make no changes and say so.
 skills: []
 
 Seam: <seam name>

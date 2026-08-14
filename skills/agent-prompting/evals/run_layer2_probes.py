@@ -252,9 +252,12 @@ def check_has_stop_rule(turns, final_text, **ctx) -> bool:
 
 
 def check_contract_inline_for_web(turns, final_text, **ctx) -> bool:
-    """Web-scout delegation: the output contract must be INLINE (process
-    finding: web-only agents cannot read local lens files). Fails if the
-    prompt passes a local lens path to a web-only agent."""
+    """Web-scout delegation: the output contract must be INLINE. The
+    process finding showed an unreadable lens stalling the delegation;
+    inline keeps the contract visible in the transparency preview and
+    portable (read was later granted to web-scout but inline stays by
+    design). Fails if the prompt passes a local lens path to a web-only
+    agent."""
     text = _all_text(turns)
     low = text.lower()
     if re.search(r"lens:\s*/[^\s]+", low):
@@ -314,6 +317,19 @@ def check_answered_directly(turns, final_text, **ctx) -> bool:
     return _skill_signal_count(_all_text(turns)) < 2
 
 
+def check_case_fail_closed(turns, final_text, **ctx) -> bool:
+    """Case-level fail-closed for planning (T2, option a): contracts the
+    goal does not support surface as open questions; [NEVER] invent them.
+    The planner selects its lens internally, so the lens-read fail-closed
+    of T3/T4 does not apply here."""
+    text = _all_text(turns).lower()
+    return any(k in text for k in (
+        "open questions", "preguntas abiertas", "surface them as open",
+        "never invent", "no inventes", "nunca inventes",
+        "cannot support", "no soporta",
+    ))
+
+
 def check_no_mutation(turns, final_text, **ctx) -> bool:
     repo = ctx.get("repo")
     before_hash = ctx.get("before_hash")
@@ -344,6 +360,7 @@ CHECK_REGISTRY = {
     "has_stop_rule": check_has_stop_rule,
     "contract_inline_for_web": check_contract_inline_for_web,
     "fail_closed_lens": check_fail_closed_lens,
+    "case_fail_closed": check_case_fail_closed,
     "lens_single": check_lens_single,
     "prompt_sent_is_shown": check_prompt_sent_is_shown,
     "answered_directly": check_answered_directly,
