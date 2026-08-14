@@ -69,7 +69,25 @@ Every delegation prompt carries five blocks. Missing one produces a known failur
 | OBJECTIVE | One deliverable, one task, no micro-steps | Vague delegation, premature done |
 | OUTPUT CONTRACT | Exact format, fields, verdict; JSON when parsed | Broken parser, buried findings |
 | LIMITS | In/out scope, tools, budget, stop rule | Excessive one-shot, scope creep |
-| FAIL-CLOSED | What to do if the lens cannot be read; skills: [] | Default review, invented output |
+| FAIL-CLOSED | What to do if the lens cannot be read; skills: [] (except planning: skills come from settings) | Default review, invented output |
+
+Composition with agent system prompts: the coordinator's prompt is a task
+contract on top of the agent's own system prompt. web-scout, scout, planner,
+worker, and analyst already define their role, their invariants, and their
+tool limits (web-scout: no fabricated sources, 10-call ceiling, per-URL read
+policy, no-results JSON; scout: locate-and-report, read/grep/find/ls only;
+planner: read-only, selects its lens internally; worker and analyst: accept
+an optional lens by path). [NEVER] restate what the agent already defines;
+the task adds the objective, the output contract, and the case-specific
+stop rule and limits. Check the roster in references/agents.md before
+assembling any prompt.
+
+T2 note: the planner selects its lens internally (per its system prompt)
+and receives pablo-code-planning / pablo-tdd from settings. The planning
+template does not force a lens path and does not set skills: [] (which
+would strip the settings pin); it states the contract and the expected
+plan shape. Fail-closed applies at the case level: contracts the goal
+does not support surface as open questions.
 
 ## 4. Thirteen principles
 
@@ -79,7 +97,7 @@ Every delegation prompt carries five blocks. Missing one produces a known failur
 | P2 | Pass trimmed context in, demand condensed results out | empirical |
 | P3 | Set in/out limits per subagent | empirical |
 | P4 | Write invariants with the reason attached | empirical |
-| P5 | Fail closed on lenses and set skills: [] | empirical (local ecosystem) |
+| P5 | Fail closed on lenses and set skills: [] (except planning: it receives its skills from settings) | empirical (local ecosystem) |
 | P6 | Give an explicit stop rule: N sources or M queries, first wins | reputational + empirical |
 | P7 | Reformulate web queries; measured recall 0.52 to 0.81 | empirical |
 | P8 | Triangulate 3+ independent sources | reputational |
@@ -133,8 +151,11 @@ about to send, then assemble the prompt with the template inside it.
 | Transparency (coordinator -> user) | references/meta-coordination.md | T5 |
 | Whether to delegate at all | references/cost.md | gate |
 
-Each reference opens with its "Use when / Do NOT use when" and carries the
-lessons, the evidence, and a worked example. The web-search reference is
-the only one with an inline-contract requirement: web-only agents cannot
-read local lens files, so its template must be pasted into the prompt
-verbatim ([NEVER] pass it as a lens path).
+Each reference carries the lessons, the evidence, and a worked example
+(web-search and planner open with a "Use when / Do NOT use when" block).
+The web-search reference is the only one with an inline-contract
+requirement: its template must be pasted into the prompt verbatim
+([NEVER] pass it as a lens path). The web-scout can read a local lens by
+path (read was granted), but the contract stays inline by design:
+portability to any web-only agent, the 10-call budget, and visibility
+in the transparency preview.

@@ -2,8 +2,8 @@
 
 Reference file for the T2 planning template in SKILL.md. Read this when
 the coordinator is about to send a plan request to the planner agent.
-The template itself is in SKILL.md section 6; this file covers context
-assembly, the goal cap, gated phases, the lens output contract, and a
+The template lives at the end of this file; the sections below cover context
+assembly, the goal cap, gated phases, the expected plan contract, and a
 worked example.
 
 ## Use when / Do NOT use when
@@ -82,17 +82,17 @@ Gated phases make the plan executable: every step is either done and
 checked, or not done. Ungated phases produce plans that read like prose
 and cannot be tracked.
 
-## 4. The lens output contract
+## 4. The expected plan contract
 
-T2 sends a lens by path (pablo-code-planning or pablo-tdd) and fails
-closed: if the planner cannot read it, it makes no changes and says so.
-skills: [] keeps the planner from loading an ambient default.
-
-The returned plan must follow the lens template verbatim. The prompt
-states this so the coordinator can diff the output against the lens
-contract. [NEVER] accept a plan that does not follow the lens template;
-a plan in the wrong shape is a delegation failure. Resend with the
-contract restated, do not improvise a different review.
+The planner selects its lens internally (per its system prompt) and
+receives pablo-code-planning and pablo-tdd from settings. The task does
+not force a lens path and does not set skills: [] (which would strip the
+settings pin). What the coordinator controls is the contract: the
+returned plan must carry four blocks: analysis, decisions, public
+contracts, and a verification criterion with a check for every step.
+[NEVER] accept a plan in a different shape; a plan in the wrong shape is
+a delegation failure. Resend with the contract restated, do not improvise
+a different review.
 
 ## 5. Ambiguity and open questions
 
@@ -113,11 +113,6 @@ constraints.
 Assembled T2 prompt:
 
 ```
-Lens: read and apply
-/home/pablo/.pi/agent/skills/pablo-code-planning/SKILL.md before
-planning. If you cannot read it, make no changes and say so.
-skills: []
-
 Goal (verbatim, authoritative):
 Build a command-line tool that converts Markdown files with fenced code
 blocks into a single self-contained HTML document with syntax
@@ -140,7 +135,7 @@ Out of scope:
 - Configuration files and plugin systems.
 - Non-Markdown input formats.
 
-Explore read-only first, then produce ONE plan per the lens contract:
+Explore read-only first, then produce ONE plan with these four blocks:
 analysis, decisions, public contracts, and a verification criterion with
 a check for every step.
 
@@ -149,14 +144,15 @@ chose; [NEVER] pick silently. Contracts the goal does not support:
 surface them as open questions, [NEVER] invent them.
 
 Limits:
-- Read-only. The plan is the deliverable and nothing else.
+- The plan is the deliverable and nothing else.
 - No scope creep beyond the confirmed goal.
 - Do not re-write the methodology of other skills; load them by name.
 ```
 
 What the coordinator checks on return:
 
-- The plan follows the lens template verbatim.
+- The plan carries the four blocks (analysis, decisions, contracts,
+  verification).
 - Every step carries a verification check (gated phases).
 - The goal text was not drifted; decisions are respected.
 - Out-of-scope items do not appear in the plan.
@@ -167,11 +163,12 @@ What the coordinator checks on return:
 Use when: non-trivial work that needs sequencing, seams, or a test plan. Do
 NOT use when: the work is already planned (T3).
 
-```text
-Lens: read and apply <path to pablo-code-planning or pablo-tdd SKILL.md>
-before planning. If you cannot read it, make no changes and say so.
-skills: []
+Composition: the planner selects its lens internally (per its system
+prompt) and receives its planning skills from settings. The task does not
+force a lens path and does not set skills: []; it states the contract and
+the expected plan shape.
 
+```text
 Goal (verbatim, authoritative):
 <paste the confirmed goal; keep it under ~4000 characters>
 
@@ -185,7 +182,7 @@ plan, not inputs dictated here.
 
 Out of scope: <explicit list>
 
-Explore read-only first, then produce ONE plan per the lens contract:
+Explore read-only first, then produce ONE plan with these four blocks:
 analysis, decisions, public contracts, and a verification criterion with
 a check for every step.
 
@@ -194,7 +191,7 @@ chose; [NEVER] pick silently. Contracts the goal does not support:
 surface them as open questions, [NEVER] invent them.
 
 Limits:
-- Read-only. The plan is the deliverable and nothing else.
+- The plan is the deliverable and nothing else.
 - No scope creep beyond the confirmed goal.
 - Do not re-write the methodology of other skills; load them by name.
 ```

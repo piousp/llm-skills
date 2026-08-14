@@ -2,7 +2,7 @@
 
 Reference file for the T1 web-search template in SKILL.md. Read this when
 the coordinator needs web facts, research topics, or claim verification.
-The template itself is in SKILL.md section 6; this file carries the
+The template lives at the end of this file; the sections below carry the
 evidence, the failure taxonomy, and a worked example.
 
 ## Use when / Do NOT use when
@@ -28,10 +28,12 @@ that fixes it.
 
 ### 1.1 The local lens failure: the output contract must be INLINE
 
-A web-scout has no filesystem access. A lens passed by path fails
-closed: the agent cannot read the file, and with skills: [] it has no
-local copy either. In the process finding, a delegation stalled because
-the agent could not load the lens and had no fallback contract.
+A lens passed by path is fragile for a web-scout: the agent's 10-call
+budget makes a lens read expensive, a failed read costs a call with no
+contract loaded, and the contract is invisible in the transparency
+preview. In the process finding, the lens file was unreadable (the agent
+lacked read at the time) and the delegation stalled with no fallback
+contract.
 
 Rule: [ALWAYS] put the full output contract and the rules INLINE in the
 prompt, as T1 does. [NEVER] pass a lens path to a web-only agent. For a
@@ -180,10 +182,6 @@ The coordinator needs to verify a claim before quoting it in a report.
 Filled T1 prompt:
 
 ```
-Role: web-scout. You search the web and report findings. You have no
-filesystem access; everything you need is in this prompt. There is no
-lens file; the output format and rules below are the full contract.
-
 Objective: verify the claim "The EU AI Act entered into force on 1
 August 2024 and requires human oversight for high-risk AI systems."
 Verify these subclaims:
@@ -216,17 +214,14 @@ Output contract: report findings as JSON only, with these fields:
 }
 
 Stop rule: stop when 3 independent sources support the claim OR after 4
-queries, whichever comes first. Hard ceiling: 10 tool calls. [NEVER]
-search past the ceiling.
+queries, whichever comes first. The agent's own 10-call ceiling always
+applies.
 
 Limits:
 - Triangulate: 3+ independent sources; two pages derived from the same
   original do not count as independent.
 - Verify against the original source, never against a snippet or a
   summary of it.
-- [NEVER] report a source you did not read. [NEVER] invent a URL.
-- One attempt per URL; on failure retry once with a different reader;
-  then drop it and record it in urls_attempted.
 - No commentary outside the JSON.
 ```
 
@@ -290,11 +285,13 @@ Use when: the coordinator needs web facts, research topics, or claim
 verification. Do NOT use when: the facts live in the codebase (T-scout), the
 answer is already in context, or the coordinator has the sources open.
 
-```text
-Role: web-scout. You search the web and report findings. You have no
-filesystem access; everything you need is in this prompt. There is no
-lens file; the output format and rules below are the full contract.
+Composition: the web-scout agent's own system prompt already defines its
+role, its invariants (no fabricated sources, 10-call ceiling, per-URL read
+policy) and its no-results JSON. The task adds only what the agent does not
+know: the objective, the claims, the output contract, and the case-specific
+stop rule and limits.
 
+```text
 Objective: <one sentence: the claim or topic to verify>. Verify these
 subclaims:
 - <subclaim 1>
@@ -321,16 +318,13 @@ Output contract: report findings as JSON only, with these fields:
 }
 
 Stop rule: stop when 3 independent sources support the claim OR after 4
-queries, whichever comes first. Hard ceiling: 10 tool calls. [NEVER]
-search past the ceiling.
+queries, whichever comes first. The agent's own 10-call ceiling always
+applies.
 
 Limits:
 - Triangulate: 3+ independent sources; two pages derived from the same
   original do not count as independent.
 - Verify against the original source, never against a snippet or a
   summary of it.
-- [NEVER] report a source you did not read. [NEVER] invent a URL.
-- One attempt per URL; on failure retry once with a different reader;
-  then drop it and record it in urls_attempted.
 - No commentary outside the JSON.
 ```

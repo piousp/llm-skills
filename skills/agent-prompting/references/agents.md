@@ -128,14 +128,19 @@ call: model, tools, skills, thinking, maxTurns, timeoutMs.
 
 ## T-scout dispatch
 
-Codebase fact lookups use scout with the T-scout template from the SKILL.md.
-The template's limits mirror the frontmatter invariants: read-only tools,
-no interpretation, never invent a finding. Web facts go to web-scout with
-T1, never to scout.
+Codebase fact lookups use scout with the T-scout template below. The
+template adds the query, the search area, and the report format; the
+scout's own invariants (read-only tools, no interpretation, never invent
+a finding) come from its system prompt, not from the prompt. Web facts
+go to web-scout with T1, never to scout.
 
 ## Template (T-scout)
 
 Use when: the coordinator needs facts from the codebase. Web facts go to T1.
+
+Composition: the scout agent's system prompt already defines its role
+(locate and report, no analysis) and its tool set (read, grep, find, ls).
+The task adds the query, the search area, and the report format.
 
 ```text
 Query: <the exact fact to find>
@@ -143,10 +148,15 @@ Where: <paths or directories>
 
 Report: path:line with an excerpt of 1-5 lines per finding. Group
 findings by directory. "No results found" is a valid report.
-
-Limits:
-- Read-only tools only: read, grep, find, ls. No bash, no subagents.
-- No interpretation, no evaluation, no recommendations.
-- [NEVER] invent a finding. If you did not see it, it is not in the
-  report.
 ```
+
+## Specialized agents (not covered by the templates)
+
+The delegation templates target the general agents above. These agents
+exist in agents/ but are not targets of T1-T5; check their frontmatter
+before delegating to them:
+
+- buscador-sibdi: academic search (SIBDI-UCR), playwright browser tools + write.
+- localizador-pagina: locates a textual reference in a PDF/URL (bash, read, web_read).
+- verificador-dois: verifies academic metadata against DOIs (bash, read, write).
+- critical-thinker: decision validation, read-only (built-in agent, not an agents/ file).

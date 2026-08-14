@@ -9,7 +9,7 @@
     "id": "planning_delegation",
     "prompt": "Armá el prompt para el planner: refactorizar app/payments.py para usar el nuevo pipeline de cobros. El goal aprobado está en goal.md del repo.",
     "should_trigger": true,
-    "expected_checks": ["auto_triggered", "has_objective", "has_output_contract", "fail_closed_lens", "no_mutation", "scan_bounded"]
+    "expected_checks": ["auto_triggered", "has_objective", "has_output_contract", "case_fail_closed", "no_mutation", "scan_bounded"]
   },
   {
     "id": "implementation_delegation",
