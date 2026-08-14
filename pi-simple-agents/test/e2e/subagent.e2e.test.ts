@@ -22,6 +22,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -120,6 +122,74 @@ live(
       stdout,
       /Cannot read properties of undefined|TypeError/i,
       `pi output looked like a crash:\n${stdout}`,
+    );
+  },
+);
+
+// Preconditions for the case below (documented, not asserted blind):
+// - ~/.pi/agent/mcp.json configures a server named "mde-build" exposing a
+//   direct tool "mvn" (i.e. the tool ends up registered as mde_build_mvn).
+// - An agent named "scout" is resolvable (ships with this repo's own
+//   agents-examples, or the user's ~/.pi/agent/agents).
+// Skips (doesn't fail) when the precondition isn't met, naming it.
+const MCP_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "mcp.json");
+
+function hasMdeBuildMvnConfigured(): boolean {
+  if (!fs.existsSync(MCP_CONFIG_PATH)) return false;
+  try {
+    const config = JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, "utf8"));
+    const mdeBuild = config.mcpServers?.["mde-build"];
+    return Boolean(mdeBuild && (mdeBuild.directTools ?? []).includes("mvn"));
+  } catch {
+    return false;
+  }
+}
+
+// Replaces the previous two "mode gate" cases (which only asserted the
+// process doesn't hang in print mode, without ever checking that MCP
+// actually initialized). Now that the mode gate is gone (src/run.ts:
+// bindExtensionsIfNeeded no longer checks mode; the host itself binds and
+// shuts down symmetrically in every mode, print/json included — see
+// DEVELOPER.md), `pi -p` is expected to both stay clean AND produce a real
+// MCP tool result, not a degraded "MCP not initialized" one.
+live(
+  "e2e: subagent tool calls a real direct MCP tool (mde_build_mvn) via `pi -p`, exits clean, and returns a real tool result (not \"MCP not initialized\")",
+  { timeout: TIMEOUT_MS + 10_000 },
+  async (t) => {
+    if (!hasMdeBuildMvnConfigured()) {
+      t.skip(`no "mde-build" MCP server with an "mvn" direct tool configured at ${MCP_CONFIG_PATH}`);
+      return;
+    }
+
+    // A structured `tools: [...]` override spelled out in the natural-
+    // language prompt is *less* reliable than just describing the task and
+    // letting the model reach for the tool itself (verified by hand: the
+    // explicit-override phrasing made the model misreport scout's
+    // available tools). Pinning --model to a capable model is what actually
+    // fixes delegation reliability here — the default model for `pi -p`
+    // isn't guaranteed strong enough to reliably invoke `subagent` at all.
+    const prompt =
+      "Usa la herramienta subagent para invocar al agente 'scout' con esta tarea: " +
+      "'Invocá el tool mde_build_mvn una vez con los parámetros mínimos necesarios y reportá su " +
+      "resultado tal cual.' Reporta el resultado tal cual.";
+
+    const { code, stdout } = await runPi(["-e", EXTENSIONS_DIR, "-ne", "--model", "anthropic/claude-sonnet-5", "-p", prompt]);
+
+    assert.equal(code, 0, `pi did not exit cleanly. Output:\n${stdout}`);
+    assert.doesNotMatch(
+      stdout,
+      /Cannot read properties of undefined|TypeError/i,
+      `pi output looked like a crash:\n${stdout}`,
+    );
+    assert.doesNotMatch(
+      stdout,
+      /MCP not initialized/,
+      `MCP never initialized — the tool degraded to its pre-fix behavior:\n${stdout}`,
+    );
+    assert.match(
+      stdout,
+      /"tool":\s*"mvn"|exitCode|BUILD (FAILURE|SUCCESS)/i,
+      `expected a real mvn tool result (success or a real Maven error) in the output:\n${stdout}`,
     );
   },
 );

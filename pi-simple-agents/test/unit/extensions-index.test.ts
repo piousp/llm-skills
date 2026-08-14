@@ -211,6 +211,7 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
         signal: undefined,
         modelRuntime: {} as unknown as ModelRuntime,
         callerSessionFile: undefined,
+        mode: "tui" as const,
       }),
     /reload failed/,
   );
@@ -245,6 +246,7 @@ test("runSingleTask: forwards the run's usage snapshot to tracker.markTaskDone",
     signal: undefined,
     modelRuntime: fakeModelRuntime,
     callerSessionFile: undefined,
+    mode: "tui" as const,
   });
 
   assert.equal(doneSpy.mock.callCount(), 1);
@@ -254,6 +256,46 @@ test("runSingleTask: forwards the run's usage snapshot to tracker.markTaskDone",
     input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
     isSubscription: false, context: undefined,
   });
+});
+
+// Mutation-tested against the reviewer's finding: deleting `mode,` at the
+// runAgentViaSdk() call site inside runSingleTask (src/run.ts consumer) used
+// to leave the whole ctx.mode -> RunTasksOptions -> runSingleTask ->
+// RunAgentViaSdkOptions threading unverified end-to-end — tsc catches an
+// omission (mode is required on RunTasksOptions), but not a wrong constant.
+// This test exercises the real threading through an injected createSession,
+// asserting the mode that actually reaches bindExtensions.
+test("runSingleTask: forwards options.mode through to the nested session's bindExtensions call", async () => {
+  const agent = makeAgent({
+    tools: ["read"],
+  } as Partial<AgentConfig>);
+  const capturedTools = [{ sourceInfo: { origin: "package" as const, source: "pi-mcp-adapter" } }];
+  let capturedBindings: unknown;
+
+  const fakeSession = {
+    getAllTools: () => capturedTools,
+    bindExtensions: async (bindings: unknown) => { capturedBindings = bindings; },
+    extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+    subscribe: () => () => {},
+    prompt: async () => {},
+    getLastAssistantText: () => "done",
+    getContextUsage: () => undefined,
+    dispose: () => {},
+    abort: () => {},
+  };
+  const createSession = async () => ({ session: fakeSession as any });
+  const modelRuntime = { isUsingSubscription: () => false } as unknown as ModelRuntime;
+
+  await runSingleTask({ agent: "scout", task: "do it" }, agent, 0, undefined, {
+    cwd: process.cwd(),
+    signal: undefined,
+    modelRuntime,
+    callerSessionFile: undefined,
+    mode: "rpc",
+    createSession,
+  });
+
+  assert.deepEqual(capturedBindings, { mode: "rpc" });
 });
 
 // (g)
@@ -282,6 +324,7 @@ test("runSingleTask: getModel resolver calls modelRuntime.getModel with the pars
     signal: undefined,
     modelRuntime: fakeModelRuntime,
     callerSessionFile: undefined,
+    mode: "tui" as const,
   });
 
   assert.deepEqual(captured, [["anthropic", "claude-fable-5"]]);

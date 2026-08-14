@@ -13,7 +13,8 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, ModelRuntime
 import type { AgentConfig } from "../src/agents.ts";
 import { applyInvocationOverride } from "../src/agents.ts";
 import { createAgentRegistry } from "../src/agent-registry.ts";
-import { runAgentViaSdk, mapWithConcurrencyLimit, MAX_TIMEOUT_MS, type AgentRunResult } from "../src/run.ts";
+import { runAgentViaSdk, mapWithConcurrencyLimit, MAX_TIMEOUT_MS, type AgentRunResult, type RunAgentViaSdkOptions } from "../src/run.ts";
+import { SUBAGENT_TOOL_NAME } from "../src/extension-binding.ts";
 import { createProgressTracker, type TaskProgress, type ProgressTracker } from "../src/progress.ts";
 import { buildSubagentResultText } from "../src/render-result.ts";
 import { formatRunResults } from "../src/format-results.ts";
@@ -155,6 +156,9 @@ interface RunTasksOptions {
   callerSessionFile: string | undefined;
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined;
   concurrency: number;
+  mode: RunAgentViaSdkOptions["mode"];
+  /** Test seam: defaults to the real createAgentSession. */
+  createSession?: RunAgentViaSdkOptions["createSession"];
 }
 
 // Runs one task end-to-end: resource loader creation/reload, session manager
@@ -167,7 +171,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: Omit<RunTasksOptions, "onUpdate" | "concurrency">,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, mode, createSession = createAgentSession } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -190,11 +194,12 @@ export async function runSingleTask(
       {
         modelRuntime,
         signal,
-        createSession: createAgentSession,
+        createSession,
         resourceLoader,
         sessionManager: manager,
         getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
         onToolEvent: tracker ? (event) => tracker.onToolEvent(index, event) : undefined,
+        mode,
       },
     );
     usage = result.usage;
@@ -218,14 +223,14 @@ async function runTasks(
   resolvedAgents: AgentConfig[],
   options: RunTasksOptions,
 ): Promise<AgentRunResult[]> {
-  const { cwd, signal, modelRuntime, callerSessionFile, onUpdate, concurrency } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, onUpdate, concurrency, mode } = options;
 
   const tracker = onUpdate
     ? createProgressTracker(tasks.map((t) => t.agent), (details) => onUpdate({ content: [], details }))
     : undefined;
 
   return mapWithConcurrencyLimit(tasks, concurrency, (t, index) =>
-    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRuntime, callerSessionFile }),
+    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRuntime, callerSessionFile, mode }),
   );
 }
 
@@ -262,7 +267,7 @@ export default async function (
   const { agents } = await registry.load(process.cwd());
   const description = buildSubagentToolDescription(agents);
   pi.registerTool({
-    name: "subagent",
+    name: SUBAGENT_TOOL_NAME,
     label: "Subagent",
     description,
     parameters: SubagentParams,
@@ -293,6 +298,14 @@ export default async function (
         callerSessionFile: ctx.sessionManager.getSessionFile(),
         onUpdate,
         concurrency,
+        // Threads the host's real run mode into every subagent's nested
+        // bindExtensions() call (see runSingleTask, src/run.ts). Omitting
+        // this field is caught by tsc (RunTasksOptions.mode is required),
+        // but a *wrong* constant here (e.g. a stray "print") is not caught
+        // by any test — the unit test at
+        // "runSingleTask: forwards options.mode through..." only verifies
+        // runSingleTask's own forwarding, not this specific call site.
+        mode: ctx.mode,
       });
 
       const formatted = formatRunResults(results);
