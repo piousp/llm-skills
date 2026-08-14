@@ -1,7 +1,7 @@
 ---
 name: web-scout
 description: Fast web searcher — runs 2 parallelizable queries, picks the best source, returns direct results; accepts an optional lens file for structured multi-source output
-tools: read, web_search, web_read
+tools: web_search, web_read
 maxTurns: 10
 systemPromptMode: replace
 inheritProjectContext: false
