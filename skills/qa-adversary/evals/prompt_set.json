@@ -1,0 +1,120 @@
+[
+  {
+    "id": "logic_change_inverted_condition",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/discounts.py\n+++ b/discounts.py\n@@ -6,1 +6,1 @@\n-    return order.total >= 50 and member_since.days >= 90\n+    return order.total >= 50 and member_since.days > 90\n```\n\nTicket: QA-117 — Loyalty discount: members with at least 90 days of tenure get 15% off orders of $50 or more. The threshold is inclusive: exactly 90 days qualifies.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_logic_change",
+    "ctx": {
+      "file": "discounts.py",
+      "tokens": [
+        "> 90",
+        "exclusive",
+        "exclusivo",
+        "exactamente 90",
+        "90 dias",
+        "90 días"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "found_planted_bug_logic_01"
+    ]
+  },
+  {
+    "id": "data_handling_missing_key",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/cart.py\n+++ b/cart.py\n@@ -7,5 +7,3 @@\n-        entry = price_lookup.get(sku)\n-        if entry is None:\n-            continue  # skip SKUs not yet in the price catalog\n+        entry = price_lookup[sku]\n         total += entry[\"price\"]\n```\n\nNo ticket exists; establish intent from the pre-change baseline shown in the diff (the pre-change behavior is the regression baseline). The repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_data_handling",
+    "ctx": {
+      "file": "cart.py",
+      "tokens": [
+        "price_lookup[sku]",
+        "keyerror",
+        "missing sku",
+        "sku ausente",
+        "clave ausente"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "found_planted_bug_data_02"
+    ]
+  },
+  {
+    "id": "business_rule_threshold_vs_ticket",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/shipping.py\n+++ b/shipping.py\n@@ -6,1 +6,1 @@\n-    return order.subtotal > 75.00 and order.country == \"US\"\n+    return order.subtotal >= 75.00 and order.country == \"US\"\n```\n\nTicket: SHIP-204 — Free shipping for orders over $75 in the contiguous US. \"Over $75\" is strict: subtotal must be greater than 75.00; a subtotal of exactly 75.00 ships at the standard rate.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_business_rule",
+    "ctx": {
+      "file": "shipping.py",
+      "tokens": [
+        ">= 75.00",
+        ">= 75",
+        "exactly 75",
+        "exactamente 75",
+        "mayor o igual",
+        "75,00"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "found_planted_bug_rule_03"
+    ]
+  },
+  {
+    "id": "repo_git_diff_coverage",
+    "prompt": "Apply the qa-adversary skill and QA the current change in the repo at <repo>. Produce the QA report in the skill's output format.\n\nThe change is the unstaged diff in this git repo — run git diff to see it (the repo has no remote and no parent branch; do not wait for one). The repo also contains an integration test suite under tests/integration/.",
+    "should_trigger": true,
+    "seed": "seed_git_diff_coverage",
+    "ctx": {
+      "file": "paging.py",
+      "tokens": [
+        "size + 1",
+        "extra element",
+        "off-by-one",
+        "elemento extra",
+        "un elemento de más"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "found_planted_bug_repo_04"
+    ]
+  },
+  {
+    "id": "clean_negative_control_refactor",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/invoice.py\n+++ b/invoice.py\n@@ -5,4 +5,1 @@\n-    total = 0\n-    for line in order[\"lines\"]:\n-        total = total + line[\"amount\"]\n-    return total\n+    return sum(line[\"amount\"] for line in order[\"lines\"])\n```\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_clean_control",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "clean_control_only"
+    ]
+  }
+]
