@@ -1,9 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import { invocationOverrideOf } from "../../src/validate.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
+
+// settleOnce resolves runAgentViaSdk's outer promise synchronously (from a
+// listener or from the try block), but the IIFE's finally block — which
+// awaits shutdownExtensionsIfBound before calling dispose() — runs in a later
+// microtask. Every assertion on post-settlement side effects (dispose,
+// callOrder tails) polls for them, bounded, instead of asserting on the race.
+async function waitFor(predicate: () => boolean, timeoutMs = 200, label = "condition"): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (predicate()) return resolve();
+      if (Date.now() > deadline) return reject(new Error(`${label} was not met within ${timeoutMs}ms`));
+      setTimeout(check, 0);
+    };
+    check();
+  });
+}
 
 function assistantMessageEnd(usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }, provider = "anthropic") {
   return {
@@ -29,7 +46,26 @@ class FakeAgentSession {
 
   throwAfterEvents = false;
 
-  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[]; turnEvents?: any[]; messageEvents?: any[]; contextUsage?: any; throwAfterEvents?: boolean } = {}) {
+  private _tools: any[];
+  bindCallCount = 0;
+  lastBindings: unknown;
+  bindShouldThrow = false;
+  bindShouldHang = false;
+  callOrder: string[] = [];
+
+  hasShutdownHandlers = true;
+  shutdownShouldThrow = false;
+  lastShutdownEvent: unknown;
+  extensionRunner = {
+    hasHandlers: (_eventType: string) => this.hasShutdownHandlers,
+    emit: async (event: unknown) => {
+      this.callOrder.push("shutdown");
+      this.lastShutdownEvent = event;
+      if (this.shutdownShouldThrow) throw new Error("shutdown failed");
+    },
+  };
+
+  constructor(text: string, opts: { hangUntilAbort?: boolean; toolEvents?: any[]; turnEvents?: any[]; messageEvents?: any[]; contextUsage?: any; throwAfterEvents?: boolean; tools?: any[]; bindShouldThrow?: boolean } = {}) {
     this._lastAssistantText = text;
     this.hangUntilAbort = opts.hangUntilAbort ?? false;
     this._toolEvents = opts.toolEvents ?? [];
@@ -37,6 +73,23 @@ class FakeAgentSession {
     this._messageEvents = opts.messageEvents ?? [];
     this._contextUsage = opts.contextUsage;
     this.throwAfterEvents = opts.throwAfterEvents ?? false;
+    this._tools = opts.tools ?? [];
+    this.bindShouldThrow = opts.bindShouldThrow ?? false;
+  }
+
+  getAllTools(): any[] {
+    return this._tools;
+  }
+
+  onBind?: () => void | Promise<void>;
+
+  async bindExtensions(bindings: unknown): Promise<void> {
+    this.bindCallCount++;
+    this.lastBindings = bindings;
+    this.callOrder.push("bind");
+    if (this.onBind) await this.onBind();
+    if (this.bindShouldThrow) throw new Error("bind failed");
+    if (this.bindShouldHang) await new Promise<void>(() => {});
   }
 
   subscribe(listener: (event: any) => void): () => void {
@@ -46,6 +99,7 @@ class FakeAgentSession {
   }
 
   async prompt(_text: string): Promise<void> {
+    this.callOrder.push("prompt");
     if (this.shouldThrow) throw new Error("prompt failed");
     // Order is deterministic: messageEvents (usage lands first), then
     // turnEvents (may trigger maxTurns mid-stream), then an optional
@@ -76,6 +130,7 @@ class FakeAgentSession {
   }
 
   dispose(): void {
+    this.callOrder.push("dispose");
     this._dispose?.();
   }
 
@@ -376,6 +431,7 @@ test("runAgentViaSdk: dispose called in finally even on error", async () => {
     { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
+  await waitFor(() => disposed, 200, "dispose");
   assert.equal(disposed, true);
 });
 
@@ -760,19 +816,7 @@ test("runAgentViaSdk: timeoutMs elapses, settles error and aborts+disposes the s
   assert.match((result as any).error, /timed out after 20ms/);
   assert.equal(fakeSession.abortCalled, true);
 
-  // settleOnce resolves the outer promise before abort() unblocks the hung
-  // prompt(), so dispose() (in the IIFE's finally) may still be pending a
-  // moment after this await returns. Poll for it, bounded by a short real
-  // timeout, instead of asserting on a race.
-  await new Promise<void>((resolve, reject) => {
-    const deadline = Date.now() + 200;
-    const check = () => {
-      if (disposed) return resolve();
-      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of timeout"));
-      setTimeout(check, 0);
-    };
-    check();
-  });
+  await waitFor(() => disposed, 200, "dispose after timeout");
   assert.equal(disposed, true);
 });
 
@@ -824,19 +868,7 @@ test("runAgentViaSdk: when maxTurns is set and turn_start events exceed it, sett
   assert.equal((result as any).error, "reached maxTurns limit of 2");
   assert.equal(fakeSession.abortCalled, true);
 
-  // settleOnce resolves the outer promise synchronously from the listener,
-  // but the IIFE's finally block (which calls dispose) runs in a later
-  // microtask. Poll for it, bounded, instead of asserting on a race — the
-  // existing timeout test uses the same shape.
-  await new Promise<void>((resolve, reject) => {
-    const deadline = Date.now() + 200;
-    const check = () => {
-      if (disposed) return resolve();
-      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of maxTurns limit"));
-      setTimeout(check, 0);
-    };
-    check();
-  });
+  await waitFor(() => disposed, 200, "dispose after maxTurns limit");
   assert.equal(disposed, true);
 });
 
@@ -866,19 +898,7 @@ test("runAgentViaSdk: when maxTurns fires first with a long timeoutMs set, maxTu
   assert.equal((result as any).error, "reached maxTurns limit of 1");
   assert.equal(fakeSession.abortCalled, true);
 
-  // settleOnce resolves the outer promise from the listener, but the IIFE's
-  // finally block (which calls dispose) runs in a later microtask. Poll for
-  // it, bounded, instead of asserting on a race — the existing timeout test
-  // uses the same shape.
-  await new Promise<void>((resolve, reject) => {
-    const deadline = Date.now() + 200;
-    const check = () => {
-      if (disposed) return resolve();
-      if (Date.now() > deadline) return reject(new Error("session was not disposed within 200ms of maxTurns-composes-with-timeout path"));
-      setTimeout(check, 0);
-    };
-    check();
-  });
+  await waitFor(() => disposed, 200, "dispose after maxTurns-composes-with-timeout");
   assert.equal(disposed, true);
 });
 
@@ -1148,5 +1168,399 @@ test("runAgentViaSdk: getContextUsage is read before the session is disposed", a
     { createSession, modelRuntime: { isUsingSubscription: () => false } as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
+  await waitFor(() => order.includes("dispose"), 200, "dispose");
   assert.deepEqual(order, ["getContextUsage", "dispose"]);
+});
+
+test("runAgentViaSdk: getAllTools with an origin:package tool triggers bindExtensions with the host's mode (tui)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+  assert.deepEqual(fakeSession.lastBindings, { mode: "tui" });
+});
+
+test("runAgentViaSdk: bindExtensions receives mode 'rpc' when the host runs in rpc mode", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "rpc" },
+  );
+
+  assert.deepEqual(fakeSession.lastBindings, { mode: "rpc" });
+});
+
+
+test("runAgentViaSdk: getAllTools with only built-in tools does not call bindExtensions (isolates the tool gate: mode is 'tui', a mode that always binds when the tool gate passes)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "top-level", source: "builtin" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 0);
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: bindExtensions is awaited before prompt is called (deferred bind: prompt must not appear in callOrder while the bind is still pending)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  let resolveBind!: () => void;
+  fakeSession.onBind = () => new Promise<void>((resolve) => { resolveBind = resolve; });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  // Give the IIFE a chance to reach and call bindExtensions, then assert the
+  // bind is still pending — this is the assertion a fire-and-forget
+  // (un-awaited) bindExtensionsIfNeeded call cannot fail: without the await,
+  // "prompt" would already be in callOrder at this point.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(fakeSession.callOrder, ["bind"]);
+
+  resolveBind();
+  await promise;
+
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "shutdown", "dispose"]);
+});
+
+test("runAgentViaSdk: bindExtensions throwing warns and does not fail the run", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    bindShouldThrow: true,
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(result.status, "success");
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "shutdown", "dispose"]);
+  assert.equal(warnSpy.mock.calls.length, 1);
+  assert.match(warnSpy.mock.calls[0]!.arguments[0] as string, /failed to initialize extensions/);
+});
+
+test("runAgentViaSdk: signal aborted during bindExtensions settles as abort error and never calls prompt", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const controller = new AbortController();
+  fakeSession.onBind = () => { controller.abort(); };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal, mode: "tui" },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error ?? "", /abort/i);
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "shutdown", "dispose"]);
+});
+
+test("runAgentViaSdk: mode 'print' with a package tool calls bindExtensions (the mode gate was removed — the host itself is what emits session_shutdown+process.exit() in this mode, not us)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "print" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: mode 'json' with a package tool calls bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "json" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+});
+
+test("runAgentViaSdk: mode 'rpc' with a package tool calls bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "rpc" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+});
+
+test("runAgentViaSdk: mode 'tui' with a package tool calls bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+});
+
+test("runAgentViaSdk: mode omitted still calls bindExtensions, with mode: undefined in the bindings (the SDK's own default applies downstream)", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+  assert.deepEqual(fakeSession.lastBindings, { mode: undefined });
+});
+
+test("runAgentViaSdk: when bound, emits session_shutdown before dispose, mirroring the SDK's own AgentSessionRuntime.dispose() sequence", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "shutdown", "dispose"]);
+  assert.deepEqual(fakeSession.lastShutdownEvent, { type: "session_shutdown", reason: "quit" });
+});
+
+test("runAgentViaSdk: when never bound (built-in tools only), never emits session_shutdown", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "top-level", source: "builtin" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["prompt", "dispose"]);
+});
+
+test("runAgentViaSdk: when bound but extensionRunner.hasHandlers('session_shutdown') is false, does not call emit", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  fakeSession.hasShutdownHandlers = false;
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "dispose"]);
+});
+
+test("runAgentViaSdk: session_shutdown emit rejecting warns and still disposes the session", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  fakeSession.shutdownShouldThrow = true;
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(result.status, "success");
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "shutdown", "dispose"]);
+  assert.equal(warnSpy.mock.calls.length, 1);
+  assert.match(warnSpy.mock.calls[0]!.arguments[0] as string, /failed to shut down extensions/);
+});
+
+test("awaitAtMost: work resolves before the deadline returns outcome 'settled'", async () => {
+  const result = await awaitAtMost(Promise.resolve("value"), 200);
+  assert.deepEqual(result, { outcome: "settled" });
+});
+
+test("awaitAtMost: work rejects before the deadline returns outcome 'failed' with the error", async () => {
+  const boom = new Error("boom");
+  const result = await awaitAtMost(Promise.reject(boom), 200);
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.error, boom);
+});
+
+test("awaitAtMost: work never settling returns outcome 'timeout' at the deadline", async () => {
+  const hung = new Promise<void>(() => {});
+  const start = Date.now();
+  const result = await awaitAtMost(hung, 20);
+  assert.deepEqual(result, { outcome: "timeout" });
+  assert.ok(Date.now() - start >= 20);
+});
+
+test("awaitAtMost: signal aborted before work settles returns outcome 'aborted'", async () => {
+  const hung = new Promise<void>(() => {});
+  const controller = new AbortController();
+  const promise = awaitAtMost(hung, 5000, controller.signal);
+  controller.abort();
+  const result = await promise;
+  assert.deepEqual(result, { outcome: "aborted" });
+});
+
+test("awaitAtMost: a late rejection after the timeout wins does not surface as an unhandled rejection", async () => {
+  let rejectLate: (err: unknown) => void;
+  const lateWork = new Promise<void>((_resolve, reject) => { rejectLate = reject; });
+
+  const unhandled: unknown[] = [];
+  const onUnhandled = (err: unknown) => unhandled.push(err);
+  process.on("unhandledRejection", onUnhandled);
+
+  try {
+    const result = await awaitAtMost(lateWork, 10);
+    assert.deepEqual(result, { outcome: "timeout" });
+
+    rejectLate!(new Error("late failure, after we stopped waiting"));
+    // Give the process a macrotask to report an unhandled rejection, if any.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("runAgentViaSdk: a hung bindExtensions is bounded by extensionBindTimeoutMs — the run settles instead of hanging, with a warning naming the deadline", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  fakeSession.bindShouldHang = true;
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui", extensionBindTimeoutMs: 20 },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal(warnSpy.mock.calls.length, 1);
+  assert.match(warnSpy.mock.calls[0]!.arguments[0] as string, /did not complete within 20ms/);
+});
+
+test("runAgentViaSdk: signal aborted while bindExtensions is pending (not yet resolved) settles as abort error and never calls prompt", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+  });
+  fakeSession.bindShouldHang = true;
+  const controller = new AbortController();
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui", signal: controller.signal, extensionBindTimeoutMs: 5000 },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  const result = await promise;
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error ?? "", /abort/i);
+  assert.equal(fakeSession.callOrder.includes("prompt"), false);
+});
+
+test("runAgentViaSdk: an agent whose only package-origin tool is its own subagent tool does not call bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [
+      { name: "subagent", sourceInfo: { origin: "package", source: "pi-simple-agents" } },
+      { name: "read", sourceInfo: { origin: "top-level", source: "builtin" } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 0);
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: an agent with the subagent tool AND a real MCP tool still calls bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [
+      { name: "subagent", sourceInfo: { origin: "package", source: "pi-simple-agents" } },
+      { name: "mcp", sourceInfo: { origin: "package", source: "pi-mcp-adapter" } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
 });

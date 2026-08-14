@@ -4,6 +4,7 @@ import type { SubagentToolEvent } from "./progress.ts";
 import { toSubagentToolEvent } from "./progress.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 import { applyUsageEvent, emptyUsage, toRunUsage, type RunUsage } from "./usage.ts";
+import { needsExtensionBinding, type ExtensionMode } from "./extension-binding.ts";
 
 interface AgentRunResultBase {
   agent: string;
@@ -44,6 +45,47 @@ export function clampThinkingLevel(level: string): ThinkingLevel | undefined {
   if ((VALID_THINKING_LEVELS as readonly string[]).includes(level)) return level as ThinkingLevel;
   console.warn(`pi-simple-agents: invalid thinking level "${level}", falling back to default`);
   return undefined;
+}
+
+export type AwaitOutcome = "settled" | "timeout" | "aborted" | "failed";
+
+/**
+ * Waits at most `ms` for `work`, or until `signal` aborts, whichever comes
+ * first. Never rejects: `work`'s rejection surfaces through the return
+ * value (`{ outcome: "failed", error }`), and a rejection that arrives
+ * *after* we've already stopped waiting (timeout/abort) is swallowed with
+ * an attached no-op `.catch()` so it can never surface as an unhandled
+ * rejection.
+ */
+export function awaitAtMost(
+  work: Promise<unknown>,
+  ms: number,
+  signal?: AbortSignal,
+): Promise<{ outcome: AwaitOutcome; error?: unknown }> {
+  return new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (result: { outcome: AwaitOutcome; error?: unknown }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => finish({ outcome: "timeout" }), ms);
+
+    const onAbort = () => finish({ outcome: "aborted" });
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    // Both branches of .then() route into finish(), which is a no-op once
+    // already settled (timeout/abort) — so a late rejection is handled here,
+    // not left to surface as an unhandled rejection.
+    work.then(
+      () => finish({ outcome: "settled" }),
+      (error) => finish({ outcome: "failed", error }),
+    );
+  });
 }
 
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min, per Phase 1 decision.
@@ -127,7 +169,17 @@ export interface RunAgentViaSdkOptions {
   signal?: AbortSignal;
   onToolEvent?: (event: SubagentToolEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+  /** Host run mode, used to gate MCP/extension initialization to modes that exit cleanly (see bindExtensionsIfNeeded). */
+  mode?: ExtensionMode;
+  /** Overrides EXTENSION_BIND_TIMEOUT_MS. Test seam; production callers should leave this unset. */
+  extensionBindTimeoutMs?: number;
 }
+
+// bindExtensions reaches out to child processes/sockets (an MCP server
+// handshake); runAgentViaSdk's own timeoutMs/AbortSignal only wrap the
+// prompt phase (see runWithTimeoutAndAbort below), so without this bound a
+// hung handshake would block the whole run indefinitely, uninterruptibly.
+export const EXTENSION_BIND_TIMEOUT_MS = 60_000;
 
 function resolveModel(
   agent: AgentConfig,
@@ -145,6 +197,74 @@ function resolveModel(
     );
   }
   return model;
+}
+
+// Emits session_start in the subagent's own nested AgentSession, so
+// extensions that depend on that hook (e.g. pi-mcp-adapter connecting MCP
+// servers) actually initialize. Skipped when no active tool for this
+// subagent came from an installed extension, to avoid paying MCP
+// connection cost in subagents that only use built-in tools. No mode gate:
+// the host itself (pi's print/json/tui/rpc modes) already binds+shuts down
+// symmetrically on its own exit path (see shutdownExtensionsIfBound below),
+// so the same pattern here is safe in every mode.
+// Returns true iff bindExtensions was actually issued (session_start was
+// emitted) — the caller owns the symmetric shutdownExtensionsIfBound() call
+// once the run settles, regardless of whether the bind itself succeeded.
+async function bindExtensionsIfNeeded(
+  agentSession: CreateAgentSessionResult["session"],
+  mode: RunAgentViaSdkOptions["mode"],
+  bindTimeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (!needsExtensionBinding(agentSession.getAllTools())) return false;
+  const { outcome, error } = await awaitAtMost(
+    agentSession.bindExtensions({ mode }),
+    bindTimeoutMs,
+    signal,
+  );
+  if (outcome === "failed") {
+    console.warn(`${WARN_PREFIX}failed to initialize extensions for subagent: ${toErrorMessage(error)}`);
+  } else if (outcome === "timeout") {
+    console.warn(
+      `${WARN_PREFIX}extension initialization did not complete within ${bindTimeoutMs}ms for subagent; ` +
+        `continuing without waiting further`,
+    );
+  }
+  // "aborted": no warning here — the pre-existing options.signal?.aborted
+  // check right after this call already settles the run as "run was
+  // aborted", so a second message would be redundant.
+  // session_start was emitted either way (the catch above is for a rejection
+  // after that point, not for never having called bindExtensions), so the
+  // symmetric shutdown must still run — an extension that partially started
+  // servers on a bind failure needs the same session_shutdown chance to stop
+  // them.
+  return true;
+}
+
+// Symmetric counterpart to bindExtensionsIfNeeded: emits session_shutdown on
+// the session's own ExtensionRunner before dispose(), exactly as the SDK's
+// own AgentSessionRuntime.dispose() does (core/agent-session-runtime.js) —
+// this is what lets an extension like pi-mcp-adapter stop the MCP server
+// child process(es) it spawned as a side effect of session_start, instead of
+// leaving them running past this subagent's lifetime. No-op when `bound` is
+// false (bindExtensions was never called, so there is nothing to shut down).
+// Precondition this relies on: pi-mcp-adapter's state is scoped to this
+// nested session's own extension factory invocation, not shared with the
+// host's — so this shutdown only stops the subagent's own MCP connections,
+// never the host's (verified in pi-mcp-adapter/index.ts: state/currentOwner
+// are closure-local to installMcpAdapter, not module-level).
+async function shutdownExtensionsIfBound(
+  agentSession: CreateAgentSessionResult["session"],
+  bound: boolean,
+): Promise<void> {
+  if (!bound) return;
+  try {
+    if (agentSession.extensionRunner.hasHandlers("session_shutdown")) {
+      await agentSession.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+    }
+  } catch (error) {
+    console.warn(`${WARN_PREFIX}failed to shut down extensions for subagent: ${toErrorMessage(error)}`);
+  }
 }
 
 function subscribeToolEvents(
@@ -213,6 +333,7 @@ export function runAgentViaSdk(
   return new Promise((resolve) => {
     let settled = false;
     let session: CreateAgentSessionResult["session"] | null = null;
+    let boundExtensions = false;
     let usageAcc = emptyUsage();
 
     // Snapshot whatever usage has accumulated so far and attach it to the
@@ -247,6 +368,13 @@ export function runAgentViaSdk(
           sessionManager: options.sessionManager,
         });
         session = agentSession;
+
+        boundExtensions = await bindExtensionsIfNeeded(
+          agentSession,
+          options.mode,
+          options.extensionBindTimeoutMs ?? EXTENSION_BIND_TIMEOUT_MS,
+          options.signal,
+        );
 
         if (options.signal?.aborted) {
           settleOnce(errorResult(ctx, "run was aborted"));
@@ -303,6 +431,7 @@ export function runAgentViaSdk(
         ));
       } finally {
         if (session) {
+          await shutdownExtensionsIfBound(session, boundExtensions);
           try { session.dispose(); } catch { /* ignore */ }
         }
       }

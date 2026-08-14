@@ -562,6 +562,30 @@ in this repository.
   config value against a provider or model that only became available after extension load (e.g.
   a provider registered after load, or a newly available model) also won't resolve until
   `/reload` — both share the same frozen `ModelRuntime` snapshot.
+- MCP tools (and any other extension that depends on the `session_start` hook to initialize,
+  e.g. `pi-mcp-adapter`) now initialize inside a subagent in every host run mode — `tui`, `rpc`,
+  `print` (`pi -p`), and `json` (`--mode json`). Each subagent that needs it emits its own
+  `session_start` (via `bindExtensions`) and, symmetrically, its own `session_shutdown` right
+  before disposal — the same bind/shutdown pair pi's own CLI uses on its own exit path. This is
+  what lets it work safely even in `print`/`json`, where the process only exits once the event
+  loop drains naturally: without the matching shutdown, a live MCP server child process spawned
+  by the bind would otherwise keep that loop from ever draining. See `src/extension-binding.ts`
+  and `src/run.ts`'s `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound`.
+- Only tools that came from an **installed package** (`sourceInfo.origin === "package"`) trigger
+  this initialization, and this package's own `subagent` tool is excluded from that check — an
+  agent that can merely nest another subagent call doesn't, by that fact alone, need any MCP
+  server connected. A top-level `~/.pi/agent/extensions/*.ts` file that registers tools and also
+  depends on `session_start` will not have it fire in a subagent (it isn't an installed package).
+  Also inherent: an extension that listens for `session_start` but registers no tools at all is
+  never detected, so it never triggers either.
+- A hung MCP handshake during bind is bounded to `EXTENSION_BIND_TIMEOUT_MS` (60s by default) and
+  is abortable via the subagent's own signal — it can't block the run indefinitely, but a
+  handshake that never resolves still delays that subagent's result by up to that bound.
+- The symmetric shutdown stops the MCP connections *this subagent's own nested session* opened;
+  it never touches the host's own MCP state (each nested session gets an independent instance of
+  the adapter's extension factory). A shutdown that itself hangs (no timeout is applied to it) is
+  a known residual risk — see `DEVELOPER.md` for the reasoning and the mitigation this took
+  instead (removing the artificial mode restriction, not adding another timeout layer).
 
 ## For developers
 

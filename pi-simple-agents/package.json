@@ -1,7 +1,12 @@
 {
   "name": "pi-simple-agents",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piousp/llm-skills.git",
+    "directory": "pi-simple-agents"
+  },
   "keywords": [
     "pi-package"
   ],

@@ -400,6 +400,7 @@ export interface RunAgentViaSdkOptions {
   signal?: AbortSignal;
   onToolEvent?: (event: SubagentToolEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+  mode?: "tui" | "rpc" | "json" | "print";
 }
 ```
 
@@ -414,6 +415,8 @@ export interface RunAgentViaSdkOptions {
   `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting. The `tool_start` variant now also carries a `summary: string`, pre-formatted by `formatToolCall` (`src/format-tool-call.ts`) from the tool's `toolName`/`args`. The event's underlying `result`/`partialResult` is never captured — only `toolName` and the formatted `args` summary flow through `SubagentToolEvent` — so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
+- `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTasksOptions`/`runSingleTask`.
+- `extensionBindTimeoutMs` — overrides `EXTENSION_BIND_TIMEOUT_MS` (60s). Test seam; production callers should leave it unset.
 
 ### AgentRunResult
 
@@ -472,6 +475,79 @@ mirrors the pre-prompt abort check (which settles the run before the prompt is e
 guarantees that a signal aborted mid-prompt settles as the same `"run was aborted"` error rather
 than falling through to the success block. The `settleOnce` guard keeps this safe against races
 with the timeout or maxTurns paths — an already-settled run is a no-op.
+
+### bindExtensionsIfNeeded / shutdownExtensionsIfBound
+
+A nested `AgentSession` created for a subagent never receives `session_start` unless something
+explicitly calls `agentSession.bindExtensions(...)` — `createAgentSession` loads extensions (so
+their tools appear in the registry) but never binds them. Without that call, any extension whose
+initialization depends on `session_start` (notably `pi-mcp-adapter`, which connects configured MCP
+servers there) never runs its init, and its tools return `"MCP not initialized"` on every call
+inside a subagent — even though the tool exists in the registry.
+
+`runAgentViaSdk` calls a private helper, `bindExtensionsIfNeeded(agentSession, mode, bindTimeoutMs,
+signal)`, immediately after `session = agentSession` and before the pre-prompt abort check (so an
+abort during the bind is observed by the existing check, rather than opening a second abort
+window). It has a single gate before calling `agentSession.bindExtensions({ mode })`:
+
+- **Tool gate** — `needsExtensionBinding(agentSession.getAllTools())` is `true` only if at least
+  one tool active for this subagent, *other than this package's own `subagent` tool*
+  (`SUBAGENT_TOOL_NAME`, `src/extension-binding.ts`), has `sourceInfo.origin === "package"` (came
+  from an installed extension package, e.g. `pi-mcp-adapter` loaded via `npm:pi-mcp-adapter`).
+  `getAllTools()` is already filtered by the SDK according to `agent.tools`/`agent.disallowedTools`,
+  so this reuses that filtering rather than duplicating it. A subagent restricted to built-ins
+  only (`origin: "top-level"`), or one whose only package-origin tool is its own `subagent` tool
+  (needed to nest another subagent call, which says nothing about needing MCP), skips the bind.
+  Deliberately does **not** match by tool name or hardcode `pi-mcp-adapter` — any installed
+  extension that depends on `session_start` benefits the same way. Does not cover a top-level
+  `~/.pi/agent/extensions/*.ts` file (not an installed package) even if it registers tools and
+  depends on `session_start`, and can't detect an extension that depends on `session_start` but
+  registers no tools at all.
+
+**There is no mode gate.** An earlier version of this mechanism only bound in `"tui"`/`"rpc"`
+mode, reasoning that binding spawns a real MCP server child process the SDK has no public API to
+shut down, and that a live child left behind would hang `"print"`/`"json"` (`pi -p`, `--mode
+json`) forever — those modes rely on Node's event loop draining naturally to exit, which a live
+child prevents, where `"tui"`/`"rpc"` call `process.exit()` unconditionally regardless. That
+premise turned out to be wrong: a public counterpart to `bindExtensions()` **does** exist —
+`AgentSession.extensionRunner` is a public getter, `ExtensionRunner` is exported from the SDK's
+package root, and its `emit()`/`hasHandlers()` methods are public (`SessionShutdownEvent` isn't
+excluded from what `emit()` accepts). pi's own CLI already uses exactly this in `"print"`/`"json"`
+mode on its own exit path (`dist/modes/print-mode.js` → `dist/core/agent-session-runtime.js`),
+which is why `pi -p` itself stays clean today. `shutdownExtensionsIfBound` (below) does the same
+thing for a subagent's nested session, which is what makes binding in every mode safe.
+
+`bindExtensionsIfNeeded` bounds the bind call with `awaitAtMost` (`EXTENSION_BIND_TIMEOUT_MS`,
+60s default, overridable via `RunAgentViaSdkOptions.extensionBindTimeoutMs` — a test seam,
+production callers should leave it unset) and the subagent's own `AbortSignal`, so a hung MCP
+handshake can't block the run indefinitely or escape an external abort the way the earlier,
+unbounded `await agentSession.bindExtensions(...)` could. It returns `true` iff
+`bindExtensions` was actually issued — including when it rejected, since `session_start` was
+still emitted and some servers may have partially started — so the caller knows whether the
+symmetric shutdown is owed. A `bindExtensions` failure or timeout is logged via `console.warn`
+(`WARN_PREFIX` + `toErrorMessage`, `src/warn.ts`) rather than propagated — the subagent still
+runs, same degraded-but-alive behavior as before this mechanism existed.
+
+`shutdownExtensionsIfBound(agentSession, bound)` is the symmetric counterpart, called in
+`runAgentViaSdk`'s `finally` block before `session.dispose()`. When `bound` is `true`, it checks
+`agentSession.extensionRunner.hasHandlers("session_shutdown")` and, if so, emits
+`{ type: "session_shutdown", reason: "quit" }` — the same event and reason pi's own
+`AgentSessionRuntime.dispose()` emits on its own exit path. `pi-mcp-adapter` implements this
+handler by stopping the MCP server child process(es) and OAuth/UI state it started for *this
+nested session specifically* — the adapter's state is scoped to each extension factory
+invocation, not shared across sessions, so this only ever stops the subagent's own connections,
+never the host's. No timeout is applied to the shutdown emit itself (unlike the bind); a
+shutdown handler that hangs is a known residual risk, accepted rather than mitigated with another
+timeout layer, since removing the mode restriction already eliminated the far more common
+failure mode (a live child left running by design, not by a hang).
+
+`bindExtensions` also triggers `extendResourcesFromExtensions` (`core/agent-session.js`), which
+re-discovers and merges resources (skills, prompt templates) any bound extension contributes,
+passing through the same `skillsOverride` filter `buildLoaderOptions` already applies
+(`src/loader-config.ts`). No extension installed in this environment implements the
+`resources_discover` hook today (checked `pi-mcp-adapter` and the other configured packages), so
+this isn't exploitable currently — but the mechanism is reachable the moment one does, and it
+runs on every bind, not just the ones this package intentionally triggers.
 
 ## mapWithConcurrencyLimit
 

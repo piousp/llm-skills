@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.14.0
+
+- **Subagents can now use MCP tools (and any other extension that depends on the `session_start`
+  hook to initialize).** Previously, a subagent's nested session never called
+  `agentSession.bindExtensions(...)`, so extensions like `pi-mcp-adapter` never initialized and
+  MCP-backed tools always returned `"MCP not initialized"` inside a subagent, even though the
+  tool existed in the registry.
+  - Binding is conditional: only subagents with at least one active tool from an installed
+    extension package (other than this package's own `subagent` tool) trigger it, so subagents
+    restricted to built-in tools pay no extra cost.
+  - The bind is paired with a symmetric shutdown (`session_shutdown`, emitted right before the
+    session disposes) so MCP server child processes spawned as a side effect don't outlive the
+    subagent — this is what makes it safe in every host run mode (`tui`, `rpc`, `print`/`pi -p`,
+    `json`), not just interactive sessions.
+  - The bind is bounded (`EXTENSION_BIND_TIMEOUT_MS`, 60s default) and abortable via the
+    subagent's own signal, so a hung MCP handshake can't block a run indefinitely.
+  - New `RunAgentViaSdkOptions` fields: `mode` (propagates the host's run mode into the nested
+    session) and `extensionBindTimeoutMs` (test seam). Both optional; existing programmatic
+    callers of `runAgentViaSdk` are unaffected if they don't set them.
+  - New `src/extension-binding.ts` module.
+
 ## 0.13.1
 
 - **Each subagent run now shows a one-line consumption footer** (tokens, cache, cost, context %),
