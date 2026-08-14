@@ -1,0 +1,38 @@
+[
+  {
+    "id": "web_search_delegation",
+    "prompt": "Delegá una búsqueda web: averiguá cuál es el precio actual del plan Pro de Anthropic y si el límite mensual de uso cambió en 2026. Armá el prompt para el subagente web-scout (solo el prompt; no ejecutes la búsqueda).",
+    "should_trigger": true,
+    "expected_checks": ["auto_triggered", "has_objective", "has_output_contract", "has_stop_rule", "contract_inline_for_web", "no_mutation", "scan_bounded"]
+  },
+  {
+    "id": "planning_delegation",
+    "prompt": "Armá el prompt para el planner: refactorizar app/payments.py para usar el nuevo pipeline de cobros. El goal aprobado está en goal.md del repo.",
+    "should_trigger": true,
+    "expected_checks": ["auto_triggered", "has_objective", "has_output_contract", "fail_closed_lens", "no_mutation", "scan_bounded"]
+  },
+  {
+    "id": "implementation_delegation",
+    "prompt": "Prepará el prompt para implementar el seam 2 del plan aprobado con un worker: extraer la validación validate_amount() de app/payments.py a su propio módulo, con sus tests.",
+    "should_trigger": true,
+    "expected_checks": ["auto_triggered", "has_objective", "fail_closed_lens", "no_mutation", "scan_bounded"]
+  },
+  {
+    "id": "review_delegation",
+    "prompt": "Armá el prompt para el analyst: code review del cambio actual en app/payments.py antes del merge.",
+    "should_trigger": true,
+    "expected_checks": ["auto_triggered", "has_objective", "has_output_contract", "fail_closed_lens", "lens_single", "no_mutation", "scan_bounded"]
+  },
+  {
+    "id": "transparency_step",
+    "prompt": "Voy a delegar una búsqueda web sobre el precio del plan Pro de Anthropic. Aplicá la transparencia antes de enviar: mostrame el prompt.",
+    "should_trigger": true,
+    "expected_checks": ["auto_triggered", "prompt_sent_is_shown", "no_mutation"]
+  },
+  {
+    "id": "negative_no_delegation",
+    "prompt": "Respondé directo: ¿qué hace get_user() en app/utils.py?",
+    "should_trigger": false,
+    "expected_checks": ["answered_directly", "no_mutation"]
+  }
+]
