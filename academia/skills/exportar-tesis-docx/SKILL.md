@@ -1,25 +1,33 @@
 ---
 name: exportar-tesis-docx
-description: exportar-tesis-docx
+description: Inyecta metadatos académicos (autor, título, materia, categoría, palabras clave, idioma, identificador) en un DOCX de la tesis PADE-UCR. Usar para exportar la tesis a DOCX con metadatos visibles en Archivo > Propiedades de Word.
 ---
 
 # Exportar tesis a DOCX con metadatos
 
+## Requisitos
+
+- `python-docx` instalado
+
 ## Procedimiento
 
-1. Llamar al tool `injectar_metadatos_tesis` con el parámetro `path`
-   apuntando al archivo DOCX.
+1. Ejecutar el script desde el directorio del skill:
+
+   ```bash
+   python3 scripts/inject-metadata.py <archivo.docx>
+   ```
+
    - Si el usuario no especificó una ruta, usar el DOCX más reciente
      del directorio de la tesis o preguntar.
-2. El tool ejecuta el script Python y devuelve el resultado.
-3. Informar al usuario qué metadatos se inyectaron y en qué archivo.
+
+2. El script modifica el DOCX in-place e informa qué archivos procesó.
 
 ## Metadatos que inyecta
 
 | Propiedad DOCX | Valor |
 |----------------|-------|
 | author | Lidia Andrea Solórzano Hidalgo, Oscar Rodolfo Solórzano Hidalgo |
-| title | Diagnóstico de procesos de análisis financiero y toma de decisiones gerenciales en una empresa de Crédito "XYZ" |
+| title | Diagnóstico de procesos de gestión financiera y toma de decisiones gerenciales en la empresa de crédito "XYZ" |
 | subject | TFIA - Maestría en Dirección y Administración de Empresas con énfasis en Finanzas - Universidad de Costa Rica |
 | category | TFIA |
 | language | es-CR |
@@ -31,7 +39,7 @@ description: exportar-tesis-docx
 ## Verificación
 
 ```text
-1. tool devuelve "OK <archivo>" → metadatos inyectados
+1. script devuelve "OK <archivo>" → metadatos inyectados
 2. Si el usuario lo pide, abrir el DOCX en Word y revisar
    Archivo > Propiedades
 ```
