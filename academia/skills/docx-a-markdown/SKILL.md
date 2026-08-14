@@ -1,6 +1,6 @@
 ---
 name: docx-a-markdown
-description: docx-a-markdown
+description: Convierte archivos DOCX a Markdown usando pandoc, mammoth o python-docx, con extracción opcional de comentarios de Word. Usar cuando se pida convertir un DOCX a Markdown o extraer comentarios de un documento de Word.
 ---
 
 # Conversión de DOCX a Markdown
@@ -13,24 +13,24 @@ description: docx-a-markdown
 
 ## Procedimiento
 
-1. El tool `docx_to_markdown` (registrado por la extensión en
-   `~/.pi/agent/extensions/docx-a-markdown/index.ts`) realiza la conversión.
-
-2. **Antes de llamar al tool, preguntar al usuario** si desea incluir los
+1. **Antes de convertir, preguntar al usuario** si desea incluir los
    comentarios de Word en la salida Markdown.
 
-3. Llamar al tool con los parámetros:
+2. Ejecutar el script desde el directorio del skill:
+
+   ```bash
+   python3 scripts/docx-to-markdown.py <archivo.docx> [--output salida.md] [--mode pandoc|mammoth|python-docx] [--no-comments]
+   ```
 
    | Parámetro | Requerido | Descripción |
    |-----------|-----------|-------------|
-   | `path` | Sí | Ruta al archivo .docx (absoluta o relativa al cwd) |
-   | `output` | No | Ruta del archivo .md de salida. Si se omite, imprime por stdout |
-   | `include_comments` | No | Booleano. Incluir comentarios al final. Default: depende de la respuesta del usuario |
-   | `mode` | No | Motor: `"pandoc"` (default), `"mammoth"`, o `"python-docx"` |
+   | `path` | Sí | Ruta al archivo .docx |
+   | `--output` | No | Ruta del .md de salida. Si se omite, imprime por stdout |
+   | `--mode` | No | Motor: `pandoc` (default), `mammoth` o `python-docx` |
+   | `--no-comments` | No | Omite la extracción de comentarios (default: incluirlos) |
 
-4. La salida incluye el Markdown convertido. Si hay comentarios y se
-   solicitaron, se agregan al final del documento en una sección
-   estructurada:
+3. Si se incluyen comentarios, aparecen al final del Markdown en una
+   sección estructurada:
 
    ```markdown
    ---
@@ -53,7 +53,7 @@ académicos), usar el skill `exportar-tesis-docx`.
 ## Verificación
 
 ```text
-1. tool devuelve contenido o ruta del archivo → conversión exitosa
+1. script devuelve contenido o ruta del archivo → conversión exitosa
 2. Si se incluyeron comentarios, verificar que aparecen al final del Markdown
-3. Si se especificó output, verificar que el archivo .md existe y es legible
+3. Si se especificó --output, verificar que el archivo .md existe y es legible
 ```
