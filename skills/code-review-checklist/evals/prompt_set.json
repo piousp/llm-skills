@@ -1,0 +1,166 @@
+[
+  {
+    "id": "dirty_diff_unstaged",
+    "prompt": "Revisa mis cambios sin commitear con el checklist de code review. Estoy por armar un PR con el procesamiento de órdenes y pagos.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "read_test_file",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_needs_work",
+      "severity_tagged",
+      "blocker_forces_needs_work",
+      "has_file_line_refs",
+      "found_planted_secret",
+      "found_planted_complexity",
+      "found_planted_mutable_let",
+      "found_planted_swallowed_catch",
+      "found_planted_bool_param",
+      "found_planted_scope_violation",
+      "found_planted_weak_test",
+      "coverage_gap_section",
+      "suggested_tests_section",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "clean_diff_all_pass",
+    "prompt": "Revisa mis cambios con el checklist: ¿está listo para merge?",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "read_test_file",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_ready",
+      "clean_diff_all_pass",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "staged_diff_only",
+    "prompt": "Revisa mis cambios staged con el checklist de code review antes del commit.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git_cached",
+      "review_format_present",
+      "verdict_present",
+      "verdict_needs_work",
+      "severity_tagged",
+      "blocker_forces_needs_work",
+      "has_file_line_refs",
+      "found_planted_secret",
+      "found_planted_mutable_let",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "feature_branch_diff",
+    "prompt": "Revisa mi rama feature contra main con el checklist: ¿está lista para el PR?",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "read_test_file",
+      "derived_diff_via_git_branch",
+      "review_format_present",
+      "verdict_present",
+      "severity_tagged",
+      "has_file_line_refs",
+      "found_planted_bool_param",
+      "coverage_gap_section",
+      "suggested_tests_section",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "single_blocker_needs_work",
+    "prompt": "Revisa mis cambios con el checklist.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_needs_work",
+      "severity_tagged",
+      "blocker_forces_needs_work",
+      "has_file_line_refs",
+      "found_planted_secret",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "no_diff_graceful",
+    "prompt": "Revisa mis cambios con el checklist de code review.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "no_diff_graceful_base",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "diff_handed_in_prompt",
+    "prompt": "Actúa como revisor de código con el checklist. Este es el diff exacto a revisar (ya extraído, trátalo como autosuficiente):\n\n--- a/src/billing.ts\n+++ b/src/billing.ts\n@@ -1,3 +1,13 @@\n export function invoiceTotal(items: number[]): number {\n  return items.reduce((a, b) => a + b, 0);\n }\n+\n+const SOURCE_HOST_TOKEN = \"dev-token-9d2b9f8e\";\n+\n+export async function chargeUser(userId: number): Promise<void> {\n+  try {\n+    await fetch(\"/api/charge\", { method: \"POST\" });\n+  } catch (e) {\n+    // ignored\n+  }\n+}\n",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "review_format_present",
+      "verdict_present",
+      "verdict_needs_work",
+      "severity_tagged",
+      "blocker_forces_needs_work",
+      "has_file_line_refs",
+      "found_planted_secret",
+      "found_planted_swallowed_catch",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "negative_control",
+    "prompt": "¿Cuál es la diferencia entre una cola y una pila? Dame un ejemplo en Python.",
+    "should_trigger": false,
+    "expected_checks": [
+      "negative_control_no_review"
+    ]
+  },
+  {
+    "id": "english_trigger_phrase",
+    "prompt": "Am I ready to merge? Run the code review checklist on my changes.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "severity_tagged",
+      "has_file_line_refs",
+      "found_planted_bool_param",
+      "coverage_gap_section",
+      "suggested_tests_section",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "nit_only_ready",
+    "prompt": "Revisa estos cambios con el checklist, ¿puedo mergear?",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_ready",
+      "severity_tagged",
+      "has_file_line_refs",
+      "found_planted_naming_nit",
+      "found_planted_redundant_comment",
+      "no_blocker_or_major_tags",
+      "no_praise"
+    ]
+  }
+]
