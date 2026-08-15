@@ -202,8 +202,14 @@ SKILL_SIGNALS = (
     "stop rule", "regla de parada", "limits", "limites",
     "use when", "fail-closed", "fail closed", "no results",
     "could not verify", "no pude verificar", "lens: read and apply",
-    "lens: read and apply", "if you cannot read it", "make no changes",
+    "if you cannot read it", "make no changes",
     "independent sources", "fuentes independientes",
+    # T2 (option a, planner without a lens) vocabulary: the template
+    # carries the contract as Goal verbatim / Decisions and constraints /
+    # Out of scope / open questions, not as objective/output contract.
+    "out of scope", "fuera de alcance", "open questions",
+    "preguntas abiertas", "verbatim", "never invent",
+    "nunca inventes", "no inventes",
 )
 
 

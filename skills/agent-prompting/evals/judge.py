@@ -73,9 +73,11 @@ def _judge_instructions_for(case_id: str) -> str:
             "preparing a coordinator-to-planner delegation prompt. Judge whether the "
             "prompt passes the confirmed goal authoritatively (goal verbatim or an "
             "explicit reference to the goal file), includes decisions/constraints or "
-            "out-of-scope, names a lens by path with fail-closed handling, and "
-            "defines the plan deliverable with verification per step. A generic "
-            "'make a plan for X' is a fail."
+            "out-of-scope, surfaces contracts the goal does not support as open "
+            "questions instead of inventing them (case-level fail-closed; the planner "
+            "selects its lens internally from settings, so no lens path is expected in "
+            "the prompt), and defines the plan deliverable with verification per step. "
+            "A generic 'make a plan for X' is a fail."
         )
     if case_id == "transparency_step":
         return (
