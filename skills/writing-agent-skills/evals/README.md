@@ -9,8 +9,8 @@ per `evaluating-agent-skills`'s method.
 ## Classification
 
 `writing-agent-skills` is a **preference skill**: it encodes Schmid's 8
-authoring tips, not a raw model capability gap. Unlike `iterative-design`,
-it is **not** name-only invoked — its description ("authoring, reviewing,
+authoring tips, not a raw model capability gap. It is **not** name-only
+invoked — its description ("authoring, reviewing,
 or refactoring an agent Skill... writing SKILL.md frontmatter/body...")
 is meant to auto-trigger from natural requests, and is explicitly
 confusable with adjacent tasks (general coding, prose writing, plain

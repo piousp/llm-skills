@@ -1,12 +1,18 @@
 ---
 name: iterative-design
 description: >
+  DEPRECATED. Superseded by pablo-goal-discovery, pablo-code-planning,
+  pablo-tdd, and pablo-toolkit; kept for reference.
   Pablo's coordinator method for building code: goal discovery, a planner
   subagent that designs, a mandatory TDD loop, then optional refactor and QA
   phases. Durable design artifacts live in a per-launch temp dir ($DESIGN_DIR),
   never in the repo. Invoked only by explicit name — never auto-triggered; the
   description is informational, not a trigger.
 ---
+
+> DEPRECATED: no longer maintained. Superseded by `pablo-goal-discovery`,
+> `pablo-code-planning`, `pablo-tdd`, and `pablo-toolkit`. Kept in the repo
+> for reference.
 
 # Iterative Design
 

@@ -67,7 +67,7 @@ selects or adjudicates on the user's behalf.
 | 4c (adjudication) | **Not delegated** — coordinator + user mark each entry `addressed`/`rejected` (with reason) | The user's judgment on whether their own response satisfies the reviewer |
 | 5 (reverse outline) | `analyst`, read-only | An agent that didn't write the chapter is better at spotting drift from stated intent |
 
-No `stages/*.md` files, unlike `iterative-design`: delegation here is a single agent
+No `stages/*.md` files: delegation here is a single agent
 per phase with a one-paragraph task, not a differently-lensed role that needs a
 persistent lens file to carry doctrine across invocations.
 
@@ -268,7 +268,7 @@ Name chapter files with the ASCII slug `state.py` derives from the outline name
 `marco-conceptual.md`); a filename that deviates from that slug shows up as a
 spurious `inconsistent` warning.
 It is read-only and advisory — it never writes, never prompts, never picks a phase
-for you. It has no git dependency (unlike `iterative-design`'s `state.py`): thesis
+for you. It has no git dependency: thesis
 state is artifact existence and chapter status, not commit history.
 
 ## Anti-patterns

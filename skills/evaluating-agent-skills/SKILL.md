@@ -19,10 +19,10 @@ This is the expansion of `writing-agent-skills` §7 — read that skill first if
 haven't authored the target skill yet.
 
 **Canonical worked example**, already built and passing:
-`iterative-design/evals/` (its `README.md` documents this same 4-layer method
-applied to a real coordinator skill, including a documented N=1 limitation and
-an environment-gap finding). Read it before adapting the templates below — most
-decisions you'll face were already made there.
+`qa-adversary/evals/` (its `README.md` documents this same 4-layer method
+applied to a real review skill, including a documented N=1 limitation). Read it
+before adapting the templates below — most decisions you'll face were already
+made there.
 
 ## 0. This is a method + templates, not an engine
 
@@ -107,8 +107,7 @@ need to verify.
 
 - **3–5 trials per prompt** — agent output is nondeterministic; one pass/fail
   is noise. Start at N=1 during development, widen once the harness itself is
-  trusted (iterative-design's L2b is currently N=1, documented as a known
-  limitation, not a hidden gap).
+  trusted (an L2b run at N=1 is a documented choice, not a hidden gap).
 - **Isolate every run** — a fresh temp dir/repo per trial, never shared state
   between trials.
 - **Gate live layers behind an env var** (`PI_LIVE_EVAL=1` convention) — never
@@ -116,7 +115,7 @@ need to verify.
   and real minutes.
 - **No hardcoded personal paths.** Anything machine-specific (a sibling
   extension's path, a subagent config) goes through an env var with a clear
-  skip-message when unset — see `iterative-design/evals/run_layer2b_pipeline.py`'s
+  skip-message when unset — see `qa-adversary/evals/run_layer2b_pipeline.py`'s
   `PI_SUBAGENT_EXTENSION_PATH` handling for the pattern.
 - **If something fails, fix the description first** (Schmid: most failures are
   trigger failures, not instruction failures) — but only applies to
@@ -146,12 +145,12 @@ that runs tasks, records transcripts, grades, aggregates).
   pattern and how to keep checks composable across prompts.
 - **L2b has no template, by design** — real subagent/tool wiring is too
   skill-specific to templatize. If you need it, copy and adapt
-  `iterative-design/evals/run_layer2b_pipeline.py` directly.
+  `qa-adversary/evals/run_layer2b_pipeline.py` directly.
 
 Copy the templates you need into `<target-skill>/evals/`, rename, and fill in
 the skill-specific pieces (`CHECK_REGISTRY` functions, prompt list, success
 criteria from step 2). Write a `README.md` in that `evals/` dir documenting
-which layers exist and why, following `iterative-design/evals/README.md`'s
+which layers exist and why, following `qa-adversary/evals/README.md`'s
 structure.
 
 ## Sources
@@ -161,5 +160,5 @@ structure.
 - Anthropic, "Demystifying evals for AI agents",
   https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
   (2026-01-09).
-- Worked example: `iterative-design/evals/` (this repo) — the 4-layer method
-  applied to a real coordinator skill.
+- Worked example: `qa-adversary/evals/` (this repo) — the 4-layer method
+  applied to a real review skill.

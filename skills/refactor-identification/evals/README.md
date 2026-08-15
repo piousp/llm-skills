@@ -6,7 +6,7 @@ Method from `evaluating-agent-skills` (itself adapting Philipp Schmid's
 
 ## Classification (step 1)
 
-Unlike a name-only-invoked skill (e.g. `iterative-design`), this skill has a
+Unlike a name-only-invoked preference skill, this skill has a
 real "when" clause and explicit negative cases in its `description`
 (`TRIGGER: deciding if a refactor belongs in this branch, "refactor
 candidates" requests, or as the deep-dive behind a broader code-review pass.
