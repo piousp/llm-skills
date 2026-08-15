@@ -97,11 +97,15 @@ run as part of a default/offline test suite.
 
 ## Known limitations
 
-- **The green live run is pre-composition.** The 6/6 L2 + 3/3 L3 run
-  predates the composition adjustments (T1 with role preamble, T2 with a
-  forced lens path, T-scout with duplicated limits). Those adjustments
-  (T1 slim, T-scout slim, T2 option a, `case_fail_closed`) have static
-  verification only; the next live run validates them.
+- **Live run 2026-08-14: 6/6 L2 + 3/3 L3 PASS post-composition.** The
+  run validates the composition adjustments (T1 slim, T-scout slim, T2
+  option a, `case_fail_closed`); two evals-side fixes were needed and
+  are committed: `SKILL_SIGNALS` gained the T2 (option a) vocabulary
+  (out of scope / open questions / verbatim / never invent — the check
+  was written against the pre-option-a T2 that carried a lens), and the
+  L3 judge's planning instruction no longer demands a lens path
+  (planning is case-fail-closed; the planner selects its lens from
+  settings).
 
 - **N=1 during development.** Every probe has been reasoned about at
   single-trial granularity; widen to 3–5 trials once the harness is
