@@ -107,11 +107,12 @@ PI_LIVE_EVAL=1 python3 evals/judge.py
 
 ### Layer 2b — omitted
 
-`iterative-design/evals/run_layer2b_pipeline.py` loads a real `subagent`
-tool via an explicit pi extension to exercise delegation. `code-review-
-checklist` can be handed to an `analyst` subagent as a lens, but that is not
-its primary invocation path, and bare `pi -ne` does not expose a `subagent`
-tool (confirmed empirically in `iterative-design/evals/`). If
+`pi-simple-agents/skills/invoking-subagents/evals/run_layer2b_pipeline.py`
+loads a real `subagent` tool via an explicit pi extension to exercise
+delegation. `code-review-checklist` can be handed to an `analyst` subagent as
+a lens, but that is not its primary invocation path, and bare `pi -ne` does
+not expose a `subagent` tool (confirmed empirically in this repo's
+`invoking-subagents` eval suite). If
 analyst-delegated reviews ever become a primary path, an L2b-style harness
 pointed at a subagent extension would be the next addition.
 

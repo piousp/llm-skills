@@ -61,7 +61,7 @@ The caller may supply additional domain-context lens paths (e.g. a team wiki-usa
 
 1. **Get the diff.**
    - If the caller's prompt already hands you the diff/baseline (a path, a commit range, or the
-     diff content itself — e.g. a subagent invocation from `iterative-design`), use exactly that.
+     diff content itself), use exactly that.
      Do not go looking for a different diff and do not ask anything — the caller isn't present to
      answer; treat the prompt as self-contained.
    - Otherwise (invoked standalone in chat, no diff specified), derive it yourself: ask for the

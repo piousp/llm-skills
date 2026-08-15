@@ -33,5 +33,5 @@ prose inline; (4) does the coordinator snapshot to `chapters/history/`
 a routine internal edit; (5) is feedback adjudication (`addressed`/`rejected`)
 always a user decision, never a subagent's — all five are process-fidelity
 requirements, not style preferences. Add if the skill is used enough to
-justify the token cost — follow `iterative-design/evals/` as the worked
+justify the token cost — follow `qa-adversary/evals/` as the worked
 example.

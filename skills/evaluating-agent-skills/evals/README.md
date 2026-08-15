@@ -5,7 +5,7 @@ decide which layers are worth building.
 
 ## Classification (step 1)
 
-Unlike `iterative-design` (name-only invoked), `evaluating-agent-skills` has a
+Unlike a name-only-invoked preference skill, `evaluating-agent-skills` has a
 real "when" clause and explicit negative cases in its `description` ("Do NOT
 use for authoring... Do NOT use for general product evals"). It is meant to
 **auto-trigger** from natural requests. That makes `should_trigger` the

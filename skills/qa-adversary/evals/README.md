@@ -419,6 +419,3 @@ fix.
 - Anthropic, "Demystifying evals for AI agents",
   https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
   (2026-01-09).
-- Worked example: `iterative-design/evals/` (this repo) — the same 4-layer
-  method applied to a real coordinator skill, including its documented N=1
-  limitation and environment-gap finding.

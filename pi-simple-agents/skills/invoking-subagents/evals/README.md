@@ -36,9 +36,9 @@ emitted, not the chat text describing what the agent did.
 - **L1 (code-based)** — the skill is pure `SKILL.md`, no `scripts/`. No L1
   target exists.
 - **L2 (bare `pi -ne` trajectory probes)** — bare `pi -ne` never exposes a
-  `subagent` tool (confirmed in this repo's own `iterative-design` and
-  `revisor-textos` eval suites: bare discovery yields only
-  Read/Bash/Edit/Write). Unlike those two skills, `invoking-subagents`
+  `subagent` tool (confirmed in this repo's `revisor-textos` eval suite: bare
+  discovery yields only Read/Bash/Edit/Write). Unlike that skill,
+  `invoking-subagents`
   defines **no degraded-path behavior** for a missing `subagent` tool — its
   entire content is mechanics of a tool that must already exist. Running
   probes in an environment where the tool is structurally absent would only
@@ -55,8 +55,7 @@ Every check in step 2's criteria is structural (dict-shape / regex on tool
 arguments) — mode exclusivity, task count, and `provider/modelId` format
 are all mechanically checkable. There is no qualitative "is the reasoning
 sound in spirit" residue here the way there is for a coordinator skill's
-prose (e.g. `iterative-design`'s gate wording) — so no LLM-as-judge layer
-was built.
+prose, so no LLM-as-judge layer was built.
 
 ## Layer 2b — real subagent-tool probes, live-gated
 
