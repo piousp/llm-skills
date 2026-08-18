@@ -1,0 +1,104 @@
+[
+  {
+    "id": "read_existing_log",
+    "prompt": "Check this directory's mistakes-memory log and tell me if there are any past mistakes I should keep in mind before you start.",
+    "should_trigger": true,
+    "expected_checks": ["log_was_read", "no_write_occurred"]
+  },
+  {
+    "id": "read_no_log",
+    "prompt": "Start working in this directory. Are there any past mistakes logged here?",
+    "should_trigger": true,
+    "expected_checks": ["no_write_occurred", "no_error_on_missing_log"]
+  },
+  {
+    "id": "write_from_user",
+    "prompt": "Log this mistake: you assumed the build used Maven but it was sbt, wasting a compile cycle. Root cause was not checking build files first. Yes, go ahead and record it.",
+    "should_trigger": true,
+    "expected_checks": ["log_entry_appended", "entry_has_all_fields", "source_is_user"]
+  },
+  {
+    "id": "write_no_basis_asks",
+    "prompt": "You definitely made some mistake earlier in this directory. Log it.",
+    "should_trigger": true,
+    "expected_checks": ["no_write_occurred", "asked_for_basis"]
+  },
+  {
+    "id": "write_needs_confirmation",
+    "prompt": "You edited application-test.yml when you should have edited application.yml, so my local run picked up the wrong config. Root cause: you did not check which profile was active. Draft a mistake entry for it but do not save anything yet.",
+    "should_trigger": true,
+    "expected_checks": ["no_write_occurred", "entry_drafted_in_response"]
+  },
+  {
+    "id": "write_denied",
+    "prompt": "Log a mistake about the wrong import path. Actually, no - do not save it.",
+    "should_trigger": true,
+    "expected_checks": ["no_write_occurred"]
+  },
+  {
+    "id": "write_source_advisor",
+    "prompt": "The advisor flagged that my earlier change broke the null check on the user lookup. Root cause: removed the guard while refactoring. Fix: restored the null guard. Detect it next time when a lookup returns Optional but callers assume present. Tag it null-safety. Record this with the advisor as the source. Yes, save it.",
+    "should_trigger": true,
+    "expected_checks": ["log_entry_appended", "source_is_advisor"]
+  },
+  {
+    "id": "write_advisor_no_confirm",
+    "prompt": "The advisor thinks my earlier change may have introduced a race condition in the cache. Root cause was an unsynchronized map. I am not sure yet whether to record it.",
+    "should_trigger": true,
+    "expected_checks": ["no_write_occurred"]
+  },
+  {
+    "id": "write_fields_complete",
+    "prompt": "Log this: symptom was tests failing intermittently, root cause a shared mutable fixture, fix was per-test isolation, detect it next time when tests pass alone but fail together, tag it testing. Save it.",
+    "should_trigger": true,
+    "expected_checks": ["log_entry_appended", "entry_has_all_fields"]
+  },
+  {
+    "id": "write_appends_not_rewrites",
+    "prompt": "Log a new mistake: you ran the wrong test suite, executing integration tests when I asked for unit tests. Root cause: you did not read the test task label. Save it.",
+    "should_trigger": true,
+    "expected_checks": ["entry_appended_only"]
+  },
+  {
+    "id": "write_nonenglish_ok",
+    "prompt": "Registra este error: asumiste que el metodo era sincrono y era async. Causa raiz: no revisaste la firma. Guardalo.",
+    "should_trigger": true,
+    "expected_checks": ["log_entry_appended"]
+  },
+  {
+    "id": "graduate_3x",
+    "prompt": "Review this directory's mistakes-memory log and tell me whether any mistake has recurred enough to become a hard rule.",
+    "should_trigger": true,
+    "expected_checks": ["graduation_proposed", "no_agents_md_write_yet"]
+  },
+  {
+    "id": "graduate_under_3x",
+    "prompt": "Review the mistake log and tell me whether anything should be graduated to a hard rule.",
+    "should_trigger": true,
+    "expected_checks": ["no_agents_md_write_yet"]
+  },
+  {
+    "id": "graduate_confirmation_gate",
+    "prompt": "The same mistake shows up three times in the log. Propose graduating it but do not touch AGENTS.md yet.",
+    "should_trigger": true,
+    "expected_checks": ["no_agents_md_write_yet"]
+  },
+  {
+    "id": "graduate_english",
+    "prompt": "This recurring mistake is logged in Spanish and has happened three times. Graduate it to a hard rule in AGENTS.md. Yes, do it.",
+    "should_trigger": true,
+    "expected_checks": ["agents_md_written", "learned_rule_in_english"]
+  },
+  {
+    "id": "graduate_log_survives",
+    "prompt": "This mistake has recurred three times. Graduate it to a hard rule in AGENTS.md. Yes, do it.",
+    "should_trigger": true,
+    "expected_checks": ["agents_md_written", "log_unchanged"]
+  },
+  {
+    "id": "graduate_creates_agents_md",
+    "prompt": "Review this directory's mistake log: a mistake has recurred three times, and this repo has no AGENTS.md. Graduate it to a hard rule. Yes, create the file and add it.",
+    "should_trigger": true,
+    "expected_checks": ["agents_md_written", "has_learned_rules_section"]
+  }
+]
