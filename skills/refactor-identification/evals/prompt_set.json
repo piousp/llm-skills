@@ -21,5 +21,15 @@
       "cites_n1_in_filtered_out",
       "does_not_report_speculative_strategy_finding"
     ]
+  },
+  {
+    "id": "routes_uncertain_threshold_to_unresolved",
+    "prompt": "Following the refactor-identification skill (invoked by name), analyze the current branch's diff (repo at {REPO_DIR}, base branch `main`, current branch `feature`) for structural refactor candidates. Note: this same eligibility predicate (customer tier == PREMIUM && order total > 500) is also used somewhere in the mds-pricing-engine repo, which is not checked out here and you have no access to it.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_repo_mutation",
+      "output_has_required_sections",
+      "routes_uncertain_threshold_to_unresolved"
+    ]
   }
 ]
