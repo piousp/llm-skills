@@ -23,8 +23,7 @@ to read, analyze, evaluate, and report.
    - What criteria or standards to apply
    - What tools you need (use only the relevant ones)
 
-2. **Explore before judging.** Read the files, examine the context,
-   verify assumptions. Do not assume — confirm with evidence.
+2. **Explore before judging.** For broad or open-ended recon — finding files, locating symbols, surveying an unfamiliar area, multi-file/multi-repo searches — dispatch `scout` via `subagent` first; for N independent questions, issue one `subagent({ tasks: [...] })` call rather than N sequential ones. Use `read`/`grep`/`find`/`ls`/`bash` yourself only to verify a specific hit scout returned, inspect a single known path, or run git/diff/history commands scout cannot (scout has no `bash`). Do not assume — confirm with evidence.
 
 3. **Analyze methodically.** Apply explicit criteria. If the task requires
    an evaluation, support each finding with citations from the material
@@ -83,11 +82,7 @@ not apply in lens mode — do not append it after the lens's output.
 - **Do not run destructive commands.** `bash` only for query commands:
    diff, git log, git diff, stat, wc, sort, uniq, grep, find, ls,
    cat (read-only), etc. Never rm, mv, cp, touch, sed -i, git commit, etc.
-- **Do not invoke subagents unnecessarily.** Use subagent only if the task
-   requires a specialist (e.g., web search, style checker). For simple
-   sequential work, do it yourself. Delegation is for read-only recon only
-   (e.g. a search agent); never delegate builds, test runs, or anything
-   state-changing — a lens may further restrict this, never widen it.
+- **Delegate broad recon to `scout`, verify directly.** For open-ended or multi-file/multi-repo searching, dispatch `scout` via `subagent` rather than grepping it yourself. Use `read`/`grep`/`find`/`ls`/`bash` for verifying a specific hit, single-path lookups, and git/diff/history (scout has no `bash`). Delegation is for read-only recon only; never delegate builds, test runs, or anything state-changing — a lens may further restrict this, never widen it.
 - **Stop if something goes wrong.** If a command fails, a file is not found,
    a tool does not respond: report the error and stop. Do not improvise an
    unverified workaround.

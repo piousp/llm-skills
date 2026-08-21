@@ -9,13 +9,17 @@ Success criteria checked (SKILL.md step 2, defined before writing the checks):
   - Never mutates repo code — this skill identifies candidates only, it never
     executes a refactor (Boundaries section).
   - Output follows the mandatory template verbatim: Scope / Findings /
-    Filtered out / Summary sections.
+    Unresolved / Filtered out / Summary sections.
   - Every finding has file:line evidence anchored in the diff.
-  - Every finding carries a gate note (checked N1–N8).
+  - Every finding carries a gate note (checked N1–N9).
   - A genuine structural duplicate is correctly categorized A1.
-  - A speculative single-implementation "candidate" is correctly rejected by
+  - A speculative single-implementation "candidate" is correctly filtered by
     N1 in Filtered out, not reported as a Finding (the skill's own worked
-    "Rejected by the gate" example).
+    "Filtered by the gate" example).
+  - A business-rule duplicate whose occurrence count depends on a fact
+    outside this repo (below threshold locally, possibly not below
+    threshold elsewhere) is routed to Unresolved (N9), not silently dropped
+    and not fabricated as a Finding or a Filtered-out verdict.
 
 Gated behind PI_LIVE_EVAL=1 — costs real LLM tokens.
 
@@ -134,9 +138,42 @@ def seed_single_implementation_repo(tmp: Path) -> Path:
     return repo
 
 
+def seed_uncertain_threshold_repo(tmp: Path) -> Path:
+    """feature branch adds a second occurrence of a business-rule predicate
+    already used once elsewhere in this repo (2 occurrences total, below the
+    >=3 business-dup threshold) — but the prompt states a possible 3rd
+    occurrence lives in another repo the agent cannot check."""
+    repo = tmp / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "eval@example.com")
+    _git(repo, "config", "user.name", "eval")
+    (repo / "OrderValidator.java").write_text(
+        "class OrderValidator {\n"
+        "    boolean isEligibleForLoyaltyDiscount(Customer customer, Order order) {\n"
+        "        return customer.getTier() == Tier.PREMIUM && order.getTotal() > 500;\n"
+        "    }\n"
+        "}\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "ShippingCalculator.java").write_text(
+        "class ShippingCalculator {\n"
+        "    boolean qualifiesForFreeShipping(Customer customer, Order order) {\n"
+        "        return customer.getTier() == Tier.PREMIUM && order.getTotal() > 500;\n"
+        "    }\n"
+        "}\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add qualifiesForFreeShipping")
+    return repo
+
+
 SEED_REGISTRY = {
     "detects_a1_structural_duplication": seed_structural_duplication_repo,
     "rejects_single_implementation_by_n1": seed_single_implementation_repo,
+    "routes_uncertain_threshold_to_unresolved": seed_uncertain_threshold_repo,
 }
 
 
@@ -157,7 +194,7 @@ def no_repo_mutation(tool_calls, final_text, **ctx) -> bool:
 
 
 def output_has_required_sections(tool_calls, final_text, **ctx) -> bool:
-    required = ["### Scope", "### Findings", "### Filtered out", "### Summary"]
+    required = ["### Scope", "### Findings", "### Unresolved", "### Filtered out", "### Summary"]
     return all(section in final_text for section in required)
 
 
@@ -166,7 +203,7 @@ def finding_has_file_line_evidence(tool_calls, final_text, **ctx) -> bool:
 
 
 def gate_note_present(tool_calls, final_text, **ctx) -> bool:
-    return "N1" in final_text and "N8" in final_text
+    return "N1" in final_text and "N9" in final_text
 
 
 def identifies_a1_category(tool_calls, final_text, **ctx) -> bool:
@@ -191,6 +228,30 @@ def does_not_report_speculative_strategy_finding(tool_calls, final_text, **ctx) 
     return "[rf-" not in findings_block
 
 
+def routes_uncertain_threshold_to_unresolved(tool_calls, final_text, **ctx) -> bool:
+    """The fixture's business-rule predicate has only 2 occurrences inside
+    this repo (below the >=3 business-dup threshold), but the prompt states
+    a possible 3rd occurrence lives in another repo not available here. The
+    skill must not silently drop it (evidence-ceiling rule) and must not
+    fabricate a Finding or a Filtered-out verdict either — it belongs in
+    Unresolved, citing the missing cross-repo fact."""
+    low = final_text.lower()
+    findings_idx = low.find("### findings")
+    unresolved_idx = low.find("### unresolved")
+    filtered_idx = low.find("### filtered out")
+    if findings_idx == -1 or unresolved_idx == -1 or filtered_idx == -1:
+        return False
+    if not (findings_idx < unresolved_idx < filtered_idx):
+        return False
+    findings_block = low[findings_idx:unresolved_idx]
+    unresolved_block = low[unresolved_idx:filtered_idx]
+    if "[rf-" in findings_block:
+        return False  # fabricated as a confirmed Finding
+    if "(none)" in unresolved_block and "[rf-u" not in unresolved_block:
+        return False  # silently dropped instead of flagged
+    return True
+
+
 CHECK_REGISTRY = {
     "no_repo_mutation": no_repo_mutation,
     "output_has_required_sections": output_has_required_sections,
@@ -199,6 +260,7 @@ CHECK_REGISTRY = {
     "identifies_a1_category": identifies_a1_category,
     "cites_n1_in_filtered_out": cites_n1_in_filtered_out,
     "does_not_report_speculative_strategy_finding": does_not_report_speculative_strategy_finding,
+    "routes_uncertain_threshold_to_unresolved": routes_uncertain_threshold_to_unresolved,
 }
 
 
