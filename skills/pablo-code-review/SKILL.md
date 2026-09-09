@@ -34,8 +34,7 @@ step to a subagent.
    Reuse the exact same diff text for all three subagents below. This keeps
    their scope identical.
 
-2. **Dispatch the three lenses in parallel**, one `subagent` call with a
-   `tasks` array (never three separate calls):
+2. **Dispatch the three lenses in parallel** (never three separate calls):
 
    - `agent: "analyst"`, `skills: ["qa-adversary"]`, `timeoutMs: 1200000`
      — task: the diff, plus "Apply the qa-adversary lens to this diff only.
@@ -57,6 +56,15 @@ step to a subagent.
    Each `skills` array is a total replacement — the analyst loads only that
    one lens, nothing else. Leave `tools` at the analyst default (read-only,
    no Write/Edit).
+
+  [MUST] invoke the subagents in parallel with timeout of 20 minutes:
+  {
+  "tasks": [
+    {"agent": "analyst", "task": "XX", "skills": "X"},
+    {"agent": "analyst", "task": "XX", "skills": "X"},
+    {"agent": "analyst", "task": "XX", "skills": "X"}
+  ]
+}
 
 3. **Merge, don't append.** Wait for all three results, then build one
    report grouped by changed file, not by lens. [NEVER] print three
