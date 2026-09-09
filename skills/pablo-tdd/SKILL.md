@@ -40,6 +40,8 @@ back to `/tmp/pi/session/<PI_SESSION_ID>`.
 
 A good test verifies behavior through public interfaces, not implementation details, so it reads like a specification and survives refactors.
 
+A good test also encodes WHY the behavior matters, not just WHAT it does. If a test can't fail when the business logic it covers changes, the test is wrong - it's asserting shape, not intent.
+
 The operational checklist and code examples live in [tests.md](tests.md); mocking guidelines in [mocking.md](mocking.md).
 
 ## Seams: where tests go
