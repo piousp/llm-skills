@@ -14,6 +14,15 @@ Identify what the change does that existing tests don't cover:
 
 Cover the edge cases of the behavior under test; the complexity section below defines what counts as a boundary vs a branch. Place new tests in the EXISTING test class for that service, unless explicitly told to create a new file. Name tests for the behavior they verify, following the repo's naming convention.
 
+## Match existing assertion conventions
+
+Before writing a new kind of assertion (e.g., checking an error response body), do both, not just the first one:
+
+1. Treat the immediate sibling test - same file, same endpoint or feature, the closest analogous case - as the default precedent.
+2. Separately search for how the same kind of assertion is done elsewhere in the suite, with a search that can also confirm absence, not only presence.
+
+A single grep hit is not proof of "the convention." A query for positive evidence (e.g. `grep asJson`) can only return files that already contain the pattern; it can never surface a sibling that deliberately has none, so it will always look like the pattern searched for is the only one that exists. [ALWAYS] compare what the search found against the sibling's actual assertions before choosing a style. If the sibling and a broader match disagree, [DO NOT] pick one silently - name the conflict to the user (AGENTS.md Rule 7: surface conflicts, don't average them).
+
 ## Test plan across seams
 
 A change that spans several seams needs a plan-level answer: which tests, at which seams, which edge cases. The plan (per `pablo-code-planning`) names the seams and edge cases; this skill converts that into tests:
