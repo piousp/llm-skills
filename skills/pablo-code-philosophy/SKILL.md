@@ -105,7 +105,7 @@ Don't assume. Don't hide confusion. Surface tradeoffs.
 - If multiple interpretations or approaches exist, present them to the user. [DO NOT] pick one silently.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name the confusion. Ask.
-- When following an existing convention (error handling, naming, structure, test assertions, anything), check the closest, most specific precedent first, then verify it against a broader search. A search for positive evidence alone (e.g. grep-ing for a pattern) can only return where that pattern already exists - it can never confirm a closer precedent deliberately lacks it, so it will always look like the only match found is "the convention." Conflicting precedents are multiple approaches: surface them, don't pick silently.
+- Before following a convention, check the closest, most specific precedent first, then verify with a broader search - a positive-only search can't prove a closer precedent lacks the pattern. Conflicting precedents are multiple approaches: surface them, don't pick silently.
 
 ## Surgical Changes
 
