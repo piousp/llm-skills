@@ -105,7 +105,7 @@ Don't assume. Don't hide confusion. Surface tradeoffs.
 - If multiple interpretations or approaches exist, present them to the user. [DO NOT] pick one silently.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name the confusion. Ask.
-- Before following a convention, check the closest, most specific precedent first, then verify with a broader search - a positive-only search can't prove a closer precedent lacks the pattern. Conflicting precedents are multiple approaches: surface them, don't pick silently.
+- Check the closest precedent first, then broaden the search - a positive match can't rule out a closer, contradicting precedent. Surface conflicts, don't pick silently.
 
 ## Surgical Changes
 
