@@ -56,7 +56,7 @@ back to `/tmp/pi/session/<PI_SESSION_ID>`.
 - **Don't reinvent the wheel** - follow known design patterns and reuse existing code over writing new shapes. → See [principles/GoF.md](principles/GoF.md)
 - **Unix philosophy** - Design for Composition. → See [principles/UNX.md](principles/UNX.md)
 - **Light FP** - Monads, immutability, typed errors, composition with judgment. → See [principles/FP.md](principles/FP.md)
-- **Tests are part of the deliverable** - every change or new code ships with a unit-test plan; match the existing suite's assertion conventions instead of picking your own (check the closest sibling test, not just the first search hit) - the how, and the bare-snippet exception where Surgical Changes wins, lives in `pablo-tdd`.
+- **Tests are part of the deliverable** - every change or new code ships with a unit-test plan; the how, and the bare-snippet exception where Surgical Changes wins, lives in `pablo-tdd`.
 - **Data structures first**: start with the data model. If the structure is wrong, the algorithm is irrelevant. Eliminate special cases by fixing the shape of the data, not by piling up conditionals. → See [principles/KISS.md](principles/KISS.md), rule of thumb 2
 - **Composition over inheritance** (except for Algebraic Data Types). → See [principles/SOLID.md](principles/SOLID.md), the L section prefers composition over inheritance
 - **Scientific code** (referential transparency): no hidden state, no implicit dependencies, no non-determinism. If it can't be tested in isolation, the design is wrong. → See [principles/FP.md](principles/FP.md), the "Scientific code / Referential transparency" section
@@ -105,6 +105,7 @@ Don't assume. Don't hide confusion. Surface tradeoffs.
 - If multiple interpretations or approaches exist, present them to the user. [DO NOT] pick one silently.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name the confusion. Ask.
+- When following an existing convention (error handling, naming, structure, test assertions, anything), check the closest, most specific precedent first, then verify it against a broader search. A search for positive evidence alone (e.g. grep-ing for a pattern) can only return where that pattern already exists - it can never confirm a closer precedent deliberately lacks it, so it will always look like the only match found is "the convention." Conflicting precedents are multiple approaches: surface them, don't pick silently.
 
 ## Surgical Changes
 
