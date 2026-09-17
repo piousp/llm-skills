@@ -34,7 +34,10 @@ step to a subagent.
    Reuse the exact same diff text for all three subagents below. This keeps
    their scope identical.
 
-2. **Dispatch the three lenses in parallel** (never three separate calls):
+2. **Dispatch the three lenses in parallel** (never three separate calls).
+   Each subagent reports problems only — [NEVER] ask a subagent to propose
+   fixes/corrections/alternatives; that step happens later, in the
+   coordinator, once all three results are in.:
 
    - `agent: "analyst"`, `skills: ["qa-adversary"]`, `timeoutMs: 1200000`
      — task: the diff, plus "Apply the qa-adversary lens to this diff only.
@@ -71,10 +74,17 @@ step to a subagent.
    sub-reports back to back — that is the audit-report shape this skill
    exists to avoid.
 
+4. **Add corrections yourself.** Once the merge is done, the coordinator
+   — not a subagent — drafts the ≥2 corrections/alternatives per finding
+   required by the Output format below, using its own judgment plus the
+   subagents' problem descriptions as input. [NEVER] send a fourth
+   subagent call, or re-invoke any of the three, to ask for fixes.
+
 ## Merge rules
 
-- Same `file:line` and same root cause across lenses → one finding. Tag it
-  with every lens that raised it, e.g. `[qa-adversary + code-review-checklist]`.
+- Same `file:line` (or same overlapping line range/set) and same root
+  cause across lenses → one finding. Tag it with every lens that raised it,
+  e.g. `[qa-adversary + code-review-checklist]`.
 - On a severity disagreement for a merged finding, keep the higher severity.
 - `refactor-identification`'s P1 candidates fold in as recommendations, tagged
   `[refactor-identification]`, counted like any other finding. Its P2/P3
@@ -101,9 +111,18 @@ Verdict: PASS | NEEDS WORK | BLOCK — <N> blocking, <N> major, <N> coverage gap
 <diff hunk for this file>
 
 <narrative: what changed and why, with every finding for this file folded
-into the explanation. Cite file:line inline, name the lens(es), give the
-concrete reasoning — a failure scenario for a qa-adversary finding, the
-violated principle for a checklist/philosophy finding.>
+into the explanation. Cite the exact location inline: a single `file:line`
+for a localized issue, or the full set/range of lines involved
+(`file:L12-L18` or `file:L12,L27,L41`) when the problem spans, repeats
+across, or is caused by the interaction of multiple lines — [NEVER] collapse
+a multi-line issue to just its first or most visible line. Name the
+lens(es), give the concrete reasoning — a failure scenario for a
+qa-adversary finding, the violated principle for a checklist/philosophy
+finding. For every finding,
+give at least 2 concrete examples illustrating the problem (e.g. two input
+scenarios that break it, or two cases where the violated principle bites),
+and list at least 2 possible corrections/alternatives so the user picks
+which one (if any) to apply — [NEVER] apply a fix yourself.>
 
 ### <next file>
 ...
@@ -127,6 +146,19 @@ coverage assessment>
 - [NEVER] edit or write code, in the coordinator or any subagent. This pass
   is read-only end to end.
 - [ALWAYS] show a file's diff hunk before discussing its findings.
+- [ALWAYS] cite every line actually involved in a finding, not just one
+  representative line — use a range or an explicit list when the issue is
+  general/spread across the hunk (e.g. a pattern repeated in several
+  places, or a bug caused by two non-adjacent lines interacting).
+- [ALWAYS] back every finding's explanation with at least 2 concrete
+  examples, and offer at least 2 possible corrections/alternatives per
+  finding — the user decides which comments are worth acting on; [NEVER]
+  present a single "the fix is X" without an alternative to weigh against
+  it.
+- [ALWAYS] draft the corrections/alternatives yourself, after the merge,
+  from the coordinator's own judgment. [NEVER] instruct a subagent to
+  suggest fixes — each lens stays focused on identifying problems; the
+  three parallel dispatches never ask for or receive corrections.
 - [NEVER] persist the report to a file — chat output only.
 - [NEVER] preview the three subagent prompts before dispatching. The diff
   and the lens are already fixed; there is nothing left for the user to
