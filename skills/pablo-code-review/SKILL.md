@@ -34,7 +34,14 @@ step to a subagent.
    Reuse the exact same diff text for all three subagents below. This keeps
    their scope identical.
 
-2. **Dispatch the three lenses in parallel** (never three separate calls).
+2. **Identify the diff's objective(s).** Before dispatching, read the diff/PR description/commit
+   messages and name what the change sets out to do. If it serves a single purpose, one line is
+   enough. If it bundles distinct purposes (e.g. removing dead code + a refactor + new logic),
+   [ALWAYS] enumerate each one explicitly — this drives the Summary and lets the reader judge
+   whether unrelated purposes belong in the same change (Scope Discipline territory, but stated
+   up front rather than buried in a finding).
+
+3. **Dispatch the three lenses in parallel** (never three separate calls).
    Each subagent reports problems only — [NEVER] ask a subagent to propose
    fixes/corrections/alternatives; that step happens later, in the
    coordinator, once all three results are in.:
@@ -69,12 +76,12 @@ step to a subagent.
   ]
 }
 
-3. **Merge, don't append.** Wait for all three results, then build one
+4. **Merge, don't append.** Wait for all three results, then build one
    report grouped by changed file, not by lens. [NEVER] print three
    sub-reports back to back — that is the audit-report shape this skill
    exists to avoid.
 
-4. **Add corrections yourself.** Once the merge is done, the coordinator
+5. **Add corrections yourself.** Once the merge is done, the coordinator
    — not a subagent — drafts the ≥2 corrections/alternatives per finding
    required by the Output format below, using its own judgment plus the
    subagents' problem descriptions as input. [NEVER] send a fourth
@@ -94,6 +101,10 @@ step to a subagent.
 - If a lens's section comes back clean ("pass" / "No confirmed defects" /
   "(none)"), say so in one line — [DO NOT] pad the narrative when there is
   nothing to explain.
+- Nits, FYIs, and P2/P3 observations get exactly one line each, in the
+  file's closing "Observaciones (no accionables)" list — [NEVER] give
+  them the four-part finding structure, [NEVER] count them in the
+  Summary tally, and [NEVER] interleave them with actionable findings.
 
 ## Output format
 
@@ -105,24 +116,47 @@ changed and *why* it matters, not just a list of line numbers.
 
 ### Summary
 Verdict: PASS | NEEDS WORK | BLOCK — <N> blocking, <N> major, <N> coverage gaps
-<one or two lines: what the diff sets out to do>
+<one or two lines if the diff serves a single purpose. If it bundles multiple distinct
+purposes (e.g. dead-code removal + a refactor + new logic), enumerate each one as its own
+line: "1. <purpose> — 2. <purpose> — ..." — this must appear before any file's findings.>
 
 ### <file path>
 <diff hunk for this file>
 
-<narrative: what changed and why, with every finding for this file folded
-into the explanation. Cite the exact location inline: a single `file:line`
-for a localized issue, or the full set/range of lines involved
-(`file:L12-L18` or `file:L12,L27,L41`) when the problem spans, repeats
-across, or is caused by the interaction of multiple lines — [NEVER] collapse
-a multi-line issue to just its first or most visible line. Name the
-lens(es), give the concrete reasoning — a failure scenario for a
-qa-adversary finding, the violated principle for a checklist/philosophy
-finding. For every finding,
-give at least 2 concrete examples illustrating the problem (e.g. two input
-scenarios that break it, or two cases where the violated principle bites),
-and list at least 2 possible corrections/alternatives so the user picks
-which one (if any) to apply — [NEVER] apply a fix yourself.>
+**Qué hace este código:** <plain-language walkthrough, several sentences,
+no jargon: what this file did BEFORE the change, what it does AFTER, and
+why the author changed it. [ALWAYS] include at least one concrete
+worked example with real-looking data flowing through the changed code
+(input → each transformation step → output), the way a colleague would
+explain it at a whiteboard. Longer is better than terse here — this block
+is what the reader uses to judge every finding below it.>
+
+<then every finding for this file, each in this four-part shape:>
+
+**[<severity> — <lens(es)>] <file:line or file:L12-L18 or file:L12,L27,L41>
+— <one-line title>**
+- **Qué:** what the defect/violation is, in one or two plain sentences.
+- **Por qué pasa:** the mechanism that produces it, with at least 2
+  concrete examples (two input scenarios that break it, or two cases
+  where the violated principle bites), using the same real-looking data
+  as the walkthrough when possible.
+- **Consecuencias:** what actually happens if merged as-is — who/what is
+  affected (users, operators, another service, future maintainers), and
+  how it would surface (wrong output, alert, silent drift).
+- **Soluciones:** at least 2 corrections/alternatives with their
+  trade-offs, so the user picks which one (if any) to apply — [NEVER]
+  apply a fix yourself, [NEVER] present a single "the fix is X" without
+  an alternative to weigh against it.
+
+Cite the exact location inline; when the problem spans, repeats across,
+or is caused by the interaction of multiple lines, cite the full set —
+[NEVER] collapse a multi-line issue to just its first or most visible
+line.
+
+**Observaciones (no accionables):** <compact one-line-each list at the end
+of the file's section: refactor-identification P2/P3 observations
+("pre-existing, not actionable in this diff") and checklist Nits/FYIs.
+One line per item, no four-part structure, never counted in the Summary.>
 
 ### <next file>
 ...
@@ -137,12 +171,20 @@ coverage assessment>
 
 ## Rules
 
+- [ALWAYS] identify and state the diff's objective(s) before any file's findings; when the
+  diff bundles distinct purposes (cleanup + refactor + new feature, etc.), enumerate each one
+  by name in the Summary — [NEVER] fold multiple purposes into one vague sentence.
 - [ALWAYS] pass the identical diff text to all three subagents; [NEVER] let
   any of them derive its own scope.
 - [NEVER] treat pre-existing, unmodified code as a finding or
   recommendation. `refactor-identification` may cite it as 1-hop context
   or as a P2/P3 observation — keep those, but never promote them to an
   actionable item.
+- [ALWAYS] verify, while merging, that every finding's cited file:line
+  falls inside the diff. A finding anchored in another repo, an
+  unavailable dependency, or unchanged code is not a finding: move it to
+  Open Questions / Doubts with the exact lookup that would confirm it,
+  regardless of the severity the lens assigned.
 - [NEVER] edit or write code, in the coordinator or any subagent. This pass
   is read-only end to end.
 - [ALWAYS] show a file's diff hunk before discussing its findings.
@@ -150,11 +192,14 @@ coverage assessment>
   representative line — use a range or an explicit list when the issue is
   general/spread across the hunk (e.g. a pattern repeated in several
   places, or a bug caused by two non-adjacent lines interacting).
-- [ALWAYS] back every finding's explanation with at least 2 concrete
-  examples, and offer at least 2 possible corrections/alternatives per
-  finding — the user decides which comments are worth acting on; [NEVER]
-  present a single "the fix is X" without an alternative to weigh against
-  it.
+- [ALWAYS] open every file's section with the "Qué hace este código"
+  walkthrough (before/after behavior + at least one worked data example)
+  BEFORE any finding — a reader who skips the diff hunk must still
+  understand what the code does from that block alone.
+- [ALWAYS] structure every actionable finding as Qué / Por qué pasa (≥2
+  concrete examples) / Consecuencias / Soluciones (≥2 alternatives) — the
+  user decides which comments are worth acting on; [NEVER] present a
+  single "the fix is X" without an alternative to weigh against it.
 - [ALWAYS] draft the corrections/alternatives yourself, after the merge,
   from the coordinator's own judgment. [NEVER] instruct a subagent to
   suggest fixes — each lens stays focused on identifying problems; the
