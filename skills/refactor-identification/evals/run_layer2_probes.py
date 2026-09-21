@@ -11,7 +11,7 @@ Success criteria checked (SKILL.md step 2, defined before writing the checks):
   - Output follows the mandatory template verbatim: Scope / Findings /
     Unresolved / Filtered out / Summary sections.
   - Every finding has file:line evidence anchored in the diff.
-  - Every finding carries a gate note (checked N1–N9).
+  - Every finding carries a gate note (checked N1–N10).
   - A genuine structural duplicate is correctly categorized A1.
   - A speculative single-implementation "candidate" is correctly filtered by
     N1 in Filtered out, not reported as a Finding (the skill's own worked
@@ -203,7 +203,7 @@ def finding_has_file_line_evidence(tool_calls, final_text, **ctx) -> bool:
 
 
 def gate_note_present(tool_calls, final_text, **ctx) -> bool:
-    return "N1" in final_text and "N9" in final_text
+    return "N1" in final_text and "N10" in final_text
 
 
 def identifies_a1_category(tool_calls, final_text, **ctx) -> bool:

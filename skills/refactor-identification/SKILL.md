@@ -136,17 +136,25 @@ re-derive.
 |---|---|---|---|
 | N1 | Only one variant/implementation exists today and the branch adds no concrete second one | YAGNI, no imaginary flexibility | Filtered out |
 | N2 | The similar blocks encode different business rules that change for different reasons (accidental duplication)† | DRY vs SRP → SRP wins | Filtered out |
-| N3 | The abstraction removing the smell would be harder to read than the duplication/conditional it replaces | KISS > DRY, KISS > SOLID | Filtered out |
+| N3 | The abstraction removing the smell would be harder to read than the duplication/conditional it replaces‡ | KISS > DRY, KISS > SOLID | Filtered out |
 | N4 | No evidence line falls inside a changed hunk or on a symbol the branch changed | Scope law, branch work only | Filtered out |
 | N5 | Flag/mode has exactly 2 simple states with trivial behavior difference | State pattern only earns its cost past this | Filtered out (A4) |
 | N6 | Single failure point already handled inline by the immediate caller | Either/Option is ceremony here | Filtered out (A3) |
 | N7 | Primitive/clump stays local: crosses no signature boundary and is validated in <2 places | KISS, a domain type adds ceremony | Filtered out (A3) |
 | N8 | The "finding" is really a rename, formatting, or trivial extract-method in disguise | Skill boundary, non-structural | Filtered out |
 | N9 | The candidate's disposition depends on a fact outside 1-hop context or outside this repo (reachability, another service's behavior, runtime data layout) | Scope law, cannot be adjudicated here | Unresolved |
+| N10 | Every evidence line lives in test, spec, fixture, or test-helper code (including the main sources of a dedicated integration-test repo/module) | Test duplication is often deliberate clarity; test-structure quality belongs to a tests-focused review, not a structural-refactor lens | Filtered out |
 
 † N2 check: compare what each predicate/block *accepts* (its extension), not the polarity of
 its call sites. If one's accepted set is a superset/subset of the other's, they are not
 different rules and N2 does not apply.
+
+‡ N3 check: "harder to read" explicitly includes hiding an effect. If the abstraction that
+removes the duplication would fold a mutation, a metric, a log, or any other side effect that
+each duplicated site currently performs in plain sight into a single method's body, N3 applies:
+a few duplicated, explicit lines beat one abstraction with hidden effects (KISS > DRY). Name
+this check in the gate note of every A1 structural-duplication candidate whose refactor
+direction merges call sites that mutate state.
 
 ## Priority assignment
 
@@ -184,7 +192,7 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
 8. Count occurrences for threshold-based candidates: grep repo-wide for the anchored
    pattern; update each candidate's measure. Drop candidates below threshold.
    Verify: every surviving candidate's measure meets its row's threshold.
-9. Gate every candidate through N1–N9. Name the one fact that decides the row before picking
+9. Gate every candidate through N1–N10. Name the one fact that decides the row before picking
    it. If that fact requires evidence outside the 1-hop radius or this repo, stop at N9; never approximate with the closest-looking row. Passing candidates get a one-line gate
    note naming the rows checked; failing candidates move to Filtered out with the failing
    row ID; N9 candidates move to Unresolved with the missing fact named.
@@ -208,7 +216,7 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
 #### [RF-1] A<n> <smell row name>: P<1|2|3>
 - Evidence: `file:line`, `file:line` (<measure, e.g. "2 occurrences, identical modulo type">)
 - Anchored in branch: `file:line` (<added|modified> hunk)
-- Gate: checked N1–N9, passes; <one line: why the closest row doesn't apply>
+- Gate: checked N1–N10, passes; <one line: why the closest row doesn't apply>
 - Refactor direction: <one line naming the target shape> → see `<skill>` <row/section>
   (direction only; the how lives there)
 
@@ -242,7 +250,7 @@ caller's prompt explicitly asks for them.
 | A2 | detect + measure | `functional-programming`: immutability principle; `gof-design-patterns`: Builder row (validated construction); `pablo-code-philosophy`: "Scientific code" |
 | A3 | detect + measure | `functional-programming`: typed error handling + `references/patterns.md` (validation pipeline, accumulating errors); its `references/java.md` / `references/scala.md` for idioms |
 | A4 | detect + measure | `functional-programming` `references/scala.md` (sealed trait + case classes + match); `gof-design-patterns`: State row (complex per-state behavior), and its Visitor caveat (never Visitor an ADT) |
-| Gate | n/a | `pablo-code-philosophy`: pipeline YAGNI→KISS→DRY→SOLID; conflict matrix KISS > DRY > SOLID; the gate N1–N9 is its instantiation |
+| Gate | n/a | `pablo-code-philosophy`: pipeline YAGNI→KISS→DRY→SOLID; conflict matrix KISS > DRY > SOLID; the gate N1–N10 is its instantiation |
 
 Never restate a gof/fp table row here. Point to it by skill name and row/section so the
 implementer reads the recipe from its source of truth.

@@ -30,7 +30,7 @@ double computeRefundTotal(List<LineItem> items) {
 - Evidence: `InvoiceService.java:41`, `InvoiceService.java:58` (2 occurrences, identical
   loop/accumulation shape; only the method name differs, no type difference)
 - Anchored in branch: `InvoiceService.java:41` (added hunk)
-- Gate: checked N1–N9, passes; N3 doesn't apply because extracting a shared
+- Gate: checked N1–N10, passes; N3 doesn't apply because extracting a shared
   `lineItemsTotal(items)` helper is strictly shorter and equally readable
 - Refactor direction: extract a shared `lineItemsTotal(List<LineItem>)` helper → see
   `functional-programming` recognition table, "same three-line transformation... copy-pasted"
@@ -54,7 +54,7 @@ class OrderTracker {
 - Evidence: `OrderTracker.scala:13` (getter returns the live `ListBuffer`, no copy; escapes:
   `mutable.ListBuffer[Order]`)
 - Anchored in branch: `OrderTracker.scala:12-13` (added hunk)
-- Gate: checked N1–N9, passes; N3 doesn't apply, returning `.toList` is not more complex
+- Gate: checked N1–N10, passes; N3 doesn't apply, returning `.toList` is not more complex
 - Refactor direction: return an immutable snapshot (`pendingOrders.toList`) and keep the
   mutable buffer private → see `functional-programming` Immutability principle (direction
   only; the how lives there)
@@ -84,7 +84,7 @@ if (c == null) { throw new IllegalStateException("no customer"); }
 - Evidence: `CustomerLookup.java:77` (producer), `CustomerLookup.java:104`,
   `OrderService.java:33` (2 null-checks on the same producer's result)
 - Anchored in branch: `CustomerLookup.java:104`, `OrderService.java:33` (both added hunks)
-- Gate: checked N1–N9, passes; N6 doesn't apply because there are 2 checking call sites, not 1
+- Gate: checked N1–N10, passes; N6 doesn't apply because there are 2 checking call sites, not 1
 - Refactor direction: change `findById` to return `Optional<Customer>` → see
   `functional-programming` `references/java.md`, `Optional` "Return type, not parameter
   type" guidance (direction only; the how lives there)
@@ -117,7 +117,7 @@ status match {
 - Evidence: `PaymentView.scala:22`, `PaymentNotifier.scala:45` (2 dispatch sites over the
   same `Int` status flag, 3 variants each)
 - Anchored in branch: `PaymentNotifier.scala:45` (added hunk)
-- Gate: checked N1–N9, passes; N5 doesn't apply because there are 3 variants, not 2 trivial ones
+- Gate: checked N1–N10, passes; N5 doesn't apply because there are 3 variants, not 2 trivial ones
 - Refactor direction: replace the `Int` flag with a sealed `PaymentStatus` ADT
   (`Pending`/`Settled`/`Failed`) and match on it → see `functional-programming`
   `references/scala.md` sealed trait + case classes + match section (direction only; the how

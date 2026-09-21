@@ -74,6 +74,10 @@ The caller may supply additional domain-context lens paths (e.g. a team wiki-usa
    payloads, API shapes) are the highest-risk surface — regressions hide at integration points.
    Also trace consumers by **contract shape** (same DTO/payload structure), not only by symbol name —
    this catches coupling through serialization or duck-typing that a name-based search misses.
+   The blast radius informs risk; it never relocates a finding. A finding's defect line must be
+   inside the diff under review. If the risky behavior lives in code outside the diff (another
+   repo, an unfetched dependency, generated code, a library), it is an Open Question naming the
+   exact lookup that would confirm it — never a Finding, whatever its severity would be.
 4. **Run every lens below against the diff.** For each suspected defect, construct a **concrete
    failure scenario**: specific inputs / state → the wrong output or crash it produces. A finding
    without a reproducible scenario is a doubt, not a finding — file it under Open Questions.
@@ -200,6 +204,12 @@ For the changed path, report one of:
 
 - Every finding needs a **concrete, reproducible failure scenario** — inputs → wrong result.
   No scenario ⇒ it is a doubt (Open Questions), not a finding. No hand-wavy "this might be slow".
+  The scenario's inputs must be reachable with the code and configuration as committed: a
+  scenario that first requires a hypothetical misconfiguration nobody has made is a doubt
+  ("what guards config X against value Y?"), not a finding.
+- [NEVER] report a finding whose defect line lives outside the diff (another repo, an
+  unavailable dependency, unchanged code). Route it to Open Questions with the exact lookup —
+  this applies even when invoked standalone with no "this diff only" instruction in the prompt.
 - A **BLOCK is load-bearing**: it stops "done" until fixed or refuted with evidence. Treat it like a
   failing test, not an opinion.
 - Be strict but honest: do not manufacture findings to look thorough. An empty Findings list with a
