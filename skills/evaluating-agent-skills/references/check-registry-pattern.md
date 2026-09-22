@@ -36,17 +36,17 @@ def grade(prompt_case: dict, tool_calls: list[dict], final_text: str, **ctx) -> 
 
 ## Why this shape
 
-- **Composable across prompts** — the same `check_id` (e.g.
+- **Composable across prompts**: the same `check_id` (e.g.
   `no_repo_mutation`) can appear in many prompt cases with different `ctx`
   (different `protected_files`), without duplicating the check function.
-- **Deterministic-first** — every check here is regex/structural, no LLM
+- **Deterministic-first**: every check here is regex/structural, no LLM
   call. Reach for `judge.py` (L3) only for what these genuinely can't grade
   (see SKILL.md step 4).
-- **Outcome over transcript** — prefer checks that inspect files on disk
+- **Outcome over transcript**: prefer checks that inspect files on disk
   (`Path(...).exists()`, file contents) over checks that only inspect
   `final_text`. The chat response is the least trustworthy signal (Anthropic:
   grade the environment's final state, not the sentence describing it).
-- **One check, one concern** — don't fold two unrelated assertions into one
+- **One check, one concern**: don't fold two unrelated assertions into one
   function; a failing check name should tell you exactly what broke.
 
 ## Checklist when adding a new check

@@ -2,7 +2,7 @@
 
 Worked before/after examples for the recurring implementation shapes referenced from `SKILL.md`.
 Each pattern shows the imperative/OOP starting point and its FP equivalent, in both Java and Scala.
-Read the "when this is worth it" note before applying — none of these are worth doing unconditionally
+Read the "when this is worth it" note before applying: none of these are worth doing unconditionally
 (see the anti-pattern table in `SKILL.md`).
 
 ## Pattern 1: Validation pipeline with typed errors (errors as data)
@@ -12,7 +12,7 @@ signature, and let failures short-circuit the pipeline instead of unwinding the 
 
 **When it's worth it:** the failure is an expected domain outcome (bad input, business-rule
 violation), and there's more than one step in the pipeline where it can fail. For a single validation
-check with one caller, a direct `if`/throw is simpler — see `SKILL.md`'s anti-pattern table.
+check with one caller, a direct `if`/throw is simpler; see `SKILL.md`'s anti-pattern table.
 
 ### Java
 
@@ -43,7 +43,7 @@ public Result<Output> process(RawInput input) {
 ```
 
 For Java 8/11, the same shape holds with the `abstract class` + nested `final` subclasses form of
-`Result<T>` from `java.md` — the call site (`validate(input).flatMap(...).map(...)`) is identical;
+`Result<T>` from `java.md`: the call site (`validate(input).flatMap(...).map(...)`) is identical;
 only the `Result` type's own definition changes with the version gate.
 
 ### Scala
@@ -68,7 +68,7 @@ def process(input: RawInput): Either[String, Output] =
   } yield toOutput(enriched)
 ```
 
-The first `Left` returned by `validate` or `enrich` short-circuits the rest of the chain — no
+The first `Left` returned by `validate` or `enrich` short-circuits the rest of the chain; no
 `try`/`catch` needed, and the possibility of failure is visible in the return type.
 
 ## Pattern 2: Fold vs. a loop with a mutable accumulator
@@ -78,7 +78,7 @@ that's genuinely all the loop does.
 
 **When it's worth it:** the loop body is a single accumulation step with no early-exit logic, no
 side effect other than updating the accumulator, and no index dependency. If the loop also logs,
-short-circuits conditionally, or needs the index, keep the loop — see `SKILL.md`'s anti-pattern
+short-circuits conditionally, or needs the index, keep the loop; see `SKILL.md`'s anti-pattern
 table ("a simple loop with one clear side effect").
 
 ### Java
@@ -135,12 +135,12 @@ val total = orders.map(_.amount).sum
 ## Pattern 3: Function composition vs. method chains / nested calls
 
 Replace either (a) a chain of nested calls that reads inside-out, or (b) a long procedural sequence
-of intermediate variables, with explicit composition — when the steps are genuinely a fixed pipeline
+of intermediate variables, with explicit composition, when the steps are genuinely a fixed pipeline
 of independent transformations.
 
 **When it's worth it:** the steps are pure transformations with no branching between them, and naming
 the composed function communicates the pipeline's intent better than reading each step. If the steps
-interleave decisions or side effects, a flat sequence of statements is more legible — composing it
+interleave decisions or side effects, a flat sequence of statements is more legible; composing it
 doesn't remove the complexity, it just hides where it lives.
 
 ### Java

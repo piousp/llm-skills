@@ -1,16 +1,16 @@
-# Stage: Correct (Phase 5 — Corrección consolidada en una sola pasada)
+# Stage: Correct (Phase 5 - Corrección consolidada en una sola pasada)
 
 ## Cuándo se ejecuta
 Cuando `state.py next` reporta `phase: 5, phase_name: "correct"`.
 
 ## Actor
-`worker` — agente con capacidad de escritura. Aplica el plan de corrección conjunto en una sola
+`worker`: agente con capacidad de escritura. Aplica el plan de corrección conjunto en una sola
 pasada.
 
 ## Inputs recibidos de state.py
-- `session_dir` — directorio de la sesión.
-- `working_file` — ruta absoluta de la copia de trabajo.
-- `plan_path` — ruta a `<session_dir>/plan-correccion.md`.
+- `session_dir`: directorio de la sesión.
+- `working_file`: ruta absoluta de la copia de trabajo.
+- `plan_path`: ruta a `<session_dir>/plan-correccion.md`.
 
 ## Proceso
 
@@ -46,13 +46,13 @@ Modo: repair
    (sobrescribiendo el original).
 
 [LIMITES]
-- No leas ningun otro archivo — solo el plan y el working file indicados.
+- No leas ningun otro archivo, solo el plan y el working file indicados.
 - No introduzcas cambios no solicitados.
 - No alteres el formato Markdown del documento.
-- Preserva el contenido sustancial — solo corrige lo señalado en el plan.
+- Preserva el contenido sustancial, solo corrige lo señalado en el plan.
 - **Nunca inventes autores, fuentes, citas o referencias bibliográficas.** Si una "Corrección
   integrada" pide citar una fuente y esta no está identificada en el plan (o pide explícitamente
-  "eliminar si no se puede verificar"), **elimina o marca la afirmación como no verificada** — no
+  "eliminar si no se puede verificar"), **elimina o marca la afirmación como no verificada**, no
   fabriques un autor, año, título o editorial plausibles para completar la corrección. Fabricar una
   cita es un fallo de contenido, no una solución aceptable, y se reporta como tal (`Status: BLOCKED`
   con la razón), no como `COMPLETED (with notes)`.
@@ -87,17 +87,17 @@ Crear un archivo marcador en `<session_dir>/correccion.md`:
 
 - **applied**: si el output del `worker` reporta `**Status:** COMPLETED`, o `COMPLETED (with notes)`
   donde el coordinador revisó las notas y ninguna describe un problema de contenido (fabricación de
-  fuentes/citas, cambio de significado, alcance no autorizado) — solo casos menores no vinculantes.
+  fuentes/citas, cambio de significado, alcance no autorizado); solo casos menores no vinculantes.
 - **failed**: si reporta `**Status:** BLOCKED`; cualquier output sin `**Status:**` reconocible; o
   `COMPLETED (with notes)` donde una nota describe fabricación de contenido (autores, fuentes,
-  citas, referencias inventadas) o cualquier otro problema de contenido, no solo de formato — el
+  citas, referencias inventadas) o cualquier otro problema de contenido, no solo de formato: el
   coordinador nunca acepta `applied` a ciegas solo porque el Status dice COMPLETED.
 
 ### 6. Manejo de fallos
 
 1. Re-delegar una vez con el mismo prompt.
 2. Si falla de nuevo, escribir `correccion.md` con `Status: failed` y `Razón: <Observations/Status
-   del segundo intento>`. No hay más pases — el pipeline termina aquí.
+   del segundo intento>`. No hay más pases: el pipeline termina aquí.
 
 ### 7. Avanzar
 

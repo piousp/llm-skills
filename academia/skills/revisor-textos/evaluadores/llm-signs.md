@@ -41,7 +41,7 @@ de redacción plantilla que el lector especializado percibe como genérica.
 - Densidad: 3 o más instancias en un mismo párrafo, u 8 o más en una sección,
   elevan la severidad un nivel.
 
-**Corpus español — núcleo fuerte (severidad media directa):**
+**Corpus español, núcleo fuerte (severidad media directa):**
 
 | Término | Nota |
 |---|---|
@@ -58,7 +58,7 @@ de redacción plantilla que el lector especializado percibe como genérica.
 | "un viaje a través de" | metáfora de recorrido vacía |
 | "tejer" / "tejido" (en sentido metafórico) | ej. "tejer un marco" |
 
-**Corpus español — general (severidad baja por instancia):**
+**Corpus español, general (severidad baja por instancia):**
 
 - "matices" (en abuso)
 - "profundo/a" (en abuso)
@@ -306,12 +306,12 @@ el dato concreto no existe o está fuera del alcance del trabajo.
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general de las marcas LLM en el documento y
+1. **Resumen ejecutivo**: estado general de las marcas LLM en el documento y
    prioridad de hallazgos: qué criterios presentan problemas, con qué
    densidad y en qué secciones se concentran.
-2. **Hallazgos detallados por criterio** — para cada uno de los seis
+2. **Hallazgos detallados por criterio**: para cada uno de los seis
    criterios, listar las observaciones siguiendo el formato definido abajo.
-3. **Recomendaciones priorizadas** — ordenadas por severidad (alta, media,
+3. **Recomendaciones priorizadas**: ordenadas por severidad (alta, media,
    baja, informativa), indicando qué correcciones son urgentes y cuáles son
    mejoras opcionales.
 
@@ -338,38 +338,38 @@ Producir un informe estructurado:
 
 Este evaluador **NO** revisa:
 
-- **Presencia o ausencia de conector entre párrafos** — la cubre
+- **Presencia o ausencia de conector entre párrafos**: la cubre
   estructura-parrafo (criterio 3). Este evaluador juzga la elección del
   conector, no su presencia.
-- **Presencia o ausencia de cierre-apertura entre secciones** — la cubre
+- **Presencia o ausencia de cierre-apertura entre secciones**: la cubre
   estructura-parrafo (criterio 4). Este evaluador juzga la forma léxica del
   cierre cuando existe, no su presencia.
-- **Guion largo** — lo cubre estructura-parrafo (criterio 5).
-- **Oración temática y cita al inicio de oración** — las cubre
+- **Guion largo**: lo cubre estructura-parrafo (criterio 5).
+- **Oración temática y cita al inicio de oración**: las cubre
   estructura-parrafo (criterios 1 y 2).
 - **Muletillas individuales genéricas** ("cabe destacar", "es importante
-  mencionar", "vale la pena señalar", "obviamente", etc.) — las cubre
+  mencionar", "vale la pena señalar", "obviamente", etc.): las cubre
   filológica (Muletillas).
-- **Precisión lógica de un conector individual** — la cubre filológica
+- **Precisión lógica de un conector individual**: la cubre filológica
   (Cohesión y fluidez). Este evaluador opera sobre el patrón mecánico o
   repetido, no sobre la corrección lógica puntual.
-- **Oraciones largas, paralelismo, voz pasiva, concordancia** — los cubre
+- **Oraciones largas, paralelismo, voz pasiva, concordancia**: los cubre
   filológica (Corrección sintáctica).
-- **Generalizaciones puntuales y cuantificadores vagos** — las cubre
+- **Generalizaciones puntuales y cuantificadores vagos**: las cubre
   filológica (Imprecisiones).
-- **Registro y tono (consistencia, oralidad)** — los cubre filológica
+- **Registro y tono (consistencia, oralidad)**: los cubre filológica
   (Registro y tono).
-- **Redundancia y pleonasmos** — los cubre filológica (Redundancias).
-- **Atribución difusa y posición no diferenciada (dimensión epistémica)** —
+- **Redundancia y pleonasmos**: los cubre filológica (Redundancias).
+- **Atribución difusa y posición no diferenciada (dimensión epistémica)**:
   las cubre defectos-epistemicos.
-- **Presencia, ausencia o calidad de la Conclusión TEIVC** — la cubre teivc
+- **Presencia, ausencia o calidad de la Conclusión TEIVC**: la cubre teivc
   (criterio C).
-- **TEIVC mecánico sin integración (plantillas sin conexión lógica)** — lo
+- **TEIVC mecánico sin integración (plantillas sin conexión lógica)**: lo
   cubre teivc (problemas transversales).
-- **Falacias lógicas** — las cubre falacias.
-- **Coherencia argumentativa global** — la cubre heuristica.
-- **Hilo conductor narrativo** — lo cubre hilo-conductor-historia.
-- **Formato APA 7** — lo cubre apa.
+- **Falacias lógicas**: las cubre falacias.
+- **Coherencia argumentativa global**: la cubre heuristica.
+- **Hilo conductor narrativo**: lo cubre hilo-conductor-historia.
+- **Formato APA 7**: lo cubre apa.
 
 # Verificación
 

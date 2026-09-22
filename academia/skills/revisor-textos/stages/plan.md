@@ -1,19 +1,19 @@
-# Stage: Plan (Phase 4 — Agrupamiento mecánico + plan de corrección conjunto)
+# Stage: Plan (Phase 4 - Agrupamiento mecánico + plan de corrección conjunto)
 
 ## Cuándo se ejecuta
 Cuando `state.py next` reporta `phase: 4, phase_name: "plan"`.
 
 ## Actores
-- Script (`state.py group`) — agrupamiento mecánico, sin juicio.
-- `worker` — agente con capacidad de escritura. Redacta la corrección conjunta por grupo.
+- Script (`state.py group`): agrupamiento mecánico, sin juicio.
+- `worker`: agente con capacidad de escritura. Redacta la corrección conjunta por grupo.
 
 ## Inputs recibidos de state.py
-- `session_dir` — directorio de la sesión.
-- `working_file` — ruta absoluta de la copia de trabajo.
+- `session_dir`: directorio de la sesión.
+- `working_file`: ruta absoluta de la copia de trabajo.
 
 ## Proceso
 
-### 1. Paso (a) — Agrupamiento mecánico
+### 1. Paso (a) - Agrupamiento mecánico
 
 Ejecutar:
 
@@ -30,7 +30,7 @@ por `Ubicación` normalizada como fallback. Calcula la severidad máxima por gru
 duplicados exactos intra-evaluador, y escribe `<session_dir>/hallazgos-agrupados.json`.
 
 Si el script termina con exit code distinto de 0: mostrar el error (stderr) al usuario y escalar.
-Sin reintento — mismo razonamiento que en `stages/consolidate.md` (error determinístico de
+Sin reintento: mismo razonamiento que en `stages/consolidate.md` (error determinístico de
 precondición, no de subagente).
 
 ### 2. Short-circuit: sin grupos
@@ -48,7 +48,7 @@ No hay correcciones que aplicar.
 ```
 
 Informar al usuario y terminar el stage (no se invoca al `worker`). Escribir este marcador no es
-juicio del coordinador — es transcripción mecánica de "no hay grupos".
+juicio del coordinador: es transcripción mecánica de "no hay grupos".
 
 ### 3. Confirmar con el usuario
 
@@ -57,7 +57,7 @@ severidad máxima, duplicados eliminados) y preguntar: "¿Generar el plan de cor
 
 NO avanzar hasta que el usuario confirme explícitamente.
 
-### 4. Paso (b) — Invocar al `worker`
+### 4. Paso (b) - Invocar al `worker`
 
 El coordinador lee `hallazgos-agrupados.json` (si < 300 líneas, lo incrusta en `[CONTEXTO]`; si es
 grande, pasa la ruta absoluta e indica que lo lea con `read`).
@@ -80,7 +80,7 @@ Formato de salida esperado:
 - Total grupos: <N>
 - Total hallazgos cubiertos: <M>
 
-## Grupo <k> — <Párrafo N (líneas M-P) | Ubicación: "<texto>"> — severidad <severidad_maxima>
+## Grupo <k> - <Párrafo N (líneas M-P) | Ubicación: "<texto>"> - severidad <severidad_maxima>
 
 - Evaluadores: <eval1 (severidad), eval2 (severidad)>
 - Hallazgos: <ids>
@@ -93,14 +93,14 @@ hallazgos del grupo en una sola corrección conjunta>
 Modo: plan
 1. Para cada grupo del JSON, redacta UNA "Corrección integrada" que combine todos
    los hallazgos del grupo (todos los ejes: heurística, APA, epistemología, etc.)
-   en una sola instrucción de corrección — no una lista de correcciones separadas.
+   en una sola instrucción de corrección, no una lista de correcciones separadas.
 2. Escribe el plan completo en <session_dir>/plan-correccion.md usando la
    herramienta `write`, siguiendo EXACTAMENTE el formato de salida.
 
 [LIMITES]
 - Un bloque "## Grupo" por grupo del JSON, en el mismo orden, sin omitir ninguno.
 - No inventes hallazgos ni correcciones fuera de los listados.
-- No modifiques working.md ni ningún otro archivo — solo escribe plan-correccion.md.
+- No modifiques working.md ni ningún otro archivo, solo escribe plan-correccion.md.
 - Output: sigue el protocolo definido en `references/subagent-protocol.md`.
 ```
 
@@ -113,14 +113,14 @@ con `total_grupos` del JSON agrupado.
 ### 6. Manejo de fallos
 
 1. Re-delegar una vez con el mismo prompt.
-2. Si falla de nuevo: el coordinador escribe un **plan degradado mecánico** — mismo formato, pero
+2. Si falla de nuevo: el coordinador escribe un **plan degradado mecánico**: mismo formato, pero
    cada "Corrección integrada" es la transcripción textual (verbatim) de las
    `correccion_sugerida` de cada hallazgo del grupo, una por línea, con esta cabecera adicional
    por grupo: `- Modo: degradado (transcripción mecánica; la integración por eje queda a cargo de
-   la fase 5)`. El coordinador nunca redacta una corrección conjunta él mismo — solo transcribe
+   la fase 5)`. El coordinador nunca redacta una corrección conjunta él mismo, solo transcribe
    verbatim (mismo precedente que el "consolidado mínimo" que existía en el pipeline anterior).
 
 ### 7. Avanzar
 
-No se necesita comando adicional — el siguiente `state.py next` detectará que
+No se necesita comando adicional: el siguiente `state.py next` detectará que
 `plan-correccion.md` existe y reportará `phase: 5, phase_name: "correct"`.

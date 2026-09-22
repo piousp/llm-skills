@@ -2,7 +2,7 @@
 
 Worked before/after examples for all 12 patterns covered by `SKILL.md`, in both Java and Scala.
 Each entry shows the smell-driven starting point and the pattern applied. Read the "when it's
-worth it" note before applying — check it against `SKILL.md`'s anti-pattern table; none of these
+worth it" note before applying, check it against `SKILL.md`'s anti-pattern table; none of these
 are worth doing unconditionally.
 
 **Contents:** Creational (Factory Method, Builder) · Structural (Adapter, Decorator, Composite) ·
@@ -16,25 +16,25 @@ Behavioral (Strategy, Template Method, Observer, Chain of Responsibility, State,
 than one call site, or is expected to grow a new case. For a single call site with a fixed, stable
 type, a direct constructor call is simpler.
 
-Java — before (the decision is inline, and will be copy-pasted at the next call site):
+Java, before (the decision is inline, and will be copy-pasted at the next call site):
 
 ```java
 Parser parser = format == Format.XML ? new XmlParser() : new JsonParser();
 ```
 
-Java — after:
+Java, after:
 
 ```java
 Parser parser = ParserFactory.forFormat(format);
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 val parser = if (format == Format.Xml) new XmlParser() else new JsonParser()
 ```
 
-Scala — after:
+Scala, after:
 
 ```scala
 val parser = Parser.forFormat(format) // companion object apply; see scala.md
@@ -43,17 +43,17 @@ val parser = Parser.forFormat(format) // companion object apply; see scala.md
 ### Builder
 
 **When it's worth it:** several optional fields with defaults, or assembly steps that need
-validating together before construction. For 2-3 required fields with no optional logic, skip it —
+validating together before construction. For 2-3 required fields with no optional logic, skip it;
 see `SKILL.md`'s anti-pattern table.
 
-Java — before (telescoping constructors, or one constructor with 6 parameters most callers barely
+Java, before (telescoping constructors, or one constructor with 6 parameters most callers barely
 use):
 
 ```java
 RetryPolicy policy = new RetryPolicy(3, Duration.ofSeconds(1), true, false, null, 0);
 ```
 
-Java — after:
+Java, after:
 
 ```java
 RetryPolicy policy = RetryPolicy.builder()
@@ -62,7 +62,7 @@ RetryPolicy policy = RetryPolicy.builder()
     .build();
 ```
 
-Scala — before/after collapse into one step, since the "before" telescoping-constructor problem
+Scala, before/after collapse into one step, since the "before" telescoping-constructor problem
 doesn't exist in Scala:
 
 ```scala
@@ -70,7 +70,7 @@ val policy = RetryPolicy(maxAttempts = 5, backoff = 2.seconds) // named + defaul
 ```
 
 If Scala code needs multi-step validation before construction, see `functional-programming`'s
-accumulating-errors ADT — that's the correct Scala replacement for a validating Builder, not a
+accumulating-errors ADT; that's the correct Scala replacement for a validating Builder, not a
 mutable builder object.
 
 ## Structural
@@ -80,26 +80,26 @@ mutable builder object.
 **When it's worth it:** more than one call site would otherwise repeat its own translation logic
 against the same incompatible interface.
 
-Java — before (translation logic repeated at each call site):
+Java, before (translation logic repeated at each call site):
 
 ```java
 legacyClient.submitJob(new LegacyPayload(request.id(), request.destination(), request.payloadBytes()));
 ```
 
-Java — after:
+Java, after:
 
 ```java
 DistributionClient client = new LegacyDistributionAdapter(legacyClient);
 client.send(request);
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 legacyClient.submitJob(LegacyPayload(request.id, request.destination, request.payloadBytes))
 ```
 
-Scala — after:
+Scala, after:
 
 ```scala
 val client: DistributionClient = new LegacyDistributionAdapter(legacyClient)
@@ -111,7 +111,7 @@ client.send(request)
 **When it's worth it:** two or more behaviors need to layer/compose over a base implementation. For
 a single fixed wrapping, a plain wrapper method is equally clear.
 
-Java — before (logging and retry logic hardcoded inside the base implementation, coupling
+Java, before (logging and retry logic hardcoded inside the base implementation, coupling
 unrelated concerns):
 
 ```java
@@ -126,14 +126,14 @@ public final class DirectDistributionClient implements DistributionClient {
 }
 ```
 
-Java — after (each concern is its own layer, composed at construction):
+Java, after (each concern is its own layer, composed at construction):
 
 ```java
 DistributionClient client = new LoggingDistributionClient(
     new RetryingDistributionClient(new DirectDistributionClient(), 3));
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 final class DirectDistributionClient extends DistributionClient {
@@ -144,7 +144,7 @@ final class DirectDistributionClient extends DistributionClient {
 }
 ```
 
-Scala — after:
+Scala, after:
 
 ```scala
 val client: DistributionClient =
@@ -156,7 +156,7 @@ val client: DistributionClient =
 **When it's worth it:** the tree has more than one level of nesting and client code currently
 special-cases leaf vs. group at more than one call site.
 
-Java — before (type-checking leaf vs. group at the call site):
+Java, before (type-checking leaf vs. group at the call site):
 
 ```java
 boolean matches(FilterNode node, Event event) {
@@ -172,13 +172,13 @@ boolean matches(FilterNode node, Event event) {
 }
 ```
 
-Java — after (uniform interface, no type-check at the call site):
+Java, after (uniform interface, no type-check at the call site):
 
 ```java
 boolean matches = node.matches(event); // AndNode and LeafNode both implement FilterNode.matches
 ```
 
-Scala — before (matching on node type at the call site instead of inside the ADT):
+Scala, before (matching on node type at the call site instead of inside the ADT):
 
 ```scala
 def matches(node: FilterNode, event: Event): Boolean = node match {
@@ -187,14 +187,14 @@ def matches(node: FilterNode, event: Event): Boolean = node match {
 }
 ```
 
-Scala — after (the behavior moves onto the ADT itself, so callers stop pattern-matching on
+Scala, after (the behavior moves onto the ADT itself, so callers stop pattern-matching on
 structure they don't need to know about):
 
 ```scala
 val result = node.matches(event) // matches is defined once per case in the sealed trait
 ```
 
-Note the Scala "before" already reads fine for a lot of cases — reach for pushing `matches` onto
+Note the Scala "before" already reads fine for a lot of cases; reach for pushing `matches` onto
 the trait only once several call sites duplicate the same `match`, not on the first occurrence.
 
 ## Behavioral
@@ -202,9 +202,9 @@ the trait only once several call sites duplicate the same `match`, not on the fi
 ### Strategy
 
 **When it's worth it:** more than one interchangeable algorithm exists today, or the set is
-concretely expected to grow — not "might grow" speculatively.
+concretely expected to grow, not "might grow" speculatively.
 
-Java — before (branching on a type/enum to select behavior):
+Java, before (branching on a type/enum to select behavior):
 
 ```java
 BigDecimal price(Order order, PricingMode mode) {
@@ -214,7 +214,7 @@ BigDecimal price(Order order, PricingMode mode) {
 }
 ```
 
-Java — after:
+Java, after:
 
 ```java
 BigDecimal price(Order order, PricingStrategy strategy) {
@@ -222,7 +222,7 @@ BigDecimal price(Order order, PricingStrategy strategy) {
 }
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 def price(order: Order, mode: PricingMode): BigDecimal = mode match {
@@ -232,8 +232,8 @@ def price(order: Order, mode: PricingMode): BigDecimal = mode match {
 }
 ```
 
-Scala — after (a function value, not a named trait, since pricing is a single stateless
-computation — see `scala.md`):
+Scala, after (a function value, not a named trait, since pricing is a single stateless
+computation; see `scala.md`):
 
 ```scala
 def price(order: Order, pricing: Order => BigDecimal): BigDecimal = pricing(order)
@@ -244,7 +244,7 @@ def price(order: Order, pricing: Order => BigDecimal): BigDecimal = pricing(orde
 **When it's worth it:** the same multi-step skeleton is copy-pasted across more than one
 implementation, with only a couple of steps differing each time.
 
-Java — before (the skeleton duplicated, with only `validate` differing):
+Java, before (the skeleton duplicated, with only `validate` differing):
 
 ```java
 public final class XmlIngestJob {
@@ -263,7 +263,7 @@ public final class JsonIngestJob {
 }
 ```
 
-Java — after:
+Java, after:
 
 ```java
 public abstract class IngestJob {
@@ -276,9 +276,9 @@ public abstract class IngestJob {
 }
 ```
 
-Scala — before: same duplication, one class per format.
+Scala, before: same duplication, one class per format.
 
-Scala — after (function-parameter form, since only `fetch`/`validate` vary and there's no
+Scala, after (function-parameter form, since only `fetch`/`validate` vary and there's no
 meaningful per-format subclass identity beyond that):
 
 ```scala
@@ -294,7 +294,7 @@ runIngest(fetchJson, validateJson)
 **When it's worth it:** more than one independent listener needs to react to the same event, and
 that set of listeners is expected to change.
 
-Java — before (the subject calls each interested party directly, coupling it to all of them):
+Java, before (the subject calls each interested party directly, coupling it to all of them):
 
 ```java
 public void complete(JobResult result) {
@@ -304,7 +304,7 @@ public void complete(JobResult result) {
 }
 ```
 
-Java — after:
+Java, after:
 
 ```java
 public void complete(JobResult result) {
@@ -313,7 +313,7 @@ public void complete(JobResult result) {
 // metricsService, notificationService, and auditLog are each registered as a JobCompletionListener
 ```
 
-Scala — before/after follow the identical shape; the Scala-specific question to ask first is
+Scala, before/after follow the identical shape; the Scala-specific question to ask first is
 whether these three reactions are already better modeled as subscribers to an existing event topic
 rather than in-process listeners (see `scala.md`).
 
@@ -322,7 +322,7 @@ rather than in-process listeners (see `scala.md`).
 **When it's worth it:** more than one validation/handling step exists, each independently
 deciding to handle or pass on, and the set of applicable steps varies (e.g., by config).
 
-Java — before (nested if/else, each condition also encoding "did a previous check already fail"):
+Java, before (nested if/else, each condition also encoding "did a previous check already fail"):
 
 ```java
 Optional<String> validate(RawInput input) {
@@ -333,7 +333,7 @@ Optional<String> validate(RawInput input) {
 }
 ```
 
-Java — after (a plain loop with early return — `Optional.stream()` needs Java 9+, so this is the
+Java, after (a plain loop with early return; `Optional.stream()` needs Java 9+, so this is the
 Java-8-safe form; see `java.md`'s note on the Java 9+ stream alternative):
 
 ```java
@@ -346,7 +346,7 @@ Optional<String> validate(RawInput input) {
 }
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 def validate(input: RawInput): Option[String] =
@@ -356,7 +356,7 @@ def validate(input: RawInput): Option[String] =
   else None
 ```
 
-Scala — after (works on any Scala 2.11+/3 — see `scala.md`'s note on the 2.13+-only
+Scala, after (works on any Scala 2.11+/3; see `scala.md`'s note on the 2.13+-only
 `Iterator.nextOption()` alternative):
 
 ```scala
@@ -364,7 +364,7 @@ def validate(input: RawInput): Option[String] =
   handlers.view.flatMap(h => h(input)).headOption
 ```
 
-Note both "after" forms are also just `functional-programming`'s validator-composition pattern —
+Note both "after" forms are also just `functional-programming`'s validator-composition pattern;
 naming it Chain of Responsibility doesn't change the code, only clarifies intent when discussing
 the design.
 
@@ -374,7 +374,7 @@ the design.
 non-trivial enough that a status-field `switch` at the top of every method has become hard to
 follow.
 
-Java — before (status field checked at the top of every method):
+Java, before (status field checked at the top of every method):
 
 ```java
 public void onPaymentReceived() {
@@ -386,7 +386,7 @@ public void onPaymentReceived() {
 }
 ```
 
-Java — after:
+Java, after:
 
 ```java
 public void onPaymentReceived() {
@@ -395,7 +395,7 @@ public void onPaymentReceived() {
 // PendingState.onPaymentReceived returns new PaidState(); PaidState.onPaymentReceived returns `this`
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 def onPaymentReceived(): OrderStatus = status match {
@@ -404,14 +404,14 @@ def onPaymentReceived(): OrderStatus = status match {
 }
 ```
 
-Scala — after:
+Scala, after:
 
 ```scala
 def onPaymentReceived(): OrderState = state.onPaymentReceived(this)
 // Pending().onPaymentReceived returns Paid(); Paid().onPaymentReceived returns itself
 ```
 
-The Scala "before" is already a `sealed trait`-friendly `match` — the "after" is worth it only once
+The Scala "before" is already a `sealed trait`-friendly `match`; the "after" is worth it only once
 each state's *behavior* (not just its label) grows enough to want its own type, per `SKILL.md`'s
 anti-pattern table.
 
@@ -420,7 +420,7 @@ anti-pattern table.
 **When it's worth it:** the set of *operations* over a fixed node hierarchy grows independently of
 the node types, and needs to be added without modifying/recompiling those node classes.
 
-Java — before (a growing `instanceof` cascade repeated for every new operation):
+Java, before (a growing `instanceof` cascade repeated for every new operation):
 
 ```java
 Object eval(Expression expr) {
@@ -431,7 +431,7 @@ Object eval(Expression expr) {
 // a render(Expression) method needs its own separate instanceof cascade, and so does export(...)
 ```
 
-Java — after:
+Java, after:
 
 ```java
 public interface ExpressionVisitor<R> {
@@ -442,8 +442,8 @@ int result = expr.accept(new EvalVisitor());
 String rendered = expr.accept(new RenderVisitor());
 ```
 
-Scala — before/after: in Scala, prefer collapsing this entirely into pattern matching over the
-sealed hierarchy rather than implementing a real Visitor — see `scala.md`'s "Visitor → pattern
+Scala, before/after: in Scala, prefer collapsing this entirely into pattern matching over the
+sealed hierarchy rather than implementing a real Visitor; see `scala.md`'s "Visitor → pattern
 matching" section. Only reach for a Scala Visitor/typeclass-per-operation shape if the operations
 must be defined outside the module owning the sealed trait.
 
@@ -452,26 +452,26 @@ must be defined outside the module owning the sealed trait.
 **When it's worth it:** the request needs to be queued, retried, logged, or undone independently
 of the code that created it. For a fire-once, no-undo call, invoke the method directly.
 
-Java — before (the action happens immediately, with no way to defer/undo/queue it):
+Java, before (the action happens immediately, with no way to defer/undo/queue it):
 
 ```java
 distributionClient.send(request);
 ```
 
-Java — after:
+Java, after:
 
 ```java
 Command command = new SubmitDistributionCommand(distributionClient, request);
 commandQueue.enqueue(command); // executed, retried, or undone later
 ```
 
-Scala — before:
+Scala, before:
 
 ```scala
 distributionClient.send(request)
 ```
 
-Scala — after (a function value is enough unless undo/inspection is required — see `scala.md`):
+Scala, after (a function value is enough unless undo/inspection is required; see `scala.md`):
 
 ```scala
 val command: () => Unit = () => distributionClient.send(request)
