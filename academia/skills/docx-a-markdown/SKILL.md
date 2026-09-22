@@ -1,6 +1,6 @@
 ---
 name: docx-a-markdown
-description: Convierte archivos DOCX a Markdown usando pandoc, mammoth o python-docx, con extracción opcional de comentarios de Word. Usar cuando se pida convertir un DOCX a Markdown o extraer comentarios de un documento de Word.
+description: Convierte archivos DOCX a Markdown usando pandoc, mammoth o python-docx, con extracción opcional de comentarios de Word. Usar cuando se pida convertir un DOCX a Markdown o extraer comentarios de un documento de Word. [DO NOT] usar para la operación inversa (Markdown/DOCX con metadatos académicos), usar `exportar-tesis-docx` para eso.
 ---
 
 # Conversión de DOCX a Markdown
