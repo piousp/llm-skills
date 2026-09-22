@@ -12,10 +12,15 @@ clause, a negative case with [DO NOT], and enforcement keys ([ALWAYS]/[DO NOT]) 
 `writing-agent-skills` §2/§3. The philosophy's "Tests are part of the deliverable"
 bullet is now a pointer to `pablo-tdd`.
 
-Empirical validation of the auto-trigger and the corresponding eval updates are
-deferred to a separate step (explicit deferral, OQ2; the evals/README ↔ SKILL.md sync
-stays pending until that step). This harness adds no trigger probes: it keeps
-measuring behavioral outcome with `--skill` forced.
+Empirical validation of the auto-trigger is deferred to a separate step (explicit
+deferral, OQ2). This harness adds no trigger probes: it keeps measuring behavioral
+outcome with `--skill` forced.
+
+Post-audit sync (writing-agent-skills review): `SKILL.md` no longer triggers on
+"planning code" (ceded to `pablo-code-planning`), dropped the dead session-directory
+section, and moved `principles/` under `references/principles/`. None of these
+affect the fixtures or checks below - the harness forces `--skill` and never reads
+`SESSION_DIR` or the old `principles/` path.
 
 Historical record (pre-split): an N=1 run in auto-discovery mode (bare `pi -ne`, no
 `--skill`) measured 0/10 real auto-triggers, and a round-2 re-test with a broadened
@@ -72,6 +77,13 @@ lives in that skill, not here.
 There are no `should_trigger: false` / negative-control cases: the harness
 measures behavior with the load forced, and trigger validation is deferred
 per OQ2.
+
+All 10 prompts are written in English. They were originally Spanish while
+`mentions_keywords` matches English substrings only (`yagni`, `premature`,
+`reason`, `change`, etc.); most checks passed anyway because the `|`-joined
+keyword lists include language-neutral acronyms (`yagni|kiss|dry|solid`), which
+masked the mismatch rather than testing it. Prompts were translated to English
+so the check actually measures what it claims to.
 
 ## Check registry
 

@@ -44,6 +44,24 @@ def handle(req: Request): Response =
   else execute(req)
 ```
 
+### Orchestrator returns the result, not the instructions
+
+```scala
+// The callee returns a flag; the caller re-applies the rule against shared state
+def classify(items: Seq[Item]): Outcome = Outcome(dropLowPriority = true)
+
+def select(items: Seq[Item]): Seq[Item] = {
+  val outcome = classify(items)
+  items.filterNot(item => outcome.dropLowPriority && item.priority == Low)
+}
+
+// The callee returns the decided value; the orchestrator only sequences
+def classify(items: Seq[Item]): Seq[Item] =
+  items.filterNot(_.priority == Low)
+
+def select(items: Seq[Item]): Seq[Item] = classify(items)
+```
+
 ### Fix the data shape, kill the conditionals
 
 ```scala
@@ -61,3 +79,6 @@ case object Basic   extends AccountType { val fee = 5.0 }
 case object Premium extends AccountType { val fee = 2.0 }
 case object Vip     extends AccountType { val fee = 0.0 }
 ```
+
+
+← Back to [KISS.md](../references/principles/KISS.md)

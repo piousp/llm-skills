@@ -35,3 +35,6 @@ val report = Report(includeCharts = true, timeoutSeconds = 30)
 
 Reach for an actual Builder class in Scala only when construction needs real multi-step
 validation across steps; for plain optional fields, case class defaults are simpler.
+
+
+← Back to [GoF.md](../references/principles/GoF.md)

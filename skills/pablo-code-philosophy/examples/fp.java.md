@@ -78,3 +78,6 @@ public Optional<Discount> resolveDiscount(Customer customer, Order order) {
 
 Either step can come up empty; `flatMap` propagates that without a chain of null-checks or a
 thrown exception per step.
+
+
+← Back to [FP.md](../references/principles/FP.md)

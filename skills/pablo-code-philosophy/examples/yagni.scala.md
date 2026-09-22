@@ -60,3 +60,6 @@ class ReportGenerator {
   def generate(): Report = { val r = build(); save(r); r }
 }
 ```
+
+
+← Back to [YAGNI.md](../references/principles/YAGNI.md)
