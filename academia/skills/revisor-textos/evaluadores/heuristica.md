@@ -103,14 +103,14 @@ por qué es falaz, y sugerir reformulación o eliminación.
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general de la calidad argumentativa,
+1. **Resumen ejecutivo**: estado general de la calidad argumentativa,
    hallazgos principales priorizados por severidad.
-2. **Coherencia argumentativa** — hallazgos sobre tesis, pertinencia,
+2. **Coherencia argumentativa**: hallazgos sobre tesis, pertinencia,
    estructura, consistencia, evidencia, contraargumentos, progresión.
-3. **Razonamiento y falacias** — falacias detectadas con ubicación,
+3. **Razonamiento y falacias**: falacias detectadas con ubicación,
    explicación y corrección sugerida.
-4. **Sesgos** — sesgos cognitivos, metodológicos y lingüísticos detectados.
-5. **Recomendaciones** — priorizadas por impacto (alta / media / baja /
+4. **Sesgos**: sesgos cognitivos, metodológicos y lingüísticos detectados.
+5. **Recomendaciones**: priorizadas por impacto (alta / media / baja /
    informativa).
 
 ## Formato de cada observación

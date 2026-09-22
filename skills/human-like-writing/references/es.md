@@ -11,8 +11,8 @@ aquí es específico de un solo dominio.
 
 ## Antes de escribir
 
-- [MUST] leer `references/banned-list-es.md` y tenerla a la vista mientras se redacta.
-- [MUST] leer `references/voice-es.md` para fijar la voz y reunir muestras few-shot.
+- [MUST] leer `banned-list-es.md` y tenerla a la vista mientras se redacta.
+- [MUST] leer `voice-es.md` para fijar la voz y reunir muestras few-shot.
 - [DO] fijar la voz y reunir de 3 a 5 muestras reales de la escritura del
   autor antes de redactar cualquier cosa de más de una frase.
 
@@ -25,7 +25,7 @@ Absolutas. Romper una obliga a reescribir.
   texto generado.
 - **[NEVER]** cerrar con una frase de manual. La última frase del texto es
   el último punto concreto, no un resumen del texto. Los cierres
-  prohibidos están en `references/banned-list-es.md`.
+  prohibidos están en `banned-list-es.md`.
 - **[NEVER]** abrir una frase con un conector de relleno que no aporta
   lógica. Si el conector no hace trabajo, eliminarlo o fusionar la frase
   con la anterior.
@@ -36,7 +36,7 @@ Absolutas. Romper una obliga a reescribir.
   lista llana ya lleva su estructura.
 - **[NEVER]** apilar atenuantes. "Parece que esto podría ser algo
   arriesgado" suena a evasión. Un atenuante por afirmación, o ninguno.
-- **[NEVER]** usar las palabras de `references/banned-list-es.md`. Si una
+- **[NEVER]** usar las palabras de `banned-list-es.md`. Si una
   palabra prohibida es exactamente la adecuada, reescribir la frase
   alrededor de ella.
 

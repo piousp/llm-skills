@@ -1,16 +1,16 @@
-# Stage: Evaluate (Phase 2 — Evaluación paralela)
+# Stage: Evaluate (Phase 2 - Evaluación paralela)
 
 ## Cuándo se ejecuta
 Cuando `state.py next` reporta `phase: 2, phase_name: "evaluating"`.
 
 ## Actor
-`analyst` — agente read-only de propósito general. Reporta hallazgos en su output textual
+`analyst`: agente read-only de propósito general. Reporta hallazgos en su output textual
 (markdown), seguidos de su propio resumen estructurado (ver `references/subagent-protocol.md`).
 
 ## Inputs recibidos de state.py
-- `session_dir` — directorio de la sesión.
-- `working_file` — ruta absoluta de la copia de trabajo.
-- `evaluadores` — lista de IDs de evaluadores (de `seleccion.json`).
+- `session_dir`: directorio de la sesión.
+- `working_file`: ruta absoluta de la copia de trabajo.
+- `evaluadores`: lista de IDs de evaluadores (de `seleccion.json`).
 
 ## Proceso
 
@@ -74,8 +74,8 @@ Modo: evaluacion
    trabajo tal como lo muestra la herramienta `read`; usa "desconocida" solo si el hallazgo es
    global al documento entero.
 [LIMITES]
-- No leas ningun otro archivo — solo el working file indicado.
-- No modifiques nada — solo reporta hallazgos.
+- No leas ningun otro archivo, solo el working file indicado.
+- No modifiques nada, solo reporta hallazgos.
 - No incluyas hallazgos fuera del alcance del skill.
 - Output: markdown siguiendo la plantilla. Cada hallazgo comienza con ## Hallazgo:.
 - Sigue el protocolo de output definido en `references/subagent-protocol.md`.
@@ -85,7 +85,7 @@ Modo: evaluacion
 
 Esperar a que todos los `subagent tasks` completen. Para cada resultado:
 
-- Si el subagente devolvió hallazgos válidos: el coordinador extrae solo el bloque `## Hallazgo:` del output (ver `references/subagent-protocol.md` — `analyst` agrega su propio resumen al final, que se descarta) y lo escribe en `<session_dir>/hallazgos-<evaluador>.md`.
+- Si el subagente devolvió hallazgos válidos: el coordinador extrae solo el bloque `## Hallazgo:` del output (ver `references/subagent-protocol.md`; `analyst` agrega su propio resumen al final, que se descarta) y lo escribe en `<session_dir>/hallazgos-<evaluador>.md`.
 - Si el subagente falló (output vacío, error, sin bloques `## Hallazgo:` reconocibles): re-delegar una vez con el mismo prompt. Si falla de nuevo, marcar el evaluador como fallido y continuar con los demás.
 
 ### 4. Presentar al usuario
@@ -102,5 +102,5 @@ Preguntar: "¿Continuar con la corrección?"
 
 ### 5. Avanzar
 
-No se necesita comando adicional — el siguiente `state.py next` detectará
+No se necesita comando adicional: el siguiente `state.py next` detectará
 que los archivos `hallazgos-*.md` existen y reportará `phase: 3, phase_name: "consolidate"`.

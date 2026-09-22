@@ -18,7 +18,7 @@ Use this skill for a deep, quantified dive on exactly 4 structural categories, w
 is not "does this diff pass review" but "is there a structural refactor worth investing in here".
 Do not use it as a substitute for a broader code-review checklist pass: that pass already covers
 two of these categories superficially (its "Abstractions" and "Structural Code Smells" sections)
-as part of a broad, fast merge gate — reach for this skill only when that surface-level pass isn't
+as part of a broad, fast merge gate; reach for this skill only when that surface-level pass isn't
 enough. Identify candidates only; never execute a refactor and never explain *how* to apply a
 pattern once one is chosen. Route the "how" to `gof-design-patterns` (pattern catalog) and
 `functional-programming` (FP mechanics); route the cut-off criterion (when NOT to bother) to

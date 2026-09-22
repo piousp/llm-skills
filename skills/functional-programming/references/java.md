@@ -5,11 +5,11 @@ before/after examples, see `patterns.md`.
 
 ## `Optional`
 
-`Optional<T>` models "a single value that may be absent" at API boundaries — it is not a general
+`Optional<T>` models "a single value that may be absent" at API boundaries: it is not a general
 replacement for `null` everywhere.
 
 - **Return type, not parameter type.** Use `Optional<T>` as a method's return type when absence is a
-  normal outcome. Don't use it as a parameter type — it forces every caller to wrap a value just to
+  normal outcome. Don't use it as a parameter type; it forces every caller to wrap a value just to
   call the method, and doesn't compose with overloading the way a plain parameter does. If a
   parameter is genuinely optional, overload the method or use a builder/parameter object instead.
 - **Don't use it as a field type.** `Optional` isn't `Serializable` and adds indirection for no
@@ -17,7 +17,7 @@ replacement for `null` everywhere.
   clear contract) or non-null; reserve `Optional` for what a method hands back to its caller.
 - **Chain, don't unwrap early.** Prefer `.map()`, `.flatMap()`, `.filter()`, `.orElse()`,
   `.orElseGet()`, `.orElseThrow()` over `if (opt.isPresent()) { opt.get()... }`. The
-  `isPresent()`/`get()` pair reintroduces the null-check it was meant to replace — it's a strong
+  `isPresent()`/`get()` pair reintroduces the null-check it was meant to replace; it's a strong
   signal the surrounding code hasn't adopted the `Optional` chain fully.
 - **`orElseGet` over `orElse` for expensive defaults.** `orElse(compute())` evaluates `compute()`
   unconditionally even when the value is present; `orElseGet(() -> compute())` only evaluates it on
@@ -26,7 +26,7 @@ replacement for `null` everywhere.
 ## Streams
 
 - **Prefer a stream pipeline over an index-based loop** when the loop's purpose is building a new
-  collection, aggregating a value, or filtering — that's exactly `map`/`filter`/`collect`/`reduce`.
+  collection, aggregating a value, or filtering: that's exactly `map`/`filter`/`collect`/`reduce`.
   Keep the index-based loop when the logic genuinely needs the index, needs to break early in a way
   that's awkward to express as a predicate, or mutates external state as its primary purpose (see the
   anti-pattern table in `SKILL.md`).
@@ -43,14 +43,14 @@ replacement for `null` everywhere.
   extract a named intermediate variable or a private method per stage. A stream that needs a comment
   explaining what it does is a candidate for that split.
 
-## Records and sealed interfaces — version-gated
+## Records and sealed interfaces: version-gated
 
 Whether these are available depends on the target repo's Java version. **Check `java.version` /
 `maven.compiler.release` in the repo's `pom.xml` before choosing a form.** In a multi-repo codebase, Java
-version commonly varies repo-by-repo — some services may already be on Java 17, others still on
-Java 8 or 11. Don't assume 17 — verify per-repo.
+version commonly varies repo-by-repo; some services may already be on Java 17, others still on
+Java 8 or 11. Don't assume 17; verify per-repo.
 
-**Java 17+** — use `record` for immutable data carriers and `sealed interface ... permits` for
+**Java 17+**: use `record` for immutable data carriers and `sealed interface ... permits` for
 closed hierarchies (the closest Java gets to an algebraic data type):
 
 ```java
@@ -70,9 +70,9 @@ if (result instanceof Ok<T> ok) {
 }
 ```
 
-**Java 8/11** — no `record`, no `sealed`. The equivalent immutable data carrier is a `final` class
+**Java 8/11**: no `record`, no `sealed`. The equivalent immutable data carrier is a `final` class
 with `private final` fields, a constructor, and `equals`/`hashCode`/`toString` (hand-rolled, or via
-Lombok's `@Value` if the repo already depends on Lombok — check the `pom.xml` before adding it as a
+Lombok's `@Value` if the repo already depends on Lombok; check the `pom.xml` before adding it as a
 new dependency):
 
 ```java
@@ -85,7 +85,7 @@ public final class Ok<T> {
 ```
 
 The equivalent closed hierarchy is an `abstract` class with a `private` constructor and a fixed,
-enumerable set of `static final` nested subclasses — closed because the private constructor prevents
+enumerable set of `static final` nested subclasses, closed because the private constructor prevents
 subclassing from outside the file:
 
 ```java
@@ -107,7 +107,7 @@ public abstract class Result<T> {
 ```
 
 Dispatch on it with `instanceof` in one place (a small "visitor-lite" method), not scattered across
-callers — that keeps the closed-hierarchy discipline even without the compiler's exhaustiveness
+callers; that keeps the closed-hierarchy discipline even without the compiler's exhaustiveness
 check.
 
 ## Typed error handling in Java
@@ -115,13 +115,13 @@ check.
 Java's stdlib has no `Either`. Given no FP library is a dependency in these repos (see "Boundaries"
 in `SKILL.md`), two patterns cover what's needed:
 
-- **`Optional<T>`** when the only information needed is "found" vs. "not found" — no error detail to
+- **`Optional<T>`** when the only information needed is "found" vs. "not found": no error detail to
   carry.
 - **A minimal custom result type** (the `Result<T>`/`Ok`/`Err` shapes above) when the failure case
   needs to carry a reason. Keep it generic and reusable across the module rather than inventing a new
   one-off result type per method.
 
-For accumulating multiple validation errors (the "Validated" use case — see `patterns.md` for the
+For accumulating multiple validation errors (the "Validated" use case, see `patterns.md` for the
 worked example), extend the `Err` case to hold a `List<String>` of messages instead of a single
 `String`, and provide a way to combine two `Result`s that merges their error lists. That's the whole
-pattern — no library needed.
+pattern; no library needed.

@@ -1,6 +1,6 @@
 # Filosofía
 
-Un texto no solo debe ser coherente — debe contar una historia, avanzar por un
+Un texto no solo debe ser coherente: debe contar una historia, avanzar por un
 hilo conductor y llegar a algún lugar. La coherencia argumentativa es necesaria
 pero insuficiente: un texto puede ser lógicamente impecable y aun así sentirse
 estancado, repetitivo o sin rumbo. Este evaluador añade la dimensión narrativa:
@@ -30,12 +30,12 @@ oración. Atraviesa cada sección, cada párrafo. Todo lo que no lo avanza, sobr
 - **Múltiples hilos sin jerarquía**: detectar si el texto intenta cubrir
   demasiado y ningún hilo domina. El lector no sabe cuál es el principal.
 
-# Historia — narrativa textual
+# Historia: narrativa textual
 
 El texto debe ir de un punto de partida a un punto de llegada, y el lector
 debe sentir ese movimiento.
 
-- **Principio**: establece el punto de partida — el contexto, la pregunta, la
+- **Principio**: establece el punto de partida: el contexto, la pregunta, la
   tensión inicial. El lector debe saber dónde está parado y qué está en juego.
 - **Desarrollo**: cada sección acerca al lector al destino. La progresión debe
   ser acumulativa: lo que se dijo antes no se repite, se usa como escalón.
@@ -62,7 +62,7 @@ se cubrieron. Usar referencias en lugar de repeticiones.
 
 ## Cada transición debe propulsar
 
-El conector entre párrafos no solo conecta — también indica dirección.
+El conector entre párrafos no solo conecta; también indica dirección.
 "En contraste" es conexión; "Esto nos lleva a" es conexión + avance.
 Evaluar si las transiciones solo enlazan o también indican dirección.
 
@@ -110,15 +110,15 @@ Detectar:
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general de la narrativa del texto: ¿tiene
+1. **Resumen ejecutivo**: estado general de la narrativa del texto: ¿tiene
    hilo conductor? ¿llega a algún lugar? Hallazgos principales priorizados
    por severidad.
-2. **Hilo conductor** — hallazgos sobre enunciabilidad, avance por párrafo,
+2. **Hilo conductor**: hallazgos sobre enunciabilidad, avance por párrafo,
    ramas muertas, jerarquía de hilos.
-3. **Narrativa** — hallazgos sobre principio, desarrollo, llegada, cierre,
+3. **Narrativa**: hallazgos sobre principio, desarrollo, llegada, cierre,
    progresión acumulativa, señalización.
-4. **Principios** — avance, retrocesos, transiciones, tensión-resolución.
-5. **Recomendaciones** — priorizadas por impacto (alta / media / baja /
+4. **Principios**: avance, retrocesos, transiciones, tensión-resolución.
+5. **Recomendaciones**: priorizadas por impacto (alta / media / baja /
    informativa).
 
 ## Formato de cada hallazgo

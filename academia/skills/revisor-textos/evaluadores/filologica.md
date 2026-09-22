@@ -40,7 +40,7 @@ válidas. Clasificar por tipo:
   (ej. "No se observaron diferencias significativas en el grupo control y el
   experimental").
 - **Ambigüedad estructural**: oraciones cuya estructura sintáctica admite
-  más de un análisis (ej. "la crítica del profesor" — ¿crítica hecha por o
+  más de un análisis (ej. "la crítica del profesor": ¿crítica hecha por o
   dirigida a?).
 
 # Imprecisiones
@@ -146,14 +146,14 @@ o vicioso (relleno), y sugerir eliminación o reemplazo.
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general de la corrección lingüística,
+1. **Resumen ejecutivo**: estado general de la corrección lingüística,
    hallazgos principales priorizados por severidad.
-2. **Léxico y precisión** — precisión léxica, ambigüedad, imprecisiones,
+2. **Léxico y precisión**: precisión léxica, ambigüedad, imprecisiones,
    redundancias, muletillas, uniformidad terminológica.
-3. **Sintaxis** — corrección sintáctica, oraciones largas, paralelismo,
+3. **Sintaxis**: corrección sintáctica, oraciones largas, paralelismo,
    concordancia, anacolutos.
-4. **Registro y cohesión** — registro, tono, cohesión, fluidez, transiciones.
-5. **Recomendaciones** — priorizadas por impacto (alta / media / baja /
+4. **Registro y cohesión**: registro, tono, cohesión, fluidez, transiciones.
+5. **Recomendaciones**: priorizadas por impacto (alta / media / baja /
    informativa).
 
 ## Formato de cada observación

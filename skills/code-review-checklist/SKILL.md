@@ -8,7 +8,7 @@ description: >
   before creating a PR, when asking 'checklist', 'review my changes', 'am I
   ready to merge'. [DO NOT] trigger to modify code directly (this lens never
   writes), or when the ask is about correctness/regression bugs rather than
-  quality/style — use `qa-adversary` for that.
+  quality/style; use `qa-adversary` for that.
 ---
 
 Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist and identify missing test coverage. You do NOT modify code.
@@ -18,7 +18,7 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
 1. Obtain the diff:
    - If the caller's prompt already hands you the diff to review (a path, a commit range, or the
      diff content itself), use exactly that.
-     Do not go looking for a different diff and do not ask anything — the caller isn't present to
+     Do not go looking for a different diff and do not ask anything: the caller isn't present to
      answer; treat the prompt as self-contained.
    - Otherwise (invoked standalone in chat, no diff specified), derive it yourself:
      - `git diff` for unstaged changes
@@ -27,7 +27,7 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
      - Ask the user for the parent branch if it isn't obvious; compare against the remote origin
        parent.
 2. Read the diff carefully. For each changed file, also read the corresponding test file if one exists.
-3. Focus on the diff only — don't review unchanged code.
+3. Focus on the diff only, don't review unchanged code.
 4. Run every checklist section against the diff. Report ONLY violations.
    No praise: this lens reports defects only, by design.
 5. Analyze test coverage gaps.
@@ -48,7 +48,7 @@ Every comment gets exactly one tier; tag each reported line with it:
 ## When NOT to report (gate)
 
 Run every candidate violation through these rows before reporting it. A
-candidate matching a row is downgraded or dropped as the row says — record
+candidate matching a row is downgraded or dropped as the row says, record
 nothing about dropped candidates (this lens has no "filtered out" section;
 silence is the output).
 
@@ -56,7 +56,7 @@ silence is the output).
 |---|---|---|
 | G1 | Evidence line is in test/fixture/test-helper code (src/test, `*Test`, `*Spec`, `*Fixture`, test modules of an integration-test repo) and the rule comes from Complexity, Config vs Code, Abstractions, or Boundaries | Do not report. Test code is judged ONLY by the Tests section and Red Flags. A hardcoded timeout, a 30-line helper, or a single-use overload in a test is not a violation |
 | G2 | A dependency version bump (pom.xml, build.sbt, package.json) not exercised by any other hunk in the diff | One FYI line max, never a Major/Blocker. Exception: a SNAPSHOT/mutable ref on a branch NOT marked POC/draft stays a Major (reproducibility) |
-| G3 | The evidence line is not inside a changed hunk of this diff | Do not report — regardless of how real the issue is. If it gates a changed line's correctness, phrase it as a Question naming the exact file to check |
+| G3 | The evidence line is not inside a changed hunk of this diff | Do not report, regardless of how real the issue is. If it gates a changed line's correctness, phrase it as a Question naming the exact file to check |
 | G4 | Pure style preference (formatting, indentation, trailing newline, import order) in a file the branch touched for other reasons | FYI at most, one line |
 
 Nits (Consistency, Naming, Comments) survive the gate but never flip a
@@ -64,7 +64,7 @@ verdict and never take more than one line each.
 
 ## Checklist
 
-### Red Flags (Blocker — instant fail, any one blocks merge)
+### Red Flags (Blocker: instant fail, any one blocks merge)
 
 - Secrets, credentials, or tokens in tracked files
 - Existing public API contract broken without explicit request
@@ -140,7 +140,7 @@ verdict and never take more than one line each.
 - Behavior that should be runtime-configurable is hardcoded
 - Magic numbers/strings that belong in config/constants
 - Production code only: constants in test code (timeouts, poll intervals,
-  fixture values) are test data, not config candidates — see gate row G1
+  fixture values) are test data, not config candidates; see gate row G1
 
 ### Immutability & FP (Major)
 
@@ -164,18 +164,18 @@ verdict and never take more than one line each.
 Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512298570/article1.pdf)
 (Bloater / OO Abuser / Change Preventer / Dispensable / Coupler):
 
-- God object [Bloater] — one class/object accumulating unrelated responsibilities
-- Circular dependency [Coupler] — at class, package, module, or build-graph level (SBT subproject /
+- God object [Bloater]: one class/object accumulating unrelated responsibilities
+- Circular dependency [Coupler]: at class, package, module, or build-graph level (SBT subproject /
   Maven module cycles count, not just classes)
-- Constant interface [OO Abuser] — Java only: interface used solely to hold constants (Effective
+- Constant interface [OO Abuser]: Java only: interface used solely to hold constants (Effective
   Java, Item 22, "use interfaces only to define types")
-- Sequential coupling [Coupler] — API requires calls in an undocumented, easy-to-get-wrong order
+- Sequential coupling [Coupler]: API requires calls in an undocumented, easy-to-get-wrong order
 
 Deliberately NOT checked here (documented so they aren't silently reintroduced): *Anemic domain
-model* — contradicts `functional-programming`/`pablo-code-philosophy`'s prescribed separation of
-data from behavior, so it isn't a smell in this codebase. *Call super*, *Circle–ellipse problem*,
-*Yo-yo problem*, *Poltergeist* — deep-inheritance smells, rare in composition-favoring Scala/Java
-service code. *Object cesspool* — no established, checkable meaning. *Race hazard* — duplicate,
+model* - contradicts `functional-programming`/`pablo-code-philosophy`'s prescribed separation of
+data from behavior, so it isn't a smell in this codebase. *Call super*, *Circle-ellipse problem*,
+*Yo-yo problem*, *Poltergeist*: deep-inheritance smells, rare in composition-favoring Scala/Java
+service code. *Object cesspool*: no established, checkable meaning. *Race hazard*: duplicate,
 already covered under Red Flags.
 
 ### Comments & Documentation (Nit, or Major if a public contract changed silently)
@@ -207,7 +207,7 @@ already covered under Red Flags.
 - Are simple, straightforward, with the fewest assumptions possible.
 - Names correspond to what the test is testing.
 - Should not test other than the added code
-- Should not test code from libraries — except contract/serialization tests that verify the
+- Should not test code from libraries, except contract/serialization tests that verify the
   integration boundary itself, not the library's own logic
 - Test that asserts nothing: tautological, only checks an exception type exists, or passes
   while exercising no behavior
@@ -264,57 +264,57 @@ For each gap found, provide:
 ## Review: <branch or context>
 
 ### Red Flags: pass | FAIL
-- [Blocker] file:line — violation
+- [Blocker] file:line: violation
 
 ### Design & Functionality: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Data Shape: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Complexity: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Boundaries: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Scope Discipline: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Abstractions: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Config vs Code: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Immutability & FP: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Error Handling & Resources: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Structural Code Smells: pass | FAIL
-- [Major] file:line — smell name [bucket] — description
+- [Major] file:line: smell name [bucket]: description
 
 ### Comments & Documentation: pass | FAIL
-- [Nit|Major] file:line — description
+- [Nit|Major] file:line: description
 
 ### Consistency: pass | FAIL
-- [Nit] file:line — description
+- [Nit] file:line: description
 
 ### Naming clarity: pass | FAIL
-- [Nit] file:line — description
+- [Nit] file:line: description
 
 ### Tests: pass | FAIL
-- [Major] file:line — description
+- [Major] file:line: description
 
 ### Coverage Gaps
-- <SourceFile> — <method/branch> has no test covering <scenario>
+- <SourceFile>: <method/branch> has no test covering <scenario>
 - ...
 
 ### Suggested Tests
-- `testMethodName` — asserts <what>
-- `testMethodName` — asserts <what>
+- `testMethodName`: asserts <what>
+- `testMethodName`: asserts <what>
 - ...
 
 ### Verdict: READY | NEEDS WORK (B blockers, N major, M nits, Q questions, K coverage gaps)
@@ -324,8 +324,8 @@ For each gap found, provide:
 
 - NEVER modify source code or test code
 - Report violations with file:line references, each tagged with its severity tier
-- If a section has zero violations, print "pass" — do not elaborate
-- Keep output scannable — one line per violation
+- If a section has zero violations, print "pass", do not elaborate
+- Keep output scannable: one line per violation
 - A single Blocker means the verdict is NEEDS WORK regardless of everything else
 - For coverage gaps, read the actual test files to avoid false positives
 - Follow the repo's test naming convention when suggesting test names

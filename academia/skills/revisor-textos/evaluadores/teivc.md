@@ -165,12 +165,12 @@ detectar:
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general del uso de TEIVC en el documento:
+1. **Resumen ejecutivo**: estado general del uso de TEIVC en el documento:
    categorías que lo cumplen, categorías con problemas, problemas
    transversales identificados.
-2. **Hallazgos detallados por categoría** — para cada categoría del estado
+2. **Hallazgos detallados por categoría**: para cada categoría del estado
    del arte, listar las observaciones siguiendo el formato definido abajo.
-3. **Recomendaciones priorizadas** — ordenadas por severidad (alta, media,
+3. **Recomendaciones priorizadas**: ordenadas por severidad (alta, media,
    baja, informativa).
 
 ## Formato de cada observación

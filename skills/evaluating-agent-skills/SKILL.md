@@ -1,7 +1,7 @@
 ---
 name: evaluating-agent-skills
 description: >
-  Use when building an eval suite for an existing agent Skill — defining success
+  Use when building an eval suite for an existing agent Skill: defining success
   criteria, building a prompt set, and running layered checks (offline code tests,
   live CLI trajectory probes, LLM-as-judge) before shipping or after changing a
   skill. This is the expansion of writing-agent-skills' description note on
@@ -16,17 +16,17 @@ Adapted from Philipp Schmid's "Practical Guide to Evaluating and Testing Agent
 Skills" (https://www.philschmid.de/testing-skills) and Anthropic's "Demystifying
 evals for AI agents" (https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
 This is the expansion of `writing-agent-skills`'s "evaluating a skill before
-shipping it" note (frontmatter description) — read that skill first if you
+shipping it" note (frontmatter description); read that skill first if you
 haven't authored the target skill yet.
 
-Read `qa-adversary/evals/` before adapting the templates below — its
+Read `qa-adversary/evals/` before adapting the templates below: its
 `README.md` applies this same 4-layer method to a real review skill, including
 a documented N=1 limitation, and most decisions you'll face were already made
 there.
 
 ## 0. Adapt the templates, don't build a generic engine
 
-Do not try to build one script that runs every skill — no single harness
+Do not try to build one script that runs every skill; no single harness
 evaluates arbitrary skills. Define success criteria specific to what the
 target skill does (a coordinator skill checks phase order and delegation; a
 code-gen skill checks SDK imports and whether output compiles). Copy
@@ -34,13 +34,13 @@ code-gen skill checks SDK imports and whether output compiles). Copy
 
 ## 1. Classify the skill first
 
-- **Capability skill** — teaches something the base model can't do reliably
+- **Capability skill**: teaches something the base model can't do reliably
   (e.g. calling a specific API correctly). `should_trigger`/description-tuning
-  matters — a vague description is often the actual bug. Re-eval periodically
+  matters; a vague description is often the actual bug. Re-eval periodically
   *without* the skill loaded; retire it once the base model passes unaided.
-- **Preference skill** — encodes a specific workflow (e.g. a coordinator
+- **Preference skill**: encodes a specific workflow (e.g. a coordinator
   process). If it's always invoked by explicit name, `should_trigger` tuning is
-  moot — skip negative-trigger tests and go straight to process-fidelity checks.
+  moot; skip negative-trigger tests and go straight to process-fidelity checks.
   Preference skills don't get obsoleted by model improvement, only by process
   changes.
 
@@ -51,22 +51,22 @@ This decides which layers in step 4 are worth building.
 Write this down before touching code.
 
 **Schmid's three axes**, per prompt:
-- *Outcome* — did it work? Code compiles, file exists, API call is valid. The
+- *Outcome*: did it work? Code compiles, file exists, API call is valid. The
   baseline; if this fails nothing else matters.
-- *Style & instructions* — did it follow the skill's specific directives (right
+- *Style & instructions*: did it follow the skill's specific directives (right
   SDK, naming convention, contract strings, phase order)?
-- *Efficiency* — tokens, tool calls, retries. Two runs can produce the same
-  correct output while one burns 3x the tokens — a real, compounding
+- *Efficiency*: tokens, tool calls, retries. Two runs can produce the same
+  correct output while one burns 3x the tokens; a real, compounding
   regression, and the most commonly skipped axis.
 
 **Anthropic's outcome-vs-transcript distinction**: grade the environment's
 final state (files written, tests passing, a session log's structure), not the
 chat text describing it. An agent can say "done!" without having done
-anything — check the artifact, not the sentence.
+anything; check the artifact, not the sentence.
 
 ## 3. Build a prompt set (10–20 to start)
 
-Schema — see `templates/prompt_set.json`:
+Schema: see `templates/prompt_set.json`:
 
 ```json
 {
@@ -79,7 +79,7 @@ Schema — see `templates/prompt_set.json`:
 
 Mix:
 - Prompts that should trigger the skill and exercise its main paths.
-- Negative controls (`should_trigger: false`) — omit entirely for
+- Negative controls (`should_trigger: false`); omit entirely for
   name-only-invoked preference skills (step 1).
 - Edge cases the skill explicitly calls out (deprecated APIs, degraded
   environments, missing tools).
@@ -94,10 +94,10 @@ the skill actually does:
 
 | Layer | What it exercises | Cost | Build it when |
 |---|---|---|---|
-| **L1 — code-based** | Any `scripts/*` the skill ships, tested directly with the language's own test framework | Free, offline, sub-second | The skill has a script with real logic (parsing, path resolution, state derivation) — skip for pure-markdown skills |
-| **L2 — trajectory probes** | Runs the target skill through the real CLI (`pi -ne --skill <dir> --mode json -p <prompt>`), parses the NDJSON transcript, applies deterministic checks from step 3's `expected_checks` | Real tokens, live-gated | Any skill — the default layer everyone should have |
-| **L3 — LLM-as-judge** | Re-sends an L2 transcript to a second model call for a qualitative verdict (was the reasoning sound, is a rule honored *in spirit*) | Real tokens, live-gated | Only for qualitative checks regex genuinely can't reach (design quality, faithful-but-not-literal rule-following) |
-| **L2b — real delegation/tool pipeline** | Loads the skill's real dependent tools (e.g. `subagent`) via explicit `-e <extension path>`, not bare discovery | Real tokens, multi-minute, live-gated | Only for skills that delegate to subagents/tools absent from bare `pi -ne` |
+| **L1: code-based** | Any `scripts/*` the skill ships, tested directly with the language's own test framework | Free, offline, sub-second | The skill has a script with real logic (parsing, path resolution, state derivation); skip for pure-markdown skills |
+| **L2: trajectory probes** | Runs the target skill through the real CLI (`pi -ne --skill <dir> --mode json -p <prompt>`), parses the NDJSON transcript, applies deterministic checks from step 3's `expected_checks` | Real tokens, live-gated | Any skill: the default layer everyone should have |
+| **L3: LLM-as-judge** | Re-sends an L2 transcript to a second model call for a qualitative verdict (was the reasoning sound, is a rule honored *in spirit*) | Real tokens, live-gated | Only for qualitative checks regex genuinely can't reach (design quality, faithful-but-not-literal rule-following) |
+| **L2b: real delegation/tool pipeline** | Loads the skill's real dependent tools (e.g. `subagent`) via explicit `-e <extension path>`, not bare discovery | Real tokens, multi-minute, live-gated | Only for skills that delegate to subagents/tools absent from bare `pi -ne` |
 
 Building L2 alone with ~10 prompts already beats "vibe-checked with a handful
 of manual runs." Add L3/L2b only when step 3's checks can't reach what you
@@ -105,20 +105,20 @@ need to verify.
 
 ## 5. Run it right
 
-- **3–5 trials per prompt** — agent output is nondeterministic; one pass/fail
+- **3–5 trials per prompt**: agent output is nondeterministic; one pass/fail
   is noise. Start at N=1 during development, widen once the harness itself is
   trusted (an L2b run at N=1 is a documented choice, not a hidden gap).
-- **Isolate every run** — a fresh temp dir/repo per trial, never shared state
+- **Isolate every run**: a fresh temp dir/repo per trial, never shared state
   between trials.
-- **Gate live layers behind an env var** (`PI_LIVE_EVAL=1` convention) — never
+- **Gate live layers behind an env var** (`PI_LIVE_EVAL=1` convention): never
   make L2/L3/L2b part of a default/offline test suite; they cost real tokens
   and real minutes.
 - **No hardcoded personal paths.** Anything machine-specific (a sibling
   extension's path, a subagent config) goes through an env var with a clear
-  skip-message when unset — see `qa-adversary/evals/run_layer2b_pipeline.py`'s
+  skip-message when unset: see `qa-adversary/evals/run_layer2b_pipeline.py`'s
   `PI_SUBAGENT_EXTENSION_PATH` handling for the pattern.
 - **If something fails, fix the description first** (Schmid: most failures are
-  trigger failures, not instruction failures) — but only applies to
+  trigger failures, not instruction failures), but only applies to
   capability/auto-triggered skills (step 1).
 
 ## 6. Vocabulary (Anthropic)
@@ -132,18 +132,18 @@ that runs tasks, records transcripts, grades, aggregates).
 
 ## Templates
 
-- `templates/prompt_set.json` — starter prompt set, fill in per skill.
-- `templates/run_layer2_probes.py` — skeleton L2 harness: seeds a temp env,
+- `templates/prompt_set.json`: starter prompt set, fill in per skill.
+- `templates/run_layer2_probes.py`: skeleton L2 harness: seeds a temp env,
   shells out to `pi -ne --skill <dir> --mode json -p <prompt>`, parses NDJSON
   tool calls, dispatches `expected_checks` against a `CHECK_REGISTRY` you fill
   in.
-- `templates/judge.py` — skeleton L3 LLM-as-judge: re-sends a probe's
+- `templates/judge.py`: skeleton L3 LLM-as-judge: re-sends a probe's
   transcript to a second `pi` call, asks for a structured JSON verdict.
-- `templates/test_layer1_template.py` — skeleton `unittest` for a skill's own
+- `templates/test_layer1_template.py`: skeleton `unittest` for a skill's own
   `scripts/*.py`.
-- `references/check-registry-pattern.md` — the `check_id` → function dispatch
+- `references/check-registry-pattern.md`: the `check_id` → function dispatch
   pattern and how to keep checks composable across prompts.
-- **L2b has no template, by design** — real subagent/tool wiring is too
+- **L2b has no template, by design**: real subagent/tool wiring is too
   skill-specific to templatize. If you need it, copy and adapt
   `qa-adversary/evals/run_layer2b_pipeline.py` directly.
 
@@ -160,5 +160,5 @@ structure.
 - Anthropic, "Demystifying evals for AI agents",
   https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
   (2026-01-09).
-- Worked example: `qa-adversary/evals/` (this repo) — the 4-layer method
+- Worked example: `qa-adversary/evals/` (this repo): the 4-layer method
   applied to a real review skill.

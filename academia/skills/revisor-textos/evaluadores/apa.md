@@ -4,19 +4,19 @@ Revisión sistemática y verificable. Cada observación debe poder rastrearse a
 una regla concreta de APA 7. No opinar sobre preferencias del autor. Señalar
 desviaciones objetivas y sugerir correcciones precisas.
 
-# APA 7 — Estructura del documento
+# APA 7: Estructura del documento
 
 Verificar que el documento incluye las secciones en orden:
 
-1. **Portada (title page)** — título en negrita y centrado, autor, afiliación,
+1. **Portada (title page)**: título en negrita y centrado, autor, afiliación,
    curso, instructor, fecha (student paper). Para professional paper: incluir
    running head y nota del autor.
-2. **Resumen (abstract)** — 150–250 palabras, un párrafo, sin sangría, con
+2. **Resumen (abstract)**: 150–250 palabras, un párrafo, sin sangría, con
    línea de palabras clave (si aplica).
-3. **Cuerpo** — introducción (no lleva encabezado), método, resultados,
+3. **Cuerpo**: introducción (no lleva encabezado), método, resultados,
    discusión según aplique.
-4. **Referencias** — página nueva, título "Referencias" centrado y en negrita.
-5. **Apéndices** — después de referencias (si aplica).
+4. **Referencias**: página nueva, título "Referencias" centrado y en negrita.
+5. **Apéndices**: después de referencias (si aplica).
 
 ## Formato general
 
@@ -49,7 +49,7 @@ Verificar:
 - No agregar líneas en blanco arriba o abajo de los encabezados, incluso si el encabezado queda al final de una página.
 - No etiquetar los encabezados con números o letras (ni 1., ni 1.1., ni a., etc.).
 
-# APA 7 — Citas en el texto
+# APA 7: Citas en el texto
 
 | Situación | Formato parentético | Formato narrativo |
 |-----------|---------------------|-------------------|
@@ -79,7 +79,7 @@ Verificar:
   suspensivos (...), luego el último autor. En cita textual: et al. desde
   el inicio.
 
-# APA 7 — Lista de referencias
+# APA 7: Lista de referencias
 
 ## Formato general
 
@@ -126,7 +126,7 @@ Autor, A. A. (Año). *Título* [Formato]. Organización. URL
   nombres propios.
 - Revistas: mayúscula inicial en todas las palabras significativas.
 
-# APA 7 — Tablas y figuras
+# APA 7: Tablas y figuras
 
 - Numerar secuencialmente (Tabla 1, Tabla 2; Figura 1, Figura 2).
 - Título en cursiva en la línea superior.
@@ -137,7 +137,7 @@ Autor, A. A. (Año). *Título* [Formato]. Organización. URL
 - Abreviaturas, terminología y valores de probabilidad consistentes en todo
   el documento.
 
-# APA 7 — Números y estadísticas
+# APA 7: Números y estadísticas
 
 - Números ≥ 10: numerales (10, 11, 200).
 - Números < 10: letra (uno, dos, nueve).
@@ -150,7 +150,7 @@ Autor, A. A. (Año). *Título* [Formato]. Organización. URL
   dos decimales.
 - Incluir intervalos de confianza cuando sea relevante.
 
-# APA 7 — Lenguaje inclusivo y sin sesgo
+# APA 7: Lenguaje inclusivo y sin sesgo
 
 Basado en el Capítulo 5 del Manual APA 7:
 
@@ -172,13 +172,13 @@ Basado en el Capítulo 5 del Manual APA 7:
 
 Producir un informe estructurado:
 
-1. **Resumen ejecutivo** — estado general del documento y hallazgos
+1. **Resumen ejecutivo**: estado general del documento y hallazgos
    principales.
-2. **Cumplimiento APA 7** — lista de secciones verificadas, cada una con
+2. **Cumplimiento APA 7**: lista de secciones verificadas, cada una con
    estado (cumple / no cumple / parcial) y referencia a la regla.
-3. **Observaciones detalladas** — cada hallazgo con ubicación (sección,
+3. **Observaciones detalladas**: cada hallazgo con ubicación (sección,
    página), regla violada, y corrección sugerida.
-4. **Recomendaciones** — priorizadas por impacto (alta, media, baja).
+4. **Recomendaciones**: priorizadas por impacto (alta, media, baja).
 
 ## Formato de cada observación
 

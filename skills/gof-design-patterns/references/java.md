@@ -4,11 +4,11 @@ Idiom-level guidance for applying the 12 patterns in `SKILL.md` to Java code. Fo
 before/after examples, see `patterns.md`.
 
 **Version gate first.** Several patterns below have a lighter-weight Java 17+ form using `record`
-and `sealed interface`. In a multi-repo codebase, Java version commonly varies repo-by-repo — some
+and `sealed interface`. In a multi-repo codebase, Java version commonly varies repo-by-repo: some
 services may already be on Java 17, others still on Java 8 or 11. Check the target repo's
 `pom.xml` `java.version`/`maven.compiler.release` before picking a form. Java's `switch` pattern
 matching over sealed types is a preview feature through Java 21, not a stable baseline unless the
-target repo has confirmed otherwise — don't rely on it; `instanceof` pattern matching (stable since
+target repo has confirmed otherwise, don't rely on it; `instanceof` pattern matching (stable since
 Java 16) is the safe form where a sealed hierarchy is otherwise available.
 
 **Contents:** Creational (Factory Method, Builder) · Structural (Adapter, Decorator, Composite) ·
@@ -40,16 +40,16 @@ public final class ParserFactory {
 The classic `switch` statement above compiles on every Java version in these repos (8 through 17).
 On a repo confirmed to be Java 14+, the arrow-form `switch` expression (`return switch (format) {
 case XML -> new XmlParser(); ... }`) is equivalent and removes the fall-through risk and the
-`default` clause — but check the version first, per the gate at the top of this file.
+`default` clause, but check the version first, per the gate at the top of this file.
 
-Keep the factory a plain method, not a class hierarchy of factories — that step up is Abstract
+Keep the factory a plain method, not a class hierarchy of factories; that step up is Abstract
 Factory, which is out of scope (see `SKILL.md`'s Boundaries) unless whole families of related
 objects genuinely need to vary together.
 
 ### Builder
 
 Use a nested `static` builder class (or, for one that must validate before construction, a
-`build()` that returns a `Result`/throws on invalid combinations — see `functional-programming`'s
+`build()` that returns a `Result`/throws on invalid combinations; see `functional-programming`'s
 typed-error-handling section for the former):
 
 ```java
@@ -77,7 +77,7 @@ public final class RetryPolicy {
 
 On Java 17+, if the object is a plain immutable data carrier with no conditional
 assembly/validation logic, a `record` with a compact canonical constructor for validation is
-simpler than a Builder — check the anti-pattern table in `SKILL.md` ("2-3 required parameters, no
+simpler than a Builder; check the anti-pattern table in `SKILL.md` ("2-3 required parameters, no
 optional/conditional logic") before reaching for the Builder form at all.
 
 ## Structural
@@ -103,7 +103,7 @@ public final class LegacyDistributionAdapter implements DistributionClient {
 }
 ```
 
-Keep the translation logic entirely inside the adapter — the moment a call site starts doing its
+Keep the translation logic entirely inside the adapter; the moment a call site starts doing its
 own partial translation on top of the adapter, the adapter isn't covering the full mismatch.
 
 ### Decorator
@@ -126,7 +126,7 @@ public final class LoggingDistributionClient implements DistributionClient {
 
 Layers compose by construction: `new LoggingDistributionClient(new RetryingDistributionClient(base))`.
 If you only ever need one fixed layer, a plain wrapper method is equally clear and skips the
-interface ceremony — see `SKILL.md`'s anti-pattern table.
+interface ceremony; see `SKILL.md`'s anti-pattern table.
 
 ### Composite
 
@@ -150,7 +150,7 @@ public final class AndNode implements FilterNode {
 ```
 
 Client code calls `.matches()` on any `FilterNode` without checking whether it's a leaf or a
-group — that uniformity is the entire point.
+group; that uniformity is the entire point.
 
 ## Behavioral
 
@@ -174,7 +174,7 @@ public final class OrderProcessor {
 ```
 
 If the "strategy" is a single pure function with no state, skip the named interface and take a
-`Function<Order, BigDecimal>` parameter directly, or even a method reference — a dedicated
+`Function<Order, BigDecimal>` parameter directly, or even a method reference; a dedicated
 interface is only worth it when the strategy needs more than one method or carries its own state.
 
 ### Template Method
@@ -195,10 +195,10 @@ public abstract class IngestJob {
 }
 ```
 
-(Explicit types here, not `var` — local-variable type inference needs Java 10+; many repos in this
+(Explicit types here, not `var`: local-variable type inference needs Java 10+; many repos in this
 codebase are still on Java 8, per the gate at the top of this file.)
 
-`run()` is `final` on purpose — the skeleton is the part that must not vary; only the abstract
+`run()` is `final` on purpose: the skeleton is the part that must not vary; only the abstract
 steps are extension points. If subclasses need to override the skeleton itself, Template Method is
 the wrong pattern (that's closer to plain polymorphism/Strategy).
 
@@ -225,7 +225,7 @@ public final class Job {
 
 If the underlying transport is already a message broker/event bus (check whether a queue/topic
 already carries this event elsewhere in the codebase), publishing to it is the actual
-integration point — don't build an in-process Observer on top of an already-decoupled pub/sub path.
+integration point; don't build an in-process Observer on top of an already-decoupled pub/sub path.
 
 ### Chain of Responsibility
 
@@ -252,12 +252,12 @@ public final class ValidationChain {
 }
 ```
 
-(A plain loop with early return, not `handlers.stream().flatMap(h -> h.handle(input).stream())` —
+(A plain loop with early return, not `handlers.stream().flatMap(h -> h.handle(input).stream())`:
 `Optional.stream()` needs Java 9+, and many repos in this codebase are still on Java 8, per the
 gate at the top of this file. On a confirmed Java 9+ repo, the stream form is equivalent and
 arguably reads more declaratively.)
 
-Note this is also exactly `functional-programming`'s "composition of small validators" case — for
+Note this is also exactly `functional-programming`'s "composition of small validators" case: for
 a chain that stops at the first failure, decide there whether you need the full Chain of
 Responsibility object structure or whether a `Stream`/`Optional` pipeline like the one above is
 already the whole answer (it usually is, in Java, once you strip the pattern down to its essence).
@@ -307,7 +307,7 @@ public final class Literal implements Expression {
 ```
 
 This is the one pattern where Java 17+'s `sealed interface` + `instanceof` pattern matching starts
-to close the gap with Scala's `match` (see `scala.md`) — for a small, stable node set, a
+to close the gap with Scala's `match` (see `scala.md`): for a small, stable node set, a
 `switch`/chained-`instanceof` dispatch method in one place can replace the full Visitor
 double-dispatch machinery. Reach for the real Visitor structure when the *set of operations* grows
 independently and needs to be added without recompiling the node classes; for a fixed, small node
@@ -341,6 +341,6 @@ public final class SubmitDistributionCommand implements Command {
 }
 ```
 
-If there's no undo/queue/retry requirement — the action just needs to happen once, right now — a
+If there's no undo/queue/retry requirement - the action just needs to happen once, right now - a
 direct method call is simpler than wrapping it in a Command object; the pattern earns its cost only
 when the request needs to outlive the call that created it.
