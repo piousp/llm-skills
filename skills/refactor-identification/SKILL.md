@@ -246,7 +246,7 @@ caller's prompt explicitly asks for them.
 
 | Category | This skill (identification) | The "how" (cross-reference, never duplicate) |
 |---|---|---|
-| A1 | detect + measure | `gof-design-patterns`: Strategy / Template Method / Factory Method rows; `functional-programming`: higher-order-function row (structural dup with no shared state); `pablo-code-philosophy` `principles/DRY.md` (2-vs-3 rule) |
+| A1 | detect + measure | `gof-design-patterns`: Strategy / Template Method / Factory Method rows; `functional-programming`: higher-order-function row (structural dup with no shared state); `pablo-code-philosophy` `references/principles/DRY.md` (2-vs-3 rule) |
 | A2 | detect + measure | `functional-programming`: immutability principle; `gof-design-patterns`: Builder row (validated construction); `pablo-code-philosophy`: "Scientific code" |
 | A3 | detect + measure | `functional-programming`: typed error handling + `references/patterns.md` (validation pipeline, accumulating errors); its `references/java.md` / `references/scala.md` for idioms |
 | A4 | detect + measure | `functional-programming` `references/scala.md` (sealed trait + case classes + match); `gof-design-patterns`: State row (complex per-state behavior), and its Visitor caveat (never Visitor an ADT) |

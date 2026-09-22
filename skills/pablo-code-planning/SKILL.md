@@ -6,35 +6,19 @@ description: >
   decision pipeline, and specify the public API and the test plan.
   Trigger when: the task is to plan code before implementation -
   analyzing current code, reuse and abstraction opportunities, public
-  API and data shapes, and the test plan at seams. [ALWAYS] deliver the
-  plan as the output, with a verification criterion on every step.
+  API and data shapes, and the test plan at seams.
   [DO NOT] use for implementing: the plan never writes or edits code;
-  test mechanics live in `pablo-tdd`, refactor methodology in
+  writing tests lives in `pablo-tdd`, refactor methodology in
   `refactor-identification`, principles in `pablo-code-philosophy`.
 ---
 
 # Code Planning
 
-A plan in the strict sense - [NEVER] write or edit code; the output is
-the plan (analysis + decisions + contracts), and nothing else.
+A plan in the strict sense - [NEVER] write or edit code.
 
 Planning is a three-phase pass: Analyze → Decide → Specify. The phases
 are ordered; the plan is complete only when all three have produced
-their part of the output.
-
-## Session working directory
-
-All pablo-* skills share the current pi session's working directory for
-session-scoped artifacts. Resolve it once at the start of the pass:
-
-```bash
-SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
-```
-
-`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
-sessions keep artifacts next to the session file
-(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
-back to `/tmp/pi/session/<PI_SESSION_ID>`.
+their part of the output, per the `## Output` contract below.
 
 ## Phase 1 - Analyze
 
@@ -42,10 +26,10 @@ Read the code to be touched before planning. Two analyses produce the
 analysis part of the plan.
 
 **Reuse analysis.** Name what already exists that the plan reuses:
-existing functions, data shapes, patterns. This is "Reuse existing
-code" and "Don't reinvent the wheel" from `pablo-code-philosophy`,
-applied as analysis, not as implementation. [ALWAYS] state what exists
-to reuse before proposing a new shape.
+existing functions, data shapes, patterns. This is the Code Manifesto's
+reuse-over-new-code rule and "Don't reinvent the wheel" from
+`pablo-code-philosophy`, applied as analysis, not as implementation.
+[ALWAYS] state what exists to reuse before proposing a new shape.
 
 **Abstraction analysis.** Scan the code to be touched for abstraction
 candidates and report one signal line per category - no thresholds, no
@@ -56,10 +40,9 @@ gates, no tables:
 - **A3 Poor data types** - primitives or null standing in for a domain type; exceptions used for expected control flow.
 - **A4 Flag/enum-modeled variants** - a discriminator drives dispatch that a sealed ADT would express directly.
 
-This mini-summary is the signal, not the method. The full methodology
-(tables, thresholds, gates N1-N8, priorities, and worked examples in
-its `references/examples.md`) lives in the `refactor-identification`
-skill; consult it there when a candidate needs a formal verdict.
+For a formal verdict on a candidate, consult `refactor-identification`
+for its full methodology (tables, thresholds, gates, priorities, and
+worked examples in its `references/examples.md`).
 
 ## Phase 2 - Decide
 
@@ -89,10 +72,9 @@ Specify the contracts the plan commits to.
 
 ## Ambiguity
 
-If multiple interpretations or approaches exist, present them; [DO NOT]
-pick one silently. State assumptions explicitly, name the confusion,
-ask. The "Before Coding" section of `pablo-code-philosophy` governs
-this behavior.
+The "Before Coding" section of `pablo-code-philosophy` governs this
+behavior: [DO NOT] pick silently among interpretations, state
+assumptions, name the confusion, ask.
 
 ## Output
 
@@ -115,10 +97,12 @@ preserve the per-step verification criteria.
 
 Load methodology from its owner by name; never duplicate it.
 
+- `pablo-goal-discovery` - upstream. This skill assumes a confirmed
+  goal; if the objective isn't confirmed yet, run that skill first.
 - `pablo-code-philosophy` - decision pipeline, conflict precedence,
-  "Data structures first", "Thin entry points", "Reuse existing code",
-  "Don't reinvent the wheel", "Before Coding".
+  "Data structures first", "Thin entry points", the Code Manifesto's
+  reuse rule, "Don't reinvent the wheel", "Before Coding".
 - `refactor-identification` - the full A1-A4 methodology: tables,
-  thresholds, gates N1-N8, priorities, and worked examples in its
+  thresholds, gates, priorities, and worked examples in its
   `references/examples.md`.
 - `pablo-tdd` - what a good test is, seams, test-plan standards.

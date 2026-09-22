@@ -20,8 +20,9 @@ emoji markers, no auto-advance).
 
 ## Session working directory
 
-All pablo-* skills share the current pi session's working directory for
-session-scoped artifacts. Resolve it once at the start of the pass:
+This skill writes session-scoped artifacts (`goal.md`, `decisions.md`) to
+the current pi session's working directory. Resolve it once at the start
+of the pass:
 
 ```bash
 SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
