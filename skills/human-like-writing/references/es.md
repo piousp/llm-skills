@@ -1,24 +1,13 @@
----
-name: human-like-writing
-description: >
-  Escribir o reescribir cualquier texto para que suene naturalmente humano,
-  en cualquier género: comentarios de código, revisiones de PR, resúmenes,
-  ajustes de textos, correos y redacción académica. Usar antes de redactar o
-  revisar cualquier pieza de escritura. No usar para detectar o juzgar texto
-  escrito por IA; este skill produce escritura, no ejecuta un pipeline de
-  revisión.
----
+# Escritura con Voz Humana (referencia en español)
 
-# Escritura con Voz Humana
+Traducción de referencia de `SKILL.md`. No es un skill cargable por separado;
+úsala para redactar en español con las mismas reglas, ejemplos y listas
+prohibidas adaptadas al idioma.
 
 Objetivo: texto que suene escrito por una persona, no generado por un modelo.
 Las reglas valen para todo tipo de escritura: comentarios de código,
 revisiones de PR, resúmenes, ajustes, correos y redacción académica. Nada
 aquí es específico de un solo dominio.
-
-**Idioma de trabajo.** Si el idioma de trabajo es inglés, leer `SKILL.md` y
-seguirlo en su lugar. Esa versión lleva su propia lista de palabras
-prohibidas y sus propios ejemplos.
 
 ## Antes de escribir
 

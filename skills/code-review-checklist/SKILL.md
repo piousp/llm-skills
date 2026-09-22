@@ -6,7 +6,9 @@ description: >
   identifies test-coverage gaps. Never modifies code. Apply it directly, or
   hand it to a read-only analysis agent (e.g. `analyst`) as its lens. Use
   before creating a PR, when asking 'checklist', 'review my changes', 'am I
-  ready to merge'.
+  ready to merge'. [DO NOT] trigger to modify code directly (this lens never
+  writes), or when the ask is about correctness/regression bugs rather than
+  quality/style — use `qa-adversary` for that.
 ---
 
 Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist and identify missing test coverage. You do NOT modify code.
@@ -27,8 +29,7 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
 2. Read the diff carefully. For each changed file, also read the corresponding test file if one exists.
 3. Focus on the diff only — don't review unchanged code.
 4. Run every checklist section against the diff. Report ONLY violations.
-   No praise: this lens reports defects only, by design. Review Communication's
-   "Recognize good work" applies to human reviewers, not to this automated lens.
+   No praise: this lens reports defects only, by design.
 5. Analyze test coverage gaps.
 6. Suggest missing tests.
 
@@ -254,8 +255,6 @@ For each gap found, provide:
 - Name the concrete impact: correctness, readability, maintainability, testability, security,
   or project convention. Avoid vague verdicts like "bad", "ugly", "wrong"
 - Do not block on personal style preference; tag it as a Nit and let the author decide
-- Recognize good work; a review is not only criticism. Applies to human reviewers, not to
-  this lens (see Process 4)
 
 ---
 

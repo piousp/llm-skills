@@ -154,7 +154,7 @@ final case class LeafNode(predicate: Event => Boolean) extends FilterNode {
 ```
 
 Same shape as Java's Composite, expressed as a sealed hierarchy — client code calls `.matches()`
-uniformly without checking leaf vs. group, and you additionally get exhaustive `match` support if
+uniformly without checking leaf vs. group, and you also get exhaustive `match` support if
 you ever need to walk the tree for a different operation.
 
 ### Template Method → a trait with an abstract step, or a higher-order function

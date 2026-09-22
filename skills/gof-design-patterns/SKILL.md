@@ -16,25 +16,24 @@ description: >
 
 # GoF Design Patterns — Curated Catalog
 
-Mechanical companion to `pablo-code-philosophy`'s "Don't reinvent the wheel: follow known design
-patterns" principle. That skill states the principle in one line; this skill provides the
-recognition heuristics, the per-language idioms, and the worked pattern catalog needed to apply it
-correctly in Java and Scala service code.
+Apply `pablo-code-philosophy`'s "Don't reinvent the wheel: follow known design patterns"
+principle using the recognition heuristics, per-language idioms, and worked pattern catalog below
+to choose and implement the right pattern in Java and Scala service code.
 
-A design pattern is a name for a recurring shape, not a goal to hit. Every section below exists to
-help you recognize when reaching for one of these 12 patterns pays off — and, just as importantly,
-when it doesn't. Applying a pattern where the simpler code would do is the same mistake as not
-applying one where the messy code needs it; `pablo-code-philosophy`'s "No speculative
-abstractions" principle applies to patterns exactly as it applies to any other abstraction.
+Treat a design pattern as a name for a recurring shape, not a goal to hit. Use the sections below
+to recognize when reaching for one of these 12 patterns pays off — and, just as importantly, when
+it doesn't. Don't apply a pattern where simpler code would do; that's the same mistake as not
+applying one where the messy code needs it. Follow `pablo-code-philosophy`'s "No speculative
+abstractions" principle for patterns exactly as for any other abstraction.
 
 ## Scope: why these 12 and not all 23
 
-The original catalog has 23 patterns across three categories. This skill deliberately covers a
-curated subset — the patterns that recur in typical Java/Scala service code — rather than the full
-catalog. The other 11 are either redundant given Scala's language features, ceremony for problems
-these codebases don't have, or simply haven't come up; see "Boundaries" at the end for the full
-list and reasoning. If a real need for one of them arises, that's a design decision to raise
-explicitly, the same way `functional-programming`'s Boundaries section treats adding an FP library.
+Use the 12 patterns below — the ones that recur in typical Java/Scala service code — rather than
+reaching for the full 23-pattern catalog. Skip the other 11: they're either redundant given
+Scala's language features, ceremony for problems these codebases don't have, or simply haven't come
+up; see "Boundaries" at the end for the full list and reasoning. If a real need for one of them
+arises, raise it as an explicit design decision, the same way `functional-programming`'s
+Boundaries section treats adding an FP library.
 
 | Category | Patterns covered here |
 |---|---|
@@ -92,8 +91,8 @@ language you're touching:
 
 - **Java** → `references/java.md`. Covers the classic interface/abstract-class implementation of
   each pattern, and where Java 17 `record`/`sealed interface` simplify the data-carrier side of a
-  pattern (check the target repo's `pom.xml` `java.version` first, per the existing
-  build-aware-codegen rule — many repos in a multi-service codebase are still on Java 8/11).
+  pattern (check the target repo's `pom.xml` `java.version` first; many repos in a multi-service
+  codebase are still on Java 8/11).
 - **Scala** → `references/scala.md`.
   Covers which patterns are largely subsumed by `sealed trait`/case classes/pattern matching/
   function values, and the idiomatic Scala shape for the ones that still earn their keep.

@@ -14,14 +14,14 @@ description: >
 
 # Refactor Identification: Branch-Scoped Structural Candidates
 
-This skill is a specialized zoom-in, not a replacement for a broader code-review checklist pass.
-Such a pass typically already touches two of these categories superficially (its "Abstractions"
-and "Structural Code Smells" sections) as part of a broad, fast merge gate. This skill goes
-deeper on exactly 4 structural categories, with quantified evidence, and answers a different
-question: not "does this diff pass review" but "is there a structural refactor worth investing
-in here". It identifies candidates only; it never executes a refactor and never explains *how* to apply a
-pattern once one is chosen. The "how" lives in `gof-design-patterns` (pattern catalog) and
-`functional-programming` (FP mechanics); the cut-off criterion (when NOT to bother) lives in
+Use this skill for a deep, quantified dive on exactly 4 structural categories, when the question
+is not "does this diff pass review" but "is there a structural refactor worth investing in here".
+Do not use it as a substitute for a broader code-review checklist pass: that pass already covers
+two of these categories superficially (its "Abstractions" and "Structural Code Smells" sections)
+as part of a broad, fast merge gate — reach for this skill only when that surface-level pass isn't
+enough. Identify candidates only; never execute a refactor and never explain *how* to apply a
+pattern once one is chosen. Route the "how" to `gof-design-patterns` (pattern catalog) and
+`functional-programming` (FP mechanics); route the cut-off criterion (when NOT to bother) to
 `pablo-code-philosophy`.
 
 ## Scope law: the branch's work only
@@ -259,8 +259,8 @@ implementer reads the recipe from its source of truth.
 
 - **Java** → `references/java.md`: grep-able cues per category.
 - **Scala** → `references/scala.md`: grep-able cues per category.
-- **JavaScript** → references/javascript.md: grep-able cues per category.
-- **TypeScript** → references/typescript.md: grep-able cues per category. Read javascript.md first: the TS file is a type-system delta.
+- **JavaScript** → `references/javascript.md`: grep-able cues per category.
+- **TypeScript** → `references/typescript.md`: grep-able cues per category. Read `javascript.md` first: the TS file is a type-system delta.
 
 ## Worked examples
 

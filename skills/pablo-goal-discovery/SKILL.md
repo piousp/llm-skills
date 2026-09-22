@@ -5,7 +5,10 @@ description: >
   code work begins. Runs the mattpocock grilling interview: rounds of numbered
   decisions with a recommendation each, fact lookups via scout, exit only on
   explicit user confirmation. Writes goal.md and the first decisions.md entry.
-  Invocable by name: goal-discovery.
+  Invocable by name: goal-discovery. [DO NOT] trigger when a confirmed
+  goal.md already exists for this work, or when the task does not need goal
+  discovery (the ask is already clear and scoped, or is pure implementation/
+  planning work).
 ---
 
 # pablo-goal-discovery

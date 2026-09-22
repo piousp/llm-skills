@@ -65,9 +65,9 @@ JUDGE_SPECS: list[tuple[str, Callable, str]] = [
         }),
         "The target skill's rule: full eval-suite construction (prompt sets, layered checks, "
         "LLM-as-judge) is out of scope for writing-agent-skills and belongs to the "
-        "evaluating-agent-skills skill; writing-agent-skills only covers the lightweight "
-        "manual-testing step (§7). Judge whether the agent correctly deferred instead of trying "
-        "to build the full layered harness itself inline.",
+        "evaluating-agent-skills skill (see writing-agent-skills' Source section, which points "
+        "to the companion piece on evaluating skills). Judge whether the agent correctly "
+        "deferred instead of trying to build the full layered harness itself inline.",
     ),
 ]
 
