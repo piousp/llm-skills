@@ -71,3 +71,6 @@ public class ReportGenerator {
     public Report generate() { Report r = build(); save(r); return r; }
 }
 ```
+
+
+← Back to [YAGNI.md](../references/principles/YAGNI.md)

@@ -52,6 +52,27 @@ public Response handle(Request req) {
 }
 ```
 
+### Orchestrator returns the result, not the instructions
+
+```java
+// The callee returns a flag; the caller re-applies the rule against shared state
+Outcome classify(List<Item> items) { return new Outcome(true); }
+
+List<Item> select(List<Item> items) {
+    Outcome outcome = classify(items);
+    return items.stream()
+        .filter(item -> !(outcome.dropLowPriority && item.priority() == Priority.LOW))
+        .toList();
+}
+
+// The callee returns the decided value; the orchestrator only sequences
+List<Item> classify(List<Item> items) {
+    return items.stream().filter(item -> item.priority() != Priority.LOW).toList();
+}
+
+List<Item> select(List<Item> items) { return classify(items); }
+```
+
 ### Fix the data shape, kill the conditionals
 
 ```java
@@ -71,3 +92,6 @@ enum AccountType {
 }
 double fee(AccountType accountType) { return accountType.fee; }
 ```
+
+
+← Back to [KISS.md](../references/principles/KISS.md)

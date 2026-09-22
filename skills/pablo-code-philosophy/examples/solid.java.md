@@ -96,3 +96,6 @@ class LabelFormatter {
 
 Dependency injection for an interface with one implementation and no test-swap need is
 indirection, not architecture.
+
+
+← Back to [SOLID.md](../references/principles/SOLID.md)

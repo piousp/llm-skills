@@ -47,3 +47,6 @@ Report report = Report.builder()
 
 Worth it once optional parameters pile up. For 2–3 params, a constructor plus overloads is
 simpler - don't reach for Builder preemptively.
+
+
+← Back to [GoF.md](../references/principles/GoF.md)

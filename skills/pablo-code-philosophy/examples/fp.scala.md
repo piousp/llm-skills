@@ -71,3 +71,6 @@ def resolveDiscount(customer: Customer, order: Order): Either[String, Discount] 
 
 Either step can fail with a reason; the for-comprehension short-circuits on the first `Left`,
 no nested match statements.
+
+
+← Back to [FP.md](../references/principles/FP.md)

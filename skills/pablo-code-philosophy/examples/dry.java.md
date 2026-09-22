@@ -82,3 +82,6 @@ public boolean isValidPhone(String phone) {
 
 Same shape (null-check + predicate), different knowledge. Merging them into one
 `isValidField(value, predicate)` adds indirection for a coincidence, not a duplication.
+
+
+← Back to [DRY.md](../references/principles/DRY.md)

@@ -5,62 +5,42 @@ description: >
   pipeline, conflict resolutions with precedence KISS > DRY > SOLID, code style
   rules (data structures first, thin entry points, composition over inheritance,
   FP principles, GoF patterns with judgment, Unix philosophy), and the surgical
-  change contract. Trigger when: writing, editing, refactoring, or planning
-  code, or deciding scope, simplicity, duplication, or architecture for a code
-  change. [ALWAYS] run each decision through the decision pipeline. [DO NOT]
-  trigger for non-code prose, documentation, general questions, web research,
-  configuration files, or test planning; the mechanical how-to lives in
-  `pablo-tdd`, `functional-programming`, `gof-design-patterns`, and
-  `refactor-identification`.
+  change contract. Trigger when: writing, editing, or refactoring code, or
+  deciding scope, simplicity, duplication, or architecture for a code change.
+  [DO NOT] trigger for non-code prose, documentation, general questions, web
+  research, configuration files, planning code before implementation, or test
+  planning; the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`,
+  `functional-programming`, `gof-design-patterns`, and `refactor-identification`.
 ---
 
-Invocation: this skill loads when the trigger conditions in the description
-match. It is the judgment layer for code changes: it decides scope, simplicity,
-duplication, and architecture. The mechanical how-to for FP idioms, the GoF
-pattern catalog, refactor detection, and test planning lives in
-`functional-programming`, `gof-design-patterns`, `refactor-identification`, and
-`pablo-tdd` respectively.
+# Code Philosophy
 
-## Session working directory
+## Code Manifesto
 
-All pablo-* skills share the current pi session's working directory for
-session-scoped artifacts. Resolve it once at the start of the pass:
+- [ALWAYS] prefer simple and readable code over elegant and terse code.
+- [ALWAYS] prefer explicit and to the point code over smart and implicit code.
+- [ALWAYS] prefer direct and flat invocations over deep nested calls.
+- [ALWAYS] prefer code verbosity over long comment explanations.
+- [ALWAYS] reuse existing code over writing new code. The less written, the fewer bugs introduced.
 
-```bash
-SESSION_DIR=$(python3 <skill-dir>/scripts/pi_session.py)
-```
+## Coding Principles
 
-`<skill-dir>` is the directory this SKILL.md was loaded from. Persistent
-sessions keep artifacts next to the session file
-(`<session-storage>/<project>/<session>.files/`); ephemeral sessions fall
-back to `/tmp/pi/session/<PI_SESSION_ID>`.
-
-# Code Manifesto
-
-- **Simple and readable code** over elegant and terse.
-- **Explicit and to the point** over smart and implicit.
-- **Direct and flat** invocations over deep nested calls.
-- **Code verbosity** over long comments explanation.
-- **Reuse existing code** over writing new. The less written, the fewer bugs introduced
-
-# Coding Principles
-
-- **YAGNI** - You Ain't Gonna Need It. → See [principles/YAGNI.md](principles/YAGNI.md)
-- **KISS** - Keep It Simple, Stupid. → See [principles/KISS.md](principles/KISS.md)
-- **DRY** - Don't Repeat Yourself. → See [principles/DRY.md](principles/DRY.md)
-- **SOLID** - Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion. → See [principles/SOLID.md](principles/SOLID.md)
-- **Low cyclomatic complexity** - If the data has the right shape, conditionals disappear. → See [principles/KISS.md](principles/KISS.md#low-cyclomatic-complexity)
-- **Avoid nested logic calls** - Flat, early-return style over deep call chains. A coordinator function calls and receives results. → See [principles/KISS.md](principles/KISS.md#avoid-nested-logic-calls)
-- **GoF patterns** - Design patterns with judgment, not religion. → See [principles/GoF.md](principles/GoF.md)
-- **No speculative abstractions** - an abstraction for a variation that doesn't exist yet is speculative; YAGNI gates it. → See [principles/YAGNI.md](principles/YAGNI.md), [principles/GoF.md](principles/GoF.md)
-- **Don't reinvent the wheel** - follow known design patterns and reuse existing code over writing new shapes. → See [principles/GoF.md](principles/GoF.md)
-- **Unix philosophy** - Design for Composition. → See [principles/UNX.md](principles/UNX.md)
-- **Light FP** - Monads, immutability, typed errors, composition with judgment. → See [principles/FP.md](principles/FP.md)
-- **Tests are part of the deliverable** - every change or new code ships with a unit-test plan; the how, and the bare-snippet exception where Surgical Changes wins, lives in `pablo-tdd`.
-- **Data structures first**: start with the data model. If the structure is wrong, the algorithm is irrelevant. Eliminate special cases by fixing the shape of the data, not by piling up conditionals. → See [principles/KISS.md](principles/KISS.md), rule of thumb 2
-- **Composition over inheritance** (except for Algebraic Data Types). → See [principles/SOLID.md](principles/SOLID.md), the L section prefers composition over inheritance
-- **Scientific code** (referential transparency): no hidden state, no implicit dependencies, no non-determinism. If it can't be tested in isolation, the design is wrong. → See [principles/FP.md](principles/FP.md), the "Scientific code / Referential transparency" section
-- **Thin entry points**: controllers, handlers, and entry points delegate immediately. Business logic belongs in services, not in the glue.
+- **YAGNI** - You Ain't Gonna Need It. [WHEN] deciding if a feature or abstraction needs to exist yet, read [references/principles/YAGNI.md](references/principles/YAGNI.md).
+- **KISS** - Keep It Simple, Stupid. [WHEN] deciding if the code is the simplest expression of the problem, read [references/principles/KISS.md](references/principles/KISS.md).
+- **DRY** - Don't Repeat Yourself. [WHEN] deciding whether to extract duplicated code, read [references/principles/DRY.md](references/principles/DRY.md).
+- **SOLID** - Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion. [WHEN] deciding on architecture, layering, or responsibilities, read [references/principles/SOLID.md](references/principles/SOLID.md).
+- **Low cyclomatic complexity** - [ALWAYS] fix the shape of the data so the conditional disappears, instead of adding a branch. [WHEN] tempted to add a branch for a special case, read [references/principles/KISS.md#low-cyclomatic-complexity](references/principles/KISS.md#low-cyclomatic-complexity).
+- **Avoid nested logic calls** - [ALWAYS] prefer flat, early-return style over deep call chains; a coordinator function calls and receives results. [WHEN] reviewing a deep call chain, read [references/principles/KISS.md#avoid-nested-logic-calls](references/principles/KISS.md#avoid-nested-logic-calls).
+- **GoF patterns** - [ALWAYS] apply design patterns with judgment, not religion. [WHEN] considering a design pattern, read [references/principles/GoF.md](references/principles/GoF.md).
+- **No speculative abstractions** - [NEVER] add an abstraction for a variation that doesn't exist yet; YAGNI gates it. [WHEN] tempted to add an abstraction for a future variation, read [references/principles/YAGNI.md](references/principles/YAGNI.md) and [references/principles/GoF.md](references/principles/GoF.md).
+- **Don't reinvent the wheel** - [ALWAYS] follow known design patterns and reuse existing code over writing new shapes. [WHEN] about to write a new shape from scratch, read [references/principles/GoF.md](references/principles/GoF.md).
+- **Unix philosophy** - [ALWAYS] design for composition. [WHEN] designing component boundaries, CLI, or tool behavior, read [references/principles/UNX.md](references/principles/UNX.md).
+- **Light FP** - Monads, immutability, typed errors, composition with judgment. [WHEN] choosing between imperative and functional style, read [references/principles/FP.md](references/principles/FP.md).
+- **Tests are part of the deliverable** - [ALWAYS] ship every change or new code with a unit-test plan; the how, and the bare-snippet exception where Surgical Changes wins, lives in `pablo-tdd`.
+- **Data structures first** - [ALWAYS] start with the data model; if the structure is wrong, the algorithm is irrelevant. [ALWAYS] eliminate special cases by fixing the shape of the data, not by piling up conditionals. [ALWAYS] make every value the type can take name a real case of the domain; a neutral/placeholder instance exists to satisfy the caller, not the model. [WHEN] designing the data model or checking for placeholder values, read [references/principles/KISS.md#every-value-of-a-type-must-name-a-domain-case](references/principles/KISS.md#every-value-of-a-type-must-name-a-domain-case).
+- **Composition over inheritance** - [ALWAYS] prefer composition over inheritance, except for Algebraic Data Types. [WHEN] deciding between composition and inheritance, read [references/principles/SOLID.md](references/principles/SOLID.md), the L section.
+- **Scientific code** (referential transparency) - [NEVER] rely on hidden state, implicit dependencies, or non-determinism; if it can't be tested in isolation, the design is wrong. [WHEN] checking a function's hidden state or determinism, read [references/principles/FP.md](references/principles/FP.md), the "Scientific code / Referential transparency" section.
+- **Thin entry points** - [ALWAYS] have controllers, handlers, and entry points delegate immediately; business logic belongs in services, not in the glue. [ALWAYS] treat this as the rule for every orchestrator, not just the outermost one: sequence calls, pass results along. [NEVER] re-ask a question the callee already answered. [WHEN] reviewing a controller, handler, or orchestrator function, read [references/principles/KISS.md#return-the-result-not-the-instructions](references/principles/KISS.md#return-the-result-not-the-instructions).
 
 ## Principle Interactions
 
@@ -78,7 +58,7 @@ YAGNI → KISS → DRY → SOLID
 |-------|------|----------|
 | 1. YAGNI | Scope | Does this feature need to exist at all? |
 | 2. KISS | Implementation | Is this the simplest expression of it? |
-| 3. DRY | Extraction | See [principles/DRY.md](principles/DRY.md) - the 2-vs-3 rule |
+| 3. DRY | Extraction | [WHEN] deciding whether to extract, read [references/principles/DRY.md](references/principles/DRY.md) - the 2-vs-3 rule |
 | 4. SOLID | Architecture | Does the design pain justify the layer? |
 
 GoF patterns are SOLID's implementation toolbox (Phase 4) - gated by Phases 1–2: don't reach for one until the variation it manages already exists.
@@ -101,25 +81,36 @@ For the non-conflicting interactions (allies/synergies), see [references/interac
 
 Don't assume. Don't hide confusion. Surface tradeoffs.
 
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations or approaches exist, present them to the user. [DO NOT] pick one silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name the confusion. Ask.
-- Check the closest precedent first, then broaden the search - a positive match can't rule out a closer, contradicting precedent. Surface conflicts, don't pick silently.
+- [ALWAYS] state assumptions explicitly. Ask if uncertain.
+- [DO NOT] pick silently among multiple interpretations or approaches; present them to the user.
+- [ALWAYS] say so if a simpler approach exists. Push back when warranted.
+- [ALWAYS] stop and name the confusion when something is unclear. Ask.
+- [ALWAYS] check the closest precedent first, then broaden the search. A positive match can't
+  rule out a closer, contradicting precedent; surface conflicts, don't pick silently.
+- [ALWAYS] keep an assumption that survives into merged code in the code itself: a comment on
+  the line, a test that pins it, or a type that makes it unviolatable. Never only in the
+  conversation that produced it - "we agreed it can't happen" is not reviewable six months from
+  now.
+- [ALWAYS] diagnose the cause behind a vague review comment before patching. "This feels like
+  too many passes" or "I don't like this" reports a symptom, not a specification of the fix.
+- [ALWAYS] verify a cause the reviewer states before acting on it ("this is redundant because X
+  already does it"). Treat the stated reasoning as a hypothesis; the cheapest check is usually
+  the test suite.
 
 ## Surgical Changes
 
 Touch only what's necessary. Don't clean what you didn't mess up.
 
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor what isn't broken.
-- Respect existing style, even if you'd do it differently.
-- Only remove imports/variables/functions that YOUR changes left unused.
-- Unrelated problems: mention them, don't fix them.
-- Every changed line must trace directly to the request.
+- [NEVER] "improve" adjacent code, comments, or formatting.
+- [NEVER] refactor what isn't broken.
+- [ALWAYS] respect existing style, even when you'd do it differently.
+- [ALWAYS] remove only the imports/variables/functions that YOUR changes left unused.
+- [ALWAYS] mention unrelated problems; don't fix them.
+- [ALWAYS] trace every changed line directly to the request.
 
 ## Don't Break What Exists
 
-- Existing behavior matters more than design purity.
-- Regressions are not acceptable because the new model "feels better".
-- Don't break APIs, contracts, established workflows, or existing interfaces unless explicitly asked and the cost is understood.
+- [ALWAYS] treat existing behavior as more important than design purity.
+- [NEVER] accept a regression because the new model "feels better".
+- [NEVER] break APIs, contracts, established workflows, or existing interfaces unless explicitly
+  asked, with the cost understood.

@@ -62,3 +62,6 @@ def isValidPhone(phone: String): Boolean = phone != null && phone.matches("\\d{1
 
 Same shape (null-check + predicate), different knowledge. Merging them adds indirection for a
 coincidence, not a duplication.
+
+
+← Back to [DRY.md](../references/principles/DRY.md)
