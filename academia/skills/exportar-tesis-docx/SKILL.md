@@ -1,6 +1,6 @@
 ---
 name: exportar-tesis-docx
-description: Inyecta metadatos académicos (autor, título, materia, categoría, palabras clave, idioma, identificador) en un DOCX de la tesis PADE-UCR. Usar para exportar la tesis a DOCX con metadatos visibles en Archivo > Propiedades de Word.
+description: Inyecta metadatos académicos (autor, título, materia, categoría, palabras clave, idioma, identificador) en un DOCX de la tesis PADE-UCR. Usar para exportar la tesis a DOCX con metadatos visibles en Archivo > Propiedades de Word. [DO NOT] usar para la operación inversa (DOCX a Markdown), usar `docx-a-markdown` para eso.
 ---
 
 # Exportar tesis a DOCX con metadatos
@@ -19,6 +19,8 @@ description: Inyecta metadatos académicos (autor, título, materia, categoría,
 
    - Si el usuario no especificó una ruta, usar el DOCX más reciente
      del directorio de la tesis o preguntar.
+   - [NEVER] ejecutar el script sin argumentos: sin una ruta explícita,
+     procesa TODOS los .docx del directorio actual, in-place.
 
 2. El script modifica el DOCX in-place e informa qué archivos procesó.
 

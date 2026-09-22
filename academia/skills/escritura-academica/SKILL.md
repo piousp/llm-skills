@@ -3,7 +3,7 @@ name: escritura-academica
 description: "Guía de redacción académica: hilo conductor, estructura del párrafo, defectos epistémicos, secuencia TEIVC y forma, citación y estilo."
 ---
 
-Guía de escritura académica: criterios de hilo, párrafo, episteme, TEIVC y forma en viñetas accionables. Se invoca solo por nombre, no se autodetecta; no es un flujo de revisión.
+Se invoca solo por nombre, no se autodetecta; no es un flujo de revisión.
 
 ## Hilo conductor e historia
 
