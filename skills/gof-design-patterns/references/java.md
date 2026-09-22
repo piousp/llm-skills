@@ -6,8 +6,7 @@ before/after examples, see `patterns.md`.
 **Version gate first.** Several patterns below have a lighter-weight Java 17+ form using `record`
 and `sealed interface`. In a multi-repo codebase, Java version commonly varies repo-by-repo — some
 services may already be on Java 17, others still on Java 8 or 11. Check the target repo's
-`pom.xml` `java.version`/`maven.compiler.release` before picking a form — this is the existing
-build-aware-codegen rule applied to pattern implementation specifically. Java's `switch` pattern
+`pom.xml` `java.version`/`maven.compiler.release` before picking a form. Java's `switch` pattern
 matching over sealed types is a preview feature through Java 21, not a stable baseline unless the
 target repo has confirmed otherwise — don't rely on it; `instanceof` pattern matching (stable since
 Java 16) is the safe form where a sealed hierarchy is otherwise available.

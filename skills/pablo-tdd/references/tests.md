@@ -1,6 +1,6 @@
 # Unit Tests
 
-The definition of a good test and the anti-patterns live in [SKILL.md](SKILL.md). This file is the operational companion: planning coverage for a change, the working checklist, and how many tests a piece of code needs.
+The definition of a good test and the anti-patterns live in [SKILL.md](../SKILL.md). This file is the operational companion: planning coverage for a change, the working checklist, and how many tests a piece of code needs.
 
 ## Plan the tests
 
@@ -27,8 +27,8 @@ If the sibling and a broader match disagree, [DO NOT] pick one silently - name t
 
 A change that spans several seams needs a plan-level answer: which tests, at which seams, which edge cases. The plan (per `pablo-code-planning`) names the seams and edge cases; this skill converts that into tests:
 
-- One vertical slice per seam: one test, then the minimal implementation to pass it, then the next seam. [NEVER] write all tests first - that is horizontal slicing (see Anti-patterns in [SKILL.md](SKILL.md)).
-- Confirm each seam with the user before writing its tests (see Seams in [SKILL.md](SKILL.md)).
+- One vertical slice per seam: one test, then the minimal implementation to pass it, then the next seam. [NEVER] write all tests first - that is horizontal slicing (see Anti-patterns in [SKILL.md](../SKILL.md)).
+- Confirm each seam with the user before writing its tests (see Seams in [SKILL.md](../SKILL.md)).
 - Place each test in the EXISTING test class for its seam, unless told otherwise.
 - Edge cases per seam: the boundaries and branches of that seam's behavior (see coverage below).
 
@@ -54,8 +54,8 @@ Worked example: `divide(x, y)`.
 
 ## Anti-patterns
 
-The anti-patterns: implementation-coupled, tautological, horizontal slicing, bypassing the interface, are detailed in [SKILL.md](SKILL.md). Review them there before writing tests.
+The anti-patterns: implementation-coupled, tautological, horizontal slicing, bypassing the interface, are detailed in [SKILL.md](../SKILL.md). Review them there before writing tests.
 
 ## Code Examples
 
-See [`examples/tests.java.md`](examples/tests.java.md) and [`examples/tests.scala.md`](examples/tests.scala.md).
+See [`examples/tests.java.md`](../examples/tests.java.md) and [`examples/tests.scala.md`](../examples/tests.scala.md).

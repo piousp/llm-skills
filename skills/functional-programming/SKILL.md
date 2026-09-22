@@ -15,14 +15,14 @@ description: >
 
 # Functional Programming — Mechanics
 
-Mechanical companion to `pablo-code-philosophy`'s "Light FP" bullet. That skill states the
-philosophy in one paragraph; this skill provides the recognition heuristics, the per-language
-idioms, and the worked pattern catalog needed to apply it correctly in Java and Scala service
-code.
+Use this as the mechanical companion to `pablo-code-philosophy`'s "Light FP" bullet: that skill
+states the philosophy in one paragraph; here you get the recognition heuristics, the
+per-language idioms, and the worked pattern catalog to apply it correctly in Java and Scala
+service code.
 
-FP here is a tool for readability and correctness, not an aesthetic to maximize. Every section below
-exists to help you recognize when reaching for it pays off — and, just as importantly, when it
-doesn't.
+Treat FP here as a tool for readability and correctness, not an aesthetic to maximize. Reach for a
+technique below only where it improves clarity; when it doesn't (see "When NOT to apply FP"),
+keep the imperative form.
 
 ## Principles (intermediate level)
 
@@ -41,7 +41,7 @@ These are the concepts this skill assumes and applies. Boundaries are listed at 
   required to test the logic itself.
 - **Composition over sequencing**: build behavior by combining small functions (`f andThen g`,
   `.map().flatMap()`) rather than writing one large procedure that inlines every step. Composition
-  is not automatically more readable than a flat imperative sequence — see the anti-pattern table.
+  is not automatically more readable than a flat imperative sequence — see "When NOT to apply FP".
 - **Higher-order functions (HOFs)**: functions that take or return other functions (`map`, `filter`,
   `andThen`, passing a validator as a parameter). Use them to parameterize *behavior*, not just data.
 - **Fold/reduce**: collapse a collection into a single value via an accumulator function
@@ -99,7 +99,7 @@ language you're touching:
 
 - **Java** → `references/java.md`. Covers Streams, `Optional`, and the Java-17+ vs. Java-8/11
   split for records/sealed interfaces — check the target repo's `pom.xml` `java.version` before
-  picking a form, per the existing build-aware-codegen rule.
+  picking a form.
 - **Scala** → `references/scala.md`. Covers `Option`/`Either`/`Try`, pattern matching, case
   classes, and for-comprehensions.
 

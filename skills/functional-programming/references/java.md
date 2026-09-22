@@ -46,8 +46,7 @@ replacement for `null` everywhere.
 ## Records and sealed interfaces — version-gated
 
 Whether these are available depends on the target repo's Java version. **Check `java.version` /
-`maven.compiler.release` in the repo's `pom.xml` before choosing a form** — this is the existing
-build-aware-codegen rule applied to FP data modeling specifically. In a multi-repo codebase, Java
+`maven.compiler.release` in the repo's `pom.xml` before choosing a form.** In a multi-repo codebase, Java
 version commonly varies repo-by-repo — some services may already be on Java 17, others still on
 Java 8 or 11. Don't assume 17 — verify per-repo.
 

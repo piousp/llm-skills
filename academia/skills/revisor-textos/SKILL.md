@@ -9,27 +9,26 @@ description: >
   traduccion, o textos que no esten en Markdown.
 ---
 
-Clasificación: Preference skill — codifica un pipeline de revisión académica.
-No se vuelve obsoleto por mejora del modelo base.
+No simplificar ni recortar el pipeline de revisión académica al aplicar mejoras del modelo base: este skill codifica un flujo deliberado que debe preservarse tal cual.
 
-# Revisor de Textos — Coordinador
+# Revisor de Textos - Coordinador
 
 Siempre invocado por nombre (sin auto-trigger).
 
 > **CRÍTICO:** Nunca avanzar a la siguiente fase hasta que el usuario lo confirme
 > explícitamente. Antes de cada acción de evaluación o corrección, verificar que
 > existe un subagente delegado para esa tarea. Si no, detenerse e informar (ver
-> "Sin `subagent` disponible → solo informar" abajo) — nunca evaluar ni corregir
+> "Sin `subagent` disponible: solo informar" abajo), nunca evaluar ni corregir
 > directamente.
 
 ## La regla del coordinador
 
 El agente principal ejecutando este skill es un **coordinador, no un ejecutor**. Puede
- explorar y leer libremente — archivos, historial, contexto existente — para entender
+ explorar y leer libremente (archivos, historial, contexto existente) para entender
 el estado del pipeline. Nunca debe evaluar contenido, aplicar correcciones, ni ejecutar
 comandos de revisión él mismo. Cada una de esas acciones se delega a un subagente.
 
-### Sin `subagent` disponible → solo informar
+### Sin `subagent` disponible: solo informar
 
 **Antes de cualquier acción de evaluación, consolidación o corrección**, verificar
 que la herramienta `subagent` está disponible en el entorno actual. Si no está
@@ -44,13 +43,13 @@ disponible:
 
 **Carve-out explícito**: el coordinador sí escribe y mantiene los archivos de estado
 en el directorio de sesión: archivos markdown de hallazgos, archivos marcadores de
-corrección. Esto no es "evaluar" — es registrar el resultado de las delegaciones para
+corrección. Esto no es "evaluar": es registrar el resultado de las delegaciones para
 que `state.py` pueda leerlo.
 
 ### Regla de lectura e incrustación
 
 **El coordinador nunca pasa rutas de archivos a los subagentes sin contexto.**
-Los subagentes se ejecutan con `inheritProjectContext: false` — no tienen contexto
+Los subagentes se ejecutan con `inheritProjectContext: false`, no tienen contexto
 del proyecto y no pueden resolver rutas relativas.
 
 Estrategia según el tipo de archivo:
@@ -66,12 +65,12 @@ Estrategia según el tipo de archivo:
 
 Dos subagentes que **deben estar configurados en el harness** (ver Dependencias),
 invocados por nombre. No se requieren agentes nuevos. Si no están configurados,
-aplica la regla "no subagent → solo informar" (sección "Regla de subagentes" arriba).
+aplica la regla "no subagent, solo informar" (ver la sección "Sin `subagent` disponible: solo informar" arriba).
 
-- **`analyst`** — agente read-only de propósito general. Evalúa el documento contra
+- **`analyst`**: agente read-only de propósito general. Evalúa el documento contra
   un skill de revisión y reporta hallazgos en su **output textual** (markdown, nunca
   escribe archivos). Usado en evaluación.
-- **`worker`** — agente con capacidad de escritura. Recibe hallazgos en markdown
+- **`worker`**: agente con capacidad de escritura. Recibe hallazgos en markdown
   y un archivo de trabajo, aplica las correcciones sugeridas. Usado en la Fase 4
   (redacta el plan de corrección conjunto) y la Fase 5 (aplica el plan).
 
@@ -81,13 +80,13 @@ Si un subagente devuelve output vacío, un error, o no completa la tarea:
 1. Verificar la causa del fallo.
 2. Escalar con el usuario con: qué subagente falló, qué se intentó,
    y el mensaje de error exacto.
-3. No intentar parchear el trabajo del subagente — el coordinador no es ejecutor.
+3. No intentar parchear el trabajo del subagente: el coordinador no es ejecutor.
 
 ### Formato canónico de prompts para subagentes
 
 Todo prompt a un subagente se ensambla con esta estructura de tres secciones,
 separando contexto de instrucción. Los subagentes se ejecutan en contexto
-ajeno (`inheritProjectContext: false`) — no han visto la conversación previa,
+ajeno (`inheritProjectContext: false`), no han visto la conversación previa,
 no pueden leer archivos del proyecto, y no reciben el contexto del harness.
 
 ```
@@ -125,7 +124,7 @@ Reglas:
   proporcionada en el prompt. No incluir el contenido textual en el prompt.
   Indicar en `[LÍMITES]`: "Lee el archivo <ruta> usando la herramienta `read`."
 - **Archivos pequeños (< 300 líneas)**: incluir el contenido textual en `[CONTEXTO]`.
-  Indicar en `[LÍMITES]`: "No leas ningun archivo — todo el contenido esta en el prompt."
+  Indicar en `[LÍMITES]`: "No leas ningun archivo, todo el contenido esta en el prompt."
 - Si un campo de contexto no aplica, omitirlo (no incluirlo vacío).
 - Los prompts en los stages (`stages/*.md`) siguen este formato; no redefinen
   la sintaxis.
@@ -136,11 +135,11 @@ Reglas:
 
 | Fase | Descripción | Actor |
 |------|-------------|-------|
-| **1 — Init** | Seleccionar archivo + evaluadores, crear sesión | Coordinador |
-| **2 — Evaluate** | Evaluación paralela de todos los evaluadores via `subagent tasks` | analyst |
-| **3 — Consolidate** | El coordinador ejecuta `state.py consolidate`; determinístico, sin subagente | Coordinador |
-| **4 — Plan** | `state.py group` agrupa mecánicamente por párrafo (derivado de `working.md` por `state.py group`); el `worker` redacta un plan de corrección conjunto por grupo | worker |
-| **5 — Correct** | Una sola pasada del `worker` con `plan-correccion.md` | worker |
+| **1 - Init** | Seleccionar archivo + evaluadores, crear sesión | Coordinador |
+| **2 - Evaluate** | Evaluación paralela de todos los evaluadores via `subagent tasks` | analyst |
+| **3 - Consolidate** | El coordinador ejecuta `state.py consolidate`; determinístico, sin subagente | Coordinador |
+| **4 - Plan** | `state.py group` agrupa mecánicamente por párrafo (derivado de `working.md` por `state.py group`); el `worker` redacta un plan de corrección conjunto por grupo | worker |
+| **5 - Correct** | Una sola pasada del `worker` con `plan-correccion.md` | worker |
 | **Done** | Pipeline terminado; notificar al usuario | Coordinador |
 
 ### Loop de evaluadores
@@ -162,7 +161,7 @@ Dentro de la Fase 5 (Correct):
 
 ## Control flow: `state.py`
 
-La secuencia de fases, el evaluador actual, y el siguiente paso son mecánicos —
+La secuencia de fases, el evaluador actual, y el siguiente paso son mecánicos:
 derivados de los archivos en disco, no de juicio del coordinador.
 
 ```bash
@@ -184,7 +183,7 @@ Retorna JSON con:
 | `pending` | IDs de evaluadores pendientes |
 
 Este script es **advisory** y **read-only** (excepto `init`, `consolidate` y `group`):
-nunca pregunta al usuario, nunca decide qué hacer — solo reporta lo que los archivos ya
+nunca pregunta al usuario, nunca decide qué hacer: solo reporta lo que los archivos ya
 dicen. Además de `init`, `state.py` tiene los subcomandos `consolidate` y `group`.
 `derive_state()` es 100% read-only, no escribe en disco.
 
@@ -207,19 +206,19 @@ dicen. Además de `init`, `state.py` tiene los subcomandos `consolidate` y `grou
 1. Ejecutar `state.py sessions` (sin argumentos). Lista, de forma read-only, los
    `<session_id>/` candidatos bajo `/tmp/revisor-textos/<basename(cwd)>/` (mtime
    + fase alcanzada en cada uno). El script nunca elige ni pregunta por su cuenta.
-2. Si la lista está **vacía** — no hay sesión previa. Ir al paso 4.
-3. Si la lista **no está vacía** — usar `ask_user_question` para ofrecer cada
+2. Si la lista está **vacía**, no hay sesión previa. Ir al paso 4.
+3. Si la lista **no está vacía**, usar `ask_user_question` para ofrecer cada
    candidato (su mtime y fase) más la opción "empezar de cero". Nunca reanudar
    automáticamente: una respuesta ambigua u omitida significa empezar de cero
    bajo un `session_id` (PPID) nuevo, nunca adivinar cuál sesión previa reusar.
    Si el usuario elige reanudar, guardar ese `session_id` y saltar directamente
-   al loop (paso 3a) — no volver a ejecutar `init`.
+   al loop (paso 3a), no volver a ejecutar `init`.
 4. Preguntar al usuario: archivo a revisar y qué evaluadores aplicar. Ejecutar
    `state.py init <file.md> [eval_id ...]`.
 5. Iniciar el loop.
 
 El directorio de sesión vive en `/tmp/...` y no sobrevive a un reinicio de la
-máquina — la reanudación del paso 3 solo cubre sesiones dentro del mismo ciclo
+máquina: la reanudación del paso 3 solo cubre sesiones dentro del mismo ciclo
 de vida de `/tmp`, nunca cross-reboot.
 
 ## Directorio de sesión
@@ -262,34 +261,34 @@ el output siga el formato exacto.
 
 ## Anti-patterns
 
-- **El coordinador evaluando o corrigiendo contenido** — siempre delegar a `analyst`
+- **El coordinador evaluando o corrigiendo contenido**: siempre delegar a `analyst`
   o `worker`.
-- **El subagente escribiendo archivos de hallazgos** — `analyst` reporta en su output
+- **El subagente escribiendo archivos de hallazgos**: `analyst` reporta en su output
   textual; el coordinador escribe el markdown.
-- **El subagente ejecutando comandos** — `analyst` y `worker` sí tienen `bash` en su
+- **El subagente ejecutando comandos**: `analyst` y `worker` sí tienen `bash` en su
   configuración, pero no deben usarlo para esta tarea: evaluación/corrección de
   contenido es lectura y escritura de texto, no ejecución.
-- **Saltarse la confirmación del usuario** — cada fase requiere confirmación
+- **Saltarse la confirmación del usuario**: cada fase requiere confirmación
   explícita (las fases 4 y 5 tienen una sola confirmación cada una, no una por
   hallazgo/grupo).
-- **Ignorar el estado de `state.py`** — si `state.py` reporta una fase, confiar en
+- **Ignorar el estado de `state.py`**: si `state.py` reporta una fase, confiar en
   ella. No re-derivar el estado manualmente.
-- **El coordinador escribiendo archivos de trabajo** — solo `worker` modifica
+- **El coordinador escribiendo archivos de trabajo**: solo `worker` modifica
   `working.md`. El coordinador solo escribe archivos de hallazgos y marcadores.
-- **Pasar rutas de archivos a los subagentes sin contexto** — los subagentes tienen
+- **Pasar rutas de archivos a los subagentes sin contexto**: los subagentes tienen
   `inheritProjectContext: false` y no pueden resolver rutas del proyecto.
   Siempre leer el archivo con `read` e incrustar el contenido textual en el prompt
   bajo `[CONTEXTO]`, o proporcionar la ruta absoluta para archivos grandes.
-- **Lanzar evaluadores secuencialmente** — en Fase 2, usar `subagent tasks: [...]`
+- **Lanzar evaluadores secuencialmente**: en Fase 2, usar `subagent tasks: [...]`
   para lanzar todos en paralelo.
-- **Generar archivos intermedios de corrección por evaluador** — el worker hace una
+- **Generar archivos intermedios de corrección por evaluador**: el worker hace una
   sola pasada sobre el consolidado; no se generan `correccion-<eval>.md`.
-- **Ejecutar la fase de handoff** — eliminada del pipeline; el done es solo notificación.
-- **Pasar el plan al worker por secciones** — el worker recibe `plan-correccion.md`
+- **Ejecutar la fase de handoff**: eliminada del pipeline; el done es solo notificación.
+- **Pasar el plan al worker por secciones**: el worker recibe `plan-correccion.md`
   completo y hace una sola pasada.
-- **Delegar la consolidación o el agrupamiento a un subagente** — son pasos
+- **Delegar la consolidación o el agrupamiento a un subagente**: son pasos
   determinísticos de `state.py` (`consolidate`, `group`), nunca del `worker`.
-- **El `worker` de la Fase 5 leyendo los hallazgos crudos** — consume
+- **El `worker` de la Fase 5 leyendo los hallazgos crudos**: consume
   `plan-correccion.md`, nunca `hallazgos-consolidado.md`/`.json` directamente.
 
 ## Dependencias

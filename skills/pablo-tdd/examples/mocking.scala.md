@@ -57,7 +57,7 @@ test("checkout confirms when gateway charges") {
 }
 ```
 
-The mock stands at the system boundary (external payment gateway), exactly where mocking.md draws the line. The test asserts observable behavior with a controlled external dependency, not the service's internals.
+The mock stands at the system boundary (external payment gateway), exactly where references/mocking.md draws the line. The test asserts observable behavior with a controlled external dependency, not the service's internals.
 
 ```scala
 // BAD: mock of the project's own collaborator
@@ -71,4 +71,4 @@ test("checkout mocks internal cart repository") {
 }
 ```
 
-The repository is the project's own class, under the project's control; mocking.md: [DO NOT] mock the project's own classes or modules. The test now couples to internal wiring and breaks on refactors that change nothing observable.
+The repository is the project's own class, under the project's control; references/mocking.md: [DO NOT] mock the project's own classes or modules. The test now couples to internal wiring and breaks on refactors that change nothing observable.

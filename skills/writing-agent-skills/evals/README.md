@@ -34,8 +34,10 @@ entirely (nothing to unit-test offline).
   which case the fix is "write a script," not "reword the steps"); correct
   relaxation of description-tuning advice for name-only-invoked skills
   (§2); pointing to `evaluating-agent-skills` rather than reinventing a
-  full eval harness inline (§7, out of scope here); correctly citing the
-  retirement criterion — re-run unaided, retire if it still passes (§8).
+  full eval harness inline (per the `Source` pointer, out of scope here);
+  correctly citing the retirement criterion — re-run unaided, retire if
+  it still passes (from the source article, not currently in `SKILL.md`
+  itself; see "Known limitations").
 - **Efficiency** — not graded here; this skill's outputs are short
   markdown responses/files, not multi-step agentic work where token/tool-
   call bloat is a realistic regression axis.
@@ -117,3 +119,9 @@ Layer 2b to exercise.
 - Not yet run against `PI_LIVE_EVAL=1` — prompt set and checks are
   authored but unexecuted; run and record a first N=1 pass before
   widening to multi-trial.
+- `mentions_retirement_process` (the `retire_capability_skill` case) tests
+  a rule from the source article that the current `SKILL.md` does not
+  state anywhere (the retirement criterion was one of the source's 8 tips,
+  not carried into the 6-section distillation). Until `SKILL.md` teaches
+  it explicitly, a pass on this check reflects general model knowledge,
+  not this skill's own text.

@@ -4,10 +4,10 @@ description: >
   Use when building an eval suite for an existing agent Skill — defining success
   criteria, building a prompt set, and running layered checks (offline code tests,
   live CLI trajectory probes, LLM-as-judge) before shipping or after changing a
-  skill. This is the expansion of writing-agent-skills' "Test it before you ship
-  it" step. Do NOT use for authoring a skill's SKILL.md itself (see
-  writing-agent-skills), and do NOT use for general product/application evals
-  unrelated to agent Skills.
+  skill. This is the expansion of writing-agent-skills' description note on
+  "evaluating a skill before shipping it". Do NOT use for authoring a skill's
+  SKILL.md itself (see writing-agent-skills), and do NOT use for general
+  product/application evals unrelated to agent Skills.
 ---
 
 # Evaluating Agent Skills
@@ -15,22 +15,22 @@ description: >
 Adapted from Philipp Schmid's "Practical Guide to Evaluating and Testing Agent
 Skills" (https://www.philschmid.de/testing-skills) and Anthropic's "Demystifying
 evals for AI agents" (https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
-This is the expansion of `writing-agent-skills` §7 — read that skill first if you
+This is the expansion of `writing-agent-skills`'s "evaluating a skill before
+shipping it" note (frontmatter description) — read that skill first if you
 haven't authored the target skill yet.
 
-**Canonical worked example**, already built and passing:
-`qa-adversary/evals/` (its `README.md` documents this same 4-layer method
-applied to a real review skill, including a documented N=1 limitation). Read it
-before adapting the templates below — most decisions you'll face were already
-made there.
+Read `qa-adversary/evals/` before adapting the templates below — its
+`README.md` applies this same 4-layer method to a real review skill, including
+a documented N=1 limitation, and most decisions you'll face were already made
+there.
 
-## 0. This is a method + templates, not an engine
+## 0. Adapt the templates, don't build a generic engine
 
-There is no single harness that evaluates arbitrary skills — success criteria
-are specific to what the skill does (a coordinator skill checks phase order and
-delegation; a code-gen skill checks SDK imports and whether output compiles).
-Copy `templates/` into `<target-skill>/evals/` and adapt; don't try to build one
-script that runs every skill.
+Do not try to build one script that runs every skill — no single harness
+evaluates arbitrary skills. Define success criteria specific to what the
+target skill does (a coordinator skill checks phase order and delegation; a
+code-gen skill checks SDK imports and whether output compiles). Copy
+`templates/` into `<target-skill>/evals/` and adapt it to that skill.
 
 ## 1. Classify the skill first
 

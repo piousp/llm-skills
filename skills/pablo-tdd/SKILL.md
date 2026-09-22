@@ -28,7 +28,7 @@ A good test verifies behavior through public interfaces, not implementation deta
 
 A good test also encodes WHY the behavior matters, not just WHAT it does. If a test can't fail when the business logic it covers changes, the test is wrong - it's asserting shape, not intent.
 
-The operational checklist and code examples live in [tests.md](tests.md); mocking guidelines in [mocking.md](mocking.md).
+The operational checklist and code examples live in [references/tests.md](references/tests.md); mocking guidelines in [references/mocking.md](references/mocking.md).
 
 ## Seams: where tests go
 

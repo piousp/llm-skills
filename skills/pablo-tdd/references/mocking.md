@@ -22,4 +22,4 @@ At system boundaries, design interfaces that are easy to mock:
 
 ## Code Examples
 
-See [`examples/mocking.java.md`](examples/mocking.java.md) and [`examples/mocking.scala.md`](examples/mocking.scala.md).
+See [`examples/mocking.java.md`](../examples/mocking.java.md) and [`examples/mocking.scala.md`](../examples/mocking.scala.md).
