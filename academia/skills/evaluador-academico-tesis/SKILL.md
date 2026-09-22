@@ -66,7 +66,7 @@ normativas y académicas como marcos de referencia complementarios:
 
 ### Título y programa
 
-- **Título**: Diagnóstico de procesos de análisis financiero y toma de
+- **Título**: Diagnóstico de procesos de gestión financiera y toma de
   decisiones gerenciales en una empresa de Crédito "XYZ"
 - **Carrera**: Maestría en Dirección y Administración de Empresas con
   énfasis en Finanzas
@@ -157,9 +157,8 @@ Verificar:
   cómo la teoría ilumina el análisis.
 - Identificar el **tipo de marco teórico** empleado: ¿es conceptual-explicativo
   o analítico-crítico? Para un TFIA, el tipo esperado es
-  **conceptual-explicativo** (ver skill `marco-teorico-redaccion`). Si el
-  marco es analítico-crítico sin justificación, evaluar si corresponde al
-  género TFIA.
+  **conceptual-explicativo**. Si el marco es analítico-crítico sin
+  justificación, evaluar si corresponde al género TFIA.
 - Secciones genéricas o de contexto demasiado amplio (p. ej. una introducción
   completa a la Industria 4.0) deben justificar por qué son relevantes para
   una empresa de crédito específica y para un diagnóstico de procesos.
@@ -393,9 +392,7 @@ Verificar:
   diccionario.
 - Detectar pasajes donde un mismo concepto se use con significados
   distintos en capítulos diferentes, o donde una categoría analítica
-  se aplique de manera inconsistente entre secciones. (La precisión
-  léxica y sintáctica dentro de cada párrafo es competencia del skill
-  revision-lexicografica-filologica.)
+  se aplique de manera inconsistente entre secciones.
 - Verificar que los conceptos técnicos mantengan el mismo significado
   en todos los capítulos donde se usan, no solo donde se definen por
   primera vez.
@@ -455,11 +452,11 @@ Verificar:
 **Pregunta central**: ¿El marco teórico declara explícitamente su
 alcance, delimitación y criterios de organización?
 
-> **Referencia normativa:** Según el skill `marco-teorico-redaccion`,
-> el alcance del marco teórico debe declararse en el **primer párrafo**
-> del capítulo, incluyendo: propósito, áreas que cubre, áreas que excluye
-> (con justificación breve) y criterio de organización. El evaluador debe
-> verificar que esto exista y sea explícito.
+> **Referencia normativa:** el alcance del marco teórico debe declararse
+> en el **primer párrafo** del capítulo, incluyendo: propósito, áreas que
+> cubre, áreas que excluye (con justificación breve) y criterio de
+> organización. El evaluador debe verificar que esto exista y sea
+> explícito.
 
 Verificar:
 - El documento debe declarar clara y tempranamente qué áreas cubre
@@ -550,8 +547,6 @@ postura del autor?
 > - TEC Costa Rica (2017) define el estado del arte como "dar cuenta de
 >   construcciones de sentido sobre datos que apoyan un diagnóstico y un
 >   pronóstico".
-> - El skill `estado-del-arte-redaccion` detalla la metodología de
->   construcción y los criterios de calidad.
 
 Este criterio aplica cuando la tesis incluye un estado del arte como
 componente explícito (subsección del marco teórico, capítulo aparte, o
@@ -561,8 +556,7 @@ criterio se omite y se documenta su no aplicabilidad.
 
 Verificar:
 
-**A. Diferenciación respecto al marco teórico** (ver tabla en skill
-`estado-del-arte-redaccion`):
+**A. Diferenciación respecto al marco teórico**:
 - El estado del arte debe distinguirse claramente del marco teórico:
   el primero hace balance de la producción investigativa existente;
   el segundo fundamenta teóricamente el estudio. Si las funciones se
