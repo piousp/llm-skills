@@ -46,9 +46,9 @@ step to a subagent.
    fixes/corrections/alternatives; that step happens later, in the
    coordinator, once all three results are in.:
 
-   - `agent: "analyst"`, `skills: ["qa-adversary"]`, `timeoutMs: 1200000`
-     - task: the diff, plus "Apply the qa-adversary lens to this diff only.
-     Do not analyze code outside the diff."
+   - `agent: "analyst"`, `skills: ["qa-adversary"]`,
+     `timeoutMs: 1200000` - task: the diff, plus "Apply the qa-adversary
+     lens to this diff only. Do not analyze code outside the diff."
    - `agent: "analyst"`, `skills: ["code-review-checklist"]`,
      `timeoutMs: 1200000` - task: the diff, plus "Apply the
      code-review-checklist lens to this diff only. Do not analyze code
@@ -133,8 +133,7 @@ is what the reader uses to judge every finding below it.>
 
 <then every finding for this file, each in this four-part shape:>
 
-**[<severity> - <lens(es)>] <file:line or file:L12-L18 or file:L12,L27,L41>
-- <one-line title>**
+**[<severity> - <lens(es)>] <file:line or file:L12-L18 or file:L12,L27,L41>: <one-line title>**
 - **Qué:** what the defect/violation is, in one or two plain sentences.
 - **Por qué pasa:** the mechanism that produces it, with at least 2
   concrete examples (two input scenarios that break it, or two cases
@@ -209,6 +208,6 @@ coverage assessment>
   and the lens are already fixed; there is nothing left for the user to
   decide at that point.
 - [WHEN] considering a change to the output format, the four-part finding
-  structure, or any lens's gates, read references/lessons-learned.md first:
+  structure, or any lens's gates, read `references/lessons-learned.md` first:
   it explains why the current shape exists and what evidence backs each
   decision.
