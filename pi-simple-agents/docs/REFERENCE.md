@@ -181,6 +181,26 @@ scout · tools: 2 · done · ↑13k ↓840 R1.2M W3.0k CH98.7% $0.412 12.3%/200k
 
 In a parallel `tasks[]` batch, each task gets its own footer: there is no aggregated total across tasks.
 
+### Session persistence
+
+When the caller's own pi session is persisted to disk, each subagent run now persists its
+session too, at `<parent-session-file-without-.jsonl>/<toolCallId>/run-<taskIndex>/session.jsonl`
+\u2014 next to the parent's own session file, not in a separate shared directory. This is the
+convention several usage-tracking tools already know how to reconcile a nested-agent tool call's
+child session against: with a session file at that path, they attribute the run's cost to its
+real model (e.g. a different, more expensive model than the caller's) instead of a generic
+bucket. It doesn't show up in `pi --continue`/`/resume`'s own listing (those only look one level
+deep), and it doesn't change what conversation history the subagent starts with \u2014 that's
+`defaultContext`, above.
+
+When the caller's own session isn't persisted (e.g. it's running in-memory), a subagent run has
+no parent path to nest under and falls back to running fully in-memory, as before \u2014 no file is
+written, and no warning either: this is normal, not a degraded case.
+
+The subagent tool's own result also reports its usage on the canonical `AgentToolResult.usage`
+field (summed across every task in the batch), in addition to the existing per-task usage inside
+`details.runs[].usage`.
+
 ## Frontmatter fields
 
 | Field | Type | Default | Description |
@@ -195,7 +215,7 @@ In a parallel `tasks[]` batch, each task gets its own footer: there is no aggreg
 | `inheritSkills` | boolean | `true` | If `false`, the agent does not inherit the parent's active skills. |
 | `inheritExtensions` | boolean | `true` | If `false`, the agent starts without loading pi extensions. |
 | `defaultReads` | list | `[]` | Files to pre-load into the agent's context on startup. Relative paths resolve against the **invocation's cwd** (not the agent's `.md` file location); `~`/`~/...` expands to the home directory; absolute paths pass through unchanged. A missing, unreadable, or non-regular-file entry produces a warning and is skipped: the rest of the list still loads. Duplicate entries (same resolved path) are deduped, first occurrence wins. |
-| `defaultContext` | `forked` or `fresh` | `fresh` | `fresh`: starts with an empty conversation (default). `forked`: attempts to copy the parent session's conversation history via a real persisted session under `~/.pi/agent/sessions/subagents/`. If the parent session isn't persisted, or the fork fails, it falls back to `fresh` with a warning: a subagent run never fails because of this. |
+| `defaultContext` | `forked` or `fresh` | `fresh` | `fresh`: starts with an empty conversation (default). `forked`: attempts to copy the parent session's conversation history via a real persisted session. If the parent session isn't persisted, or the fork fails, it falls back to `fresh` with a warning: a subagent run never fails because of this. Either way, when the parent session is persisted, the run's own session now persists too (see [Session persistence](#session-persistence) below); it doesn't affect what context the subagent starts with, only whether its transcript is written to disk. |
 | `thinking` | string | *inherited* | Thinking budget level: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `skills` | list | *inherited* | Explicit whitelist of skills to load, matched by exact, case-sensitive name against the inherited set. When set, overrides automatic inheritance; requested names with no match produce a warning per run. Setting `skills` together with `inheritSkills: false` is contradictory config: it produces a warning and the filter is ignored. **Limitation:** the filter narrows *which* skills are available, but still doesn't preload the named skills' content into the subagent's context. This is not the same as Claude Code's skill-preload semantics. |
 | `maxTurns` | integer 1–100 | *no limit* | Max number of model turns (one model response + its batch of tool calls = 1 turn) before the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted. Out-of-range or non-integer values (≤ 0, > 100, `NaN`, `Infinity`, non-integer like 2.5) are warned and ignored, falling back to no limit. |

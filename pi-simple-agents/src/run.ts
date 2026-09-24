@@ -11,6 +11,8 @@ interface AgentRunResultBase {
   task: string;
   durationMs: number;
   usage?: RunUsage;
+  /** Path of this run's own persisted session file, if the caller's session manager persists (undefined when in-memory). */
+  sessionFile?: string;
 }
 
 export type AgentRunResult =
@@ -347,7 +349,8 @@ export function runAgentViaSdk(
         session?.getContextUsage(),
         (provider) => options.modelRuntime.isUsingSubscription(provider),
       );
-      resolve({ ...result, usage } as AgentRunResult);
+      const sessionFile = options.sessionManager?.getSessionFile?.();
+      resolve({ ...result, usage, sessionFile } as AgentRunResult);
     };
 
     (async () => {
