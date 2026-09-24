@@ -22,14 +22,15 @@ import { validateSubagentParams, resolveAgents, normalizeTasks, invocationOverri
 import type { TaskEntry, ValidationResult } from "../src/validate.ts";
 import { buildSubagentCallText } from "../src/render-call.ts";
 import { buildLoaderOptions } from "../src/loader-config.ts";
-import { createSubagentSessionManager } from "../src/subagent-session.ts";
+import { childSessionDir, createSubagentSessionManager } from "../src/subagent-session.ts";
+import { aggregateRunUsage } from "../src/usage.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { emitWarnings, toErrorMessage } from "../src/warn.ts";
 
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
-const SUBAGENT_SESSIONS_DIR = path.join(os.homedir(), ".pi/agent/sessions/subagents");
 const SESSION_MANAGER_FACTORY = {
   forkFrom: (s: string, t: string, d: string) => SessionManager.forkFrom(s, t, d),
+  atPath: (f: string, c: string) => SessionManager.open(f, path.dirname(f), c),
   inMemory: (c: string) => SessionManager.inMemory(c),
 };
 
@@ -52,10 +53,32 @@ function errorResult(error: string) {
 // type aliases carry an implicit index signature, so each member stays
 // assignable to `Record<string, unknown>` wherever the host's tool types still
 // expect that shape.
+/** Per-child projection of a run's persisted session + usage, aligned by index to `runs`. */
+export interface ChildResult {
+  sessionFile?: string;
+  usage?: AgentRunResult["usage"];
+}
+
 export type SubagentToolDetails =
   | { progress: readonly TaskProgress[] }
-  | { runs: AgentRunResult[] }
+  | { runId: string; runs: AgentRunResult[]; results: ChildResult[] }
   | { error: string };
+
+// Pure tail of execute(): assembles the tool result from the settled runs.
+// Extracted so the runId/results/usage contract is unit-testable without a
+// real model session. `usage` is promoted to the canonical AgentToolResult
+// field (not just details) so Pi's own usage accounting and any /usage
+// tooling that reads it directly can see the subagent's real cost.
+export function buildSubagentToolResult(results: AgentRunResult[], runId: string) {
+  const formatted = formatRunResults(results);
+  const childResults: ChildResult[] = results.map((r) => ({ sessionFile: r.sessionFile, usage: r.usage }));
+  return {
+    content: [{ type: "text" as const, text: formatted.text }],
+    details: { runId, runs: results, results: childResults },
+    usage: aggregateRunUsage(results),
+    isError: formatted.isError,
+  };
+}
 
 export const SubagentParams = Type.Object({
   agent: Type.Optional(Type.String()),
@@ -154,6 +177,8 @@ interface RunTasksOptions {
   signal: AbortSignal | undefined;
   modelRuntime: ModelRuntime;
   callerSessionFile: string | undefined;
+  /** The subagent tool call's own toolCallId — the basis for each run's childSessionDir. */
+  runId: string;
   onUpdate: AgentToolUpdateCallback<SubagentToolDetails> | undefined;
   concurrency: number;
   mode: RunAgentViaSdkOptions["mode"];
@@ -171,7 +196,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: Omit<RunTasksOptions, "onUpdate" | "concurrency">,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, mode, createSession = createAgentSession } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -183,7 +208,7 @@ export async function runSingleTask(
       effectiveAgent,
       callerSessionFile,
       cwd,
-      SUBAGENT_SESSIONS_DIR,
+      childSessionDir(callerSessionFile, runId, index),
       SESSION_MANAGER_FACTORY,
     );
     emitWarnings(warnings);
@@ -223,14 +248,14 @@ async function runTasks(
   resolvedAgents: AgentConfig[],
   options: RunTasksOptions,
 ): Promise<AgentRunResult[]> {
-  const { cwd, signal, modelRuntime, callerSessionFile, onUpdate, concurrency, mode } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, runId, onUpdate, concurrency, mode } = options;
 
   const tracker = onUpdate
     ? createProgressTracker(tasks.map((t) => t.agent), (details) => onUpdate({ content: [], details }))
     : undefined;
 
   return mapWithConcurrencyLimit(tasks, concurrency, (t, index) =>
-    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRuntime, callerSessionFile, mode }),
+    runSingleTask(t, resolvedAgents[index], index, tracker, { cwd, signal, modelRuntime, callerSessionFile, runId, mode }),
   );
 }
 
@@ -273,7 +298,7 @@ export default async function (
     parameters: SubagentParams,
     renderCall: renderSubagentCall,
     renderResult: renderSubagentResult,
-    execute: async (_toolCallId, rawParams, signal, onUpdate, ctx) => {
+    execute: async (toolCallId, rawParams, signal, onUpdate, ctx) => {
       if (!modelRuntimeResult.ok) {
         return errorResult(`failed to initialize model runtime: ${modelRuntimeResult.error}`);
       }
@@ -295,6 +320,7 @@ export default async function (
         cwd: ctx.cwd,
         signal,
         modelRuntime: modelRuntimeResult.value,
+        runId: toolCallId,
         callerSessionFile: ctx.sessionManager.getSessionFile(),
         onUpdate,
         concurrency,
@@ -308,12 +334,7 @@ export default async function (
         mode: ctx.mode,
       });
 
-      const formatted = formatRunResults(results);
-      return {
-        content: [{ type: "text", text: formatted.text }],
-        details: { runs: results },
-        isError: formatted.isError,
-      };
+      return buildSubagentToolResult(results, toolCallId);
     },
   });
 }

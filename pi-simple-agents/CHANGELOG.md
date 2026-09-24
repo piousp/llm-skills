@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.15.0
+
+- **Subagent runs now persist their own session to disk by default, instead of running purely
+  in-memory.** Previously, every subagent run's tokens and cost were computed correctly but
+  never written anywhere durable, so any usage-tracking tool that attributes cost by reading
+  session files on disk (local `/usage`-style dashboards, not the model provider's own billing)
+  had no record of them \u2014 subagent spend, including on a different model than the caller's, was
+  invisible locally even though it was real spend.
+  - Each run's session is now persisted at `<parent-session-file-without-ext>/<runId>/
+    run-<taskIndex>/session.jsonl`, where `runId` is the subagent tool call's own `toolCallId`.
+    This is the convention several usage-tracking tools already know how to reconcile: when a
+    child session at that path exists, they attribute cost/tokens to the child's real model
+    instead of lumping it into a generic bucket.
+  - `defaultContext: "forked"` agents now persist at this same conventional path too, replacing
+    the previous fixed `~/.pi/agent/sessions/subagents/` directory.
+  - A subagent whose caller session isn't itself persisted (e.g. an in-memory host session)
+    still falls back to running fully in-memory, as before \u2014 there is no parent path to nest
+    under.
+  - New `childSessionDir` export in `src/subagent-session.ts`; `SessionManagerFactory` gains an
+    `atPath` method.
+- **The subagent tool's result now reports its own usage on the canonical `AgentToolResult.usage`
+  field**, not just inside `details`, so Pi's own usage accounting sees it directly. `details`
+  gains `runId` (the tool call's id) and `results` (a per-task array of `{ sessionFile, usage }`,
+  aligned by index to the existing `runs` array) alongside the unchanged `runs` field.
+
 ## 0.14.1
 
 - Rewrite README: short introduction aimed at new users, advanced usage moved to

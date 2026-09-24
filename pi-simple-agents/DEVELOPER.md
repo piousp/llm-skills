@@ -422,8 +422,8 @@ export interface RunAgentViaSdkOptions {
 
 ```typescript
 type AgentRunResult =
-  | { status: "success"; agent: string; task: string; durationMs: number; usage?: RunUsage; finalText?: string }
-  | { status: "error";   agent: string; task: string; durationMs: number; usage?: RunUsage; error: string };
+  | { status: "success"; agent: string; task: string; durationMs: number; usage?: RunUsage; sessionFile?: string; finalText?: string }
+  | { status: "error";   agent: string; task: string; durationMs: number; usage?: RunUsage; sessionFile?: string; error: string };
 ```
 
 Session disposal is guaranteed in a `finally` block regardless of success or error.
@@ -435,6 +435,17 @@ plain `agentSession.subscribe` listener registered unconditionally alongside the
 turn-counter subscriptions (not via the SDK's `AgentSession.getSessionStats()`, which would
 include the caller's forked history for `defaultContext: "forked"` agents). `getContextUsage()` is
 read from the session before it's disposed.
+
+`sessionFile` is attached in that same chokepoint, from `options.sessionManager?.getSessionFile?.()`
+— the run's own persisted session path (see `childSessionDir`, below), or `undefined` when the
+run ended up in-memory (no persisted caller session to nest under). The optional chaining exists
+because test doubles for `sessionManager` are not always a full `SessionManager`; a real one
+never lacks `getSessionFile`.
+
+The extension promotes `sessionFile` and `usage` from each run into the subagent tool's own
+result (`details.results[]` and the top-level `AgentToolResult.usage`, see
+`buildSubagentToolResult` below) so usage-tracking tools that reconcile nested sessions by path
+can attribute the run's cost to its real model.
 
 Internally, the abort-listener registration, timeout scheduling, and the `agentSession.prompt(task)`
 call are factored into a module-private `runWithTimeoutAndAbort` helper (not exported) — extracted
@@ -853,7 +864,16 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    resolver (resolving `"provider/modelId"` config strings) passed to `createSession`. Because
    this `ModelRuntime` snapshot is frozen at extension-load time, a `/login` performed later in
    the session requires a `/reload` before subagents pick up the new credentials.
-7. Formats results via `formatRunResults`.
+7. Assembles the final tool result via `buildSubagentToolResult(results, toolCallId)`: formats
+   `results` with `formatRunResults` for the model-facing text, and separately sets `details.runId`
+   (the tool call's own `toolCallId`, threaded through `RunTasksOptions.runId` into
+   `runSingleTask`'s `childSessionDir` call \u2014 see [src/subagent-session.ts](#srcsubagent-sessionts)
+   above), `details.results` (a `{ sessionFile, usage }` projection of `results`, aligned by index
+   to the unchanged `details.runs`), and the top-level `AgentToolResult.usage` (via
+   `aggregateRunUsage`, [src/usage.ts](#srcusagets), summing every run's `usage`; `undefined` if
+   none has one). Extracted as its own exported function \u2014 not part of a stable public API,
+   just a visibility change for testability \u2014 so the runId/results/usage assembly is
+   unit-testable without a real model session.
 
 `runTasks`'s per-task worker, `runSingleTask` (resource loader creation/reload, session manager
 creation, the SDK run, and progress-tracker teardown), is exported from `extensions/index.ts`
@@ -1039,6 +1059,16 @@ function toRunUsage(
 ): RunUsage;
 function formatTokens(count: number): string;
 function formatRunUsage(usage: RunUsage): string;
+
+interface AggregatedUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+function aggregateRunUsage(runs: readonly { usage?: RunUsage }[]): AggregatedUsage | undefined;
 ```
 
 Pure functions backing the per-subagent-run consumption footer (tokens, cache, cost, context %).
@@ -1067,7 +1097,15 @@ Pure functions backing the per-subagent-run consumption footer (tokens, cache, c
 
 `MessageUsage` is a structural (not imported) shape matching the SDK's `Usage` type
 (`@earendil-works/pi-ai`), which isn't resolvable from this package (nested under
-`pi-coding-agent`'s own `node_modules`).
+`pi-coding-agent`'s own `node_modules`). `AggregatedUsage` is the same not-importable situation,
+for the same real type \u2014 it's what the subagent tool call's own `AgentToolResult.usage` field
+expects (see `buildSubagentToolResult`, [Extension internals](#extension-internals) above).
+
+`aggregateRunUsage` sums `input`/`output`/`cacheRead`/`cacheWrite`/`cost` across every run that
+has a `usage` (runs without one \u2014 e.g. failed before a session existed \u2014 are skipped, not
+zero-filled), returning `undefined` if none do. `RunUsage` only tracks `cost` as a single total
+(see `addUsage` above), so the returned `cost`'s per-kind breakdown (`input`/`output`/`cacheRead`/
+`cacheWrite`) is always `0`; the real `Usage` type's only consumers here read `cost.total`.
 
 ### src/render-result.ts
 
@@ -1137,16 +1175,23 @@ package's public entry point). Pure, total, never throws.
 ### src/subagent-session.ts
 
 ```typescript
+function childSessionDir(
+  callerSessionFile: string | undefined,
+  runId: string,
+  resultIndex: number,
+): string | undefined;
+
 function createSubagentSessionManager<S>(
   agent: Pick<AgentConfig, "name" | "defaultContext">,
   callerSessionFile: string | undefined,
   cwd: string,
-  sessionDir: string,
+  childDir: string | undefined,
   factory: SessionManagerFactory<S>,
 ): SubagentSessionResult<S>;
 
 interface SessionManagerFactory<S> {
   forkFrom(sourcePath: string, targetCwd: string, sessionDir: string): S; // may throw
+  atPath(sessionFile: string, cwd: string): S; // may throw
   inMemory(cwd: string): S;
 }
 
@@ -1156,20 +1201,37 @@ interface SubagentSessionResult<S> {
 }
 ```
 
-Decides fork-vs-fresh for a subagent's session. `defaultContext !== "forked"` (including
-`undefined` — the effective default is `fresh`) returns `factory.inMemory(cwd)`, no warnings.
-`"forked"` without a `callerSessionFile` (the caller session isn't persisted) falls back to
-`inMemory(cwd)` with a warning naming the agent. `"forked"` with a file calls
-`factory.forkFrom(callerSessionFile, cwd, sessionDir)`; if that throws (e.g. the source file was
-deleted or is empty/invalid), it catches and falls back to `inMemory(cwd)` with a warning that
-includes the underlying error message. Never throws itself — forking a subagent's session never
-aborts the run. Generic over `S` with an injected `factory`, mirroring the injection pattern
-already used by `RunAgentViaSdkOptions.createSession` in `src/run.ts`, so it's testable with fakes
-without touching disk.
+`childSessionDir` is a pure helper: `<dirname(callerSessionFile)>/<basename(callerSessionFile)
+without .jsonl>/<sanitized runId>/run-<resultIndex>`, or `undefined` when there's no persisted
+caller session to nest under. `runId` is sanitized (`[^A-Za-z0-9._-]` → `_`; a result that's empty
+or only dots/underscores — including `.`/`..`, which would otherwise resolve outside the intended
+directory — falls back to the literal `"run"`). This is the path convention several
+usage-tracking tools already know how to reconcile a nested-agent tool call's child session
+against: when a session file exists at that path, they attribute the run's cost to its real
+model instead of a generic bucket. `runId` is the subagent tool call's own `toolCallId`;
+`resultIndex` is each task's position in the batch (see `runTasks`/`runSingleTask` below).
 
-Wired in `runTasks` with `sessionDir = ~/.pi/agent/sessions/subagents/` (a dedicated directory, not
-the project's default session dir, so a forked subagent session never becomes the "most recent"
-session that `pi --continue` would resume) and `callerSessionFile = ctx.sessionManager.getSessionFile()`.
+`createSubagentSessionManager` decides which manager backs a subagent's session.
+`defaultContext === "forked"`: without a `callerSessionFile` (the caller session isn't
+persisted), falls back to `inMemory(cwd)` with a warning naming the agent; with one, calls
+`factory.forkFrom(callerSessionFile, cwd, childDir ?? "")` (catching and falling back to
+`inMemory(cwd)` with a warning that includes the underlying error message if that throws — never
+throws itself, forking a subagent's session never aborts the run). Otherwise (including
+`undefined` — the effective default is `fresh`): without a `childDir` (no persisted caller
+session), returns `factory.inMemory(cwd)`, no warnings; with one, calls
+`factory.atPath(join(childDir, "session.jsonl"), cwd)`, with the same catch-and-fall-back-to-
+`inMemory` behavior on throw. Generic over `S` with an injected `factory`, mirroring the injection
+pattern already used by `RunAgentViaSdkOptions.createSession` in `src/run.ts`, so it's testable
+with fakes without touching disk.
+
+Wired in `runSingleTask` with `childDir = childSessionDir(callerSessionFile, options.runId, index)`
+and `callerSessionFile = ctx.sessionManager.getSessionFile()` — replacing the previous fixed
+`~/.pi/agent/sessions/subagents/` directory, which every `"forked"` agent shared regardless of
+caller or task. The real factory's `atPath` is `SessionManager.open(sessionFile,
+dirname(sessionFile), cwd)`; opening a not-yet-existing path starts a fresh, empty session
+(`SessionManager.open` never loads content from a path that doesn't exist yet) and persists it
+lazily, on the first assistant message — so a run that errors or aborts before producing one
+never creates a file.
 
 ### src/tool-description.ts
 

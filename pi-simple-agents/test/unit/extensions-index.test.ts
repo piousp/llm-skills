@@ -1,13 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DefaultResourceLoader, type ExtensionAPI, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import extensionFactory, { runSingleTask, SubagentParams } from "../../extensions/index.ts";
+import extensionFactory, { runSingleTask, SubagentParams, buildSubagentToolResult } from "../../extensions/index.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker, type TaskProgress } from "../../src/progress.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
+import { childSessionDir } from "../../src/subagent-session.ts";
 import type { AgentConfig } from "../../src/agents.ts";
 import type { RunUsage } from "../../src/usage.ts";
+
+function makeTmpDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-simple-agents-extensions-index-"));
+}
 
 const sampleUsage: RunUsage = {
   input: 12500, output: 840, cacheRead: 1_200_000, cacheWrite: 3000,
@@ -189,6 +197,52 @@ test("renderResult: final+expanded with runs carrying usage delegates runs throu
   assert.equal(rendered, expected);
 });
 
+// (h)
+// buildSubagentToolResult is the pure tail of execute() (Surgical Changes:
+// extracted so the runId/results/usage assembly is testable without a real
+// model session). Verifies the P4 contract: details.runId + details.results
+// (per-child sessionFile/usage projection, aligned by index to details.runs)
+// + the aggregate usage promoted to the canonical AgentToolResult.usage field.
+test("buildSubagentToolResult: assembles runId, runs, per-child results projection, and aggregate usage", () => {
+  const runs = [
+    {
+      agent: "scout", task: "a", durationMs: 5, status: "success" as const,
+      sessionFile: "/sessions/parent/call-1/run-0/session.jsonl",
+      usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.1, isSubscription: false, context: undefined },
+    },
+    {
+      agent: "scout", task: "b", durationMs: 3, status: "error" as const, error: "boom",
+      // No sessionFile/usage: the run failed before a session existed.
+    },
+  ];
+
+  const result = buildSubagentToolResult(runs, "call-1");
+
+  assert.equal(result.details && "runId" in result.details ? result.details.runId : undefined, "call-1");
+  assert.equal(result.details && "runs" in result.details ? result.details.runs : undefined, runs);
+  assert.deepEqual(
+    result.details && "results" in result.details ? result.details.results : undefined,
+    [
+      { sessionFile: "/sessions/parent/call-1/run-0/session.jsonl", usage: runs[0].usage },
+      { sessionFile: undefined, usage: undefined },
+    ],
+  );
+  assert.deepEqual(result.usage, {
+    input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+  });
+});
+
+test("buildSubagentToolResult: no run carries usage yields undefined aggregate usage", () => {
+  const runs = [
+    { agent: "scout", task: "a", durationMs: 5, status: "error" as const, error: "boom" },
+  ];
+
+  const result = buildSubagentToolResult(runs, "call-2");
+
+  assert.equal(result.usage, undefined);
+});
+
 // (e)
 // Mechanism note: runAgentViaSdk never rejects (it catches internally and
 // always resolves), and createSession is hardcoded — neither is a reachable
@@ -211,6 +265,7 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
         signal: undefined,
         modelRuntime: {} as unknown as ModelRuntime,
         callerSessionFile: undefined,
+        runId: "call-1",
         mode: "tui" as const,
       }),
     /reload failed/,
@@ -246,6 +301,7 @@ test("runSingleTask: forwards the run's usage snapshot to tracker.markTaskDone",
     signal: undefined,
     modelRuntime: fakeModelRuntime,
     callerSessionFile: undefined,
+    runId: "call-2",
     mode: "tui" as const,
   });
 
@@ -291,11 +347,56 @@ test("runSingleTask: forwards options.mode through to the nested session's bindE
     signal: undefined,
     modelRuntime,
     callerSessionFile: undefined,
+    runId: "call-3",
     mode: "rpc",
     createSession,
   });
 
   assert.deepEqual(capturedBindings, { mode: "rpc" });
+});
+
+// Exercises the P3 wiring end-to-end with the real session-manager factory
+// (no fakes on that path): a subagent run with a persisted caller session
+// must land its own session file at the conventional
+// <parent-without-ext>/<runId>/run-<index>/session.jsonl path, so usage
+// dashboards that reconcile nested sessions by that convention can attribute
+// the run's cost and model to it.
+test("runSingleTask: persists its session at the conventional childSessionDir path derived from runId and index", async () => {
+  const tmpCwd = makeTmpDir();
+  try {
+    const callerSessionFile = path.join(tmpCwd, "sessions", "parent.jsonl");
+    fs.mkdirSync(path.dirname(callerSessionFile), { recursive: true });
+
+    const agent = makeAgent();
+    const fakeSession = {
+      getAllTools: () => [],
+      bindExtensions: async () => {},
+      extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+      subscribe: () => () => {},
+      prompt: async () => {},
+      getLastAssistantText: () => "done",
+      getContextUsage: () => undefined,
+      dispose: () => {},
+      abort: () => {},
+    };
+    const createSession = async () => ({ session: fakeSession as any });
+    const modelRuntime = { isUsingSubscription: () => false } as unknown as ModelRuntime;
+
+    const result = await runSingleTask({ agent: "scout", task: "do it" }, agent, 0, undefined, {
+      cwd: tmpCwd,
+      signal: undefined,
+      modelRuntime,
+      callerSessionFile,
+      runId: "call-xyz",
+      mode: "rpc",
+      createSession,
+    });
+
+    const expectedDir = childSessionDir(callerSessionFile, "call-xyz", 0)!;
+    assert.equal(result.sessionFile, path.join(expectedDir, "session.jsonl"));
+  } finally {
+    fs.rmSync(tmpCwd, { recursive: true, force: true });
+  }
 });
 
 // (g)
@@ -324,6 +425,7 @@ test("runSingleTask: getModel resolver calls modelRuntime.getModel with the pars
     signal: undefined,
     modelRuntime: fakeModelRuntime,
     callerSessionFile: undefined,
+    runId: "call-4",
     mode: "tui" as const,
   });
 

@@ -35,6 +35,48 @@ export interface RunUsage {
   readonly context: { readonly percent: number | null; readonly window: number } | undefined;
 }
 
+// Structural shape of the SDK's `Usage` type (@earendil-works/pi-ai), used
+// for the AgentToolResult.usage field the subagent tool reports upstream.
+// Same not-importable situation as MessageUsage above.
+export interface AggregatedUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+
+// Sums the usage of every run that has one, for the tool result's aggregate
+// `usage` field. Runs without usage (e.g. failed before a session existed)
+// are skipped, not zero-filled. RunUsage only tracks `cost` as a total (see
+// addUsage above), so the per-kind cost breakdown below is always 0 \u2014 no
+// consumer of AgentToolResult.usage reads anything but `cost.total`.
+export function aggregateRunUsage(runs: readonly { usage?: RunUsage }[]): AggregatedUsage | undefined {
+  const withUsage = runs.filter((r): r is { usage: RunUsage } => r.usage !== undefined);
+  if (withUsage.length === 0) return undefined;
+
+  const totals = withUsage.reduce(
+    (acc, r) => ({
+      input: acc.input + r.usage.input,
+      output: acc.output + r.usage.output,
+      cacheRead: acc.cacheRead + r.usage.cacheRead,
+      cacheWrite: acc.cacheWrite + r.usage.cacheWrite,
+      cost: acc.cost + r.usage.cost,
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+  );
+
+  return {
+    input: totals.input,
+    output: totals.output,
+    cacheRead: totals.cacheRead,
+    cacheWrite: totals.cacheWrite,
+    totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: totals.cost },
+  };
+}
+
 export function emptyUsage(): UsageAccumulator {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, provider: undefined };
 }

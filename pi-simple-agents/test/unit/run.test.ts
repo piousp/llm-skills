@@ -403,6 +403,42 @@ test("runAgentViaSdk: resolves success with finalText from session", async () =>
   assert.equal(result.finalText, "found it");
 });
 
+test("runAgentViaSdk: success result carries sessionFile from options.sessionManager.getSessionFile()", async () => {
+  const fakeSession = new FakeAgentSession("found it");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: {} as any,
+      resourceLoader: {} as any,
+      sessionManager: { getSessionFile: () => "/sessions/parent/abc123/run-0/session.jsonl" } as any,
+    },
+  );
+
+  assert.equal(result.sessionFile, "/sessions/parent/abc123/run-0/session.jsonl");
+});
+
+test("runAgentViaSdk: in-memory sessionManager (getSessionFile returns undefined) leaves sessionFile undefined", async () => {
+  const fakeSession = new FakeAgentSession("found it");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: {} as any,
+      resourceLoader: {} as any,
+      sessionManager: { getSessionFile: () => undefined } as any,
+    },
+  );
+
+  assert.equal(result.sessionFile, undefined);
+});
+
 test("runAgentViaSdk: resolves error when session.prompt throws", async () => {
   const fakeSession = new FakeAgentSession("ignored");
   fakeSession.shouldThrow = true;
