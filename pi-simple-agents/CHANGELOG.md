@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.1
+
+- **Expandable task in the call title.** pi 0.99 passes `expanded` to call renderers, so Ctrl+O
+  (or a click) now also shows the full task under each agent. The collapsed title is unchanged.
+- **Progress summaries for the new tools.** `mcp__<server>__<tool>` calls render as
+  `server/tool key=value ...`, `tool_search` as its query and `codemode` as the first line of its
+  code, instead of the raw name plus JSON.
+
 ## 0.20.0
 
 - **Breaking: requires pi >= 0.99.0** (`peerDependencies` floor raised from 0.84.1; dev
