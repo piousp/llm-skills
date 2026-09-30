@@ -60,7 +60,7 @@ test("buildLoaderOptions: supplies pi's built-in codemode, tool-search and mcp e
   assert.deepEqual(factories.map((f) => f.name), ["codemode", "tool-search", "mcp"]);
   for (const f of factories) {
     assert.equal(f.builtin, true, `${f.name} must be builtin so -builtin:<name> settings and noExtensions apply`);
-    assert.equal(f.replaceable, true, `${f.name} must be replaceable so a third-party MCP extension takes over`);
+    assert.equal(f.replaceable, true, `${f.name} must be replaceable so an installed extension registering the same tool or command replaces it, as in the host`);
     assert.equal(typeof f.factory, "function");
   }
 });
