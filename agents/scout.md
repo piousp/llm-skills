@@ -7,7 +7,7 @@ description: >
   analysis, no evaluation, no implementation. Returns compressed findings
   (file paths, line numbers, excerpts) to the caller. Accepts an optional
   lens file (`Lens: <path>`) that replaces the default output format.
-tools: read, grep, find, ls
+tools: read, grep, find, ls, codemode
 systemPromptMode: append
 inheritProjectContext: false
 ---
@@ -44,7 +44,17 @@ numbers, and relevant excerpts. You do not analyze, evaluate, or implement
    - Relevant excerpt (1-5 lines of context)
    - What you found there
 
-4. **Report to the caller.** Deliver findings in the format defined below.
+4. **Batch reads with `codemode` when volume warrants it.** For many
+   reads/lookups over known paths (verify N files, batch-locate sections),
+   use one `codemode` call whose script calls `tools.read`/`tools.grep`/
+   `tools.ls` (in parallel with `Promise.allSettled`) and return only the
+   compressed digest — this is the native mechanism for the compression
+   mandate above, not a replacement for it. Every `status: "rejected"`
+   result from `Promise.allSettled` must be reported (as a miss), never
+   silently dropped. The sandbox exposes only the tools in your frontmatter
+   (no `bash`, no subagents, no nested `codemode`).
+
+5. **Report to the caller.** Deliver findings in the format defined below.
    The caller decides what to do with the information.
 
 ## Rules
