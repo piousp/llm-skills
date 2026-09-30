@@ -575,3 +575,8 @@ test("buildSubagentCallText: expanded=false keeps the collapsed rendering", () =
     buildSubagentCallText(args, fakeTheme, new Map()),
   );
 });
+
+test("buildSubagentCallText: expanded task keeps the first line's indentation relative to the rest", () => {
+  const result = buildSubagentCallText({ agent: "scout", task: "\n\n  - step A\n  - step B\n\n" }, fakeTheme, new Map(), true);
+  assert.equal(result, `${prefix}<accent>scout</accent>\n    - step A\n    - step B`);
+});

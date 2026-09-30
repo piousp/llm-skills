@@ -116,6 +116,18 @@ test("renderCall: argsComplete=false renders title only — never per-agent para
   assert.doesNotMatch(rendered, /model:|thinking:|tools:/);
 });
 
+test("renderCall: context.expanded=true renders the expanded call text with the full task", async () => {
+  const captured = await loadExtension();
+
+  const args = { agent: "scout", task: "Line one\nLine two" };
+  const context = { cwd: "/some/realistic/project/path", argsComplete: false, expanded: true };
+
+  const rendered = textOf(captured.renderCall(args, fakeTheme, context));
+
+  assert.equal(rendered, buildSubagentCallText(args, fakeTheme, new Map(), true));
+  assert.match(rendered, /Line two/);
+});
+
 // (d)
 test("renderResult: isPartial with content:[] and details:undefined renders an empty Text without throwing", async () => {
   const captured = await loadExtension();

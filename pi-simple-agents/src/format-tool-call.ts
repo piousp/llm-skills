@@ -66,15 +66,15 @@ function codemodeSummary(a: Record<string, unknown>): string {
 }
 
 // Built-in MCP tools are named `mcp__<server>__<tool>`; render them as
-// `server/tool key=value ...`, the way pi titles direct MCP calls.
+// `server/tool key=value ...`. This matches pi's own `server/tool` title for
+// plain names; sanitized or hash-shortened names show as registered.
 const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/;
 
-function mcpSummary(toolName: string, args: unknown): string | undefined {
+function mcpSummary(toolName: string, a: Record<string, unknown>): string | undefined {
   const match = MCP_TOOL_NAME.exec(toolName);
   if (!match) return undefined;
   const title = `${match[1]}/${match[2]}`;
-  if (typeof args !== "object" || args === null || Array.isArray(args)) return title;
-  const pairs = Object.entries(args).map(([key, value]) => `${key}=${safeJson(value)}`).join(" ");
+  const pairs = Object.entries(a).map(([key, value]) => `${key}=${safeJson(value)}`).join(" ");
   return pairs ? `${title} ${pairs}` : title;
 }
 
@@ -104,10 +104,10 @@ function fallbackSummary(toolName: string, args: unknown): string {
 }
 
 export function formatToolCall(toolName: string, args: unknown): string {
-  const isObject = typeof args === "object" && args !== null;
+  const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
   const formatter = FORMATTERS[toolName];
   const summary = formatter
-    ? formatter(isObject ? (args as Record<string, unknown>) : {})
-    : mcpSummary(toolName, args) ?? fallbackSummary(toolName, args);
+    ? formatter(record)
+    : mcpSummary(toolName, record) ?? fallbackSummary(toolName, args);
   return truncate(summary);
 }

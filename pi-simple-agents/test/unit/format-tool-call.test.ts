@@ -139,3 +139,15 @@ test("formatToolCall: codemode renders the first line of the code, skipping a le
 test("formatToolCall: codemode without code renders the bare tool name", () => {
   assert.equal(formatToolCall("codemode", {}), "codemode");
 });
+
+test("formatToolCall: MCP tool with array args renders index=value pairs, like the other formatters' object view", () => {
+  assert.equal(formatToolCall("mcp__srv__tool", ["a"]), 'srv/tool 0="a"');
+});
+
+test("formatToolCall: MCP tool with non-object args renders only server/tool", () => {
+  assert.equal(formatToolCall("mcp__srv__tool", "text"), "srv/tool");
+});
+
+test("formatToolCall: mcp__ prefix without a tool separator falls back to name plus JSON", () => {
+  assert.equal(formatToolCall("mcp__server", { a: 1 }), 'mcp__server {"a":1}');
+});

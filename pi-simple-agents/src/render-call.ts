@@ -59,9 +59,13 @@ export function buildSubagentCallText(
     : buildSingleCallText(args, theme, paramAgents);
 }
 
+// Drops leading blank lines and trailing whitespace only, so the first line
+// keeps its indentation relative to the rest.
+const LEADING_BLANK_LINES = /^(?:[ \t]*\r?\n)+/;
+
 function indent(text: string, spaces: number): string {
   const pad = " ".repeat(spaces);
-  return text.trim().split("\n").map((line) => `${pad}${line}`).join("\n");
+  return text.replace(LEADING_BLANK_LINES, "").trimEnd().split("\n").map((line) => `${pad}${line}`).join("\n");
 }
 
 function callPrefix(theme: CallTheme): string {
