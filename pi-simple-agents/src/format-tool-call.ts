@@ -55,6 +55,29 @@ function lsSummary(a: Record<string, unknown>): string {
   return `ls ${str(a, "path", ".")}`;
 }
 
+function toolSearchSummary(a: Record<string, unknown>): string {
+  return `tool_search ${str(a, "query")}`.trim();
+}
+
+const CODEMODE_OPTIONS_LINE = /^\s*\/\/\s*@options:.*\n/;
+
+function codemodeSummary(a: Record<string, unknown>): string {
+  return `codemode ${firstLine(str(a, "code").replace(CODEMODE_OPTIONS_LINE, ""))}`.trim();
+}
+
+// Built-in MCP tools are named `mcp__<server>__<tool>`; render them as
+// `server/tool key=value ...`, the way pi titles direct MCP calls.
+const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/;
+
+function mcpSummary(toolName: string, args: unknown): string | undefined {
+  const match = MCP_TOOL_NAME.exec(toolName);
+  if (!match) return undefined;
+  const title = `${match[1]}/${match[2]}`;
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return title;
+  const pairs = Object.entries(args).map(([key, value]) => `${key}=${safeJson(value)}`).join(" ");
+  return pairs ? `${title} ${pairs}` : title;
+}
+
 const FORMATTERS: Record<string, (a: Record<string, unknown>) => string> = {
   read: readSummary,
   write: writeSummary,
@@ -63,6 +86,8 @@ const FORMATTERS: Record<string, (a: Record<string, unknown>) => string> = {
   grep: grepSummary,
   find: findSummary,
   ls: lsSummary,
+  tool_search: toolSearchSummary,
+  codemode: codemodeSummary,
 };
 
 function safeJson(args: unknown): string {
@@ -83,6 +108,6 @@ export function formatToolCall(toolName: string, args: unknown): string {
   const formatter = FORMATTERS[toolName];
   const summary = formatter
     ? formatter(isObject ? (args as Record<string, unknown>) : {})
-    : fallbackSummary(toolName, args);
+    : mcpSummary(toolName, args) ?? fallbackSummary(toolName, args);
   return truncate(summary);
 }

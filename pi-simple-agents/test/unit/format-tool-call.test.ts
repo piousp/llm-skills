@@ -111,3 +111,31 @@ test("formatToolCall: output is truncated to a max width", () => {
   assert.ok(result.length <= 80);
   assert.ok(result.endsWith("\u2026"));
 });
+
+test("formatToolCall: MCP tool renders server/tool with key=value args", () => {
+  const result = formatToolCall("mcp__mde-build__mvn", { goal: "test", module: "core" });
+  assert.equal(result, 'mde-build/mvn goal="test" module="core"');
+});
+
+test("formatToolCall: MCP tool whose name contains underscores splits on the first separator", () => {
+  const result = formatToolCall("mcp__codegraph__codegraph_explore", { query: "X" });
+  assert.equal(result, 'codegraph/codegraph_explore query="X"');
+});
+
+test("formatToolCall: MCP tool with no args renders only server/tool", () => {
+  assert.equal(formatToolCall("mcp__codegraph__codegraph_node", {}), "codegraph/codegraph_node");
+  assert.equal(formatToolCall("mcp__codegraph__codegraph_node", undefined), "codegraph/codegraph_node");
+});
+
+test("formatToolCall: tool_search renders the query", () => {
+  assert.equal(formatToolCall("tool_search", { query: "codegraph", limit: 3 }), "tool_search codegraph");
+});
+
+test("formatToolCall: codemode renders the first line of the code, skipping a leading @options line", () => {
+  const code = '// @options: {"max_output_tokens": 1000}\nconst r = await tools.read({ path: "a" });\nreturn r;';
+  assert.equal(formatToolCall("codemode", { code }), 'codemode const r = await tools.read({ path: "a" });');
+});
+
+test("formatToolCall: codemode without code renders the bare tool name", () => {
+  assert.equal(formatToolCall("codemode", {}), "codemode");
+});
