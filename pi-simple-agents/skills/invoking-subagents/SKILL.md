@@ -65,8 +65,10 @@ user settings > agent frontmatter > session default. A bare alias without a `/` 
 ### `tools` / `skills`
 
 Arrays of strings. Both are **total replacement**, not merge, of whatever the agent would
-otherwise resolve. `tools` accepts native pi tool names only; no Claude Code tool-name aliasing
-(e.g. `Read`→`read`) in this invocation path. `skills` whitelists by exact case-sensitive name
+otherwise resolve. `tools` takes exact pi tool names, MCP tools included as
+`mcp__<server>__<tool>` (no wildcards; a deferred server also needs `tool_search`, a `codemode`
+one needs `codemode`); no Claude Code tool-name aliasing (e.g. `Read`→`read`) in this invocation
+path. `skills` whitelists by exact case-sensitive name
 against the inherited skill set. `[]` is a valid explicit value meaning "none" for that call;
 omitting the field means "inherit whatever settings.json/frontmatter already resolved"; these
 are different things.

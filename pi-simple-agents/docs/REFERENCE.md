@@ -47,7 +47,7 @@ As with frontmatter `model`, registry existence isn't checked. A well-formed but
 
 ### Overriding tools per invocation
 
-Both modes accept an optional `tools` param: an array of pi tool names. Unlike frontmatter `tools`, this does **not** accept Claude Code tool-name aliases (`Read`, `Grep`, etc.): that mapping is frontmatter-only. See [Claude Code compatibility](#claude-code-compatibility). Only native pi tool names (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, ...) are recognized here.
+Both modes accept an optional `tools` param: an array of pi tool names. Unlike frontmatter `tools`, this does **not** accept Claude Code tool-name aliases (`Read`, `Grep`, etc.): that mapping is frontmatter-only. See [Claude Code compatibility](#claude-code-compatibility). Names are exact pi tool names: built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, ...), tools from installed extensions, and MCP tools (`mcp__<server>__<tool>`, see [MCP tools in subagents](#mcp-tools-in-subagents)).
 
 In single mode, `tools` is a top-level param:
 
@@ -207,7 +207,7 @@ field (summed across every task in the batch), in addition to the existing per-t
 |---|---|---|---|
 | `name` | string | — **(required)** | Agent name. Used to reference it in `subagent`. |
 | `description` | string | — **(required)** | Short description visible in the UI. Also used to build the `subagent` tool's description shown to the model (a `name: description` line per discovered agent), computed once when the pi session starts: agents added or renamed while pi is running aren't reflected until restart. |
-| `tools` | list | `[]` | Tools the agent is allowed to use. Comma-separated in YAML. Accepts pi tool names or Claude Code tool names (see [Claude Code compatibility](#claude-code-compatibility)). |
+| `tools` | list | `[]` | Tools the agent is allowed to use, by exact name. Comma-separated in YAML. Accepts pi tool names, MCP tools as `mcp__<server>__<tool>` (see [MCP tools in subagents](#mcp-tools-in-subagents)), or Claude Code tool names (see [Claude Code compatibility](#claude-code-compatibility)). |
 | `disallowedTools` | list | `[]` | Tools the agent is denied, applied after `tools`. Comma-separated in YAML. Same name compatibility as `tools`. Forwarded to the SDK as `excludeTools`. |
 | `model` | string | *inherited from parent session* | Model to use, in `provider/modelId` form, e.g. `openrouter/gpt-4o`. Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`, `inherit`) are also accepted but have no effect on model resolution. See [Claude Code compatibility](#claude-code-compatibility). |
 | `systemPromptMode` | `append` or `replace` | `append` | `append`: the agent's system prompt is added to the parent session context. `replace`: replaces the entire system context. |
@@ -220,6 +220,60 @@ field (summed across every task in the batch), in addition to the existing per-t
 | `skills` | list | *inherited* | Explicit whitelist of skills to load, matched by exact, case-sensitive name against the inherited set. When set, overrides automatic inheritance; requested names with no match produce a warning per run. Setting `skills` together with `inheritSkills: false` is contradictory config: it produces a warning and the filter is ignored. **Limitation:** the filter narrows *which* skills are available, but still doesn't preload the named skills' content into the subagent's context. This is not the same as Claude Code's skill-preload semantics. |
 | `maxTurns` | integer 1–100 | *no limit* | Max number of model turns (one model response + its batch of tool calls = 1 turn) before the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted. Out-of-range or non-integer values (≤ 0, > 100, `NaN`, `Infinity`, non-integer like 2.5) are warned and ignored, falling back to no limit. |
 | `timeoutMs` | number (ms) | `600000` (10 min) | Bounds how long a subagent run may take before it's aborted. A value above the 2-hour ceiling (`7200000` ms) is clamped to it with a warning. A non-number, `<= 0`, `NaN`, or `Infinity` value falls back to the 10-minute default with a warning. On expiry, the run settles as an error (`"timed out after <N>ms"`) and any partial output is discarded. |
+
+## MCP tools in subagents
+
+Subagents get MCP through pi's built-in MCP support, configured in `~/.pi/agent/mcp.json` (or a trusted project's `mcp.json`). This needs pi 0.99.0 or later. `pi-mcp-adapter` is not supported.
+
+pi's CLI loads its built-in `mcp`, `tool-search` and `codemode` extensions on its own; an SDK session, which is what a subagent runs in, doesn't. pi-simple-agents adds them to every subagent, so they follow the same settings as the host: `-builtin:<name>` in the `extensions` setting turns one off, and `inheritExtensions: false` turns all three off.
+
+### Tool names and the `tools` list
+
+MCP tools are registered as `mcp__<server>__<tool>`, e.g. `mcp__mde-build__mvn` for the `mvn` tool of a server named `mde-build`. `pi mcp list` shows the servers.
+
+When an agent has a `tools` list (frontmatter, `settings.json` override, or per call), pi filters by exact name before anything else:
+
+- A tool that isn't on the list is never registered in that subagent. `tool_search` can't find it and `codemode` can't call it.
+- There are no wildcards. `mcp__mde-build__*` matches nothing.
+- `disallowedTools` removes tools by exact name after `tools` is applied.
+- A per-call `tools` replaces the agent's list, it doesn't add to it. Repeat the agent's own tools if it still needs them.
+
+An agent with no `tools` list gets every tool the session has, every MCP tool included.
+
+### Exposure
+
+Each server's `exposure` in `mcp.json` (default `codemode`) decides how the model reaches its tools, once they pass the `tools` list:
+
+| `exposure` | What the model sees | What `tools` needs |
+|---|---|---|
+| `direct` | The tool, declared right away | The MCP tool name |
+| `deferred` | Nothing until `tool_search` loads it | `tool_search` and the MCP tool name |
+| `codemode` (default) | Only through `codemode` scripts | `codemode` and the MCP tool name |
+| `hidden` | Nothing | Unreachable |
+
+`toolExposure` in `mcp.json` can override the exposure of single tools; the same table applies per tool. See pi's [MCP docs](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/mcp.md) for the config format.
+
+Measured against a real `mcp.json` with `mde-build` (`direct`: `mvn`, `sbt`, `npm`) and `codegraph` (`deferred`: `codegraph_explore`):
+
+| `tools` | What the subagent ends up with |
+|---|---|
+| `[read, tool_search]` | `tool_search`, and no MCP tools |
+| `[read, tool_search, mcp__codegraph__codegraph_explore]` | `tool_search`, plus `codegraph_explore` for it to load |
+| `[read, codemode]` | `codemode`, and no MCP tools |
+| `[read, codemode, mcp__mde-build__mvn]` | `codemode` and `mvn`, both active |
+| none | Every MCP tool, `tool_search` active, `codemode` registered but inactive |
+
+`codemode` is only active by default when some server uses `codemode` or `codemode-deferred` exposure, or when `defaultTools` in `settings.json` includes `"+codemode"`. Listing it in `tools` activates it.
+
+### When MCP connects
+
+MCP servers connect when a session emits `session_start`. A subagent emits its own only when it needs one, to skip the connection cost otherwise. It does when, before connecting, it has:
+
+- a tool from an installed extension package (`sourceInfo.origin === "package"`), e.g. `pi-search-hub`;
+- a tool from the built-in `mcp`, `tool-search` or `codemode` extension (`sourceInfo.path` `builtin:mcp`, `builtin:tool-search`, `builtin:codemode`);
+- a `tools` entry that isn't registered yet. MCP tools only appear once their server connects, so an `mcp__...` name always counts. So does a misspelled name, which only costs connection time. Inert Claude Code tools (`Task`, `TodoWrite`, ...) and this package's own `subagent` tool are ignored.
+
+The subagent emits `session_shutdown` before it is disposed, which stops the servers it started. The host's own connections are untouched: each subagent gets its own instance of the MCP extension. This works in every host mode, `tui`, `rpc`, `print` (`pi -p`) and `json`.
 
 ## Claude Code compatibility
 
@@ -380,11 +434,10 @@ maxTurns: 10
 ## Known limitations
 
 - Subagents share a `ModelRuntime` snapshot taken when the extension loads. This affects two things: (a) performing `/login` later in the same session requires running `/reload` before subagents will see the new credentials, and (b) resolving an agent's `model: "provider/modelId"` config value against a provider or model that only became available after extension load (e.g. a provider registered after load, or a newly available model) also won't resolve until `/reload`: both share the same frozen `ModelRuntime` snapshot.
-- Subagents load pi's built-in `codemode`, `tool-search` and `mcp` extensions like the CLI does (the SDK doesn't on its own), honoring `-builtin:<name>` in the `extensions` setting. Requires pi >= 0.99.0. Only pi's built-in MCP (`~/.pi/agent/mcp.json`) is supported; `pi-mcp-adapter` is not.
-- MCP tools (pi's built-in MCP), and any other extension that depends on the `session_start` hook to initialize, now initialize inside a subagent in every host run mode: `tui`, `rpc`, `print` (`pi -p`), and `json` (`--mode json`). Each subagent that needs it emits its own `session_start` (via `bindExtensions`) and, symmetrically, its own `session_shutdown` right before disposal: the same bind/shutdown pair pi's own CLI uses on its own exit path. This is what lets it work safely even in `print`/`json`, where the process only exits once the event loop drains naturally: without the matching shutdown, a live MCP server child process spawned by the bind would otherwise keep that loop from ever draining. See `src/extension-binding.ts` and `src/run.ts`'s `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound`.
-- This initialization is triggered when, before binding, the subagent has a tool from an **installed package** (`sourceInfo.origin === "package"`), a tool from pi's built-in `mcp`, `tool-search` or `codemode` extension (`sourceInfo.path` `builtin:mcp` / `builtin:tool-search` / `builtin:codemode`), or a `tools` entry that isn't registered yet (e.g. `mcp__<server>__<tool>`, which the built-in MCP only registers once its server connects at `session_start`). A misspelled `tools` entry therefore also triggers a bind, which only costs connection time. This package's own `subagent` tool is excluded from all three checks: an agent that can merely nest another subagent call doesn't, by that fact alone, need any MCP server connected. A top-level `~/.pi/agent/extensions/*.ts` file that registers tools and also depends on `session_start` will not have it fire in a subagent (it isn't an installed package). Also inherent: an extension that listens for `session_start` but registers no tools at all is never detected, so it never triggers either.
+- MCP in subagents has its own section, [MCP tools in subagents](#mcp-tools-in-subagents). The two limitations below are its residual risks.
+- A `~/.pi/agent/extensions/*.ts` file that registers tools and also depends on `session_start` won't have it fire in a subagent, since it isn't an installed package. An extension that listens for `session_start` but registers no tools is never detected either.
 - A hung MCP handshake during bind is bounded to `EXTENSION_BIND_TIMEOUT_MS` (60s by default) and is abortable via the subagent's own signal: it can't block the run indefinitely, but a handshake that never resolves still delays that subagent's result by up to that bound.
-- The symmetric shutdown stops the MCP connections *this subagent's own nested session* opened; it never touches the host's own MCP state (each nested session gets an independent instance of the adapter's extension factory). A shutdown that itself hangs (no timeout is applied to it) is a known residual risk. See `DEVELOPER.md` for the reasoning and the mitigation this took instead (removing the artificial mode restriction, not adding another timeout layer).
+- The symmetric shutdown stops the MCP connections *this subagent's own nested session* opened; it never touches the host's own MCP state (each nested session gets an independent instance of the MCP extension's factory). A shutdown that itself hangs (no timeout is applied to it) is a known residual risk. See `DEVELOPER.md` for the reasoning and the mitigation this took instead (removing the artificial mode restriction, not adding another timeout layer).
 
 ## For developers
 
