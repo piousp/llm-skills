@@ -87,7 +87,7 @@ export const SubagentParams = Type.Object({
     description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
   })),
   tools: Type.Optional(Type.Array(Type.String(), {
-    description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Native pi tool names only — Claude Code tool-name aliases are not mapped here.',
+    description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Exact pi tool names, including MCP tools as mcp__<server>__<tool> (no wildcards); Claude Code tool-name aliases are not mapped here.',
   })),
   skills: Type.Optional(Type.Array(Type.String(), {
     description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',
@@ -114,7 +114,7 @@ export const SubagentParams = Type.Object({
           description: 'Optional model override in "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"). Takes precedence over the agent\'s configured model.',
         })),
         tools: Type.Optional(Type.Array(Type.String(), {
-          description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Native pi tool names only — Claude Code tool-name aliases are not mapped here.',
+          description: 'Optional tool whitelist for this invocation only. Replaces the agent\'s configured tools entirely (no merge). Exact pi tool names, including MCP tools as mcp__<server>__<tool> (no wildcards); Claude Code tool-name aliases are not mapped here.',
         })),
         skills: Type.Optional(Type.Array(Type.String(), {
           description: 'Optional skill whitelist for this invocation only. Replaces the agent\'s configured skills entirely (no merge).',

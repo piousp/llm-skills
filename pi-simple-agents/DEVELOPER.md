@@ -498,7 +498,7 @@ appear, and other extensions' tools may fail on every call
 inside a subagent — even though the tool exists in the registry.
 
 `runAgentViaSdk` calls a private helper, `bindExtensionsIfNeeded(agentSession, mode, bindTimeoutMs,
-signal)`, immediately after `session = agentSession` and before the pre-prompt abort check (so an
+signal, agent.tools)`, immediately after `session = agentSession` and before the pre-prompt abort check (so an
 abort during the bind is observed by the existing check, rather than opening a second abort
 window). It has a single gate before calling `agentSession.bindExtensions({ mode })`:
 
@@ -514,7 +514,9 @@ window). It has a single gate before calling `agentSession.bindExtensions({ mode
   - a name in `agent.tools` isn't registered yet. pi's built-in MCP registers `mcp__<server>__<tool>`
     only once the server connects, during `session_start`, so a pre-bind registry never contains
     them; a requested-but-missing name can only still come from an extension. A misspelled name
-    also triggers a bind, which only costs connection time.
+    also triggers a bind, which only costs connection time. Inert Claude Code tool names
+    (`CLAUDE_INERT_TOOLS`, `src/claude-compat.ts`) stay in `agent.tools` but no extension ever
+    supplies them, so they are excluded from this check.
 
   `getAllTools()` is already filtered by the SDK according to `agent.tools`/`agent.disallowedTools`,
   so this reuses that filtering rather than duplicating it. A subagent restricted to base built-ins
@@ -965,6 +967,23 @@ unchanged) and extended with two new overrides:
 - `agent.skills !== undefined && agent.inheritSkills === false` is contradictory config: it
   produces a warning in `result.warnings` and no `skillsOverride` is attached.
 
+The returned `options` also always include `extensionFactories: BUILTIN_EXTENSION_FACTORIES`:
+pi's built-in `codemode`, `tool-search` and `mcp` extensions, built with the SDK's public
+`createCodemodeExtension()`, `createToolSearchExtension()` and `createMcpExtension()`. pi's CLI adds
+these to its own loader (`main.js`, `builtInExtensions`), but a `DefaultResourceLoader` gets none
+unless they are supplied, so without this no subagent would ever see MCP, `tool_search` or
+`codemode`. Each entry is `builtin: true, replaceable: true`, the same flags the CLI uses:
+
+- `builtin` makes it load as the `builtin:<name>` extension path, so `-builtin:<name>` in the
+  `extensions` setting and `noExtensions` (`inheritExtensions: false`) disable it as in the host.
+- `replaceable` lets pi drop it when an installed extension registers the same tool or command
+  (`codemode`, `tool_search`, `/mcp`), as the host does, instead of loading both and colliding.
+
+`llama.cpp` is left out: its factory isn't exported, and it registers a provider, not tools. The
+factory instances are module-level and shared by every subagent loader. That is safe because each
+one keeps its state inside the `(pi) => {...}` closure it returns, so every nested session gets its
+own.
+
 The returned `options` also unconditionally include `noThemes: true` — themes are only consumed by
 interactive mode, and subagent sessions are headless, so this skips theme loading/resolution work
 on every subagent's `resourceLoader.reload()`.
@@ -1308,6 +1327,20 @@ part of `npm test` and must be opted into explicitly:
 ```bash
 PI_LIVE_E2E=1 npm run test:e2e
 ```
+
+Two live cases cover MCP:
+
+- `test/e2e/extension-binding.integration.test.ts` needs no model call. It builds a session with the
+  same loader a subagent gets (`buildLoaderOptions`), checks that the gate fires before any
+  `mcp__*` tool exists, binds, waits for `builtin:mcp` tools and a real child process, then checks
+  that `session_shutdown` stops it. It skips unless `~/.pi/agent/mcp.json` has an enabled stdio
+  server.
+- The `mcp__mde-build__mvn` case in `test/e2e/subagent.e2e.test.ts` runs `pi -p`, has a `worker`
+  call `mcp__mde-build__mvn` through a per-call `tools` override, and expects a real Maven result.
+  It skips unless `mcp.json` has an enabled `mde-build` server with `"exposure": "direct"`.
+
+Either one runs alone with `--test-name-pattern`, or by passing the single file to
+`node --experimental-strip-types --test`.
 
 ## License
 

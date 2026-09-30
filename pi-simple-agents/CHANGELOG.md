@@ -20,6 +20,9 @@
 - **`pi-mcp-adapter` is no longer supported**: use pi's built-in MCP (`~/.pi/agent/mcp.json`).
 - `inheritExtensions: false` now also disables the built-in `mcp`, `tool-search` and `codemode`
   extensions in that agent, matching `pi --no-extensions` in 0.99.
+- The `tools` param description, the bundled skill and `docs/REFERENCE.md` (new section "MCP tools
+  in subagents") explain exact `mcp__<server>__<tool>` names and how `exposure` interacts with a
+  subagent's `tools` list. README shortened.
 - Live tests (`PI_LIVE_E2E=1`) rewritten for pi's built-in MCP: the integration test drives the
   real subagent loader, and the `pi -p` e2e calls `mcp__mde-build__mvn` through a `worker`.
 
