@@ -163,6 +163,10 @@ Ctrl+O (`app.tools.expand`) toggles the `subagent` tool box's body between colla
 - **Collapsed, once settled:** shows nothing: no output.
 - **Expanded, once settled:** shows the agent's/agents' full final output, same as the always-on behavior before this toggle existed.
 
+The same toggle (or a click on the box) also expands the call title. Collapsed, it shows the first line of the task, cut to 80 characters. Expanded, it shows the full task, indented under the agent and its parameter line; in parallel mode each agent is followed by its own full task.
+
+Tool-call summaries in the stream cover `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `tool_search` (the query) and `codemode` (the first line of the code, skipping a leading `// @options:` line). MCP tools named `mcp__<server>__<tool>` render as `server/tool key=value ...`, as pi titles direct MCP calls. Any other tool renders as its name plus its JSON arguments.
+
 Expanded, in-progress example:
 
 ```
