@@ -7,7 +7,7 @@ description: >
   analysis, no evaluation, no implementation. Returns compressed findings
   (file paths, line numbers, excerpts) to the caller. Accepts an optional
   lens file (`Lens: <path>`) that replaces the default output format.
-tools: read, grep, find, ls, mcp
+tools: read, grep, find, ls, tool_search, mcp__codegraph__codegraph_explore
 systemPromptMode: append
 inheritProjectContext: false
 ---

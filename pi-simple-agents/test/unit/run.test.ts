@@ -1210,7 +1210,7 @@ test("runAgentViaSdk: getContextUsage is read before the session is disposed", a
 
 test("runAgentViaSdk: getAllTools with an origin:package tool triggers bindExtensions with the host's mode (tui)", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1226,7 +1226,7 @@ test("runAgentViaSdk: getAllTools with an origin:package tool triggers bindExten
 
 test("runAgentViaSdk: bindExtensions receives mode 'rpc' when the host runs in rpc mode", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1258,7 +1258,7 @@ test("runAgentViaSdk: getAllTools with only built-in tools does not call bindExt
 
 test("runAgentViaSdk: bindExtensions is awaited before prompt is called (deferred bind: prompt must not appear in callOrder while the bind is still pending)", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   let resolveBind!: () => void;
   fakeSession.onBind = () => new Promise<void>((resolve) => { resolveBind = resolve; });
@@ -1287,7 +1287,7 @@ test("runAgentViaSdk: bindExtensions is awaited before prompt is called (deferre
 test("runAgentViaSdk: bindExtensions throwing warns and does not fail the run", async (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
     bindShouldThrow: true,
   });
   const createSession = async () => ({ session: fakeSession as any });
@@ -1307,7 +1307,7 @@ test("runAgentViaSdk: bindExtensions throwing warns and does not fail the run", 
 
 test("runAgentViaSdk: signal aborted during bindExtensions settles as abort error and never calls prompt", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const controller = new AbortController();
   fakeSession.onBind = () => { controller.abort(); };
@@ -1327,7 +1327,7 @@ test("runAgentViaSdk: signal aborted during bindExtensions settles as abort erro
 
 test("runAgentViaSdk: mode 'print' with a package tool calls bindExtensions (the mode gate was removed — the host itself is what emits session_shutdown+process.exit() in this mode, not us)", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1343,7 +1343,7 @@ test("runAgentViaSdk: mode 'print' with a package tool calls bindExtensions (the
 
 test("runAgentViaSdk: mode 'json' with a package tool calls bindExtensions", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1358,7 +1358,7 @@ test("runAgentViaSdk: mode 'json' with a package tool calls bindExtensions", asy
 
 test("runAgentViaSdk: mode 'rpc' with a package tool calls bindExtensions", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1373,7 +1373,7 @@ test("runAgentViaSdk: mode 'rpc' with a package tool calls bindExtensions", asyn
 
 test("runAgentViaSdk: mode 'tui' with a package tool calls bindExtensions", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1388,7 +1388,7 @@ test("runAgentViaSdk: mode 'tui' with a package tool calls bindExtensions", asyn
 
 test("runAgentViaSdk: mode omitted still calls bindExtensions, with mode: undefined in the bindings (the SDK's own default applies downstream)", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1404,7 +1404,7 @@ test("runAgentViaSdk: mode omitted still calls bindExtensions, with mode: undefi
 
 test("runAgentViaSdk: when bound, emits session_shutdown before dispose, mirroring the SDK's own AgentSessionRuntime.dispose() sequence", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 
@@ -1437,7 +1437,7 @@ test("runAgentViaSdk: when never bound (built-in tools only), never emits sessio
 
 test("runAgentViaSdk: when bound but extensionRunner.hasHandlers('session_shutdown') is false, does not call emit", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   fakeSession.hasShutdownHandlers = false;
   const createSession = async () => ({ session: fakeSession as any });
@@ -1455,7 +1455,7 @@ test("runAgentViaSdk: when bound but extensionRunner.hasHandlers('session_shutdo
 test("runAgentViaSdk: session_shutdown emit rejecting warns and still disposes the session", async (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   fakeSession.shutdownShouldThrow = true;
   const createSession = async () => ({ session: fakeSession as any });
@@ -1526,7 +1526,7 @@ test("awaitAtMost: a late rejection after the timeout wins does not surface as a
 test("runAgentViaSdk: a hung bindExtensions is bounded by extensionBindTimeoutMs — the run settles instead of hanging, with a warning naming the deadline", async (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   fakeSession.bindShouldHang = true;
   const createSession = async () => ({ session: fakeSession as any });
@@ -1544,7 +1544,7 @@ test("runAgentViaSdk: a hung bindExtensions is bounded by extensionBindTimeoutMs
 
 test("runAgentViaSdk: signal aborted while bindExtensions is pending (not yet resolved) settles as abort error and never calls prompt", async () => {
   const fakeSession = new FakeAgentSession("done", {
-    tools: [{ sourceInfo: { origin: "package", source: "pi-mcp-adapter" } }],
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
   });
   fakeSession.bindShouldHang = true;
   const controller = new AbortController();
@@ -1587,8 +1587,38 @@ test("runAgentViaSdk: an agent with the subagent tool AND a real MCP tool still 
   const fakeSession = new FakeAgentSession("done", {
     tools: [
       { name: "subagent", sourceInfo: { origin: "package", source: "pi-simple-agents" } },
-      { name: "mcp", sourceInfo: { origin: "package", source: "pi-mcp-adapter" } },
+      { name: "pkg_tool", sourceInfo: { origin: "package", source: "some-extension-package" } },
     ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+});
+
+test("runAgentViaSdk: an agent.tools entry not registered before bind (e.g. a built-in MCP tool, registered at session_start) triggers bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__mde-build__mvn"] }),
+    "build it",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+  );
+
+  assert.equal(fakeSession.bindCallCount, 1);
+});
+
+test("runAgentViaSdk: a tool from a built-in extension (path builtin:tool-search) triggers bindExtensions", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ name: "tool_search", sourceInfo: { path: "builtin:tool-search", origin: "top-level", source: "builtin" } }],
   });
   const createSession = async () => ({ session: fakeSession as any });
 

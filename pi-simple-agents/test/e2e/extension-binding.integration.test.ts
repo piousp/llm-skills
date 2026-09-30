@@ -1,19 +1,18 @@
-// Live integration test: creates a real AgentSession with the user's real,
-// installed extensions (no -e/-ne, no `pi` subprocess, no prompt()/model
-// call) and drives the exact bind -> shutdown sequence runAgentViaSdk uses
-// (src/run.ts). This is the regression net for the fix itself: unlike the
-// unit tests (which fake the SDK) and the `pi -p` e2e cases below (which
-// exercise the mode gate but never actually call a real MCP tool), this is
-// the only automated check that bindExtensions() really emits session_start
-// and that a real extension (pi-mcp-adapter) really spawns a child process
-// as a result — and that emitting session_shutdown before dispose() really
-// stops it. Manual verification did this by hand in `tui` (three cases: a
-// real Maven build, a real codegraph search, a real sbt build); this test
-// automates the mechanism, not those specific tools.
+// Live integration test: creates a real AgentSession through the same
+// loader a subagent gets (buildLoaderOptions + DefaultResourceLoader, which
+// supplies pi's built-in codemode/tool-search/mcp extensions) — no `pi`
+// subprocess, no prompt()/model call — and drives the exact
+// gate -> bind -> shutdown sequence runAgentViaSdk uses (src/run.ts). Unlike
+// the unit tests (which fake the SDK), this checks against pi's real
+// built-in MCP extension that:
+//   - the gate fires before bind even though no mcp__* tool is registered yet
+//     (they are only registered once servers connect, at session_start);
+//   - bindExtensions() really connects a server (spawns a child process and
+//     registers its builtin:mcp tools);
+//   - session_shutdown before dispose() really stops it.
 //
 // NOT part of `npm test`: depends on this machine's ~/.pi/agent/mcp.json
-// having at least one configured server, and on pi-mcp-adapter being
-// installed. Opt in explicitly:
+// having at least one enabled stdio server. Opt in explicitly:
 //
 //   PI_LIVE_E2E=1 npm run test:e2e
 //
@@ -25,24 +24,22 @@ import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createAgentSession } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
+import { buildLoaderOptions } from "../../src/loader-config.ts";
+import { needsExtensionBinding } from "../../src/extension-binding.ts";
+import type { AgentConfig } from "../../src/agents.ts";
 
 const live = process.env.PI_LIVE_E2E ? test : test.skip;
 const MCP_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "mcp.json");
 
-// Requires a server with lifecycle "eager"/"keep-alive", not just any
-// configured server: pi-mcp-adapter's default ("lazy") only spawns a
-// server's child process on its first actual tool call, not at
-// session_start — so a lazy-only config can never make the child-process
-// assertions below observe anything, regardless of whether bindExtensions
-// ran at all. This precondition is deliberately stricter than "MCP is
-// configured".
-function hasEagerOrKeepAliveMcpServer(): boolean {
+// Native MCP connects every enabled server at session_start, so any enabled
+// stdio server ("command" set) spawns an observable child process.
+function hasEnabledStdioMcpServer(): boolean {
   if (!fs.existsSync(MCP_CONFIG_PATH)) return false;
   try {
     const config = JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, "utf8"));
-    const servers = Object.values(config.mcpServers ?? {}) as Array<{ lifecycle?: string }>;
-    return servers.some((s) => s.lifecycle === "eager" || s.lifecycle === "keep-alive");
+    const servers = Object.values(config.mcpServers ?? {}) as Array<{ command?: string; enabled?: boolean }>;
+    return servers.some((s) => typeof s.command === "string" && s.enabled !== false);
   } catch {
     return false;
   }
@@ -60,39 +57,56 @@ function countChildProcesses(parentPid: number): number {
   return count;
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return predicate();
+}
+
+const agent: AgentConfig = {
+  name: "integration-agent",
+  description: "integration test agent",
+  systemPromptMode: "append",
+  inheritProjectContext: false,
+  defaultReads: [],
+  source: "user",
+  filePath: "/tmp/integration-agent.md",
+  systemPrompt: "",
+};
+
 live(
-  "integration: bindExtensions() initializes a real installed extension (spawns a child process), and session_shutdown really stops it",
-  { timeout: 30_000 },
+  "integration: the gate fires for built-in MCP before bind, bindExtensions() connects a real server (child process + builtin:mcp tools), and session_shutdown stops it",
+  { timeout: 60_000 },
   async (t) => {
-    if (!hasEagerOrKeepAliveMcpServer()) {
-      t.skip(
-        `no MCP server with lifecycle "eager"/"keep-alive" configured at ${MCP_CONFIG_PATH} — ` +
-          `a "lazy" (the default) server only spawns on first tool call, not at session_start, ` +
-          `so this test can't observe a bind-triggered process on this machine`,
-      );
+    if (!hasEnabledStdioMcpServer()) {
+      t.skip(`no enabled stdio MCP server configured at ${MCP_CONFIG_PATH}`);
       return;
     }
 
-    // No `tools` allowlist: extension tools (like `mcp`) are enabled by
-    // default, and this test needs at least one of them present.
-    const { session } = await createAgentSession({});
+    const resourceLoader = new DefaultResourceLoader(buildLoaderOptions(agent, process.cwd(), os.homedir()).options);
+    await resourceLoader.reload();
+    // No `tools` allowlist: every registered tool stays available, including
+    // the built-in tool_search/codemode tools the gate keys on.
+    const { session } = await createAgentSession({ resourceLoader, sessionManager: SessionManager.inMemory() });
     try {
       const toolsBeforeBind = session.getAllTools();
-      const packageToolBefore = toolsBeforeBind.find(
-        (tool) => tool.sourceInfo.origin === "package" && tool.name !== "subagent",
-      );
       assert.ok(
-        packageToolBefore,
-        "expected at least one installed-package tool (e.g. mcp) in the registry before bind " +
-          "(bindExtensions only emits session_start; it doesn't change which tools are registered)",
+        !toolsBeforeBind.some((tool) => tool.sourceInfo.path === "builtin:mcp"),
+        "expected no builtin:mcp tools before bind (they register once servers connect, at session_start)",
       );
+      assert.equal(needsExtensionBinding(toolsBeforeBind), true, "expected the gate to fire before bind");
 
       const childrenBeforeBind = countChildProcesses(process.pid);
 
       await session.bindExtensions({ mode: "rpc" });
-      // pi-mcp-adapter's session_start handler spawns MCP server child
-      // processes asynchronously; give it a moment before checking.
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const connected = await waitFor(
+        () => session.getAllTools().some((tool) => tool.sourceInfo.path === "builtin:mcp"),
+        30_000,
+      );
+      assert.ok(connected, "expected at least one builtin:mcp tool registered after bind");
 
       const childrenAfterBind = countChildProcesses(process.pid);
       assert.ok(
@@ -104,14 +118,11 @@ live(
       if (session.extensionRunner.hasHandlers("session_shutdown")) {
         await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
       }
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
-      const childrenAfterShutdown = countChildProcesses(process.pid);
-      assert.equal(
-        childrenAfterShutdown,
-        childrenBeforeBind,
+      const stopped = await waitFor(() => countChildProcesses(process.pid) <= childrenBeforeBind, 5_000);
+      assert.ok(
+        stopped,
         `expected session_shutdown to stop the child process(es) bindExtensions spawned ` +
-          `(before bind: ${childrenBeforeBind}, after shutdown: ${childrenAfterShutdown})`,
+          `(before bind: ${childrenBeforeBind}, after shutdown: ${countChildProcesses(process.pid)})`,
       );
     } finally {
       session.dispose();

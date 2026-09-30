@@ -127,19 +127,21 @@ live(
 );
 
 // Preconditions for the case below (documented, not asserted blind):
-// - ~/.pi/agent/mcp.json configures a server named "mde-build" exposing a
-//   direct tool "mvn" (i.e. the tool ends up registered as mde_build_mvn).
-// - An agent named "scout" is resolvable (ships with this repo's own
-//   agents-examples, or the user's ~/.pi/agent/agents).
+// - ~/.pi/agent/mcp.json configures a server named "mde-build" with
+//   `"exposure": "direct"` (pi's built-in MCP registers its "mvn" tool as
+//   mcp__mde-build__mvn once the server connects).
+// - An agent named "worker" is resolvable (~/.pi/agent/agents); the prompt
+//   grants the MCP tool through a per-invocation `tools` override, since no
+//   shipped agent lists it.
 // Skips (doesn't fail) when the precondition isn't met, naming it.
 const MCP_CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "mcp.json");
 
-function hasMdeBuildMvnConfigured(): boolean {
+function hasMdeBuildDirectConfigured(): boolean {
   if (!fs.existsSync(MCP_CONFIG_PATH)) return false;
   try {
     const config = JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, "utf8"));
     const mdeBuild = config.mcpServers?.["mde-build"];
-    return Boolean(mdeBuild && (mdeBuild.directTools ?? []).includes("mvn"));
+    return Boolean(mdeBuild && mdeBuild.exposure === "direct" && mdeBuild.enabled !== false);
   } catch {
     return false;
   }
@@ -153,25 +155,27 @@ function hasMdeBuildMvnConfigured(): boolean {
 // DEVELOPER.md), `pi -p` is expected to both stay clean AND produce a real
 // MCP tool result, not a degraded "MCP not initialized" one.
 live(
-  "e2e: subagent tool calls a real direct MCP tool (mde_build_mvn) via `pi -p`, exits clean, and returns a real tool result (not \"MCP not initialized\")",
+  "e2e: subagent tool calls a real direct built-in MCP tool (mcp__mde-build__mvn) via `pi -p`, exits clean, and returns a real tool result (not \"MCP not initialized\")",
   { timeout: TIMEOUT_MS + 10_000 },
   async (t) => {
-    if (!hasMdeBuildMvnConfigured()) {
-      t.skip(`no "mde-build" MCP server with an "mvn" direct tool configured at ${MCP_CONFIG_PATH}`);
+    if (!hasMdeBuildDirectConfigured()) {
+      t.skip(`no enabled "mde-build" MCP server with "exposure": "direct" configured at ${MCP_CONFIG_PATH}`);
       return;
     }
 
-    // A structured `tools: [...]` override spelled out in the natural-
-    // language prompt is *less* reliable than just describing the task and
-    // letting the model reach for the tool itself (verified by hand: the
-    // explicit-override phrasing made the model misreport scout's
-    // available tools). Pinning --model to a capable model is what actually
-    // fixes delegation reliability here — the default model for `pi -p`
-    // isn't guaranteed strong enough to reliably invoke `subagent` at all.
+    // The `tools` override is required: no shipped agent lists the MCP tool.
+    // Earlier, spelling out an override made the model misreport a scout's
+    // available tools, so the task stays minimal. Pinning --model to a
+    // capable model is what actually fixes delegation reliability here —
+    // the default model for `pi -p` isn't guaranteed strong enough to
+    // reliably invoke `subagent` at all. Concrete arguments are given
+    // because a worker won't guess a Maven projectDir (it reports BLOCKED).
     const prompt =
-      "Usa la herramienta subagent para invocar al agente 'scout' con esta tarea: " +
-      "'Invocá el tool mde_build_mvn una vez con los parámetros mínimos necesarios y reportá su " +
-      "resultado tal cual.' Reporta el resultado tal cual.";
+      "Usa la herramienta subagent para invocar al agente 'worker' con el parametro tools " +
+      "[\"read\", \"mcp__mde-build__mvn\"] y esta tarea: " +
+      `'Invocá el tool mcp__mde-build__mvn una vez con goal="compile" y projectDir="${os.tmpdir()}" ` +
+      "(no tiene pom.xml: un error real de Maven es un resultado válido) y reportá su resultado tal cual.' " +
+      "Reporta el resultado tal cual.";
 
     const { code, stdout } = await runPi(["-e", EXTENSIONS_DIR, "-ne", "--model", "anthropic/claude-sonnet-5", "-p", prompt]);
 

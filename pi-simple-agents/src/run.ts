@@ -202,10 +202,11 @@ function resolveModel(
 }
 
 // Emits session_start in the subagent's own nested AgentSession, so
-// extensions that depend on that hook (e.g. pi-mcp-adapter connecting MCP
-// servers) actually initialize. Skipped when no active tool for this
-// subagent came from an installed extension, to avoid paying MCP
-// connection cost in subagents that only use built-in tools. No mode gate:
+// extensions that depend on that hook (e.g. pi's built-in MCP extension
+// connecting servers and registering mcp__* tools) actually initialize.
+// Skipped when needsExtensionBinding finds no such dependency (see
+// extension-binding.ts), to avoid paying MCP connection cost in subagents
+// that only use base built-in tools. No mode gate:
 // the host itself (pi's print/json/tui/rpc modes) already binds+shuts down
 // symmetrically on its own exit path (see shutdownExtensionsIfBound below),
 // so the same pattern here is safe in every mode.
@@ -217,8 +218,9 @@ async function bindExtensionsIfNeeded(
   mode: RunAgentViaSdkOptions["mode"],
   bindTimeoutMs: number,
   signal: AbortSignal | undefined,
+  requestedToolNames: readonly string[] | undefined,
 ): Promise<boolean> {
-  if (!needsExtensionBinding(agentSession.getAllTools())) return false;
+  if (!needsExtensionBinding(agentSession.getAllTools(), requestedToolNames)) return false;
   const { outcome, error } = await awaitAtMost(
     agentSession.bindExtensions({ mode }),
     bindTimeoutMs,
@@ -246,15 +248,16 @@ async function bindExtensionsIfNeeded(
 // Symmetric counterpart to bindExtensionsIfNeeded: emits session_shutdown on
 // the session's own ExtensionRunner before dispose(), exactly as the SDK's
 // own AgentSessionRuntime.dispose() does (core/agent-session-runtime.js) —
-// this is what lets an extension like pi-mcp-adapter stop the MCP server
+// this is what lets an MCP extension stop the MCP server
 // child process(es) it spawned as a side effect of session_start, instead of
 // leaving them running past this subagent's lifetime. No-op when `bound` is
 // false (bindExtensions was never called, so there is nothing to shut down).
-// Precondition this relies on: pi-mcp-adapter's state is scoped to this
+// Precondition this relies on: the MCP extension's state is scoped to this
 // nested session's own extension factory invocation, not shared with the
 // host's — so this shutdown only stops the subagent's own MCP connections,
-// never the host's (verified in pi-mcp-adapter/index.ts: state/currentOwner
-// are closure-local to installMcpAdapter, not module-level).
+// never the host's (verified for pi 0.99's built-in extension in
+// dist/extensions/mcp/index.js: servers/sessionActive are closure-local to
+// the `(pi) => {...}` factory createMcpExtension returns).
 async function shutdownExtensionsIfBound(
   agentSession: CreateAgentSessionResult["session"],
   bound: boolean,
@@ -377,6 +380,7 @@ export function runAgentViaSdk(
           options.mode,
           options.extensionBindTimeoutMs ?? EXTENSION_BIND_TIMEOUT_MS,
           options.signal,
+          agent.tools,
         );
 
         if (options.signal?.aborted) {
