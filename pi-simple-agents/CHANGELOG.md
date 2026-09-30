@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.20.0
+
+- **Breaking: requires pi >= 0.99.0** (`peerDependencies` floor raised from 0.84.1; dev
+  dependencies moved to 0.99.1).
+- **Subagents can use pi 0.99's built-in MCP, `tool_search` and `codemode`.** Previously these
+  never reached a subagent, for two reasons:
+  - pi's CLI injects its built-in extensions into its own resource loader, but SDK loaders get
+    none. `buildLoaderOptions` now passes `codemode`, `tool-search` and `mcp` as
+    `extensionFactories`, marked `builtin`/`replaceable` like the CLI, so `-builtin:<name>`
+    settings and `inheritExtensions: false` behave as in the host. `llama.cpp` is not included (its factory isn't exported; it registers
+    a provider, not tools).
+  - The `session_start` gate only counted `origin: "package"` tools, while every built-in tool is
+    `origin: "top-level"`, and built-in MCP tools are only registered after `session_start`.
+    `needsExtensionBinding(tools, requestedToolNames)` now also fires for tools whose
+    `sourceInfo.path` is `builtin:mcp`, `builtin:tool-search` or `builtin:codemode`, and for
+    `agent.tools` entries not registered yet (e.g. `mcp__<server>__<tool>`), ignoring inert
+    Claude Code tool names (`Task`, `TodoWrite`, ...).
+- **`pi-mcp-adapter` is no longer supported**: use pi's built-in MCP (`~/.pi/agent/mcp.json`).
+- `inheritExtensions: false` now also disables the built-in `mcp`, `tool-search` and `codemode`
+  extensions in that agent, matching `pi --no-extensions` in 0.99.
+- Live tests (`PI_LIVE_E2E=1`) rewritten for pi's built-in MCP: the integration test drives the
+  real subagent loader, and the `pi -p` e2e calls `mcp__mde-build__mvn` through a `worker`.
+
 ## 0.15.0
 
 - **Subagent runs now persist their own session to disk by default, instead of running purely

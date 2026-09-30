@@ -51,6 +51,20 @@ test("buildLoaderOptions: noThemes is unconditionally true regardless of agent c
   assert.equal(withOverrides.options.noThemes, true);
 });
 
+// --- Built-in extensions (pi >= 0.99): the SDK loader only loads what extensionFactories supplies ---
+
+test("buildLoaderOptions: supplies pi's built-in codemode, tool-search and mcp extensions as builtin, replaceable factories (mirrors the CLI)", () => {
+  const { options } = buildLoaderOptions(baseAgent(), "/some/cwd", "/some/home");
+  const factories = (options.extensionFactories ?? []) as Array<{ name?: string; builtin?: boolean; replaceable?: boolean; factory?: unknown }>;
+
+  assert.deepEqual(factories.map((f) => f.name), ["codemode", "tool-search", "mcp"]);
+  for (const f of factories) {
+    assert.equal(f.builtin, true, `${f.name} must be builtin so -builtin:<name> settings and noExtensions apply`);
+    assert.equal(f.replaceable, true, `${f.name} must be replaceable so a third-party MCP extension takes over`);
+    assert.equal(typeof f.factory, "function");
+  }
+});
+
 // --- S2: paridad ---
 
 test("buildLoaderOptions: inheritExtensions false maps to noExtensions true, undefined maps to false", () => {

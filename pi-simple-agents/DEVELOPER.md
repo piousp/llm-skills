@@ -492,8 +492,9 @@ with the timeout or maxTurns paths — an already-settled run is a no-op.
 A nested `AgentSession` created for a subagent never receives `session_start` unless something
 explicitly calls `agentSession.bindExtensions(...)` — `createAgentSession` loads extensions (so
 their tools appear in the registry) but never binds them. Without that call, any extension whose
-initialization depends on `session_start` (notably `pi-mcp-adapter`, which connects configured MCP
-servers there) never runs its init, and its tools return `"MCP not initialized"` on every call
+initialization depends on `session_start` (notably pi's built-in MCP extension, which connects
+configured MCP servers and registers their `mcp__*` tools there) never runs its init: its tools never
+appear, and other extensions' tools may fail on every call
 inside a subagent — even though the tool exists in the registry.
 
 `runAgentViaSdk` calls a private helper, `bindExtensionsIfNeeded(agentSession, mode, bindTimeoutMs,
@@ -501,19 +502,33 @@ signal)`, immediately after `session = agentSession` and before the pre-prompt a
 abort during the bind is observed by the existing check, rather than opening a second abort
 window). It has a single gate before calling `agentSession.bindExtensions({ mode })`:
 
-- **Tool gate** — `needsExtensionBinding(agentSession.getAllTools())` is `true` only if at least
-  one tool active for this subagent, *other than this package's own `subagent` tool*
-  (`SUBAGENT_TOOL_NAME`, `src/extension-binding.ts`), has `sourceInfo.origin === "package"` (came
-  from an installed extension package, e.g. `pi-mcp-adapter` loaded via `npm:pi-mcp-adapter`).
+- **Tool gate** — `needsExtensionBinding(agentSession.getAllTools(), agent.tools)` is `true` if,
+  ignoring this package's own `subagent` tool (`SUBAGENT_TOOL_NAME`, `src/extension-binding.ts`),
+  any of these holds before the bind:
+  - a registered tool has `sourceInfo.origin === "package"` (came from an installed extension
+    package, e.g. `pi-search-hub` or `rpiv-advisor`, which both listen to `session_start`);
+  - a registered tool comes from pi's built-in `mcp`, `tool-search` or `codemode` extension. Every
+    built-in, base tools like `read` included, is `origin: "top-level", source: "builtin"`, so the
+    only distinguishing field is `sourceInfo.path` (`builtin:mcp` vs `builtin:read`), matched against
+    an explicit allowlist rather than inferred;
+  - a name in `agent.tools` isn't registered yet. pi's built-in MCP registers `mcp__<server>__<tool>`
+    only once the server connects, during `session_start`, so a pre-bind registry never contains
+    them; a requested-but-missing name can only still come from an extension. A misspelled name
+    also triggers a bind, which only costs connection time.
+
   `getAllTools()` is already filtered by the SDK according to `agent.tools`/`agent.disallowedTools`,
-  so this reuses that filtering rather than duplicating it. A subagent restricted to built-ins
-  only (`origin: "top-level"`), or one whose only package-origin tool is its own `subagent` tool
-  (needed to nest another subagent call, which says nothing about needing MCP), skips the bind.
-  Deliberately does **not** match by tool name or hardcode `pi-mcp-adapter` — any installed
-  extension that depends on `session_start` benefits the same way. Does not cover a top-level
-  `~/.pi/agent/extensions/*.ts` file (not an installed package) even if it registers tools and
-  depends on `session_start`, and can't detect an extension that depends on `session_start` but
-  registers no tools at all.
+  so this reuses that filtering rather than duplicating it. A subagent restricted to base built-ins
+  whose requested tools are all registered, or one whose only package-origin tool is its own
+  `subagent` tool (needed to nest another subagent call, which says nothing about needing MCP),
+  skips the bind. Does not cover a top-level `~/.pi/agent/extensions/*.ts` file (not an installed
+  package) whose tools are already registered, and can't detect an extension that depends on
+  `session_start` but registers no tools at all.
+
+  The built-in extensions only exist in the child at all because `buildLoaderOptions`
+  (`src/loader-config.ts`) passes them as `extensionFactories`: pi's CLI injects them into its own
+  loader (`main.js`: `builtInExtensions`), but SDK loaders get none unless supplied. They're marked
+  `builtin: true, replaceable: true` like the CLI's, so `-builtin:<name>` settings, `noExtensions`
+  (`inheritExtensions: false`) and an extension registering the same tool/command behave as in the host.
 
 **There is no mode gate.** An earlier version of this mechanism only bound in `"tui"`/`"rpc"`
 mode, reasoning that binding spawns a real MCP server child process the SDK has no public API to
@@ -543,10 +558,10 @@ runs, same degraded-but-alive behavior as before this mechanism existed.
 `runAgentViaSdk`'s `finally` block before `session.dispose()`. When `bound` is `true`, it checks
 `agentSession.extensionRunner.hasHandlers("session_shutdown")` and, if so, emits
 `{ type: "session_shutdown", reason: "quit" }` — the same event and reason pi's own
-`AgentSessionRuntime.dispose()` emits on its own exit path. `pi-mcp-adapter` implements this
-handler by stopping the MCP server child process(es) and OAuth/UI state it started for *this
-nested session specifically* — the adapter's state is scoped to each extension factory
-invocation, not shared across sessions, so this only ever stops the subagent's own connections,
+`AgentSessionRuntime.dispose()` emits on its own exit path. pi's built-in MCP implements this
+handler by stopping the MCP server child process(es) and OAuth/UI state they started for *this
+nested session specifically* — each extension's state is scoped to each extension factory
+invocation (for the built-in: the `(pi) => {...}` closure `createMcpExtension()` returns), not shared across sessions, so this only ever stops the subagent's own connections,
 never the host's. No timeout is applied to the shutdown emit itself (unlike the bind); a
 shutdown handler that hangs is a known residual risk, accepted rather than mitigated with another
 timeout layer, since removing the mode restriction already eliminated the far more common
@@ -556,7 +571,7 @@ failure mode (a live child left running by design, not by a hang).
 re-discovers and merges resources (skills, prompt templates) any bound extension contributes,
 passing through the same `skillsOverride` filter `buildLoaderOptions` already applies
 (`src/loader-config.ts`). No extension installed in this environment implements the
-`resources_discover` hook today (checked `pi-mcp-adapter` and the other configured packages), so
+`resources_discover` hook today (checked pi's built-in extensions and the other configured packages), so
 this isn't exploitable currently — but the mechanism is reachable the moment one does, and it
 runs on every bind, not just the ones this package intentionally triggers.
 
@@ -840,6 +855,7 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
     cwd,
     agentDir: path.join(os.homedir(), ".pi", "agent"),
     noExtensions: agent.inheritExtensions === false,
+    extensionFactories: BUILTIN_EXTENSION_FACTORIES, // pi's codemode, tool-search, mcp
     noSkills: agent.inheritSkills === false,
     noContextFiles: agent.inheritProjectContext === false,
     systemPromptOverride:

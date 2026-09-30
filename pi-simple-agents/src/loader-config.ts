@@ -1,5 +1,10 @@
 import path from "node:path";
-import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
+import {
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
+  DefaultResourceLoader,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { resolveDefaultReads } from "./default-reads.ts";
 import { filterSkillsByName } from "./skills-filter.ts";
@@ -16,6 +21,19 @@ interface OverrideResult<V> {
   override: V | undefined;
   warnings: string[];
 }
+
+// pi's CLI injects its built-in extensions into its own loader (main.js:
+// builtInExtensions); SDK loaders get none unless supplied here. Marked
+// builtin/replaceable exactly like the CLI, so `-builtin:<name>` settings,
+// noExtensions, and an installed extension registering the same tool or
+// command (`codemode`, `tool_search`, `/mcp`) behave the same in subagents
+// as in the host. llama.cpp is omitted: its factory
+// isn't exported, and it registers a provider, not tools.
+const BUILTIN_EXTENSION_FACTORIES: MinimalLoaderOptions["extensionFactories"] = [
+  { name: "codemode", factory: createCodemodeExtension(), replaceable: true, builtin: true },
+  { name: "tool-search", factory: createToolSearchExtension(), replaceable: true, builtin: true },
+  { name: "mcp", factory: createMcpExtension(), replaceable: true, builtin: true },
+];
 
 function buildAgentsFilesOverride(
   agent: AgentConfig,
@@ -84,6 +102,7 @@ export function buildLoaderOptions(
       cwd,
       agentDir: path.join(homeDir, ".pi", "agent"),
       noExtensions: agent.inheritExtensions === false,
+      extensionFactories: BUILTIN_EXTENSION_FACTORIES,
       noSkills: agent.inheritSkills === false,
       noContextFiles: agent.inheritProjectContext === false,
       systemPromptOverride:

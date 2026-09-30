@@ -123,3 +123,24 @@ test("buildLoaderOptions + real DefaultResourceLoader: skillsOverride filters re
     fs.rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+test("buildLoaderOptions + real DefaultResourceLoader: pi's built-in codemode, tool-search and mcp extensions load, and inheritExtensions: false disables them", async () => {
+  const cwd = makeTmpDir();
+  const homeDir = makeTmpDir();
+  try {
+    const builtinPaths = ["builtin:codemode", "builtin:tool-search", "builtin:mcp"];
+
+    const inherited = new DefaultResourceLoader(buildLoaderOptions(baseAgent(), cwd, homeDir).options);
+    await inherited.reload();
+    const loadedPaths = inherited.getExtensions().extensions.map((e) => e.path);
+    for (const p of builtinPaths) assert.ok(loadedPaths.includes(p), `expected ${p} in ${JSON.stringify(loadedPaths)}`);
+
+    const isolated = new DefaultResourceLoader(buildLoaderOptions(baseAgent({ inheritExtensions: false }), cwd, homeDir).options);
+    await isolated.reload();
+    const isolatedPaths = isolated.getExtensions().extensions.map((e) => e.path);
+    for (const p of builtinPaths) assert.ok(!isolatedPaths.includes(p), `expected ${p} absent with inheritExtensions: false`);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
+});
