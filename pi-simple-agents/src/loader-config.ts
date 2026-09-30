@@ -24,7 +24,8 @@ interface OverrideResult<V> {
 
 // pi's CLI injects its built-in extensions into its own loader (main.js:
 // builtInExtensions); SDK loaders get none unless supplied here. Marked
-// builtin/replaceable exactly like the CLI, so `-builtin:<name>` settings,
+// builtin/replaceable exactly like the CLI (flags copied by hand, verified
+// against pi 0.99.1), so `-builtin:<name>` settings,
 // noExtensions, and an installed extension registering the same tool or
 // command (`codemode`, `tool_search`, `/mcp`) behave the same in subagents
 // as in the host. llama.cpp is omitted: its factory
