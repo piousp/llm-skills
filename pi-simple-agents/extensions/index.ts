@@ -150,11 +150,12 @@ function toParamAgentsMap(agents: readonly AgentConfig[]): Map<string, AgentConf
 interface RenderCallContext {
   cwd: string;
   argsComplete: boolean;
+  expanded?: boolean;
 }
 
-// Renders the tool_box title: agent name + truncated first line of the task.
-// The host only supports expand/collapse on the result body (renderResult),
-// not on the call title, so there is no separate "expanded" title variant.
+// Renders the tool_box title. Collapsed: agent name + truncated first line of
+// the task. Expanded (Ctrl+O / click, which also expands the result): the full
+// task under each agent.
 function renderSubagentCall(
   args: SubagentArgs,
   theme: Theme,
@@ -163,7 +164,7 @@ function renderSubagentCall(
   const paramAgents = context?.argsComplete
     ? toParamAgentsMap(registry.peek(context.cwd)?.agents ?? [])
     : new Map<string, AgentConfig>();
-  return new Text(buildSubagentCallText(args, theme, paramAgents), 0, 0);
+  return new Text(buildSubagentCallText(args, theme, paramAgents, context?.expanded === true), 0, 0);
 }
 
 function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
