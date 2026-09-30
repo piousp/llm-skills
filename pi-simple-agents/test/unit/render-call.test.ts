@@ -526,3 +526,52 @@ test("buildSubagentCallText: task exactly 80 chars renders without truncation", 
     `<toolTitle><b>subagent </b></toolTitle><accent>scout</accent>: ${exactTask}`,
   );
 });
+
+test("buildSubagentCallText: expanded single task shows the full multi-line task below the params line", () => {
+  const agent = makeAgent({ name: "scout", model: "m" });
+  const task = `${"x".repeat(100)}\nsecond line`;
+  const result = buildSubagentCallText({ agent: "scout", task }, fakeTheme, new Map([["scout", agent]]), true);
+
+  assert.equal(
+    result,
+    `${prefix}<accent>scout</accent>`
+      + `\n  <dim>${formatAgentParams(agent)}</dim>`
+      + `\n  ${"x".repeat(100)}\n  second line`,
+  );
+});
+
+test("buildSubagentCallText: expanded single task without a known agent config shows title and task only", () => {
+  const result = buildSubagentCallText({ agent: "scout", task: "Find X" }, fakeTheme, new Map(), true);
+  assert.equal(result, `${prefix}<accent>scout</accent>\n  Find X`);
+});
+
+test("buildSubagentCallText: expanded without a task shows only the title", () => {
+  assert.equal(buildSubagentCallText({ agent: "scout" }, fakeTheme, new Map(), true), `${prefix}<accent>scout</accent>`);
+});
+
+test("buildSubagentCallText: expanded parallel tasks show each agent with its params and full task", () => {
+  const scoutAgent = makeAgent({ name: "scout", model: "m1" });
+  const result = buildSubagentCallText(
+    { tasks: [{ agent: "scout", task: "List files\nin src" }, { agent: "web-scout", task: "Find docs" }] },
+    fakeTheme,
+    new Map([["scout", scoutAgent]]),
+    true,
+  );
+
+  assert.equal(
+    result,
+    `${prefix}(2)`
+      + `\n  <accent>scout</accent><dim>: ${formatAgentParams(scoutAgent)}</dim>`
+      + `\n    List files\n    in src`
+      + `\n  <accent>web-scout</accent>`
+      + `\n    Find docs`,
+  );
+});
+
+test("buildSubagentCallText: expanded=false keeps the collapsed rendering", () => {
+  const args = { agent: "scout", task: "Find X\nmore" };
+  assert.equal(
+    buildSubagentCallText(args, fakeTheme, new Map(), false),
+    buildSubagentCallText(args, fakeTheme, new Map()),
+  );
+});
