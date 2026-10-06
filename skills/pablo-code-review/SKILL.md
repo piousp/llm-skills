@@ -41,21 +41,19 @@ step to a subagent.
    whether unrelated purposes belong in the same change (Scope Discipline territory, but stated
    up front rather than buried in a finding).
 
-3. **Dispatch the three lenses in parallel** (never three separate calls).
-   Each subagent reports problems only. [NEVER] ask a subagent to propose
-   fixes/corrections/alternatives; that step happens later, in the
-   coordinator, once all three results are in.:
+3. **Dispatch the three lenses concurrently: one `subagent` call per lens, issued in the same
+   turn.** Each call starts its own independent background job, so the three run at once.
+   [NEVER] wait for one lens's result before issuing the next.
 
-   - `agent: "analyst"`, `skills: ["qa-adversary"]`,
-     `timeoutMs: 1200000` - task: the diff, plus "Apply the qa-adversary
-     lens to this diff only. Do not analyze code outside the diff."
-   - `agent: "analyst"`, `skills: ["code-review-checklist"]`,
-     `timeoutMs: 1200000` - task: the diff, plus "Apply the
-     code-review-checklist lens to this diff only. Do not analyze code
-     outside the diff."
-   - `agent: "analyst"`, `skills: ["refactor-identification"]`,
-     `timeoutMs: 1200000` - task: the diff, plus "Apply the
-     refactor-identification lens to this diff." Use it as-is: its own
+  How to invoke, as three standalone calls:
+
+  ```
+  {"agent": "analyst", "task": "<diff>\n\nApply the qa-adversary lens to this diff only. Do not analyze code outside the diff.", "skills": ["qa-adversary"], "timeoutMs": 1200000}
+  {"agent": "analyst", "task": "<diff>\n\nApply the code-review-checklist lens to this diff only. Do not analyze code outside the diff.", "skills": ["code-review-checklist"], "timeoutMs": 1200000}
+  {"agent": "analyst", "task": "<diff>\n\nApply the refactor-identification lens to this diff.", "skills": ["refactor-identification"], "timeoutMs": 1200000}
+  ```
+
+   Use each lens as-is: its own
      Scope law already 1-hops into pre-existing code for context and its
      P1/P2/P3 table already restricts an actionable recommendation to a
      smell whose root cause was added or modified by the branch (P1). A
@@ -63,25 +61,15 @@ step to a subagent.
      observation, never a recommendation. [NEVER] loosen its Boundaries
      section to widen the scan.
 
-   Each `skills` array is a total replacement: the analyst loads only that
-   one lens, nothing else. Leave `tools` at the analyst default (read-only,
-   no Write/Edit).
+4. **Merge, don't append.** Wait for all three results to arrive (each call's result is delivered
+   as its own message), then build one report grouped by changed file, not by lens. [NEVER] print
+   three sub-reports back to back: that is the audit-report shape this skill exists to avoid.
 
-  [MUST] invoke the subagents in parallel with timeout of 20 minutes:
-  {
-  "tasks": [
-    {"agent": "analyst", "task": "XX", "skills": "X"},
-    {"agent": "analyst", "task": "XX", "skills": "X"},
-    {"agent": "analyst", "task": "XX", "skills": "X"}
-  ]
-}
+5. **Sort by issue severity** Blocking, major, minor, trivial. 
+  Give them unique identifiers: (i.e. B1, M1, M2, I1, I2, I3, G1, etc).
+  Group the issues by file as well
 
-4. **Merge, don't append.** Wait for all three results, then build one
-   report grouped by changed file, not by lens. [NEVER] print three
-   sub-reports back to back: that is the audit-report shape this skill
-   exists to avoid.
-
-5. **Add corrections yourself.** Once the merge is done, the coordinator,
+6. **Add corrections yourself.** Once the merge is done, the coordinator,
    not a subagent, drafts the ≥2 corrections/alternatives per finding
    required by the Output format below, using its own judgment plus the
    subagents' problem descriptions as input. [NEVER] send a fourth

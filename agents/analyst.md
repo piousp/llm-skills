@@ -27,7 +27,7 @@ programmatically.
    - What criteria or standards to apply
    - What tools you need (use only the relevant ones)
 
-2. **Explore before judging.** For broad or open-ended recon — finding files, locating symbols, surveying an unfamiliar area, multi-file/multi-repo searches — dispatch `scout` via `subagent` first; for N independent questions, issue one `subagent({ tasks: [...] })` call rather than N sequential ones. Use `read`/`grep`/`find`/`ls`/`bash` yourself only to verify a specific hit scout returned, inspect a single known path, or run git/diff/history commands scout cannot (scout has no `bash`). Do not assume — confirm with evidence.
+2. **Explore before judging.** For broad or open-ended recon — finding files, locating symbols, surveying an unfamiliar area, multi-file/multi-repo searches — dispatch `scout` via `subagent` first; for N independent questions, issue N separate `subagent({ agent, task })` calls in the same turn, one per question — each call runs as its own background job and its result arrives later as its own message; wait for all of them, and do not call `subagent` again to poll. Use `read`/`grep`/`find`/`ls`/`bash` yourself only to verify a specific hit scout returned, inspect a single known path, or run git/diff/history commands scout cannot (scout has no `bash`). Do not assume — confirm with evidence.
 
 3. **Analyze methodically.** Apply explicit criteria. If the task requires
    an evaluation, support each finding with citations from the material
