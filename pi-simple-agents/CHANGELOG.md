@@ -1,5 +1,68 @@
 # Changelog
 
+## 1.0.0
+
+- **Fix: deeply nested subagents (a subagent dispatching another subagent) could make session
+  persistence fail with `ENAMETOOLONG`.** Each nesting level added one more
+  `<runId>/run-N/session` segment to the persisted session path; confirmed in the wild, real
+  session paths with ~20 nesting levels reached 1005-1016 bytes, right at macOS's `PATH_MAX`
+  (1024). Past that, the directory create failed and the run silently fell back to an in-memory
+  (unpersisted) session, with only a console warning. Nesting is now capped at 4 literal levels;
+  anything deeper collapses into one short hashed segment anchored at the ancestor directory
+  that existed at the cap, so the path no longer grows with nesting depth. Also hardened: an
+  individual run id segment longer than 64 characters (not the cause found here, but possible on
+  a non-Anthropic host) is now truncated with a stable hash suffix instead of risking
+  `NAME_MAX` (255 bytes per path component) on its own.
+  Tradeoff: a run past the nesting cap no longer has its ancestor chain readable from its session
+  path (it was never being persisted at all before this fix, so nothing is lost in practice).
+- **Breaking: `subagent` no longer waits for a run to finish.** Calling it launches one background
+  job for that one `{agent, task}` call and returns almost immediately with an acknowledgment —
+  a job id (`S1001`, `S1002`, …), the agent, and the task — instead of the agent's final output.
+  The model is told explicitly not to call `subagent` again to poll. When the job settles, its
+  result is delivered automatically as a new message in the conversation, which also wakes the
+  model up with a follow-up turn to act on it (unless the job was cancelled, in which case it's
+  delivered quietly, without a new turn). This is the only mode now: there is no opt-in flag to
+  keep the old synchronous behavior.
+- **Breaking: the `tasks:[...]` parallel-launch mode is removed.** It existed only to get
+  concurrency out of a blocking call; now every call is non-blocking, so running several agents at
+  once just means calling `subagent` once per task, in the same turn — each call gets its own
+  independent job, with no overall cap on how many run at once. `agent`/`task` are now required,
+  top-level fields; the `concurrency` setting (`MAX_PARALLEL_TASKS`, `resolveConcurrency`,
+  `DEFAULT_CONCURRENCY`) is gone and silently ignored if still present in `settings.json`.
+- **Breaking: `buildSubagentToolResult` and related result types are now single-result shaped.**
+  `buildSubagentToolResult(result, runId)` takes one `AgentRunResult`, not an array; its `details`
+  is `{runId, run}` (the array-shaped `results`/`ChildResult` are gone). `formatRunResults` →
+  `formatRunResult(result)`; `aggregateRunUsage` → `toAggregatedUsage(usage)`. The completion
+  message's `details` is now `{jobId, runId, status, task, run?, usage?, isError}`, replacing the
+  old `tasks`/`runs`/`results` arrays.
+- **New `/subagents` command.** Lists every running and recently-finished job in the current
+  session (newest first, with per-task detail and a usage footer once finished).
+  `/subagents cancel <id>` cancels a running job; `/subagents clear` drops finished jobs from the
+  list (the 50 most recent are also kept automatically without it). Esc no longer cancels a
+  subagent run — only `/subagents cancel`, a session shutdown, or the headless safety nets
+  (the settle barrier's abort path, `agent_settled`) do; a job's abort signal is now
+  independent of the launching tool call's, so it survives past the end of the turn that launched
+  it.
+- **New running-jobs widget.** A persistent panel below the editor lists every still-running task
+  (agent, truncated task preview, elapsed time, ticking once a second) while at least one job is
+  running, and disappears once nothing is. This is how a job that outlives the rest of the
+  conversation stays visible without asking.
+- **A job's result renders like a native tool result**, in its own transcript entry: same themed
+  background (`toolSuccessBg`/`toolErrorBg`), same header convention, individually clickable to
+  toggle expand (independent of the global Ctrl+O toggle, same mechanism a real tool result uses).
+- **Headless and nested sessions still wait for their own jobs before settling.** `pi -p`,
+  `--mode json`, and a nested subagent session (one `subagent` call dispatching another) have
+  nowhere to show the widget/`/subagents`, so a new settle barrier (`agent_before_settle`) delays
+  that session's own settlement until every background job it launched finishes — the headless
+  process still exits with the real result, not an empty/truncated one.
+- **`AgentToolResult.usage` moved off the launch tool call's own result.** There's nothing to
+  report at launch time; the usage (and the run itself, at `details.run`) is now on the
+  completion message's own `details.usage` instead, once the job settles.
+- Background jobs are **in-memory only, per pi session**: no persistence across a restart, and a
+  nested subagent gets its own independent job set, invisible to its parent's.
+- `src/background-jobs.ts`, `src/job-messages.ts`, `src/job-view.ts`, and `src/job-widget.ts` are
+  new internal modules backing all of the above; see [DEVELOPER.md](DEVELOPER.md#background-jobs).
+
 ## 0.20.1
 
 - **Expandable task in the call title.** pi 0.99 passes `expanded` to call renderers, so Ctrl+O
@@ -40,7 +103,7 @@
   in-memory.** Previously, every subagent run's tokens and cost were computed correctly but
   never written anywhere durable, so any usage-tracking tool that attributes cost by reading
   session files on disk (local `/usage`-style dashboards, not the model provider's own billing)
-  had no record of them \u2014 subagent spend, including on a different model than the caller's, was
+  had no record of them — subagent spend, including on a different model than the caller's, was
   invisible locally even though it was real spend.
   - Each run's session is now persisted at `<parent-session-file-without-ext>/<runId>/
     run-<taskIndex>/session.jsonl`, where `runId` is the subagent tool call's own `toolCallId`.
@@ -50,7 +113,7 @@
   - `defaultContext: "forked"` agents now persist at this same conventional path too, replacing
     the previous fixed `~/.pi/agent/sessions/subagents/` directory.
   - A subagent whose caller session isn't itself persisted (e.g. an in-memory host session)
-    still falls back to running fully in-memory, as before \u2014 there is no parent path to nest
+    still falls back to running fully in-memory, as before — there is no parent path to nest
     under.
   - New `childSessionDir` export in `src/subagent-session.ts`; `SessionManagerFactory` gains an
     `atPath` method.

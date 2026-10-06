@@ -1,4 +1,3 @@
-import { buildProgressLines, buildProgressStream, type TaskProgress } from "./progress.ts";
 import { formatRunUsage, type RunUsage } from "./usage.ts";
 
 export const DIVIDER = "\u2500\u2500\u2500"; // ───
@@ -15,34 +14,26 @@ export interface RunUsageSource {
 }
 
 export interface SubagentResultView {
-  isPartial: boolean;
   expanded: boolean;
-  progress: readonly TaskProgress[] | undefined;
   content: string;
-  runs?: readonly RunUsageSource[];
+  run?: RunUsageSource;
 }
 
-function buildUsageFooterLines(runs: readonly RunUsageSource[] | undefined, theme: ResultTheme): string[] {
-  if (!runs) return [];
-  return runs
-    .map((run) => ({ agent: run.agent, footer: run.usage ? formatRunUsage(run.usage) : "" }))
-    .filter((r) => r.footer !== "")
-    .map((r) => `${theme.fg("accent", r.agent)} ${theme.fg("dim", r.footer)}`);
+function buildUsageFooterLine(run: RunUsageSource | undefined, theme: ResultTheme): string | undefined {
+  if (!run || !run.usage) return undefined;
+  const footer = formatRunUsage(run.usage);
+  if (footer === "") return undefined;
+  return `${theme.fg("accent", run.agent)} ${theme.fg("dim", footer)}`;
 }
 
 export function buildSubagentResultText(view: SubagentResultView, theme: ResultTheme): string {
-  const { isPartial, expanded, progress, content, runs } = view;
+  const { expanded, content, run } = view;
 
-  if (isPartial) {
-    if (!progress) return "";
-    const body = expanded ? buildProgressStream(progress, theme) : buildProgressLines(progress, theme);
-    return `${theme.fg("muted", DIVIDER)}\n${body}`;
-  }
-
-  // Usage footers are visible collapsed or expanded — they're a one-line
+  // The usage footer is visible collapsed or expanded — it's a one-line
   // summary, not the (potentially large) output the collapse/expand toggle
   // guards. Only the divider + full content stay gated behind `expanded`.
-  const footerLines = buildUsageFooterLines(runs, theme);
+  const footerLine = buildUsageFooterLine(run, theme);
+  const footerLines = footerLine ? [footerLine] : [];
 
   if (!expanded || !content) return footerLines.join("\n");
 

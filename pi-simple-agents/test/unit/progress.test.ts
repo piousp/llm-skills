@@ -4,8 +4,7 @@ import {
   initialTaskProgress,
   applyToolEvent,
   markDone,
-  buildProgressLines,
-  buildProgressStream,
+  buildProgressLine,
   createProgressTracker,
   toSubagentToolEvent,
   type TaskProgress,
@@ -95,7 +94,7 @@ test("applyToolEvent: returns a new object and does not mutate the original runn
   assert.equal(originalRunningTools.length, 0);
 });
 
-test("buildProgressLines: one task, one running tool renders accent agent, dim tool count and running tool name", () => {
+test("buildProgressLine: one running tool renders accent agent, dim tool count and running tool name", () => {
   const p: TaskProgress = {
     agent: "scout",
     runningTools: [{ toolCallId: "a", toolName: "read" }],
@@ -103,12 +102,12 @@ test("buildProgressLines: one task, one running tool renders accent agent, dim t
     done: false,
   };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 1 \u00b7 running: read</dim>");
 });
 
-test("buildProgressLines: two running tools list names in start order", () => {
+test("buildProgressLine: two running tools list names in start order", () => {
   const p: TaskProgress = {
     agent: "scout",
     runningTools: [
@@ -119,20 +118,20 @@ test("buildProgressLines: two running tools list names in start order", () => {
     done: false,
   };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 2 \u00b7 running: read, grep</dim>");
 });
 
-test("buildProgressLines: no running tools, not done renders working\u2026", () => {
+test("buildProgressLine: no running tools, not done renders working\u2026", () => {
   const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 working\u2026</dim>");
 });
 
-test("buildProgressLines: done true renders done regardless of runningTools", () => {
+test("buildProgressLine: done true renders done regardless of runningTools", () => {
   const p: TaskProgress = {
     agent: "scout",
     runningTools: [{ toolCallId: "a", toolName: "read" }],
@@ -140,15 +139,15 @@ test("buildProgressLines: done true renders done regardless of runningTools", ()
     done: true,
   };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 3 \u00b7 done</dim>");
 });
 
-test("buildProgressLines: done with usage appends the usage footer after the status", () => {
+test("buildProgressLine: done with usage appends the usage footer after the status", () => {
   const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: true, usage: sampleUsage };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(
     result,
@@ -156,94 +155,23 @@ test("buildProgressLines: done with usage appends the usage footer after the sta
   );
 });
 
-test("buildProgressLines: not done with usage does not render the footer (footer only appears once settled)", () => {
+test("buildProgressLine: not done with usage does not render the footer (footer only appears once settled)", () => {
   const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false, usage: sampleUsage };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 working\u2026</dim>");
 });
 
-test("buildProgressLines: done with a usage that renders empty omits the footer segment", () => {
+test("buildProgressLine: done with a usage that renders empty omits the footer segment", () => {
   const emptyRunUsage: RunUsage = {
     input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, isSubscription: false, context: undefined,
   };
   const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: true, usage: emptyRunUsage };
 
-  const result = buildProgressLines([p], fakeTheme);
+  const result = buildProgressLine(p, fakeTheme);
 
   assert.equal(result, "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 done</dim>");
-});
-
-test("buildProgressLines: two tasks render two lines joined by newline in input order", () => {
-  const p1: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false };
-  const p2: TaskProgress = { agent: "web-scout", runningTools: [], history: ["read a.ts", "read b.ts"], done: true };
-
-  const result = buildProgressLines([p1, p2], fakeTheme);
-
-  assert.equal(
-    result,
-    "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 working\u2026</dim>\n"
-      + "<accent>web-scout</accent> <dim>\u00b7 tools: 2 \u00b7 done</dim>",
-  );
-});
-
-test("buildProgressStream: single task, empty history renders only the status line (same as buildProgressLines)", () => {
-  const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false };
-
-  const result = buildProgressStream([p], fakeTheme);
-
-  assert.equal(result, buildProgressLines([p], fakeTheme));
-});
-
-test("buildProgressStream: single task with history renders the status line followed by indented dim entries in order", () => {
-  const p: TaskProgress = {
-    agent: "scout",
-    runningTools: [{ toolCallId: "a", toolName: "grep" }],
-    history: ["read foo.ts", "grep /x/"],
-    done: false,
-  };
-
-  const result = buildProgressStream([p], fakeTheme);
-
-  assert.equal(
-    result,
-    "<accent>scout</accent> <dim>\u00b7 tools: 2 \u00b7 running: grep</dim>\n"
-      + "  <dim>read foo.ts</dim>\n"
-      + "  <dim>grep /x/</dim>",
-  );
-});
-
-test("buildProgressStream: two tasks render each block in input order", () => {
-  const p1: TaskProgress = { agent: "scout", runningTools: [], history: ["read a.ts"], done: false };
-  const p2: TaskProgress = { agent: "web-scout", runningTools: [], history: [], done: true };
-
-  const result = buildProgressStream([p1, p2], fakeTheme);
-
-  assert.equal(
-    result,
-    "<accent>scout</accent> <dim>\u00b7 tools: 1 \u00b7 working\u2026</dim>\n"
-      + "  <dim>read a.ts</dim>\n"
-      + "<accent>web-scout</accent> <dim>\u00b7 tools: 0 \u00b7 done</dim>",
-  );
-});
-
-test("buildProgressStream: done with usage puts the footer on the header line, history lines untouched", () => {
-  const p: TaskProgress = {
-    agent: "scout",
-    runningTools: [],
-    history: ["read foo.ts"],
-    done: true,
-    usage: sampleUsage,
-  };
-
-  const result = buildProgressStream([p], fakeTheme);
-
-  assert.equal(
-    result,
-    `<accent>scout</accent> <dim>\u00b7 tools: 1 \u00b7 done \u00b7 ${sampleUsageFooter}</dim>\n`
-      + "  <dim>read foo.ts</dim>",
-  );
 });
 
 test("toSubagentToolEvent: tool_execution_start maps args through formatToolCall into summary", () => {
@@ -281,58 +209,38 @@ test("toSubagentToolEvent: tool_execution_update is ignored", () => {
   assert.equal(event, undefined);
 });
 
-test("createProgressTracker: onToolEvent on one index leaves other tasks' progress untouched", () => {
-  const emitted: Array<readonly TaskProgress[]> = [];
-  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
+test("createProgressTracker: emits a new TaskProgress on every event", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
 
-  tracker.onToolEvent(0, { type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
+  tracker.onToolEvent({ type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
+  tracker.markTaskDone();
 
-  const last = emitted[emitted.length - 1];
-  assert.deepEqual(last[1], { agent: "planner", runningTools: [], history: [], done: false });
-});
-
-test("createProgressTracker: emits a fresh array reference on every event", () => {
-  const emitted: Array<readonly TaskProgress[]> = [];
-  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
-
-  tracker.onToolEvent(0, { type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
-  tracker.markTaskDone(0);
-
+  assert.equal(emitted.length, 2);
   assert.notEqual(emitted[0], emitted[1]);
+  assert.deepEqual(emitted[0].runningTools, [{ toolCallId: "a", toolName: "read" }]);
+  assert.equal(emitted[1].done, true);
 });
 
-test("createProgressTracker: onToolEvent is a no-op for an index already marked done", () => {
-  const emitted: Array<readonly TaskProgress[]> = [];
-  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
+test("createProgressTracker: onToolEvent after markTaskDone is a no-op (no further emit)", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
 
-  tracker.markTaskDone(0);
+  tracker.markTaskDone();
   const emitCountAfterDone = emitted.length;
 
-  tracker.onToolEvent(0, { type: "tool_start", toolCallId: "x", toolName: "read", summary: "read foo.ts" });
+  tracker.onToolEvent({ type: "tool_start", toolCallId: "x", toolName: "read", summary: "read foo.ts" });
 
   assert.equal(emitted.length, emitCountAfterDone);
-  const last = emitted[emitted.length - 1];
-  assert.deepEqual(last[0], { agent: "scout", runningTools: [], history: [], done: true });
 });
 
-test("createProgressTracker: markTaskDone only marks its own slot done", () => {
-  const emitted: Array<readonly TaskProgress[]> = [];
-  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
+test("createProgressTracker: markTaskDone with usage attaches it to the emitted progress", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
 
-  tracker.markTaskDone(1);
-
-  const last = emitted[emitted.length - 1];
-  assert.equal(last[0].done, false);
-  assert.equal(last[1].done, true);
-});
-
-test("createProgressTracker: markTaskDone with usage attaches usage only to its own slot", () => {
-  const emitted: Array<readonly TaskProgress[]> = [];
-  const tracker = createProgressTracker(["scout", "planner"], (details) => emitted.push(details.progress));
-
-  tracker.markTaskDone(1, sampleUsage);
+  tracker.markTaskDone(sampleUsage);
 
   const last = emitted[emitted.length - 1];
-  assert.equal("usage" in last[0], false);
-  assert.equal(last[1].usage, sampleUsage);
+  assert.equal(last.done, true);
+  assert.equal(last.usage, sampleUsage);
 });

@@ -58,44 +58,6 @@ Body content.
   }
 });
 
-test("load: no concurrency in settings defaults to 4", async () => {
-  const agentsDir = makeTmpDir();
-  const cwd = makeTmpDir();
-  const userSettingsPath = path.join(makeTmpDir(), "user-settings.json");
-  try {
-    const registry = createAgentRegistry({ agentsDir, userSettingsPath });
-    const loaded = await registry.load(cwd);
-
-    assert.equal(loaded.concurrency, 4);
-  } finally {
-    fs.rmSync(agentsDir, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
-test("load: concurrency: 6 in settings file resolves to 6", async () => {
-  const agentsDir = makeTmpDir();
-  const cwd = makeTmpDir();
-  const userSettingsPath = path.join(makeTmpDir(), "user-settings.json");
-  try {
-    const projectSettingsPath = path.join(cwd, ".pi", "settings.json");
-    fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
-    fs.writeFileSync(
-      projectSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 6 } }),
-      "utf8",
-    );
-
-    const registry = createAgentRegistry({ agentsDir, userSettingsPath });
-    const loaded = await registry.load(cwd);
-
-    assert.equal(loaded.concurrency, 6);
-  } finally {
-    fs.rmSync(agentsDir, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
 test("peek: before any load returns undefined", () => {
   const agentsDir = makeTmpDir();
   const cwd = makeTmpDir();
@@ -223,7 +185,7 @@ test("createAgentRegistry: constructing with a nonexistent agentsDir does not th
   });
 });
 
-test("load: against a nonexistent agentsDir resolves to empty agents and default concurrency", async () => {
+test("load: against a nonexistent agentsDir resolves to empty agents", async () => {
   const agentsDir = path.join(makeTmpDir(), "does-not-exist");
   const cwd = makeTmpDir();
   const userSettingsPath = path.join(makeTmpDir(), "user-settings.json");
@@ -232,7 +194,7 @@ test("load: against a nonexistent agentsDir resolves to empty agents and default
 
     await assert.doesNotReject(async () => {
       const loaded = await registry.load(cwd);
-      assert.deepEqual(loaded, { agents: [], concurrency: 4 });
+      assert.deepEqual(loaded, { agents: [] });
     });
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });

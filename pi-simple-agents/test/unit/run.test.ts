@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, mapWithConcurrencyLimit, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveConcurrency, DEFAULT_CONCURRENCY, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import { invocationOverrideOf } from "../../src/validate.ts";
 import type { SubagentToolEvent } from "../../src/progress.ts";
@@ -227,51 +227,6 @@ test("resolveTimeoutMs: Infinity still falls back to default, not the ceiling", 
   assert.equal(warnSpy.mock.callCount(), 1);
 });
 
-test("resolveConcurrency: undefined falls back to default", () => {
-  assert.equal(resolveConcurrency(undefined), DEFAULT_CONCURRENCY);
-});
-
-test("resolveConcurrency: valid integers pass through unchanged", () => {
-  assert.equal(resolveConcurrency(1), 1);
-  assert.equal(resolveConcurrency(8), 8);
-});
-
-test("resolveConcurrency: 0 falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency(0), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
-test("resolveConcurrency: negative number falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency(-1), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
-test("resolveConcurrency: NaN falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency(NaN), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
-test("resolveConcurrency: Infinity falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency(Infinity), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
-test("resolveConcurrency: non-integer falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency(2.5), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
-test("resolveConcurrency: non-number falls back to default with warning", (t) => {
-  const warnSpy = t.mock.method(console, "warn", () => {});
-  assert.equal(resolveConcurrency("4"), DEFAULT_CONCURRENCY);
-  assert.equal(warnSpy.mock.callCount(), 1);
-});
-
 test("resolveMaxTurns: passes through undefined and valid 1..100 with no warning; invalid inputs warn once and resolve to undefined", (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
 
@@ -294,40 +249,6 @@ test("resolveMaxTurns: passes through undefined and valid 1..100 with no warning
       `expected warning to mention the invalid value ${String(value)}; got: ${message}`,
     );
   }
-});
-
-test("mapWithConcurrencyLimit: empty input returns empty array", async () => {
-  const result = await mapWithConcurrencyLimit([], 4, async () => "x");
-  assert.deepEqual(result, []);
-});
-
-test("mapWithConcurrencyLimit: processes all items in order", async () => {
-  const result = await mapWithConcurrencyLimit(
-    [1, 2, 3, 4, 5],
-    2,
-    async (n) => n * 2,
-  );
-  assert.deepEqual(result, [2, 4, 6, 8, 10]);
-});
-
-test("mapWithConcurrencyLimit: respects concurrency limit", async () => {
-  let concurrent = 0;
-  let maxConcurrent = 0;
-
-  const result = await mapWithConcurrencyLimit(
-    [1, 2, 3, 4, 5, 6],
-    3,
-    async (n) => {
-      concurrent++;
-      maxConcurrent = Math.max(maxConcurrent, concurrent);
-      await new Promise((r) => setTimeout(r, 5));
-      concurrent--;
-      return n;
-    },
-  );
-
-  assert.equal(maxConcurrent, 3);
-  assert.deepEqual(result, [1, 2, 3, 4, 5, 6]);
 });
 
 test("runWithTimeoutAndAbort: prompt resolves normally before timeout/abort -> resolves cleanly and removes abort listener", async () => {

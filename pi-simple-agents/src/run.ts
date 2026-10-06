@@ -45,7 +45,7 @@ type ThinkingLevel = (typeof VALID_THINKING_LEVELS)[number];
 
 export function clampThinkingLevel(level: string): ThinkingLevel | undefined {
   if ((VALID_THINKING_LEVELS as readonly string[]).includes(level)) return level as ThinkingLevel;
-  console.warn(`pi-simple-agents: invalid thinking level "${level}", falling back to default`);
+  console.warn(`${WARN_PREFIX}invalid thinking level "${level}", falling back to default`);
   return undefined;
 }
 
@@ -90,27 +90,18 @@ export function awaitAtMost(
   });
 }
 
-export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min, per Phase 1 decision.
+export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min.
 export const MAX_TIMEOUT_MS = 7_200_000; // 2h ceiling, enforced here for every layer (frontmatter/settings/param).
 
 export function resolveTimeoutMs(value: unknown): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     if (value <= MAX_TIMEOUT_MS) return value;
-    console.warn(`pi-simple-agents: timeoutMs ${value} exceeds the maximum of ${MAX_TIMEOUT_MS}ms, clamping`);
+    console.warn(`${WARN_PREFIX}timeoutMs ${value} exceeds the maximum of ${MAX_TIMEOUT_MS}ms, clamping`);
     return MAX_TIMEOUT_MS;
   }
-  console.warn(`pi-simple-agents: invalid timeoutMs ${value}, falling back to default`);
+  console.warn(`${WARN_PREFIX}invalid timeoutMs ${value}, falling back to default`);
   return DEFAULT_TIMEOUT_MS;
-}
-
-export const DEFAULT_CONCURRENCY = 4;
-
-export function resolveConcurrency(value: unknown): number {
-  if (value === undefined) return DEFAULT_CONCURRENCY;
-  if (typeof value === "number" && Number.isInteger(value) && value >= 1) return value;
-  console.warn(`pi-simple-agents: invalid concurrency ${value}, falling back to default`);
-  return DEFAULT_CONCURRENCY;
 }
 
 export const MAX_TURNS_LIMIT = 100;
@@ -133,29 +124,8 @@ export function isValidMaxTurns(value: unknown): value is number {
 export function resolveMaxTurns(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (isValidMaxTurns(value)) return value;
-  console.warn(`pi-simple-agents: invalid maxTurns ${value}, ignoring (no limit)`);
+  console.warn(`${WARN_PREFIX}invalid maxTurns ${value}, ignoring (no limit)`);
   return undefined;
-}
-
-export function mapWithConcurrencyLimit<TIn, TOut>(
-  items: TIn[],
-  concurrency: number,
-  fn: (item: TIn, index: number) => Promise<TOut>,
-): Promise<TOut[]> {
-  if (items.length === 0) return Promise.resolve([]);
-  const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results: TOut[] = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = new Array(limit).fill(null).map(async () => {
-    while (true) {
-      const current = nextIndex++;
-      if (current >= items.length) return;
-      results[current] = await fn(items[current], current);
-    }
-  });
-
-  return Promise.all(workers).then(() => results);
 }
 
 type CreateSessionOpts = Pick<
@@ -303,7 +273,7 @@ function subscribeTurnCounter(
 // needed here. onTimeout is invoked once, before abort() is issued, so the
 // caller can settle "timed out" before disposal races the prompt's rejection.
 // Listener removal only happens on the normal-completion path — the abort
-// path relies on { once: true } to self-remove, matching prior behavior.
+// path relies on { once: true } to self-remove instead.
 export async function runWithTimeoutAndAbort(
   agentSession: CreateAgentSessionResult["session"],
   task: string,

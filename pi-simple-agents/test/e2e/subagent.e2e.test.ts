@@ -102,17 +102,18 @@ live(
 );
 
 live(
-  "e2e: subagent tool honors a per-task `model` override in parallel mode without crashing",
+  "e2e: subagent tool honors a per-call `model` override across two separate concurrent calls without crashing",
   { timeout: TIMEOUT_MS + 10_000 },
   async () => {
     const prompt =
-      "Usa la herramienta subagent en modo paralelo (parametro tasks) con estas dos tareas: " +
+      "Lanza dos llamadas separadas a la herramienta subagent, en el mismo turno: " +
       "1) agente pablo-planner, tarea 'Consulta de prueba A: responde en una sola frase confirmando " +
       "que funcionas correctamente.', con el parametro model en 'anthropic/claude-sonnet-5' para " +
       "forzar ese modelo en lugar del que el agente use por defecto; " +
       "2) agente scout, tarea 'Consulta de prueba B: responde en una sola frase confirmando que " +
       "funcionas correctamente.', sin especificar model (usa el modelo configurado por defecto). " +
-      "Reporta ambos resultados tal cual.";
+      "Cada llamada arranca su propio job en background; espera a que lleguen los dos resultados " +
+      "y reportalos tal cual.";
 
     const { code, stdout } = await runPi(["-e", EXTENSIONS_DIR, "-ne", "-p", prompt]);
 

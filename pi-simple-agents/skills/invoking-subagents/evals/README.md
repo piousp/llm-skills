@@ -9,25 +9,22 @@ via this repo's `evaluating-agent-skills` skill.
 ## Classification (step 1)
 
 `invoking-subagents` is a **capability skill**: it teaches mechanics the
-base model has no generic way to know (the `subagent` tool's exact schema:
-single vs. `tasks: [...]` mode exclusivity, the 8-task cap, model-override
-precedence and format). It is auto-discoverable (the package README states
-it "loads automatically once installed"), so trigger-tuning matters and
-negative controls are included, unlike a name-only preference skill.
+base model has no generic way to know (the `subagent` tool's exact schema,
+that each call runs as an independent background job with no batch mode,
+and model-override precedence and format). It is auto-discoverable (the
+package README states it "loads automatically once installed"), so
+trigger-tuning matters and negative controls are included, unlike a
+name-only preference skill.
 
 ## Success criteria (step 2, defined before any check was written)
 
 Outcome over transcript: grade the actual `subagent` tool-call arguments
 emitted, not the chat text describing what the agent did.
 
-- **Mode exclusivity**: a call never mixes top-level `agent`/`task` with
-  `tasks: [...]` in the same call.
-- **The 8-task cap**: no single call's `tasks` array exceeds 8 entries.
-- **Model format**: any `model` value, top-level or per-task, is
-  `provider/modelId` (contains `/`), never a bare alias (`sonnet`, `opus`,
-  etc.).
-- **Model placement**: single mode puts `model` top-level; parallel mode
-  puts it per `tasks[]` entry, never top-level alongside `tasks`.
+- **No `tasks` key**: a call never uses the removed `tasks: [...]` array;
+  running several agents at once means issuing several separate calls.
+- **Model format**: any `model` value is `provider/modelId` (contains
+  `/`), never a bare alias (`sonnet`, `opus`, etc.).
 - **Trigger discipline**: off-topic prompts and prompts answerable
   directly produce no `subagent` call at all.
 
@@ -68,9 +65,9 @@ emitted `subagent` call(s) against the deterministic `CHECK_REGISTRY`.
 
 Every case delegates to the `worker` agent with a trivial one-word-reply
 task, to keep real subagent runs fast and cheap. The one exception,
-`nine_tasks_respect_cap`, deliberately asks for 9 independent replies (one
-over the tool's 8-task cap) to exercise the cap-respecting check; it alone
-spawns up to 9 real `worker` runs.
+`nine_independent_as_separate_calls`, asks for 9 independent replies to
+confirm the model issues 9 separate calls rather than inventing a batch
+array; it alone spawns up to 9 real `worker` runs.
 
 Costs real LLM tokens and, for that one case, real subagent runtime, gated
 behind `PI_LIVE_EVAL=1`, never part of a default/offline suite:
@@ -83,14 +80,21 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 
 ## Prompt set (step 3)
 
-9 cases in `prompt_set.json`: single mode, parallel mode, model override in
-each mode, a bare-alias case (must resolve to `provider/modelId`, never
-pass the alias through), the 8-task-cap edge case, two negative controls
-(`should_trigger: false`: unrelated question, directly-answerable request),
-and one mixed-request case checking mode exclusivity isn't violated when a
-user's phrasing blends a solo task with a parallel pair.
+9 cases in `prompt_set.json`: single mode, two independent tasks as two
+separate calls, a per-call model override, a bare-alias case (must resolve
+to `provider/modelId`, never pass the alias through), a 9-independent-tasks
+case (checks the model issues 9 separate calls, no `tasks` array), two
+negative controls (`should_trigger: false`: unrelated question,
+directly-answerable request), and one mixed-request case checking a
+user's phrasing that blends a solo task with an independent pair still
+produces separate calls, never a `tasks` array.
 
 ## N=1 findings (full run, 2026-07-30)
+
+> These results are from the pre-1.0.0 prompt set (`tasks: [...]` parallel mode). The prompt set
+> and `CHECK_REGISTRY` were rewritten for 1.0.0's `tasks:[...]` removal (single-mode-only, N
+> separate calls); the rewritten set has not been run yet (`PI_LIVE_EVAL=1` required, costs real
+> tokens). Treat the findings below as historical, not current coverage.
 
 9/9 cases passed, including all trigger-discipline checks (both negative
 controls correctly emitted no `subagent` call).

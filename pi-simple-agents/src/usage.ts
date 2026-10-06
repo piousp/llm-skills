@@ -47,33 +47,40 @@ export interface AggregatedUsage {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
 
-// Sums the usage of every run that has one, for the tool result's aggregate
-// `usage` field. Runs without usage (e.g. failed before a session existed)
-// are skipped, not zero-filled. RunUsage only tracks `cost` as a total (see
-// addUsage above), so the per-kind cost breakdown below is always 0 \u2014 no
-// consumer of AgentToolResult.usage reads anything but `cost.total`.
-export function aggregateRunUsage(runs: readonly { usage?: RunUsage }[]): AggregatedUsage | undefined {
-  const withUsage = runs.filter((r): r is { usage: RunUsage } => r.usage !== undefined);
-  if (withUsage.length === 0) return undefined;
+// The 4 token-count fields every usage shape here tracks (RunUsage,
+// MessageUsage, the running totals below) — only `cost`'s shape differs
+// between them (a plain number vs. a `{ total }` object), so it stays out of
+// this shared piece and is summed separately at each call site.
+interface TokenCounts {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}
 
-  const totals = withUsage.reduce(
-    (acc, r) => ({
-      input: acc.input + r.usage.input,
-      output: acc.output + r.usage.output,
-      cacheRead: acc.cacheRead + r.usage.cacheRead,
-      cacheWrite: acc.cacheWrite + r.usage.cacheWrite,
-      cost: acc.cost + r.usage.cost,
-    }),
-    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-  );
-
+function addTokenCounts(a: TokenCounts, b: TokenCounts): TokenCounts {
   return {
-    input: totals.input,
-    output: totals.output,
-    cacheRead: totals.cacheRead,
-    cacheWrite: totals.cacheWrite,
-    totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: totals.cost },
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+  };
+}
+
+// Shapes a run's usage for the tool result's `usage` field. Undefined when
+// the run never produced usage (e.g. failed before a session existed).
+// RunUsage only tracks `cost` as a total (see addUsage below), so the
+// per-kind cost breakdown below is always 0 — no consumer of
+// AgentToolResult.usage reads anything but `cost.total`.
+export function toAggregatedUsage(usage: RunUsage | undefined): AggregatedUsage | undefined {
+  if (usage === undefined) return undefined;
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
   };
 }
 
@@ -83,10 +90,7 @@ export function emptyUsage(): UsageAccumulator {
 
 function addUsage(acc: UsageAccumulator, usage: MessageUsage, provider: string | undefined): UsageAccumulator {
   return {
-    input: acc.input + usage.input,
-    output: acc.output + usage.output,
-    cacheRead: acc.cacheRead + usage.cacheRead,
-    cacheWrite: acc.cacheWrite + usage.cacheWrite,
+    ...addTokenCounts(acc, usage),
     cost: acc.cost + usage.cost.total,
     provider: provider ?? acc.provider,
   };

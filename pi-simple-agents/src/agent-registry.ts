@@ -7,13 +7,10 @@ import {
   type CacheEntry,
   type SubagentSettings,
 } from "./agents.ts";
-import { resolveConcurrency } from "./run.ts";
 
 export interface LoadedAgents {
   /** Overrides already applied. Treat as immutable. */
   agents: readonly AgentConfig[];
-  /** Already resolved via resolveConcurrency; always a valid integer ≥ 1. */
-  concurrency: number;
 }
 
 export interface AgentRegistry {
@@ -49,9 +46,8 @@ export function createAgentRegistry(paths: AgentRegistryPaths): AgentRegistry {
     ]);
 
     const agents = applyOverrides(discovered, settings.agentOverrides);
-    const concurrency = resolveConcurrency(settings.concurrency);
 
-    const result: LoadedAgents = { agents, concurrency };
+    const result: LoadedAgents = { agents };
     snapshots.set(cwd, result);
     return result;
   }

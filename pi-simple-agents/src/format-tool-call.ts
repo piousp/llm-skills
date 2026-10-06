@@ -1,4 +1,4 @@
-import { truncate, firstLine } from "./render-call.ts";
+import { truncate, firstLine } from "./text-utils.ts";
 
 function str(a: Record<string, unknown>, key: string, fallback = ""): string {
   return typeof a[key] === "string" ? (a[key] as string) : fallback;
@@ -37,8 +37,8 @@ function bashSummary(a: Record<string, unknown>): string {
 
 function grepSummary(a: Record<string, unknown>): string {
   const pattern = str(a, "pattern");
-  const path = str(a, "path", "") || undefined;
-  const glob = str(a, "glob", "") || undefined;
+  const path = str(a, "path") || undefined;
+  const glob = str(a, "glob") || undefined;
   let text = `grep /${pattern}/`;
   if (path) text += ` in ${path}`;
   if (glob) text += ` (${glob})`;
@@ -47,7 +47,7 @@ function grepSummary(a: Record<string, unknown>): string {
 
 function findSummary(a: Record<string, unknown>): string {
   const pattern = str(a, "pattern");
-  const path = str(a, "path", "") || undefined;
+  const path = str(a, "path") || undefined;
   return path ? `find ${pattern} in ${path}` : `find ${pattern}`;
 }
 
