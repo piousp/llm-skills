@@ -34,22 +34,24 @@ Ask for it in plain words:
 Use the agent scout to find all the functions that use fetch in src
 ```
 
-Or call the tool directly. One agent:
+Or call the tool directly:
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/"
 ```
 
-Several at once, up to 8 per call:
+Each call starts its own background job (see below), so running several at once just means calling `subagent` once per task:
 
 ```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/"
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
+subagent agent: "scout", task: "List all .ts files in src/"
+subagent agent: "web-scout", task: "Find the latest version of the API docs"
 ```
 
 A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `timeoutMs` for that run only.
+
+## Background jobs
+
+`subagent` returns right away with a job id, not the result — the result is delivered later as its own message, and (unless cancelled) wakes the model up to act on it. A persistent panel shows jobs still running; `/subagents` lists running and recent ones, `/subagents cancel <id>` stops one, `/subagents clear` drops finished ones. See [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs) for the full behavior.
 
 ## MCP tools
 

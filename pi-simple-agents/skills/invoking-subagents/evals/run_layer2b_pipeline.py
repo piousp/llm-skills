@@ -11,14 +11,14 @@ directly against a real `subagent` tool, loaded via an explicit `-e <path>`
 to a pi extension that provides one (e.g. pi-simple-agents' own
 `extensions/` dir) — not bare discovery.
 
-All checks below are structural/deterministic (mode exclusivity, the
-8-task cap, model-format compliance) — no LLM judge (L3) needed; see
+All checks below are structural/deterministic (no `tasks` key, per-call
+model format compliance, call counts) — no LLM judge (L3) needed; see
 README "Why no L3".
 
 Gated behind PI_LIVE_EVAL=1 and PI_SUBAGENT_EXTENSION_PATH. Costs real LLM
 tokens: each case spawns at least one real `worker` subagent run; the
-`nine_tasks_respect_cap` case alone spawns up to 9. Not part of any
-default/offline suite.
+`nine_independent_as_separate_calls` case alone spawns up to 9. Not part of
+any default/offline suite.
 
 Usage:
     export PI_SUBAGENT_EXTENSION_PATH=/path/to/pi-simple-agents/extensions
@@ -93,26 +93,23 @@ def check_agent_is_worker(tool_calls, final_text, **ctx) -> bool:
     return any(c["arguments"].get("agent") == "worker" for c in _subagent_calls(tool_calls))
 
 
-def check_parallel_tasks_array(tool_calls, final_text, **ctx) -> bool:
-    return any(
-        isinstance(c["arguments"].get("tasks"), list) and len(c["arguments"]["tasks"]) >= 2
-        for c in _subagent_calls(tool_calls)
-    )
+def check_two_or_more_single_mode_calls(tool_calls, final_text, **ctx) -> bool:
+    calls = _subagent_calls(tool_calls)
+    return len(calls) >= 2 and all("agent" in c["arguments"] and "task" in c["arguments"] for c in calls)
 
 
-def check_tasks_count_two(tool_calls, final_text, **ctx) -> bool:
-    return any(
-        isinstance(c["arguments"].get("tasks"), list) and len(c["arguments"]["tasks"]) == 2
-        for c in _subagent_calls(tool_calls)
-    )
+def check_exactly_two_calls(tool_calls, final_text, **ctx) -> bool:
+    return len(_subagent_calls(tool_calls)) == 2
 
 
-def check_no_mode_mixing(tool_calls, final_text, **ctx) -> bool:
-    for c in _subagent_calls(tool_calls):
-        args = c["arguments"]
-        if "tasks" in args and ("agent" in args or "task" in args):
-            return False
-    return True
+def check_at_least_three_calls(tool_calls, final_text, **ctx) -> bool:
+    return len(_subagent_calls(tool_calls)) >= 3
+
+
+def check_no_tasks_key(tool_calls, final_text, **ctx) -> bool:
+    """No call in this prompt set should ever use the removed `tasks` array --
+    each independent task is its own `subagent` call."""
+    return all("tasks" not in c["arguments"] for c in _subagent_calls(tool_calls))
 
 
 def check_single_mode_model_top_level(tool_calls, final_text, **ctx) -> bool:
@@ -123,23 +120,11 @@ def check_single_mode_model_top_level(tool_calls, final_text, **ctx) -> bool:
     return False
 
 
-def check_parallel_model_per_entry(tool_calls, final_text, **ctx) -> bool:
-    for c in _subagent_calls(tool_calls):
-        args = c["arguments"]
-        tasks = args.get("tasks")
-        if isinstance(tasks, list) and len(tasks) >= 2:
-            if "model" in args:
-                return False  # top-level model alongside tasks is invalid
-            models = [t.get("model") for t in tasks if isinstance(t, dict) and t.get("model")]
-            return len(models) >= 1 and all(_model_format_valid(m) for m in models)
-    return False
-
-
-def check_no_top_level_model_with_tasks(tool_calls, final_text, **ctx) -> bool:
-    return all(
-        not ("tasks" in c["arguments"] and "model" in c["arguments"])
-        for c in _subagent_calls(tool_calls)
-    )
+def check_model_on_the_right_calls(tool_calls, final_text, **ctx) -> bool:
+    """At least two separate calls, each carrying its own valid per-call model."""
+    calls = _subagent_calls(tool_calls)
+    with_model = [c for c in calls if _model_format_valid(c["arguments"].get("model"))]
+    return len(calls) >= 2 and len(with_model) >= 2
 
 
 def check_model_format_valid_everywhere(tool_calls, final_text, **ctx) -> bool:
@@ -147,17 +132,7 @@ def check_model_format_valid_everywhere(tool_calls, final_text, **ctx) -> bool:
         args = c["arguments"]
         if "model" in args and not _model_format_valid(args["model"]):
             return False
-        for t in (args.get("tasks") or []):
-            if isinstance(t, dict) and "model" in t and not _model_format_valid(t["model"]):
-                return False
     return True
-
-
-def check_respects_max_8_per_call(tool_calls, final_text, **ctx) -> bool:
-    return all(
-        not (isinstance(c["arguments"].get("tasks"), list) and len(c["arguments"]["tasks"]) > 8)
-        for c in _subagent_calls(tool_calls)
-    )
 
 
 def check_no_subagent_call(tool_calls, final_text, **ctx) -> bool:
@@ -165,29 +140,22 @@ def check_no_subagent_call(tool_calls, final_text, **ctx) -> bool:
 
 
 def check_all_nine_replies_attempted(tool_calls, final_text, **ctx) -> bool:
-    """Total task count across all subagent calls (single-mode call = 1,
-    tasks[] call = len(tasks)) must reach 9 -- guards against the model
-    silently dropping to 8 replies to dodge the cap instead of splitting
-    across multiple calls."""
-    total = 0
-    for c in _subagent_calls(tool_calls):
-        args = c["arguments"]
-        tasks = args.get("tasks")
-        total += len(tasks) if isinstance(tasks, list) else 1
-    return total >= 9
+    """9 separate single-mode calls, one per reply -- guards against the model
+    batching fewer calls or inventing a tasks[] array instead of issuing 9
+    independent subagent calls."""
+    return len(_subagent_calls(tool_calls)) >= 9
 
 
 CHECK_REGISTRY = {
     "single_call_agent_mode": check_single_call_agent_mode,
     "agent_is_worker": check_agent_is_worker,
-    "parallel_tasks_array": check_parallel_tasks_array,
-    "tasks_count_two": check_tasks_count_two,
-    "no_mode_mixing": check_no_mode_mixing,
+    "two_or_more_single_mode_calls": check_two_or_more_single_mode_calls,
+    "exactly_two_calls": check_exactly_two_calls,
+    "at_least_three_calls": check_at_least_three_calls,
+    "no_tasks_key": check_no_tasks_key,
     "single_mode_model_top_level": check_single_mode_model_top_level,
-    "parallel_model_per_entry": check_parallel_model_per_entry,
-    "no_top_level_model_with_tasks": check_no_top_level_model_with_tasks,
+    "model_on_the_right_calls": check_model_on_the_right_calls,
     "model_format_valid_everywhere": check_model_format_valid_everywhere,
-    "respects_max_8_per_call": check_respects_max_8_per_call,
     "no_subagent_call": check_no_subagent_call,
     "all_nine_replies_attempted": check_all_nine_replies_attempted,
 }

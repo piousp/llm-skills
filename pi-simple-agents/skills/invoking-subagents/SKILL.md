@@ -1,6 +1,6 @@
 ---
 name: invoking-subagents
-description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}), parallel mode ({tasks: [...]}, up to 8 tasks), and the six optional per-invocation overrides (model, tools, skills, thinking, maxTurns, timeoutMs) for one call. Use when delegating work to a subagent, fanning tasks out in parallel, or overriding which model, tools, skills, thinking level, turn cap, or timeout a single subagent run uses. [DO NOT] use this for defining new agents or configuring persistent overrides; see the pi-simple-agents README for that."
+description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}) and the six optional per-invocation overrides (model, tools, skills, thinking, maxTurns, timeoutMs) for one call. Each call starts its own independent background job and returns a job id immediately; the result arrives later as a message. Running several agents at once means calling the tool once per task, in the same turn. Use when delegating work to a subagent, running several subagents concurrently, or overriding which model, tools, skills, thinking level, turn cap, or timeout a single subagent run uses. [DO NOT] use this for defining new agents or configuring persistent overrides; see the pi-simple-agents README for that."
 ---
 
 # Invoking subagents
@@ -15,21 +15,26 @@ here; check it before picking an `agent` value.
 {"agent": "sbt-test", "task": "Run the unit tests under core/src/test/scala/foo"}
 ```
 
-One agent, one task, per call. The result is returned when that agent's run settles.
+One agent, one task, per call. The call returns almost immediately with a job id — not the
+agent's final output. The result is delivered later as its own message in the conversation, and
+(unless cancelled) wakes the model up with a follow-up turn to act on it. **Do not call
+`subagent` again to poll** for that job's result; it arrives automatically.
 
-## Parallel mode
+## Running several at once
+
+There is no parallel-batch mode. Each `subagent` call starts its own independent background job,
+so running N agents concurrently just means issuing N separate calls, ideally in the same turn:
 
 ```json
-{
-  "tasks": [
-    {"agent": "sbt-compile", "task": "Compile the core module"},
-    {"agent": "sbt-test", "task": "Run tests in the api module"}
-  ]
-}
+{"agent": "scout", "task": "List all .ts files in src/"}
+```
+```json
+{"agent": "web-scout", "task": "Find the latest API docs version"}
 ```
 
-Up to 8 entries per call, run with limited concurrency. Never mix a top-level
-`agent`/`task` with `tasks` in the same call: it's one or the other.
+Both jobs run at once; there is no cap on how many background jobs can be running at the same
+time. Wait for all of their results to arrive (each one as its own message) before concluding the
+work is done — don't call `subagent` again to check on them.
 
 ## Per-invocation parameters
 
@@ -38,21 +43,10 @@ Six optional params can override an agent's resolved configuration for one call:
 settings → frontmatter → inherited resolution wins; pass a param only at the user's explicit
 request (e.g. "run scout with high thinking" or "cap this at 5 turns").
 
-Placement is the same for all six: in single mode each is a top-level field; in parallel mode
-each goes inside its own `tasks[]` entry. **Never** mix a top-level override with a top-level
-`tasks` array; set it per entry instead.
+Each is a top-level field alongside `agent`/`task`:
 
 ```json
 {"agent": "scout", "task": "Find fetch() callers", "model": "anthropic/claude-opus-4-8", "thinking": "high", "maxTurns": 5}
-```
-
-```json
-{
-  "tasks": [
-    {"agent": "scout", "task": "List all .ts files in src/", "tools": ["find", "ls"], "timeoutMs": 120000},
-    {"agent": "web-scout", "task": "Find the latest API docs version"}
-  ]
-}
 ```
 
 ### `model`
@@ -101,13 +95,11 @@ as an error (`"timed out after <N>ms"`).
 ## Errors and how to fix them
 
 - Unknown `agent` name → error lists the available agents.
-- Mixing top-level `agent`/`task` with `tasks` → rejected; use exactly one mode.
+- Missing or empty `agent`/`task` → validation error naming the missing field.
 - `model` not in `provider/modelId` form → validation error.
 - `tools`/`skills` not an array of strings → validation error.
-- Top-level `model`/`tools`/`skills`/`thinking`/`maxTurns`/`timeoutMs` together with `tasks` →
-  rejected; put the field inside each `tasks[]` entry instead.
 
 ## Not covered here
 
-Defining new agents, persistent model/tool overrides, and concurrency tuning; see the
-[README](../../README.md).
+Defining new agents, persistent model/tool overrides, and `/subagents` job management
+(listing/cancelling/clearing); see the [README](../../README.md).

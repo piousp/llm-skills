@@ -6,7 +6,7 @@ import {
   toRunUsage,
   formatTokens,
   formatRunUsage,
-  aggregateRunUsage,
+  toAggregatedUsage,
   type UsageAccumulator,
   type RunUsage,
 } from "../../src/usage.ts";
@@ -19,28 +19,20 @@ function runUsage(overrides: Partial<RunUsage> = {}): RunUsage {
   };
 }
 
-test("aggregateRunUsage: no runs yields undefined", () => {
-  assert.equal(aggregateRunUsage([]), undefined);
+test("toAggregatedUsage: undefined usage yields undefined", () => {
+  assert.equal(toAggregatedUsage(undefined), undefined);
 });
 
-test("aggregateRunUsage: runs with no usage at all yields undefined", () => {
-  assert.equal(aggregateRunUsage([{ usage: undefined }, { usage: undefined }]), undefined);
-});
+test("toAggregatedUsage: maps input/output/cache/cost from a run's usage", () => {
+  const usage = runUsage({ input: 100, output: 20, cacheRead: 5, cacheWrite: 1, cost: 0.5 });
 
-test("aggregateRunUsage: sums input/output/cache/cost across runs with usage, ignoring runs without it", () => {
-  const runs = [
-    { usage: runUsage({ input: 100, output: 20, cacheRead: 5, cacheWrite: 1, cost: 0.5 }) },
-    { usage: undefined },
-    { usage: runUsage({ input: 30, output: 10, cacheRead: 0, cacheWrite: 2, cost: 0.25 }) },
-  ];
-
-  assert.deepEqual(aggregateRunUsage(runs), {
-    input: 130,
-    output: 30,
+  assert.deepEqual(toAggregatedUsage(usage), {
+    input: 100,
+    output: 20,
     cacheRead: 5,
-    cacheWrite: 3,
-    totalTokens: 130 + 30 + 5 + 3,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.75 },
+    cacheWrite: 1,
+    totalTokens: 100 + 20 + 5 + 1,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 },
   });
 });
 

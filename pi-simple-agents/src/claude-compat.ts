@@ -1,3 +1,5 @@
+import { WARN_PREFIX } from "./warn.ts";
+
 export const CLAUDE_TOOL_MAP: Readonly<Record<string, string>> = {
   Read: "read",
   Grep: "grep",
@@ -91,40 +93,31 @@ export function claimUnwarned(
   return claimed;
 }
 
-// Filter names down to those the inert set recognises and tag each with a
-// `prefix:` so downstream sorting/claim logic can tell the groups apart.
-// Same filter+map shape across fields/tools/models, so it lives here once.
-function inertKeysFor<T>(set: ReadonlySet<T>, names: Iterable<T>, prefix: string): string[] {
-  return [...names]
-    .filter((name) => set.has(name))
-    .map((name) => `${prefix}:${name}`);
+// Filters names down to those the inert set recognises, claims each
+// (prefixing only to namespace the shared registry's keys across the three
+// groups — a tool and a model alias could share a literal name), and
+// returns the ones actually claimed this cycle, sorted. Grouping happens on
+// the plain names before the prefix is added, so there's no decode step.
+function claimedNamesFor<T extends string>(
+  prefix: string,
+  set: ReadonlySet<T>,
+  names: Iterable<T>,
+  registry: Map<string, number>,
+): T[] {
+  const candidates = [...names].filter((name) => set.has(name));
+  const claimed = new Set(claimUnwarned(candidates.map((name) => `${prefix}:${name}`), registry));
+  return candidates.filter((name) => claimed.has(`${prefix}:${name}`)).sort();
 }
 
 export function reportInertUsage(
   usage: { fields: Iterable<string>; tools: Iterable<string>; models: Iterable<string> },
   registry: Map<string, number>,
 ): string | undefined {
-  const inertKeys = [
-    ...inertKeysFor(CLAUDE_INERT_FIELDS, usage.fields, "field"),
-    ...inertKeysFor(CLAUDE_INERT_TOOLS, usage.tools, "tool"),
-    ...inertKeysFor(CLAUDE_MODEL_ALIASES, usage.models, "model"),
-  ];
-  const claimed = claimUnwarned(inertKeys, registry);
+  const fields = claimedNamesFor("field", CLAUDE_INERT_FIELDS, usage.fields, registry);
+  const tools = claimedNamesFor("tool", CLAUDE_INERT_TOOLS, usage.tools, registry);
+  const models = claimedNamesFor("model", CLAUDE_MODEL_ALIASES, usage.models, registry);
 
-  if (claimed.length === 0) return undefined;
-
-  const fields = claimed
-    .filter((key) => key.startsWith("field:"))
-    .map((key) => key.slice("field:".length))
-    .sort();
-  const tools = claimed
-    .filter((key) => key.startsWith("tool:"))
-    .map((key) => key.slice("tool:".length))
-    .sort();
-  const models = claimed
-    .filter((key) => key.startsWith("model:"))
-    .map((key) => key.slice("model:".length))
-    .sort();
+  if (fields.length === 0 && tools.length === 0 && models.length === 0) return undefined;
 
   const parts: string[] = [];
   if (fields.length > 0) parts.push(`fields: ${fields.join(", ")}`);
@@ -133,5 +126,5 @@ export function reportInertUsage(
     parts.push(`model aliases: ${models.join(", ")} (Claude Code compatibility)`);
   }
 
-  return `pi-simple-agents: accepted but inert in pi — ${parts.join("; ")}`;
+  return `${WARN_PREFIX}accepted but inert in pi — ${parts.join("; ")}`;
 }

@@ -155,7 +155,7 @@ async function discoverAgentFile(
   try {
     stat = await fsPromises.stat(filePath);
   } catch {
-    return { warnings: [`pi-simple-agents: skipping unreadable file ${filePath}`] };
+    return { warnings: [`${WARN_PREFIX}skipping unreadable file ${filePath}`] };
   }
   if (!stat.isFile()) {
     return { warnings: [] };
@@ -165,17 +165,17 @@ async function discoverAgentFile(
   try {
     content = await fsPromises.readFile(filePath, "utf8");
   } catch {
-    return { warnings: [`pi-simple-agents: skipping unreadable file ${filePath}`] };
+    return { warnings: [`${WARN_PREFIX}skipping unreadable file ${filePath}`] };
   }
 
   const result = parseFrontmatter(content);
   const { frontmatter, body, warnings } = result;
-  const fileWarnings = warnings.map((warning) => `pi-simple-agents: ${filePath}: ${warning}`);
+  const fileWarnings = warnings.map((warning) => `${WARN_PREFIX}${filePath}: ${warning}`);
 
   const resolvedName = frontmatter.name ?? fallbackName;
   if (!resolvedName || !frontmatter.description) {
     fileWarnings.push(
-      `pi-simple-agents: skipping ${filePath} — missing required "name" or "description"`,
+      `${WARN_PREFIX}skipping ${filePath} — missing required "name" or "description"`,
     );
     return { warnings: fileWarnings, frontmatterResult: result };
   }
@@ -267,9 +267,6 @@ function mergeOverrides(base: AgentOverrides, top: AgentOverrides): AgentOverrid
 
 export interface SubagentSettings {
   agentOverrides: AgentOverrides;
-  /** Raw value from settings JSON; validated at use site by resolveConcurrency
-      (same pattern as timeoutMs → resolveTimeoutMs). */
-  concurrency?: unknown;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -294,16 +291,14 @@ async function readSettingsFile(settingsPath: string): Promise<SubagentSettings>
       );
     }
     const agentOverrides = primary?.agentOverrides ?? legacy?.agentOverrides;
-    const concurrency = primary?.concurrency ?? legacy?.concurrency;
     if (agentOverrides !== undefined && !isPlainObject(agentOverrides)) {
       console.warn(
         `${WARN_PREFIX}"agentOverrides" in ${settingsPath} is not an object; ignoring it`,
       );
-      return { agentOverrides: {}, concurrency };
+      return { agentOverrides: {} };
     }
     return {
       agentOverrides: agentOverrides ?? {},
-      concurrency,
     };
   } catch {
     console.warn(`${WARN_PREFIX}failed to parse settings file ${settingsPath}`);
@@ -327,7 +322,6 @@ export function loadSettings(
     const project = await readSettingsFile(projectSettingsPath);
     return {
       agentOverrides: mergeOverrides(user.agentOverrides, project.agentOverrides),
-      concurrency: project.concurrency ?? user.concurrency,
     };
   });
 }
@@ -352,28 +346,30 @@ export interface InvocationOverride {
   timeoutMs?: number;
 }
 
+// Single source of truth for the 6 invocation-override fields, in the
+// order they're checked/copied/rejected everywhere they appear (this file,
+// src/validate.ts, extensions/index.ts's SubagentParams schema).
+export const OVERRIDE_KEYS = ["model", "tools", "skills", "thinking", "maxTurns", "timeoutMs"] as const;
+
+function copyOverrideKey<K extends (typeof OVERRIDE_KEYS)[number]>(
+  target: AgentConfig,
+  source: InvocationOverride,
+  key: K,
+): void {
+  const value = source[key];
+  if (value !== undefined) (target as Record<K, unknown>)[key] = value;
+}
+
 export function applyInvocationOverride(
   agent: AgentConfig,
   override: InvocationOverride,
 ): AgentConfig {
-  if (
-    override.model === undefined
-    && override.tools === undefined
-    && override.skills === undefined
-    && override.thinking === undefined
-    && override.maxTurns === undefined
-    && override.timeoutMs === undefined
-  ) {
+  if (OVERRIDE_KEYS.every((key) => override[key] === undefined)) {
     return agent;
   }
 
   const result: AgentConfig = { ...agent };
-  if (override.model !== undefined) result.model = override.model;
-  if (override.tools !== undefined) result.tools = override.tools;
-  if (override.skills !== undefined) result.skills = override.skills;
-  if (override.thinking !== undefined) result.thinking = override.thinking;
-  if (override.maxTurns !== undefined) result.maxTurns = override.maxTurns;
-  if (override.timeoutMs !== undefined) result.timeoutMs = override.timeoutMs;
+  for (const key of OVERRIDE_KEYS) copyOverrideKey(result, override, key);
   return result;
 }
 

@@ -1260,7 +1260,7 @@ test("dedupeByResolvedName: first agent in input order wins on a name collision;
   assert.ok(message.includes(second.filePath));
 });
 
-test("loadSettings: both files missing returns empty agentOverrides and undefined concurrency", async () => {
+test("loadSettings: both files missing returns empty agentOverrides", async () => {
   const dir = makeTmpDir();
   try {
     const userSettingsPath = path.join(dir, "user-settings.json");
@@ -1269,43 +1269,6 @@ test("loadSettings: both files missing returns empty agentOverrides and undefine
     const settings = await loadSettings(userSettingsPath, projectSettingsPath);
 
     assert.deepEqual(settings.agentOverrides, {});
-    assert.equal(settings.concurrency, undefined);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadSettings: reads concurrency from 'pi-simple-agents' key", async () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 6 } }),
-      "utf8",
-    );
-
-    const settings = await loadSettings(userSettingsPath);
-
-    assert.equal(settings.concurrency, 6);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadSettings: reads concurrency from legacy 'subagents' key", async () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({ subagents: { concurrency: 6 } }),
-      "utf8",
-    );
-
-    const settings = await loadSettings(userSettingsPath);
-
-    assert.equal(settings.concurrency, 6);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1317,7 +1280,7 @@ test("loadSettings: legacy 'subagents' key emits a deprecation warning naming th
     const userSettingsPath = path.join(dir, "user-settings.json");
     fs.writeFileSync(
       userSettingsPath,
-      JSON.stringify({ subagents: { concurrency: 6 } }),
+      JSON.stringify({ subagents: { agentOverrides: { scout: { model: "custom" } } } }),
       "utf8",
     );
 
@@ -1325,7 +1288,7 @@ test("loadSettings: legacy 'subagents' key emits a deprecation warning naming th
 
     const settings = await loadSettings(userSettingsPath);
 
-    assert.equal(settings.concurrency, 6);
+    assert.equal(settings.agentOverrides.scout?.model, "custom");
     assert.ok(
       warnSpy.mock.calls.some((call) => {
         const message = call.arguments[0] as string;
@@ -1337,14 +1300,14 @@ test("loadSettings: legacy 'subagents' key emits a deprecation warning naming th
   }
 });
 
-test("loadSettings: legacy 'subagents' key used for both agentOverrides and concurrency warns once, not twice", async (t) => {
+test("loadSettings: legacy 'subagents' key used repeatedly in the same file still warns once, not twice", async (t) => {
   const dir = makeTmpDir();
   try {
     const userSettingsPath = path.join(dir, "user-settings.json");
     fs.writeFileSync(
       userSettingsPath,
       JSON.stringify({
-        subagents: { concurrency: 6, agentOverrides: { scout: { model: "custom" } } },
+        subagents: { agentOverrides: { scout: { model: "custom" } } },
       }),
       "utf8",
     );
@@ -1353,7 +1316,6 @@ test("loadSettings: legacy 'subagents' key used for both agentOverrides and conc
 
     const settings = await loadSettings(userSettingsPath);
 
-    assert.equal(settings.concurrency, 6);
     assert.equal(settings.agentOverrides.scout?.model, "custom");
     const deprecationCalls = warnSpy.mock.calls.filter((call) => {
       const message = call.arguments[0] as string;
@@ -1371,7 +1333,7 @@ test("loadSettings: 'pi-simple-agents' key alone does not emit the legacy deprec
     const userSettingsPath = path.join(dir, "user-settings.json");
     fs.writeFileSync(
       userSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 6 } }),
+      JSON.stringify({ "pi-simple-agents": { agentOverrides: { scout: { model: "custom" } } } }),
       "utf8",
     );
 
@@ -1379,21 +1341,21 @@ test("loadSettings: 'pi-simple-agents' key alone does not emit the legacy deprec
 
     const settings = await loadSettings(userSettingsPath);
 
-    assert.equal(settings.concurrency, 6);
+    assert.equal(settings.agentOverrides.scout?.model, "custom");
     assert.equal(warnSpy.mock.calls.length, 0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("loadSettings: 'pi-simple-agents' concurrency and legacy 'subagents' agentOverrides in the same file are both honored independently", async () => {
+test("loadSettings: legacy 'subagents' agentOverrides is used when 'pi-simple-agents' sets no agentOverrides of its own", async () => {
   const dir = makeTmpDir();
   try {
     const userSettingsPath = path.join(dir, "user-settings.json");
     fs.writeFileSync(
       userSettingsPath,
       JSON.stringify({
-        "pi-simple-agents": { concurrency: 6 },
+        "pi-simple-agents": {},
         subagents: { agentOverrides: { scout: { model: "custom" } } },
       }),
       "utf8",
@@ -1401,29 +1363,6 @@ test("loadSettings: 'pi-simple-agents' concurrency and legacy 'subagents' agentO
 
     const settings = await loadSettings(userSettingsPath);
 
-    assert.equal(settings.concurrency, 6);
-    assert.equal(settings.agentOverrides.scout?.model, "custom");
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadSettings: 'pi-simple-agents' agentOverrides and legacy 'subagents' concurrency in the same file are both honored independently", async () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({
-        "pi-simple-agents": { agentOverrides: { scout: { model: "custom" } } },
-        subagents: { concurrency: 8 },
-      }),
-      "utf8",
-    );
-
-    const settings = await loadSettings(userSettingsPath);
-
-    assert.equal(settings.concurrency, 8);
     assert.equal(settings.agentOverrides.scout?.model, "custom");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1446,56 +1385,6 @@ test("loadSettings: when both 'pi-simple-agents' and legacy 'subagents' set agen
     const settings = await loadSettings(userSettingsPath);
 
     assert.equal(settings.agentOverrides.scout?.model, "primary-model");
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadSettings: project file's concurrency overrides user file's", async () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    const projectSettingsPath = path.join(dir, "project-settings.json");
-
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 4 } }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      projectSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 8 } }),
-      "utf8",
-    );
-
-    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
-
-    assert.equal(settings.concurrency, 8);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("loadSettings: project file with no concurrency key falls back to user file's value", async () => {
-  const dir = makeTmpDir();
-  try {
-    const userSettingsPath = path.join(dir, "user-settings.json");
-    const projectSettingsPath = path.join(dir, "project-settings.json");
-
-    fs.writeFileSync(
-      userSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { concurrency: 4 } }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      projectSettingsPath,
-      JSON.stringify({ "pi-simple-agents": { agentOverrides: {} } }),
-      "utf8",
-    );
-
-    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
-
-    assert.equal(settings.concurrency, 4);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1549,7 +1438,6 @@ test("loadSettings: malformed JSON in project file only still returns user file'
       userSettingsPath,
       JSON.stringify({
         "pi-simple-agents": {
-          concurrency: 6,
           agentOverrides: { scout: { model: "user-model" } },
         },
       }),
@@ -1561,7 +1449,6 @@ test("loadSettings: malformed JSON in project file only still returns user file'
 
     const settings = await loadSettings(userSettingsPath, projectSettingsPath);
 
-    assert.equal(settings.concurrency, 6);
     assert.equal(settings.agentOverrides.scout?.model, "user-model");
     assert.ok(
       warnSpy.mock.calls.some((call) =>

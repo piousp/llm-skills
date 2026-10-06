@@ -38,6 +38,82 @@ test("childSessionDir: a runId that sanitizes to only dots falls back to \"run\"
   );
 });
 
+test("childSessionDir: a runId at or under the length cap is left untouched", () => {
+  const runId = "a".repeat(64);
+  const result = childSessionDir("/a/b/parent.jsonl", runId, 0);
+  assert.equal(result, `/a/b/parent/${runId}/run-0`);
+});
+
+test("childSessionDir: a runId over the length cap is truncated with a stable hash suffix, never exceeding the cap", () => {
+  const longRunId = "toolu_" + "x".repeat(300);
+  const result = childSessionDir("/a/b/parent.jsonl", longRunId, 0)!;
+  const segment = result.split("/")[4];
+  assert.ok(segment.length <= 64, `expected segment length <= 64, got ${segment.length}`);
+  assert.match(segment, /^toolu_x+_[0-9a-f]{8}$/);
+});
+
+test("childSessionDir: two long runIds sharing a long common prefix produce different directories", () => {
+  const prefix = "a".repeat(100);
+  const resultA = childSessionDir("/a/b/parent.jsonl", `${prefix}-one`, 0);
+  const resultB = childSessionDir("/a/b/parent.jsonl", `${prefix}-two`, 0);
+  assert.notEqual(resultA, resultB);
+});
+
+test("childSessionDir: truncation is deterministic for the same runId", () => {
+  const longRunId = "x".repeat(500);
+  const resultA = childSessionDir("/a/b/parent.jsonl", longRunId, 0);
+  const resultB = childSessionDir("/a/b/parent.jsonl", longRunId, 0);
+  assert.equal(resultA, resultB);
+});
+
+// Builds a synthetic `callerSessionFile` path representing `depth` levels of
+// subagent-calling-subagent nesting, the same shape childSessionDir itself
+// produces (each hop appends "<runId>/run-<N>/session").
+function nestedCallerSessionFile(depth: number): string {
+  let path = "/root/2026-01-01_root";
+  for (let i = 0; i < depth; i++) {
+    path += `/toolu_level${i}/run-0/session`;
+  }
+  return `${path}.jsonl`;
+}
+
+test("childSessionDir: up to MAX_LITERAL_NESTING_DEPTH (4) levels of nesting still produce the full literal path", () => {
+  const caller = nestedCallerSessionFile(3); // depth 3 < cap: still literal
+  const result = childSessionDir(caller, "toolu_next", 0)!;
+  assert.equal(result, `${nestedCallerSessionFile(3).replace(/\.jsonl$/, "")}/toolu_next/run-0`);
+});
+
+test("childSessionDir: beyond the nesting cap, the path collapses to a short hashed segment instead of growing further", () => {
+  const caller = nestedCallerSessionFile(4); // depth 4 == cap: next hop collapses
+  const result = childSessionDir(caller, "toolu_next", 0)!;
+  assert.doesNotMatch(result, /toolu_next/, "the raw runId should not appear literally once collapsed");
+  assert.match(result.split("/").at(-2)!, /^deep-[0-9a-f]{16}$/);
+});
+
+test("childSessionDir: path length stays bounded no matter how much deeper the real nesting goes", () => {
+  const shallow = childSessionDir(nestedCallerSessionFile(5), "toolu_x", 0)!;
+  const deep = childSessionDir(nestedCallerSessionFile(25), "toolu_x", 0)!;
+  // Both are past the cap, so both collapse at the same anchor (depth-4
+  // prefix is identical for every caller built by nestedCallerSessionFile);
+  // length must not grow with the caller's own nesting depth.
+  assert.equal(shallow.length, deep.length);
+});
+
+test("childSessionDir: collapsed dirs for different callers at the same depth are distinct (hash includes the full caller path)", () => {
+  const callerA = nestedCallerSessionFile(6);
+  const callerB = nestedCallerSessionFile(6).replace("level5", "level5alt");
+  const resultA = childSessionDir(callerA, "toolu_x", 0);
+  const resultB = childSessionDir(callerB, "toolu_x", 0);
+  assert.notEqual(resultA, resultB);
+});
+
+test("childSessionDir: collapsed dirs for the same caller+runId are deterministic", () => {
+  const caller = nestedCallerSessionFile(10);
+  const resultA = childSessionDir(caller, "toolu_x", 0);
+  const resultB = childSessionDir(caller, "toolu_x", 0);
+  assert.equal(resultA, resultB);
+});
+
 interface FakeSession {
   id: string;
 }

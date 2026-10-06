@@ -20,9 +20,7 @@ The `subagent` tool accepts optional per-invocation overrides: `model`, `tools`,
 
 ### Overriding the model per invocation
 
-Both modes accept an optional `model` param, in `provider/modelId` form (e.g. `"anthropic/claude-opus-4-8"`). Multiple slashes are valid: the first segment is the provider, the rest is the model ID (e.g. `"openrouter/anthropic/claude-sonnet-4-5"`).
-
-In single mode, `model` is a top-level param:
+`subagent` accepts an optional `model` param, in `provider/modelId` form (e.g. `"anthropic/claude-opus-4-8"`). Multiple slashes are valid: the first segment is the provider, the rest is the model ID (e.g. `"openrouter/anthropic/claude-sonnet-4-5"`).
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", model: "anthropic/claude-opus-4-8"
@@ -34,176 +32,116 @@ It can also be done by natural language:
 Use the agent scout with model "anthropic/claude-opus-4-8" to find all the functions that use fetch in src
 ```
 
-In parallel mode, `model` goes inside each entry of `tasks[]`: a top-level `model` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", model: "anthropic/claude-haiku-4-5"
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
-```
-
 As with frontmatter `model`, registry existence isn't checked. A well-formed but unknown model falls back to the session default, logging a `pi-simple-agents: ` warning naming the model and provider. A bare alias without a `/` (e.g. `"sonnet"`) is rejected outright: the whole `subagent` call fails with a validation error before any agent runs. Always use the full `provider/modelId` form. See [Model aliases](#model-aliases).
 
 ### Overriding tools per invocation
 
-Both modes accept an optional `tools` param: an array of pi tool names. Unlike frontmatter `tools`, this does **not** accept Claude Code tool-name aliases (`Read`, `Grep`, etc.): that mapping is frontmatter-only. See [Claude Code compatibility](#claude-code-compatibility). Names are exact pi tool names: built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, ...), tools from installed extensions, and MCP tools (`mcp__<server>__<tool>`, see [MCP tools in subagents](#mcp-tools-in-subagents)).
-
-In single mode, `tools` is a top-level param:
+`subagent` accepts an optional `tools` param: an array of pi tool names. Unlike frontmatter `tools`, this does **not** accept Claude Code tool-name aliases (`Read`, `Grep`, etc.): that mapping is frontmatter-only. See [Claude Code compatibility](#claude-code-compatibility). Names are exact pi tool names: built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`, ...), tools from installed extensions, and MCP tools (`mcp__<server>__<tool>`, see [MCP tools in subagents](#mcp-tools-in-subagents)).
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", tools: ["read", "grep"]
-```
-
-In parallel mode, `tools` goes inside each entry of `tasks[]`: a top-level `tools` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", tools: ["find", "ls"]
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
 ```
 
 `tools` is a **total replacement**, not a merge. It does not add to or subtract from the agent's configured tool list; it replaces it outright for that call. An explicit `tools: []` means "no tools for this call"; omitting `tools` entirely means "use whatever settings.json/frontmatter already resolved". These are two different things. The `subagent` tool's call display always shows the effective (post-override) tool list, so a call with `tools: []` renders as `tools: none` in that line, never the agent's configured tools.
 
 ### Overriding skills per invocation
 
-Both modes accept an optional `skills` param: an array of skill names, matched the same way as frontmatter `skills`: an explicit whitelist, by exact case-sensitive name against the inherited set.
-
-In single mode, `skills` is a top-level param:
+`subagent` accepts an optional `skills` param: an array of skill names, matched the same way as frontmatter `skills`: an explicit whitelist, by exact case-sensitive name against the inherited set.
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", skills: ["tdd"]
-```
-
-In parallel mode, `skills` goes inside each entry of `tasks[]`: a top-level `skills` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", skills: ["tdd"]
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
 ```
 
 As with `tools`, `skills` is a **total replacement**, not a merge. An explicit `skills: []` means "no skills for this call"; omitting `skills` means "inherit whatever settings.json/frontmatter already resolved". This has the same limitation as the frontmatter `skills` field (see [Frontmatter fields](#frontmatter-fields)): the whitelist narrows *which* skills are available, but doesn't preload the named skills' content into the subagent's context.
 
 ### Overriding maxTurns per invocation
 
-Both modes accept an optional `maxTurns` param: an integer from 1 to 100 that bounds the number of model turns (one model response + its batch of tool calls = 1 turn) for that call. When the limit is exceeded, the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted.
-
-In single mode, `maxTurns` is a top-level param:
+`subagent` accepts an optional `maxTurns` param: an integer from 1 to 100 that bounds the number of model turns (one model response + its batch of tool calls = 1 turn) for that call. When the limit is exceeded, the run settles as an error (`"reached maxTurns limit of N"`) and the session is aborted.
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", maxTurns: 5
-```
-
-In parallel mode, `maxTurns` goes inside each entry of `tasks[]`: a top-level `maxTurns` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", maxTurns: 5
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
 ```
 
 Invocation-level `maxTurns` takes precedence over the agent's configured value (frontmatter or settings-level `agentOverrides`). An invalid value (0, negative, > 100, `NaN`, `Infinity`, non-integer, or non-numeric) is warned and treated as "no limit" for that call: same fallback as at the frontmatter layer.
 
 ### Overriding thinking per invocation
 
-Both modes accept an optional `thinking` param: one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, which sets the thinking-budget level for that call.
-
-In single mode, `thinking` is a top-level param:
+`subagent` accepts an optional `thinking` param: one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, which sets the thinking-budget level for that call.
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", thinking: "high"
-```
-
-In parallel mode, `thinking` goes inside each entry of `tasks[]`: a top-level `thinking` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", thinking: "low"
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
 ```
 
 Invocation-level `thinking` takes precedence over the agent's configured value (frontmatter or settings-level `agentOverrides`). It's a free string, not validated at the tool boundary. An unrecognized level is warned and ignored at run time, falling back to the agent's otherwise-resolved thinking level: the same fallback the frontmatter/settings layers already use.
 
 ### Overriding timeoutMs per invocation
 
-Both modes accept an optional `timeoutMs` param: a positive number of milliseconds bounding how long that call may run before it's aborted.
-
-In single mode, `timeoutMs` is a top-level param:
+`subagent` accepts an optional `timeoutMs` param: a positive number of milliseconds bounding how long that call may run before it's aborted.
 
 ```
 subagent agent: "scout", task: "Find all functions that use fetch() in src/", timeoutMs: 120000
 ```
 
-In parallel mode, `timeoutMs` goes inside each entry of `tasks[]`: a top-level `timeoutMs` alongside `tasks` is rejected:
-
-```
-subagent tasks: [
-  agent: "scout", task: "List all .ts files in src/", timeoutMs: 120000
-  agent: "web-scout", task: "Find the latest version of the API docs"
-]
-```
-
 Invocation-level `timeoutMs` takes precedence over the agent's configured value (frontmatter or settings-level `agentOverrides`), and over the 10-minute default when nothing else sets it. A value above the 2-hour ceiling (`7200000` ms) is **clamped** to that ceiling with a `console.warn`, not rejected. A non-number, `<= 0`, `NaN`, or `Infinity` value is warned and falls back to the 10-minute default. On expiry, the run settles as an error (`"timed out after <N>ms"`) and any partial output is discarded.
 
-## Bundled skill internals
+## Background jobs
 
-While a subagent runs, the `subagent` tool's call display shows a live status line per task: `<agent> · tools: <N> · <status>`, where `<status>` is `working…` (no tool started yet), `running: <tool1, tool2, ...>` (tools currently executing, in start order: parallel tool calls within one agent are possible), or `done` (the task has settled).
+`subagent` never waits for a run to finish. Calling it launches one job for that one `{agent, task}` call and returns almost immediately with an acknowledgment: a job id (`S1001`, `S1002`, ...), the agent, and the task. The model is told explicitly not to call `subagent` again to poll for that job's result.
 
-### Expanding the live stream (Ctrl+O)
+The job keeps running in the background. When it settles, its result is delivered automatically as a new message in the conversation — the model sees it without needing to ask, and (unless the job was cancelled) it wakes the model up with a follow-up turn so it can act on the result. A job the user cancels via `/subagents cancel` still delivers a message, but quietly: it doesn't trigger a new turn.
 
-Ctrl+O (`app.tools.expand`) toggles the `subagent` tool box's body between collapsed and expanded, with different content depending on whether the task is still running or has settled:
+This means a subagent call never blocks the conversation: the model can keep working, and the user can keep typing, while one or more jobs run underneath. Running several agents at once means calling `subagent` once per task, in the same turn — each call gets its own independent job, and there is no overall limit on how many jobs run at once.
 
-- **Collapsed, in progress:** unchanged: just the status line per agent, as above.
-- **Expanded, in progress:** the status line per agent, followed by an indented stream with one line per tool call that agent has fired so far, in order: the name and a short summary of its arguments, never the tool call's result/output (this keeps memory bounded even for a long-running subagent that, say, `read`s large files).
-- **Collapsed, once settled:** shows nothing: no output.
-- **Expanded, once settled:** shows the agent's/agents' full final output, same as the always-on behavior before this toggle existed.
+Jobs are **in-memory only, per pi session**: nothing persists across a restart, and a nested subagent (one `subagent` call dispatching another) gets its own independent job set, invisible to the parent's. A session with no interactive UI (`pi -p`, `--mode json`, or a nested child session) still waits for its own background jobs to finish before the run settles — it just doesn't show the widget or `/subagents` below, since there's nothing to render them into.
 
-The same toggle (or a click on the box) also expands the call title. Collapsed, it shows the first line of the task, cut to 80 characters. Expanded, it shows the full task, indented under the agent and its parameter line; in parallel mode each agent is followed by its own full task.
+### The `/subagents` command
 
-Tool-call summaries in the stream cover `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `tool_search` (the query) and `codemode` (the first line of the code, skipping a leading `// @options:` line). MCP tools named `mcp__<server>__<tool>` render as `server/tool key=value ...`, matching pi's own `server/tool` title for plain names (names pi sanitized or shortened with a hash show as registered). Any other tool renders as its name plus its JSON arguments.
+`/subagents` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
 
-Expanded, in-progress example:
+`/subagents cancel <id>` cancels a running job. `/subagents clear` drops every finished job from the list (running ones are untouched) — useful after a long session accumulates a lot of history; by default the 50 most recent finished jobs are kept automatically even without clearing.
 
-```
-scout · tools: 2 · running: read
-  read src/foo.ts:10-40
-  $ ls -la
-```
+### The running-jobs widget
+
+While at least one job is running, a persistent panel appears below the editor: one line per still-running task, with its agent, a truncated preview of the task, and elapsed time, ticking once a second. It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to — the same thing `/subagents` shows on demand, kept visible without asking.
+
+### Expanding a job's result (Ctrl+O)
+
+A background job shows up as **two** separate blocks in the transcript, each collapsible/expandable independently, both styled and behaving like a native tool result (same themed background, same `toolTitle` header convention, individually clickable to toggle):
+
+- **The launch itself** (`subagent <agent>[...]`): collapsed, a one-line `backgrounded job <id>` summary; expanded, the full acknowledgment text.
+- **The result**, once it arrives (`subagent <agent> · job <id> · <status>`): collapsed, just a one-line usage footer per task; expanded, the full output — same divider + content convention the tool used to show inline before background jobs existed.
+
+Ctrl+O (`app.tools.expand`) toggles every expandable block in the transcript at once, including both of the above. Clicking directly on either block toggles just that one, independent of the global toggle, the same way a plain tool result already worked.
 
 ### Usage footer
 
-Once a task settles, its status/result line gets a one-line consumption footer appended, in the same format as pi's own status-bar footer: `↑<input> ↓<output> R<cache-read> W<cache-write> CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`. Fields at zero are omitted (no cache activity means no `R`/`W`/`CH`); `$` only shows when cost is non-zero or the model is subscription-backed. Cache-hit % is cumulative over the whole run, not just the last turn. The footer is visible in both collapsed and expanded views: the Ctrl+O toggle only gates the full output/tool-call stream, not this one-line summary. It also appears on error/timeout/maxTurns runs: the tokens were spent regardless of the outcome.
+A job's result block carries a one-line consumption footer per task, in the same format as pi's own status-bar footer: `↑<input> ↓<output> R<cache-read> W<cache-write> CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`. Fields at zero are omitted (no cache activity means no `R`/`W`/`CH`); `$` only shows when cost is non-zero or the model is subscription-backed. Cache-hit % is cumulative over the whole run, not just the last turn. The footer is visible in both collapsed and expanded views. It also appears on error/timeout/maxTurns runs: the tokens were spent regardless of the outcome.
 
 ```
-scout · tools: 2 · done · ↑13k ↓840 R1.2M W3.0k CH98.7% $0.412 12.3%/200k
+scout ↑13k ↓840 R1.2M W3.0k CH98.7% $0.412 12.3%/200k
 ```
 
-In a parallel `tasks[]` batch, each task gets its own footer: there is no aggregated total across tasks.
+This usage is **not** on the launch tool call's own result (there is nothing to report yet at launch time) — see [Session persistence](#session-persistence) below for where it lives once the job settles.
 
 ### Session persistence
 
 When the caller's own pi session is persisted to disk, each subagent run now persists its
-session too, at `<parent-session-file-without-.jsonl>/<toolCallId>/run-<taskIndex>/session.jsonl`
-\u2014 next to the parent's own session file, not in a separate shared directory. This is the
-convention several usage-tracking tools already know how to reconcile a nested-agent tool call's
-child session against: with a session file at that path, they attribute the run's cost to its
-real model (e.g. a different, more expensive model than the caller's) instead of a generic
-bucket. It doesn't show up in `pi --continue`/`/resume`'s own listing (those only look one level
-deep), and it doesn't change what conversation history the subagent starts with \u2014 that's
-`defaultContext`, above.
+session too, at `<parent-session-file-without-.jsonl>/<toolCallId>/run-0/session.jsonl`
+— next to the parent's own session file, not in a separate shared directory. The `run-0` segment
+is a fixed convention (each job now runs exactly one task): this is the same path several
+usage-tracking tools already know how to reconcile a nested-agent tool call's child session
+against, so a session file there still attributes the run's cost to its real model (e.g. a
+different, more expensive model than the caller's) instead of a generic bucket. It doesn't show
+up in `pi --continue`/`/resume`'s own listing (those only look one level deep), and it doesn't
+change what conversation history the subagent starts with — that's `defaultContext`, above.
 
 When the caller's own session isn't persisted (e.g. it's running in-memory), a subagent run has
-no parent path to nest under and falls back to running fully in-memory, as before \u2014 no file is
+no parent path to nest under and falls back to running fully in-memory, as before — no file is
 written, and no warning either: this is normal, not a degraded case.
 
-The subagent tool's own result also reports its usage on the canonical `AgentToolResult.usage`
-field (summed across every task in the batch), in addition to the existing per-task usage inside
-`details.runs[].usage`.
+The launch tool call's own result carries no `usage` field — there is nothing to report yet,
+since the run hasn't started. The usage is on the **completion message**'s own `details.usage`
+field instead, once the job settles, alongside the run itself at `details.run`.
 
 ## Frontmatter fields
 
@@ -357,20 +295,6 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
 
 > `timeoutMs` (number, milliseconds) bounds how long a subagent run may take before it's aborted. It can be set at any layer: frontmatter, settings-level `agentOverrides`, or per invocation (see [Overriding timeoutMs per invocation](#overriding-timeoutms-per-invocation)). Default when unset: `600000` (10 minutes). A ceiling of `7200000` ms (2 hours) applies everywhere: a finite value above it is clamped to the ceiling with a `console.warn`, not rejected. An invalid value (`0`, negative, `NaN`, `Infinity`, or a non-numeric value from raw JSON) falls back to the default with a `console.warn`. On expiry, the run settles as an error (`"timed out after <N>ms"`) and any partial output is discarded: it is not returned as a truncated success. The example above raises `planner`'s timeout to 30 minutes for a heavy-thinking, long-running agent. It bounds only the model/prompt execution phase: session creation and resource-loader setup happen before the timer starts and are not covered.
 
-### Concurrency
-
-The `pi-simple-agents.concurrency` (or `subagents.concurrency`) key, set alongside `agentOverrides` in the same `settings.json` files, controls how many subagent tasks a single `subagent` tool call runs in parallel. Default when unset: `4`. It's effectively capped at `8`, since a call can't have more than `MAX_PARALLEL_TASKS` (8) tasks to begin with: `concurrency` only throttles how many of those run at once, it isn't a separate, independent limit. An invalid value (not a positive integer) falls back to the default with a `console.warn`.
-
-```json
-{
-  "pi-simple-agents": {
-    "concurrency": 6
-  }
-}
-```
-
-Same precedence as `agentOverrides`: project settings (`{project-folder}/.pi/settings.json`) override user settings (`~/.pi/agent/settings.json`) when both set it.
-
 ### Precedence rules
 
 ```
@@ -431,16 +355,17 @@ maxTurns: 10
 
 ## Limits
 
-- **Maximum 8 tasks** per call in parallel mode (`MAX_PARALLEL_TASKS`).
-- **Up to 8 agents running concurrently**: controlled by the `concurrency` setting (default 4, see [Concurrency](#concurrency)); it can never exceed the 8-task-per-call limit above.
+- **No limit on concurrent background jobs.** Each `subagent` call gets its own independent job; calling it N times in a row starts N jobs running at once, with no cap.
 - Agents run inside a pi SDK session with proper resource handling, context management, and cleanup.
 
 ## Known limitations
 
+- A background job's own abort signal is independent of the launching tool call's. Pressing Esc on the turn that launched a job (or that job's own turn otherwise ending) does **not** cancel it \u2014 only `/subagents cancel <id>`, a session shutdown, or the headless safety nets (the settle barrier's abort path, `agent_settled`) do. This is intentional: coupling them would cancel every job the instant its launching turn ends, defeating the point of running in the background.
+- Background jobs are in-memory only, scoped to the current pi process. There is no persistence across a restart or reload: an in-flight job is simply gone, with no completion message ever delivered for it. `/subagents clear` and the default 50-job retention also only ever affect the current process's history.
 - Subagents share a `ModelRuntime` snapshot taken when the extension loads. This affects two things: (a) performing `/login` later in the same session requires running `/reload` before subagents will see the new credentials, and (b) resolving an agent's `model: "provider/modelId"` config value against a provider or model that only became available after extension load (e.g. a provider registered after load, or a newly available model) also won't resolve until `/reload`: both share the same frozen `ModelRuntime` snapshot.
 - MCP in subagents has its own section, [MCP tools in subagents](#mcp-tools-in-subagents). The two limitations below are its residual risks.
 - A `~/.pi/agent/extensions/*.ts` file that registers tools and also depends on `session_start` won't have it fire in a subagent, since it isn't an installed package. An extension that listens for `session_start` but registers no tools is never detected either.
-- A hung MCP handshake during bind is bounded to `EXTENSION_BIND_TIMEOUT_MS` (60s by default) and is abortable via the subagent's own signal: it can't block the run indefinitely, but a handshake that never resolves still delays that subagent's result by up to that bound.
+- A hung MCP handshake during bind is bounded to `EXTENSION_BIND_TIMEOUT_MS` (60s by default) and is abortable via the job's own cancellation (`/subagents cancel`, not the launching tool call's signal \u2014 see [Background jobs](#background-jobs)): it can't block the run indefinitely, but a handshake that never resolves still delays that job's result by up to that bound.
 - The symmetric shutdown stops the MCP connections *this subagent's own nested session* opened; it never touches the host's own MCP state (each nested session gets an independent instance of the MCP extension's factory). A shutdown that itself hangs (no timeout is applied to it) is a known residual risk. See `DEVELOPER.md` for the reasoning and the mitigation this took instead (removing the artificial mode restriction, not adding another timeout layer).
 
 ## For developers

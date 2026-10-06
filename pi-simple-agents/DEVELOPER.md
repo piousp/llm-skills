@@ -22,13 +22,10 @@ import {
   applyOverrides,
   applyInvocationOverride,
   runAgentViaSdk,
-  mapWithConcurrencyLimit,
-  resolveConcurrency,
-  DEFAULT_CONCURRENCY,
   clampThinkingLevel,
   validateSubagentParams,
-  resolveAgents,
-  formatRunResults,
+  resolveAgent,
+  formatRunResult,
   createAgentRegistry,
   type AgentConfig,
   type AgentOverrides,
@@ -89,7 +86,7 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
   `src/run.ts`). Parsed from frontmatter by `parseFrontmatter` and validated at the use site by
   `resolveMaxTurns` (see below); a `0`, negative, non-integer, `NaN`/`Infinity`, or out-of-range
   value is warned-and-dropped (resolves to `undefined` = no limit), mirroring
-  `resolveTimeoutMs`/`resolveConcurrency`.
+  `resolveTimeoutMs`.
 - `timeoutMs` — optional wall-clock bound (ms) on a run's prompt execution, now parsed from
   frontmatter too (previously settings-only). Resolvable from frontmatter, settings-level
   `agentOverrides`, or a per-invocation override, in that ascending precedence. Range/ceiling is
@@ -100,8 +97,8 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
 
 Per-invocation override applied on top of an already-configured `AgentConfig`, distinct from the
 settings-level `AgentOverrides` merged by `applyOverrides` above: this one comes from the
-`subagent` tool call's own arguments (single-mode `{model, tools, skills, thinking, maxTurns,
-timeoutMs}`, or a `tasks[]` entry's own copy of the same six fields), not from `settings.json`.
+`subagent` tool call's own arguments (`{model, tools, skills, thinking, maxTurns, timeoutMs}`), not
+from `settings.json`.
 
 ```typescript
 interface InvocationOverride {
@@ -284,14 +281,12 @@ const agentsAgain = await discoverAgents("~/.pi/agent/agents", cache); // cached
 
 ## loadSettings
 
-Replaces the deleted `loadOverrides` (`loadOverrides` no longer exists). Loads both
-`agentOverrides` and `concurrency` from `settings.json`.
+Replaces the deleted `loadOverrides` (`loadOverrides` no longer exists). Loads `agentOverrides`
+from `settings.json`.
 
 ```typescript
 interface SubagentSettings {
   agentOverrides: AgentOverrides;
-  /** Raw value from settings JSON; validated at use site by resolveConcurrency. */
-  concurrency?: unknown;
 }
 
 function loadSettings(
@@ -301,29 +296,23 @@ function loadSettings(
 ): Promise<SubagentSettings>;
 ```
 
-Reads `settings.json` via `fs/promises`. `agentOverrides` and `concurrency` are resolved as
-**independent per-field fallbacks** between the top-level `pi-simple-agents` key and the legacy
-`subagents` key: `primary?.field ?? legacy?.field`, evaluated separately for EACH field — so one
-file can use `pi-simple-agents` for one field and `subagents` for another, and both are honored
-(a real bug, fixed during QA: this is the correct independent-per-field behavior, not an
-all-or-nothing key choice). When both keys set the same field, `pi-simple-agents`'s value wins.
+Reads `settings.json` via `fs/promises`. `agentOverrides` is resolved as `primary?.agentOverrides ??
+legacy?.agentOverrides` between the top-level `pi-simple-agents` key and the legacy `subagents`
+key — when both keys set it, `pi-simple-agents`'s value wins.
 
-Whenever the `subagents` key is present in a file AT ALL (regardless of which fields it supplies),
-one deprecation `console.warn` fires (once per file, not once per field) recommending
-`pi-simple-agents` instead — `subagents` still works fully, this is a warning only, not a
-functional restriction.
+Whenever the `subagents` key is present in a file AT ALL, one deprecation `console.warn` fires
+(once per file) recommending `pi-simple-agents` instead — `subagents` still works fully, this is a
+warning only, not a functional restriction.
+
+A `concurrency` key under either `pi-simple-agents` or `subagents`, if present, is silently
+ignored: not read onto `SubagentSettings`, not validated, no warning.
 
 `agentOverrides` gets a plain-object guard: if a resolved (non-`undefined`) `agentOverrides` value
 isn't a plain object (e.g. a string, array, or `null`), it's ignored with a warning and treated as
 `{}` — a fix for a silent-corruption bug where a malformed value used to flow through and produce
 garbage per-agent merges with zero warning.
 
-`concurrency` is **not** validated here — it's passed through as `unknown` raw JSON; validation
-happens at the consuming site via `resolveConcurrency` (see below), the same division of
-responsibility as the pre-existing `timeoutMs` field.
-
-When both paths are provided, the project file overrides the user file per-field:
-`agentOverrides` is merged, `concurrency` takes the project's value if defined, else the user's.
+When both paths are provided, the project file's `agentOverrides` is merged over the user file's.
 Malformed JSON in one file doesn't poison the other — each file's own parse/read failure only
 affects that file's contribution. Cache key: `` `${userSettingsPath}::${projectSettingsPath ?? ""}` ``.
 Never rejects.
@@ -333,7 +322,7 @@ const settings = await loadSettings(
   "~/.pi/agent/settings.json",
   "/path/to/project/.pi/settings.json",
 );
-// settings.agentOverrides, settings.concurrency
+// settings.agentOverrides
 ```
 
 ### Settings JSON contract
@@ -341,19 +330,13 @@ const settings = await loadSettings(
 ```json
 {
   "pi-simple-agents": {
-    "concurrency": 6,
     "agentOverrides": { "scout": { "model": "..." } }
   }
 }
 ```
 
-`concurrency` controls the max number of subagent tasks run in parallel within one `subagent` tool
-call (a BATCH-level setting, not per-agent). Default `4` (via `DEFAULT_CONCURRENCY`/
-`resolveConcurrency`). Effective ceiling of 8, because the tool's own `MAX_PARALLEL_TASKS` bounds
-how many tasks one call can even have. Read from either `pi-simple-agents.concurrency` (preferred)
-or the legacy `subagents.concurrency` (deprecated, still works, warns). Project settings
-(`{cwd}/.pi/settings.json`) override user settings (`~/.pi/agent/settings.json`) when the project
-value is defined — same precedence pattern as `agentOverrides`.
+Project settings (`{cwd}/.pi/settings.json`) override user settings (`~/.pi/agent/settings.json`)
+per field when the project value is defined.
 
 ## applyOverrides
 
@@ -415,7 +398,7 @@ export interface RunAgentViaSdkOptions {
   `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting. The `tool_start` variant now also carries a `summary: string`, pre-formatted by `formatToolCall` (`src/format-tool-call.ts`) from the tool's `toolName`/`args`. The event's underlying `result`/`partialResult` is never captured — only `toolName` and the formatted `args` summary flow through `SubagentToolEvent` — so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
-- `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTasksOptions`/`runSingleTask`.
+- `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTaskOptions`/`runSingleTask`.
 - `extensionBindTimeoutMs` — overrides `EXTENSION_BIND_TIMEOUT_MS` (60s). Test seam; production callers should leave it unset.
 
 ### AgentRunResult
@@ -577,35 +560,6 @@ passing through the same `skillsOverride` filter `buildLoaderOptions` already ap
 this isn't exploitable currently — but the mechanism is reachable the moment one does, and it
 runs on every bind, not just the ones this package intentionally triggers.
 
-## mapWithConcurrencyLimit
-
-Processes an array with a configurable concurrency cap. Preserves input order.
-
-```typescript
-function mapWithConcurrencyLimit<TIn, TOut>(
-  items: TIn[],
-  concurrency: number,
-  fn: (item: TIn, index: number) => Promise<TOut>,
-): Promise<TOut[]>;
-```
-
-The concurrency value is clamped to `[1, items.length]`. Empty input returns an immediately resolved empty array.
-
-## resolveConcurrency
-
-```typescript
-const DEFAULT_CONCURRENCY = 4;
-
-function resolveConcurrency(value: unknown): number;
-```
-
-Validates the raw `concurrency` value read from settings (see `loadSettings` above).
-`undefined` → `DEFAULT_CONCURRENCY` (4). A finite integer ≥ 1 → returned unchanged. Anything else
-(`0`, negative, `NaN`, `Infinity`, non-integer, non-number) → `console.warn` naming the invalid
-value, then `DEFAULT_CONCURRENCY`. No upper cap of its own — `mapWithConcurrencyLimit` already
-clamps to `[1, items.length]`, and the `subagent` tool's own `MAX_PARALLEL_TASKS` (8) bounds
-`items.length`, so an effective ceiling of 8 applies at the tool layer, not inside this function.
-
 ## resolveTimeoutMs
 
 ```typescript
@@ -634,12 +588,12 @@ function resolveMaxTurns(value: unknown): number | undefined;
 ```
 
 Pure use-site validation of the `maxTurns` value on an `AgentConfig` (see [AgentConfig](#agentconfig)
-and [runAgentViaSdk turn counting](#turn-counting) below). Mirrors `resolveConcurrency` above but
-resolves to `undefined` (no limit) instead of a default, since the absence of a cap is itself a
-valid configuration. `undefined` → `undefined`. An integer in `[1, MAX_TURNS_LIMIT]` → returned
-unchanged. Anything else (`0`, negative, `> 100`, `NaN`, `Infinity`, non-integer, non-number) →
-`console.warn` naming the invalid value, then `undefined` (= no limit). No hard error — same
-warn-and-fall-through discipline as `resolveTimeoutMs` and `resolveConcurrency`.
+and [runAgentViaSdk turn counting](#turn-counting) below). Resolves to `undefined` (no limit)
+instead of a default, since the absence of a cap is itself a valid configuration. `undefined` →
+`undefined`. An integer in `[1, MAX_TURNS_LIMIT]` → returned unchanged. Anything else (`0`,
+negative, `> 100`, `NaN`, `Infinity`, non-integer, non-number) → `console.warn` naming the invalid
+value, then `undefined` (= no limit). No hard error — same warn-and-fall-through discipline as
+`resolveTimeoutMs`.
 
 ## clampThinkingLevel
 
@@ -655,7 +609,7 @@ Valid levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"
 
 ## validateSubagentParams
 
-Validates the two accepted call shapes for the `subagent` tool.
+Validates the single accepted call shape for the `subagent` tool.
 
 ```typescript
 function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams>;
@@ -664,48 +618,25 @@ function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams>;
 ### SubagentParams
 
 ```typescript
-type TaskEntry = { agent: string; task: string } & InvocationOverride;
-
-type SubagentParams =
-  | ({ agent: string; task: string; tasks?: undefined } & InvocationOverride)
-  | ({ agent?: undefined; task?: undefined; tasks: TaskEntry[] }
-      & Partial<Record<keyof InvocationOverride, undefined>>);
+type SubagentParams = { agent: string; task: string } & InvocationOverride;
 ```
 
-The tasks-mode branch's override side is now a **self-maintaining mapped type**
-(`Partial<Record<keyof InvocationOverride, undefined>>`) instead of a hand-written list of
-`field?: undefined` lines. This closes a real drift bug: the hand-written union had been missing
-`maxTurns` in this branch since 0.10.0 added it to `InvocationOverride` (only `model`/`tools`/
-`skills` were listed), so tasks-mode's type never actually forbade a stray top-level `maxTurns`
-at the type level, even though the runtime check in `validateTasksMode` always rejected it
-correctly. Mapping the type off `InvocationOverride`'s own keys means every future field added to
-`InvocationOverride` (like this release's `thinking`/`timeoutMs`) is automatically reflected here
-too, with no separate list to keep in sync.
-
-Both call shapes intersect `InvocationOverride` (see above): single mode carries `model`/`tools`/
-`skills`/`thinking`/`maxTurns`/`timeoutMs` directly on the top-level object, `tasks` mode carries
-them per entry via `TaskEntry`. `invocationOverrideOf(t)` (`src/validate.ts`) extracts just the
-present override fields off either shape (a `TaskEntry`, or validated single-mode args) into a
-plain `InvocationOverride`, for feeding to `applyInvocationOverride`.
+`agent`/`task` are both required — no alternate batch shape exists anymore. `SubagentParams`
+intersects `InvocationOverride` (see above): `model`/`tools`/`skills`/`thinking`/`maxTurns`/
+`timeoutMs` sit directly on the top-level object. `invocationOverrideOf(t)` (`src/validate.ts`)
+extracts just the present override fields off the validated args into a plain
+`InvocationOverride`, for feeding to `applyInvocationOverride`.
 
 Validation rules:
-- Exactly one of `{agent, task, ...}` or `{tasks: [...]}` must be provided (not both, not neither).
-- `tasks` array must have between 1 and 8 entries (`MAX_PARALLEL_TASKS`).
-- Each entry must be `{ agent: string, task: string }` with non-empty strings, plus optional
-  per-entry `model` (a `"provider/modelId"` string, same format/validation as single-mode `model`
-  below), `tools` (an array of strings), and `skills` (an array of strings). `[]` is a valid value
-  for `tools`/`skills` and is distinct from omitting the field: omitted means "inherit the agent's
+- `agent` and `task` are both required, non-empty strings.
+- `model` must be a `"provider/modelId"` string (rejected otherwise with a message naming the
+  required format); `tools`/`skills` must each be an array of strings. `[]` is a valid value for
+  `tools`/`skills` and is distinct from omitting the field: omitted means "inherit the agent's
   configured value", `[]` means "override to empty".
-- In single mode, a top-level `model` must be a `"provider/modelId"` string (rejected otherwise
-  with a message naming the required format); top-level `tools`/`skills` must each be an array of
-  strings. `thinking`/`maxTurns`/`timeoutMs` get a minimal type guard (`typeof` check) at this
-  same seam — an ill-typed value is warned and dropped, not a hard validation error; range/level
-  checks live at each field's own use site (`resolveMaxTurns`, `resolveTimeoutMs`,
-  `clampThinkingLevel`), not here.
-- In `tasks` mode, top-level `model`/`tools`/`skills`/`thinking`/`maxTurns`/`timeoutMs` are
-  rejected outright (checked via a small loop over all six fields before validating `tasks`
-  itself) with an error naming the field and pointing at the per-entry equivalent — overrides
-  only apply per task in this mode.
+- `thinking`/`maxTurns`/`timeoutMs` get a minimal type guard (`typeof` check) at this same seam
+  — an ill-typed value is warned and dropped, not a hard validation error; range/level checks
+  live at each field's own use site (`resolveMaxTurns`, `resolveTimeoutMs`, `clampThinkingLevel`),
+  not here.
 
 ### ValidationResult
 
@@ -715,31 +646,34 @@ type ValidationResult<T> =
   | { ok: false; error: string };
 ```
 
-## resolveAgents
+## resolveAgent
 
-Resolves agent names to their full `AgentConfig` entries. Reports all unknown names in a single error message.
+Resolves one agent name to its full `AgentConfig` entry.
 
 ```typescript
-function resolveAgents(
-  names: string[],
+function resolveAgent(
+  name: string,
   agents: AgentConfig[],
-): ValidationResult<AgentConfig[]>;
+): ValidationResult<AgentConfig>;
 ```
+
+Unknown name → `{ ok: false, error: "Unknown agent: <name>. Available agents: a, b" }`
+(singular wording — no more `(s)`).
 
 ```typescript
 const agents = await discoverAgents("~/.pi/agent/agents");
-const resolved = resolveAgents(["scout", "worker"], agents);
+const resolved = resolveAgent("scout", agents);
 if (resolved.ok) {
-  // resolved.value: AgentConfig[]
+  // resolved.value: AgentConfig
 }
 ```
 
-## formatRunResults
+## formatRunResult
 
-Converts one or more `AgentRunResult` into a human-readable string.
+Converts one `AgentRunResult` into a human-readable string.
 
 ```typescript
-function formatRunResults(results: AgentRunResult[]): FormattedResults;
+function formatRunResult(result: AgentRunResult): FormattedResults;
 ```
 
 ```typescript
@@ -749,9 +683,9 @@ interface FormattedResults {
 }
 ```
 
-- Single result: renders inline (final text or error message).
-- Multiple results: renders as markdown sections with agent name and status label.
-- `isError` is `true` when **all** results are errors.
+Always renders inline (final text or error message) — the "numbered sections for multiple
+results" behavior is gone; there is only ever one result. `isError` is `true` when the result is
+an error.
 
 ## Caching
 
@@ -774,15 +708,13 @@ composite of both settings paths.
 ## createAgentRegistry
 
 New module `src/agent-registry.ts`. Composes `discoverAgents` + `loadSettings` + `applyOverrides`
-+ `resolveConcurrency` behind one `load`/`peek` API, and is what the extension actually uses — see
+behind one `load`/`peek` API, and is what the extension actually uses — see
 [Extension internals](#extension-internals) below.
 
 ```typescript
 interface LoadedAgents {
   /** Overrides already applied. Treat as immutable. */
   agents: readonly AgentConfig[];
-  /** Already resolved via resolveConcurrency; always a valid integer ≥ 1. */
-  concurrency: number;
 }
 
 interface AgentRegistry {
@@ -807,8 +739,8 @@ function createAgentRegistry(paths: AgentRegistryPaths): AgentRegistry;
 `projectSettingsPath = path.join(cwd, ".pi", "settings.json")` internally (no injection point —
 deliberate, one implementation, YAGNI), runs `discoverAgents` and `loadSettings` in PARALLEL via
 `Promise.all` (both are independent I/O and neither rejects, so there's no fail-fast reason to
-serialize them), applies `applyOverrides`, resolves concurrency via `resolveConcurrency`, stores
-the result keyed by `cwd` in an internal snapshot map (for `peek`), and returns it.
+serialize them), applies `applyOverrides`, stores the result keyed by `cwd` in an internal
+snapshot map (for `peek`), and returns it.
 
 `peek(cwd)` is purely synchronous/zero-I/O: it returns the last COMPLETED `load(cwd)` result for
 that exact `cwd`, or `undefined` if none completed yet — used by the extension's `renderCall`
@@ -827,7 +759,7 @@ const registry = createAgentRegistry({
   userSettingsPath: "~/.pi/agent/settings.json",
 });
 
-const { agents, concurrency } = await registry.load(process.cwd());
+const { agents } = await registry.load(process.cwd());
 // later, synchronously, e.g. inside renderCall:
 const snapshot = registry.peek(process.cwd());
 ```
@@ -841,14 +773,14 @@ awaits `registry.load(process.cwd())` before building the tool description and c
 
 1. Loads agents and settings via one `createAgentRegistry({ agentsDir: AGENTS_DIR, userSettingsPath: ... })`
    instance's `registry.load(cwd)` — this composes `discoverAgents` (`~/.pi/agent/agents/`) and
-   `loadSettings` (`~/.pi/agent/settings.json` + `{cwd}/.pi/settings.json`) plus `applyOverrides`
-   and `resolveConcurrency`, replacing the old module-level `agentCache`/`overridesCache`/
+   `loadSettings` (`~/.pi/agent/settings.json` + `{cwd}/.pi/settings.json`) plus `applyOverrides`,
+   replacing the old module-level `agentCache`/`overridesCache`/
    `loadAvailableAgents` helpers, which combined `discoverAgents` + `loadOverrides` +
    `applyOverrides` by hand — those are gone.
 2. `registry.peek(cwd)` is used wherever a synchronous, zero-I/O read of the last completed load
    is needed (e.g. `renderCall`, which must stay synchronous per the SDK's `renderCall` contract).
 3. Validates parameters via `validateSubagentParams`.
-4. Resolves agent names via `resolveAgents`.
+4. Resolves the agent name via `resolveAgent`.
 5. Creates a `DefaultResourceLoader` per agent (from `@earendil-works/pi-coding-agent`) with field-to-behavior mapping:
 
 ```typescript
@@ -872,33 +804,62 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 }
 ```
 
-6. Resolves models via `modelRuntime.getModel(provider, modelId)` (passed through as `getModel`)
-   and runs agents via `runAgentViaSdk` with a configurable concurrency (default 4, resolved via
-   `resolveConcurrency`) via `mapWithConcurrencyLimit` — no longer a hardcoded `4`. The value comes
-   from `registry.load(ctx.cwd)`'s resolved `concurrency` field, threaded through
-   `RunTasksOptions.concurrency: number`. A separate, extension-level `ModelRuntime` — built once,
+6. Resolves the model via `modelRuntime.getModel(provider, modelId)` (passed through as `getModel`)
+   and runs the agent via `runAgentViaSdk`. Every call runs as its own independent background job
+   — there is no batch/concurrency layer anymore. A separate, extension-level `ModelRuntime` — built once,
    eagerly, via `ModelRuntime.create()` at extension load — is what's forwarded to
    `runAgentViaSdk`/`createSession` as `modelRuntime`, and is also used to build the `getModel`
    resolver (resolving `"provider/modelId"` config strings) passed to `createSession`. Because
    this `ModelRuntime` snapshot is frozen at extension-load time, a `/login` performed later in
    the session requires a `/reload` before subagents pick up the new credentials.
-7. Assembles the final tool result via `buildSubagentToolResult(results, toolCallId)`: formats
-   `results` with `formatRunResults` for the model-facing text, and separately sets `details.runId`
-   (the tool call's own `toolCallId`, threaded through `RunTasksOptions.runId` into
-   `runSingleTask`'s `childSessionDir` call \u2014 see [src/subagent-session.ts](#srcsubagent-sessionts)
-   above), `details.results` (a `{ sessionFile, usage }` projection of `results`, aligned by index
-   to the unchanged `details.runs`), and the top-level `AgentToolResult.usage` (via
-   `aggregateRunUsage`, [src/usage.ts](#srcusagets), summing every run's `usage`; `undefined` if
-   none has one). Extracted as its own exported function \u2014 not part of a stable public API,
-   just a visibility change for testability \u2014 so the runId/results/usage assembly is
-   unit-testable without a real model session.
+7. **Does not await step 6 to completion.** Instead, it hands the actual run (everything step 6
+   describes) to `jobs.start({ runId: toolCallId, task, run })` (`src/background-jobs.ts`,
+   `createJobRegistry`), a per-session, in-memory registry living in the extension factory's
+   closure (not module-level — a nested child session loads this extension again and must get its
+   own independent registry, never the parent's). `start()` returns a `JobSnapshot` synchronously
+   and launches `run` on a later microtask, so a synchronous throw inside it is also caught as a
+   `failed` job rather than an unhandled rejection. `execute()` then returns immediately via
+   `buildSubagentAckResult(job)` (`src/job-messages.ts`): a job id (`S1001`, `S1002`, …,
+   `FIRST_JOB_NUMBER = 1001`), the agent/task, and explicit model-facing instructions not to
+   call `subagent` again to poll. The tool call's own `signal` is deliberately **not** passed to
+   the job — the job gets its own `AbortController` from the registry, so the job survives past
+   the end of the turn that launched it. (Esc no longer cancels a subagent run; only
+   `/subagents cancel <id>` and a session shutdown do.)
 
-`runTasks`'s per-task worker, `runSingleTask` (resource loader creation/reload, session manager
-creation, the SDK run, and progress-tracker teardown), is exported from `extensions/index.ts`
-(was module-private) purely so its unit tests can call it directly — not part of a stable public
-API, just a visibility change for testability. `runSingleTask` computes ONE
-`effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t))` per task and reuses
-that single reference across all three of its call sites — `createMinimalResourceLoader`,
+   When the job settles (`JobState` becomes `completed`/`cancelled`/`failed`), the registry's
+   `onSettled` hook builds a completion message via `buildJobCompletionMessage(job)` and delivers
+   it with `pi.sendMessage(message, options)`: a `subagent-result`-typed `CustomMessage` carrying
+   a `runId`/`run`/aggregate-`usage` assembly built directly in `buildJobCompletionMessage`
+   (not via `buildSubagentToolResult`, which still exists and is still re-exported from
+   `extensions/index.ts` as a public API, but is no longer called anywhere in this package — the
+   completion message only needs a subset of that function's shape). `cancelled` jobs deliver with
+   `{ triggerTurn: false }` (informational,
+   doesn't wake the model); `completed`/`failed` jobs deliver with
+   `{ triggerTurn: true, deliverAs: "followUp" }` (queued until the model's current turn ends, then
+   starts a new one). See [Background jobs](#background-jobs) below for the full architecture
+   (registry, settle barrier, widget, `/subagents`). The `onSettled` hook itself is a one-line call
+   to `deliverJobResult(pi, job)`, exported from `extensions/index.ts` for the same reason
+   `runSingleTask` is below — so this wiring (build the message, hand it to `pi.sendMessage` with
+   the right options) is unit-testable with a fake `pi` and a synthetic `SettledJob`, without a real
+   job ever running.
+
+   The default export also takes a third parameter,
+   `createSessionOverride?: RunAgentViaSdkOptions["createSession"]`, threaded all the way down into
+   every job's `runSingleTask` call. It's a test-only seam (always `undefined` in production, where
+   `runSingleTask`'s own default — the real `createAgentSession` — applies): it's what lets a
+   test substitute a fake `AgentSession` for every job this extension instance launches, so
+   `execute()`'s actual happy path, the lifecycle handlers' effect on a real (if fake-backed) job,
+   and the `/subagents` command against a real job are all exercisable without a network/model call.
+   See `test/unit/extensions-index.test.ts`'s `fakeAgentSession`/`waitUntil` helpers.
+
+The job's per-run worker, `runSingleTask(t, agent, tracker, options)` (resource loader
+creation/reload, session manager creation, the SDK run, and progress-tracker teardown), is
+exported from `extensions/index.ts` (was module-private) purely so its unit tests can call it
+directly — not part of a stable public API, just a visibility change for testability. It no
+longer takes an `index: number` parameter — a module constant `RUN_INDEX = 0` is used internally
+for `childSessionDir` instead, since a job now always runs exactly one task. `runSingleTask`
+computes ONE `effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t))` and
+reuses that single reference across all three of its call sites — `createMinimalResourceLoader`,
 `createSubagentSessionManager`, and `runAgentViaSdk` — so a per-invocation `model`/`tools`/`skills`/
 `thinking`/`maxTurns`/`timeoutMs` override (the task's own override fields, see
 [InvocationOverride](#invocationoverride-and-applyinvocationoverride) above) applies consistently
@@ -907,9 +868,234 @@ resolution.
 
 As of the fields connected below, `createMinimalResourceLoader`'s body is glue over
 `buildLoaderOptions` (`src/loader-config.ts`), which composes `resolveDefaultReads` and
-`filterSkillsByName`; and `runTasks`'s per-task session manager is glue over
-`createSubagentSessionManager` (`src/subagent-session.ts`). The 7 modules below are internal to
-`src/`, not exported from the package entry point.
+`filterSkillsByName`; and `runSingleTask`'s session manager is glue over
+`createSubagentSessionManager` (`src/subagent-session.ts`). The modules below are internal to
+`src/`, not exported from the package entry point — including the four behind background jobs
+(`background-jobs.ts`, `job-messages.ts`, `job-view.ts`, `job-widget.ts`), covered together in
+their own section, [Background jobs](#background-jobs), right after this list.
+
+## Background jobs
+
+Four modules implement everything step 7 above hands off to: the in-memory job registry, the
+messages a settled job delivers, the text views (widget + `/subagents`), and the widget's own
+render/ticker controller. None of them touch the SDK directly — `jobs.start()`'s `run` callback,
+supplied from `extensions/index.ts`, is the only place that calls `runSingleTask`/`runAgentViaSdk`.
+
+### src/background-jobs.ts
+
+```typescript
+interface JobTask { readonly agent: string; readonly task: string }
+
+// "user" = a specific /subagents cancel <id>; "system" = cancelAll() (shutdown,
+// or a headless safety net). Carried from "cancelling" into "cancelled" so
+// buildJobCompletionMessage can word the two differently.
+type CancelReason = "user" | "system";
+
+type JobState =
+  | { readonly status: "running" }
+  | { readonly status: "cancelling"; readonly reason: CancelReason }
+  | { readonly status: "completed"; readonly settledAt: number; readonly result: AgentRunResult }
+  | { readonly status: "cancelled"; readonly settledAt: number; readonly result: AgentRunResult; readonly reason: CancelReason }
+  | { readonly status: "failed"; readonly settledAt: number; readonly error: string };
+
+interface JobSnapshot {
+  readonly id: string;        // "S1001", "S1002", … sequential, FIRST_JOB_NUMBER = 1001
+  readonly runId: string;     // the launching tool call's toolCallId → childSessionDir
+  readonly startedAt: number;
+  readonly task: JobTask;
+  readonly progress: TaskProgress;
+  readonly state: JobState;
+}
+type SettledJob = JobSnapshot & { readonly state: Extract<JobState, { settledAt: number }> };
+
+type JobRun = (io: { signal: AbortSignal; tracker: ProgressTracker }) => Promise<AgentRunResult>;
+
+interface JobRegistryDeps {
+  now: () => number;
+  onSettled: (job: SettledJob) => void;
+  onChange: (jobs: readonly JobSnapshot[]) => void;
+  maxRecent?: number; // default MAX_RECENT_JOBS = 50
+}
+
+type CancelResult =
+  | { readonly kind: "cancelling"; readonly job: JobSnapshot }
+  | { readonly kind: "not-running"; readonly job: JobSnapshot }
+  | { readonly kind: "not-found"; readonly id: string };
+
+interface JobRegistry {
+  start(input: { runId: string; task: JobTask; run: JobRun }): JobSnapshot;
+  cancel(id: string): CancelResult;
+  cancelAll(): void;
+  shutdown(): void;
+  list(): readonly JobSnapshot[];
+  hasRunning(): boolean;
+  whenIdle(): Promise<void>;
+  clearFinished(): number;
+}
+
+function createJobRegistry(deps: JobRegistryDeps): JobRegistry;
+function createSettleBarrier(
+  jobs: Pick<JobRegistry, "hasRunning" | "whenIdle" | "cancelAll">,
+): (event: unknown, ctx: { hasUI: boolean; signal: AbortSignal | undefined }) => Promise<void>;
+```
+
+`createJobRegistry` is a per-extension-factory-invocation closure (never module-level — a nested
+child session loads this extension again and must get its own independent registry, invisible to
+the parent's). `start()` always returns synchronously with a `running` snapshot; `run` itself is
+invoked on a later microtask (`Promise.resolve().then(...)`), so even a synchronous throw inside it
+is caught and turned into a `failed` job rather than an unhandled rejection or a thrown `start()`.
+Settling picks `cancelled` over `completed` when the job's state was `cancelling` at the moment
+`run` resolved, regardless of whether `run` itself noticed the abort (a `run` that ignores its
+`signal` entirely still gets recorded as `cancelled`, not `completed`, once cancel was requested).
+
+`cancel()`/`cancelAll()` are idempotent (a second cancel never re-aborts the same
+`AbortController`) and symmetric with `shutdown()`, which calls `cancelAll()` then sets an internal
+`closed` flag: once closed, further settles still update the job's own state (so a late `list()`
+call reports it correctly) but never call `onSettled`/`onChange` again — nothing should message a
+session that's already being replaced. `clearFinished()` drops every settled job (running ones
+untouched), returning the count removed; `maxRecent` (default 50) does the same pruning
+automatically on every settle, oldest finished job first, never touching running ones.
+
+`cancel(id)` tags the transition with `reason: "user"`; `cancelAll()` tags it `"system"` and only
+ever touches a job whose state is still exactly `"running"` — re-processing an already-`cancelling`
+job (e.g. a second `cancelAll()` call, or the settle barrier's abort path firing after a user
+cancel) is a no-op, not a redundant `onChange`. `whenIdle()` waiters are released on every settle
+regardless of `closed`: only the `onSettled`/`onChange` *notifications* are suppressed post-shutdown
+(`emitChange` already no-ops internally when `closed`) — a `whenIdle()` caller (the settle barrier,
+mid-wait during a shutdown) must still resolve once the job it's waiting on actually finishes.
+
+`createSettleBarrier` is what makes background jobs safe in a context with no interactive UI
+(`pi -p`, `--mode json`, or a nested child session — `ctx.hasUI` is false in all three). Wired to
+`agent_before_settle`, it's a no-op when `ctx.hasUI` is true (the widget/`/subagents` are enough
+there) or when nothing is running; otherwise it awaits `jobs.whenIdle()`, racing it against
+`ctx.signal` aborting (which calls `jobs.cancelAll()` and resolves immediately rather than waiting
+forever, removing its own abort listener once `whenIdle` wins the race so a later abort of that
+same signal — e.g. a shutdown right after the jobs finished — doesn't call `cancelAll()` again
+pointlessly). `extensions/index.ts` also wires `agent_settled` to call `jobs.cancelAll()` whenever
+`!ctx.hasUI` — a safety net for a run that aborts mid-tool-call and skips the boundary event
+entirely (`cancelAll()` is already a no-op when nothing is running, so there's no separate
+`hasRunning()` guard at the call site).
+
+### src/job-messages.ts
+
+```typescript
+function buildSubagentToolResult(result: AgentRunResult, runId: string): AgentToolResult<...>;
+
+function buildSubagentAckResult(job: JobSnapshot): AgentToolResult<...>;
+
+const SUBAGENT_RESULT_MESSAGE_TYPE = "subagent-result";
+interface SubagentJobMessageDetails {
+  jobId: string; runId: string; status: SettledJob["state"]["status"];
+  task: JobTask; run?: AgentRunResult;
+  usage?: AggregatedUsage; isError: boolean;
+}
+function buildJobCompletionMessage(job: SettledJob): {
+  message: { customType: "subagent-result"; content: string; display: true; details: SubagentJobMessageDetails };
+  options: { triggerTurn: true; deliverAs: "followUp" } | { triggerTurn: false };
+};
+```
+
+`ChildResult` is gone — `buildSubagentToolResult` now takes one `AgentRunResult`, not an array,
+and returns `{ content, details: { runId, run: result }, usage: toAggregatedUsage(result.usage),
+isError }`. This is a deliberate breaking change in 1.0.0 (see CHANGELOG.md's 1.0.0 entry), not a
+TODO. `buildSubagentToolResult` lives here (moved from `extensions/index.ts`, still re-exported
+from there as a public API) but `buildJobCompletionMessage` below does not call it: that
+function's full tool-result shape would be built only to be taken apart again for the subset of
+fields the completion message needs, so the message is assembled directly from
+`formatRunResult`/`toAggregatedUsage` instead. `buildSubagentToolResult` is still exercised by its
+own tests (and remains available to whatever external call site re-exporting it from the package's
+entry point is for). `buildSubagentAckResult` is the *other* tail: the launch tool result, built
+from a `JobSnapshot` alone (no run result exists yet), explicitly telling the model not to poll
+and naming the `/subagents cancel <id>` escape hatch; its text and `details` (`{jobId, runId,
+task}`) no longer carry a `(N task/tasks)` count suffix — there's always exactly one task now.
+
+`buildJobCompletionMessage` picks the header text from `job.state.status` (also without a
+`(N task/tasks)` suffix now), and the delivery `options` from a `DELIVERY_OPTIONS_BY_STATUS` table
+keyed by that same status: `completed`/`failed` map to `{ triggerTurn: true, deliverAs: "followUp"
+}` (queued if the model is mid-turn, otherwise starts a new one); `cancelled` maps to
+`{ triggerTurn: false }` (delivered, but doesn't wake the model — the user asked for the cancel,
+there's nothing to react to). A `failed` job has no `result` to assemble (the job never produced
+an `AgentRunResult`), so its `details` is hand-built with `run` absent and `isError: true`; every
+other status builds `details` from the job's own `result` via `formatRunResult`/`toAggregatedUsage`.
+
+### src/job-view.ts
+
+```typescript
+function formatElapsed(ms: number): string; // "0s", "1m 00s", "1h 00m"
+function buildJobsWidgetLines(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string[] | undefined;
+function buildJobListText(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string;
+
+type SubagentsCommand =
+  | { readonly kind: "list" }
+  | { readonly kind: "cancel"; readonly id: string }
+  | { readonly kind: "clear" }
+  | { readonly kind: "usage-error"; readonly message: string };
+function parseSubagentsCommand(args: string): SubagentsCommand;
+function describeCancelResult(result: CancelResult): { text: string; level: "info" | "warning" };
+function describeClearResult(removed: number): string;
+```
+
+Pure text builders, no UI/SDK dependency. `buildJobsWidgetLines` returns `undefined` when no job is
+`running`/`cancelling` (the caller clears the widget instead of showing an empty panel); otherwise
+one line per still-unfinished task across every active job (`◯` running, `◌` cancelling), elapsed
+time ticking from `now - job.startedAt`, plus a trailing hint line. `buildJobListText` (used by the
+`/subagents` command, not the widget) reuses `buildProgressLine` (`src/progress.ts`) for a running
+job's body and a local per-task renderer (agent, success/`FAILED`, usage footer) for a finished
+one; it does not re-sort — callers pass `jobs.list()`, already newest-first.
+
+### src/job-widget.ts
+
+```typescript
+const JOBS_WIDGET_KEY = "pi-simple-agents:jobs";
+interface JobWidgetUi {
+  setWidget(key: string, lines: string[] | undefined, options?: { placement?: "aboveEditor" | "belowEditor" }): void;
+  theme: ProgressTheme;
+}
+interface JobWidgetDeps {
+  getUi: () => JobWidgetUi | undefined; // undefined in a context with no UI
+  now: () => number;
+  schedule: (fn: () => void, ms: number) => unknown;
+  cancel: (handle: unknown) => void;
+}
+function createJobWidget(deps: JobWidgetDeps): { refresh(jobs: readonly JobSnapshot[]): void; dispose(): void };
+```
+
+Wraps `buildJobsWidgetLines` with a self-rescheduling ticker: `refresh()` renders immediately and,
+only while at least one line is showing, schedules the next tick a second later; a tick that finds
+nothing left to show stops rescheduling itself rather than ticking forever. `extensions/index.ts`
+wires the real `schedule`/`cancel` to `setTimeout`/`clearTimeout` (the handle `unref()`'d, so it can
+never by itself keep the process alive) and `getUi` to whatever `ExtensionContext` was last
+captured from any handler call, gated on `ctx.hasUI` — there is no "current context" otherwise
+reachable from the registry's async `onChange` callback.
+
+## Extension wiring (background jobs)
+
+`extensions/index.ts`'s default export wires all four modules above into the registered tool, two
+new registrations, and three event handlers — all scoped inside the factory function's closure
+(per-session, like the job registry itself, never module-level):
+
+- `pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage)`: renders
+  a settled job's completion message. Styled to match a native tool result — same `Box` +
+  `toolSuccessBg`/`toolErrorBg` background the host's own `ToolExecutionComponent` uses, same
+  `toolTitle` header convention — and wrapped in its own `MouseRegion` so it's individually
+  clickable to toggle expand, independent of the global Ctrl+O toggle. `CustomMessageComponent`
+  (the generic host wrapper every `registerMessageRenderer` output gets) provides neither of these
+  on its own: no box styling for a *custom* renderer's output, and no click handling at all, only
+  the global toggle. The closure-local `expanded` this introduces is reset to the current global
+  value every time the host rebuilds this component (on the global toggle itself, a resize, or a
+  theme change) — a click only persists until the next such rebuild.
+- `pi.registerCommand("subagents", ...)`: `/subagents` (list), `/subagents cancel <id>`,
+  `/subagents clear`, dispatched through `parseSubagentsCommand`.
+- `pi.on("agent_before_settle", ...)`: the settle barrier (see `createSettleBarrier` above).
+- `pi.on("agent_settled", ...)`: the `!ctx.hasUI` safety-net cleanup, see above.
+- `pi.on("session_shutdown", ...)`: `jobs.shutdown()` plus `widget.dispose()`, on every shutdown
+  reason.
+
+A `uiRef`/`captureUi(ctx)` pair — scoped inside the factory closure, like everything else above,
+never module-level — updated at the top of `execute()`, the `/subagents`
+handler, and every one of the three event handlers above, is what lets the job registry's
+`onChange`/`onSettled` callbacks (which can fire well after any single handler call returns) reach
+`ctx.ui` at all — there is no "current context" otherwise available to them.
 
 ### src/default-reads.ts
 
@@ -993,13 +1179,7 @@ Never throws.
 ### src/render-call.ts
 
 ```typescript
-type RenderTaskEntry = { agent?: string; task?: string } & InvocationOverride;
-
-type SubagentCallArgs = {
-  agent?: string;
-  task?: string;
-  tasks?: RenderTaskEntry[];
-} & InvocationOverride;
+type SubagentCallArgs = { agent?: string; task?: string } & InvocationOverride;
 
 interface CallTheme {
   fg(color: "toolTitle" | "accent" | "dim", text: string): string;
@@ -1016,10 +1196,11 @@ function formatAgentParams(agent: AgentConfig, override?: InvocationOverride): s
 ```
 
 Builds the `tool_box` call display text for the `subagent` tool — the one/two-line summary shown
-while/after the tool call renders in single mode (one `agent`/`task`) or parallel mode (a `tasks`
-array). `buildSubagentCallText` dispatches on whether `args.tasks` is non-empty; each branch looks
-up the named agent(s) in `paramAgents` and, when found, appends a dim parameter line built by
-`formatAgentParams`.
+while/after the tool call renders (one `agent`/`task`; there is no parallel/batch mode anymore).
+`buildSubagentCallText` looks up the named agent in `paramAgents` and, when found, appends a dim
+parameter line built by `formatAgentParams`. `RenderTaskEntry`, `describeTask`,
+`buildParallelCallText` and `buildExpandedParallelCallText` are gone along with the removed
+`tasks[]` call shape.
 
 - `formatAgentParams` merges `agent` with `override` via `applyInvocationOverride` first, then
   renders the *effective* (post-invocation-override) `model`/`thinking`/`tools`/`skills`/
@@ -1034,11 +1215,6 @@ up the named agent(s) in `paramAgents` and, when found, appends a dim parameter 
 - `formatList` (private, generalized from an earlier `formatTools`) renders both the `tools` and
   `skills` segments: `undefined` → `"inherited"`, empty array → `"none"`, otherwise the first
   `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer.
-- In parallel mode (`buildSubagentCallText` → `buildParallelCallText`), each task's own
-  `tools`/`skills`/`model` override is looked up via `invocationOverrideOf(t)` and merged via
-  `applyInvocationOverride` independently per task/line — one task's override never bleeds into
-  another task's rendered line.
-
 ### src/format-tool-call.ts
 
 ```typescript
@@ -1103,7 +1279,7 @@ interface AggregatedUsage {
   totalTokens: number;
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
 }
-function aggregateRunUsage(runs: readonly { usage?: RunUsage }[]): AggregatedUsage | undefined;
+function toAggregatedUsage(usage: RunUsage | undefined): AggregatedUsage | undefined;
 ```
 
 Pure functions backing the per-subagent-run consumption footer (tokens, cache, cost, context %).
@@ -1133,12 +1309,14 @@ Pure functions backing the per-subagent-run consumption footer (tokens, cache, c
 `MessageUsage` is a structural (not imported) shape matching the SDK's `Usage` type
 (`@earendil-works/pi-ai`), which isn't resolvable from this package (nested under
 `pi-coding-agent`'s own `node_modules`). `AggregatedUsage` is the same not-importable situation,
-for the same real type \u2014 it's what the subagent tool call's own `AgentToolResult.usage` field
-expects (see `buildSubagentToolResult`, [Extension internals](#extension-internals) above).
+for the same real type — it's what the background job's **completion message** carries as
+`details.usage` (see `buildSubagentToolResult`/`buildJobCompletionMessage`,
+[Background jobs](#background-jobs) below), not the launch tool call's own `AgentToolResult.usage`
+(which is unset — there is nothing to report yet at launch time).
 
-`aggregateRunUsage` sums `input`/`output`/`cacheRead`/`cacheWrite`/`cost` across every run that
-has a `usage` (runs without one \u2014 e.g. failed before a session existed \u2014 are skipped, not
-zero-filled), returning `undefined` if none do. `RunUsage` only tracks `cost` as a single total
+`toAggregatedUsage` takes one optional `RunUsage` (there is only ever one run per job now) and maps
+its `input`/`output`/`cacheRead`/`cacheWrite`/`cost` into an `AggregatedUsage`; `undefined` in
+(e.g. a run that failed before a session existed) maps to `undefined` out. `RunUsage` only tracks `cost` as a single total
 (see `addUsage` above), so the returned `cost`'s per-kind breakdown (`input`/`output`/`cacheRead`/
 `cacheWrite`) is always `0`; the real `Usage` type's only consumers here read `cost.total`.
 
@@ -1157,9 +1335,7 @@ interface RunUsageSource {
 }
 
 interface SubagentResultView {
-  isPartial: boolean;
   expanded: boolean;
-  progress: readonly TaskProgress[] | undefined;
   content: string;
   runs?: readonly RunUsageSource[];
 }
@@ -1167,27 +1343,27 @@ interface SubagentResultView {
 function buildSubagentResultText(view: SubagentResultView, theme: ResultTheme): string;
 ```
 
-Pure function that decides the `subagent` tool box's body text — everything below the header
-built by `buildSubagentCallText` (`src/render-call.ts`) — for the host's `expanded` flag (Ctrl+O /
-`app.tools.expand`). `extensions/index.ts`'s `renderSubagentResult` delegates to this function
-instead of carrying its own `isPartial`/`expanded` branching, so the state matrix below lives in
-one tested, side-effect-free place.
+Pure function deciding a collapsible block's body text for the host's `expanded` flag (Ctrl+O /
+`app.tools.expand`, or an individual click — see [Background jobs](#background-jobs)). Used from
+two call sites in `extensions/index.ts`: `renderSubagentResult`'s `{error}`/no-details fallback
+branch, and `renderSubagentResultMessage`'s body for a settled job's completion message.
 
-| `isPartial` | `expanded` | Body |
-|---|---|---|
-| `true` | `false` | `buildProgressLines(progress, theme)` — one status line per agent, including each task's usage footer once it's `done` (see `src/progress.ts`). |
-| `true` | `true` | `buildProgressStream(progress, theme)` (`src/progress.ts`) — the status line per agent, each followed by its indented `history` of tool-call summaries. |
-| `false` | `false` | One `formatRunUsage` footer line per entry in `runs` that has non-empty usage — empty string if `runs` is absent or every run's usage is empty. No divider, no `content`. |
-| `false` | `true` | The subagent's/subagents' full `content` (colored `toolOutput`), preceded by the divider, followed by the same per-run footer lines as the collapsed case. |
+| `expanded` | Body |
+|---|---|
+| `false` | One `formatRunUsage` footer line per entry in `runs` that has non-empty usage — empty string if `runs` is absent or every run's usage is empty. No divider, no `content`. |
+| `true` | The subagent's/subagents' full `content` (colored `toolOutput`), preceded by the divider, followed by the same per-run footer lines as the collapsed case. |
 
-`RunUsageSource` is a deliberately minimal structural view (`agent` + `usage`) rather than importing `AgentRunResult`'s full union — this module only ever reads those two fields. The usage
-footer is visible in **both** collapsed and expanded final states; only the full `content` (and,
-symmetrically, the live tool-call stream in the `isPartial` rows) is gated behind the `expanded`
-toggle — a one-line consumption summary isn't the large payload the toggle exists to hide.
-In the `true`/`false` and `true`/`true` rows (and the `true` row with no `progress` at all, which
-returns `""`), the body is prefixed with `${theme.fg("muted", DIVIDER)}\n`; the collapsed-final
-row never gets a divider even when it renders footer lines, since there's no content above them to
-separate from.
+`RunUsageSource` is a deliberately minimal structural view (`agent` + `usage`) rather than
+importing `AgentRunResult`'s full union — this module only ever reads those two fields. The usage
+footer is visible in **both** collapsed and expanded states; only the full `content` is gated
+behind the `expanded` toggle — a one-line consumption summary isn't the large payload the toggle
+exists to hide. In the `true` row, the body is prefixed with a divider line.
+
+`execute()`'s own tool result never streams partial updates — the launch ack is the tool's only
+result. Live per-task progress feeds the running-jobs widget and `/subagents` instead, both built
+on `buildProgressLine`/the `TaskProgress` shape from `src/progress.ts`, consumed by
+`src/job-view.ts`/`src/job-widget.ts`. `TaskProgress.history` is collected there (its length feeds
+`buildProgressLine`'s `tools: N` segment) but never rendered entry by entry.
 
 ### src/skills-filter.ts
 
@@ -1236,15 +1412,38 @@ interface SubagentSessionResult<S> {
 }
 ```
 
-`childSessionDir` is a pure helper: `<dirname(callerSessionFile)>/<basename(callerSessionFile)
-without .jsonl>/<sanitized runId>/run-<resultIndex>`, or `undefined` when there's no persisted
-caller session to nest under. `runId` is sanitized (`[^A-Za-z0-9._-]` → `_`; a result that's empty
-or only dots/underscores — including `.`/`..`, which would otherwise resolve outside the intended
-directory — falls back to the literal `"run"`). This is the path convention several
-usage-tracking tools already know how to reconcile a nested-agent tool call's child session
-against: when a session file exists at that path, they attribute the run's cost to its real
-model instead of a generic bucket. `runId` is the subagent tool call's own `toolCallId`;
-`resultIndex` is each task's position in the batch (see `runTasks`/`runSingleTask` below).
+`childSessionDir` is a pure helper. Below `MAX_LITERAL_NESTING_DEPTH` (4) levels of subagent
+nesting, it's `<dirname(callerSessionFile)>/<basename(callerSessionFile) without .jsonl>/<sanitized
+runId>/run-<resultIndex>`, or `undefined` when there's no persisted caller session to nest under.
+`runId` is sanitized (`[^A-Za-z0-9._-]` → `_`; a result that's empty or only dots/underscores —
+including `.`/`..`, which would otherwise resolve outside the intended directory — falls back to
+the literal `"run"`), then capped at `MAX_RUN_ID_SEGMENT_LENGTH` (64 chars): most filesystems
+reject a single path component over 255 bytes (`NAME_MAX`) with `ENAMETOOLONG`, and nothing
+guarantees the host's own `toolCallId` stays short. A runId over the cap is truncated and has an
+8-hex-char `sha1` suffix of the sanitized (pre-truncation) string appended, so two long runIds
+sharing a common prefix still land in distinct directories.
+
+**Nesting depth cap.** Each level of subagent-calling-subagent nesting adds one more
+`<runId>/run-N/session` segment to the path (since the immediate parent's own session file is
+always named `session.jsonl`, so its `basename(..., ".jsonl")` is literally `"session"`). This
+compounds: real session paths with ~20 nesting levels were found at 1005-1016 bytes, right at
+macOS's `PATH_MAX` (1024), causing `createSubagentSessionManager`'s `factory.atPath` to throw
+`ENAMETOOLONG` and silently fall back to an in-memory session. `nestingDepth(callerSessionFile)`
+counts `/run-\d+` occurrences in the caller's path to detect this. At or past the cap,
+`truncateAtDepth` finds the end of the `MAX_LITERAL_NESTING_DEPTH`-th `/run-\d+` segment and uses
+everything up to there as a stable anchor — identical for every descendant of the same branch,
+regardless of how much deeper the real call chain goes, since truncating to the same Nth
+occurrence always yields the same prefix. The rest of that (arbitrarily long) ancestor chain, plus
+this run's own `runId`, collapses into one `deep-<16-hex-char-sha1>` segment under that anchor, so
+the resulting path's length is bounded independent of nesting depth. Tradeoff: a run past the cap
+no longer has its full ancestor chain readable from its own session path — acceptable, since
+those runs weren't being persisted at all before this fix (the directory create failed outright).
+
+This is the path convention several usage-tracking tools already know how to reconcile a
+nested-agent tool call's child session against: when a session file exists at that path, they
+attribute the run's cost to its real model instead of a generic bucket. `runId` is the subagent
+tool call's own `toolCallId`; `resultIndex` is always `0` now (the module constant `RUN_INDEX =
+0`, see `runSingleTask` below), since a job runs exactly one task.
 
 `createSubagentSessionManager` decides which manager backs a subagent's session.
 `defaultContext === "forked"`: without a `callerSessionFile` (the caller session isn't
@@ -1259,7 +1458,7 @@ session), returns `factory.inMemory(cwd)`, no warnings; with one, calls
 pattern already used by `RunAgentViaSdkOptions.createSession` in `src/run.ts`, so it's testable
 with fakes without touching disk.
 
-Wired in `runSingleTask` with `childDir = childSessionDir(callerSessionFile, options.runId, index)`
+Wired in `runSingleTask` with `childDir = childSessionDir(callerSessionFile, options.runId, RUN_INDEX)`
 and `callerSessionFile = ctx.sessionManager.getSessionFile()` — replacing the previous fixed
 `~/.pi/agent/sessions/subagents/` directory, which every `"forked"` agent shared regardless of
 caller or task. The real factory's `atPath` is `SessionManager.open(sessionFile,
@@ -1271,7 +1470,8 @@ never creates a file.
 ### src/tool-description.ts
 
 ```typescript
-const SUBAGENT_BASE_DESCRIPTION = "Run one or more subagents and wait for their results";
+const SUBAGENT_BASE_DESCRIPTION =
+  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). Use /subagents to list running/recent jobs and /subagents cancel <id> to cancel one.";
 
 function buildSubagentToolDescription(
   agents: ReadonlyArray<Pick<AgentConfig, "name" | "description">>,

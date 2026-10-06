@@ -11,6 +11,20 @@ test("buildSubagentToolDescription: no agents returns the base description uncha
   assert.equal(result, SUBAGENT_BASE_DESCRIPTION);
 });
 
+test("SUBAGENT_BASE_DESCRIPTION: tells the model it's backgrounded and not to poll", () => {
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /background/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /job id/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /delivered later/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /do not call this tool again to poll/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /\/subagents/);
+});
+
+test("SUBAGENT_BASE_DESCRIPTION: tells the model to call once per task for concurrency, with no leftover parallel-mode wording", () => {
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /once per task/i);
+  assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /\btasks\b/);
+  assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /one or more/i);
+});
+
 test("buildSubagentToolDescription: single agent appends an available-agents section", () => {
   const result = buildSubagentToolDescription([{ name: "scout", description: "Finds things" }]);
 

@@ -57,31 +57,31 @@ export function markDone(progress: TaskProgress, usage?: RunUsage): TaskProgress
   return usage ? { ...done, usage } : done;
 }
 
-// Orchestrates the per-task progress fold/emit cycle for `runTasks`: holds the
-// mutable progress array as a module-confined closure local (same "local
-// mutability is fine" precedent as runAgentViaSdk's settled/session locals),
-// folds incoming tool events through the pure reducers above, and re-emits a
-// shallow copy of the array on every change so callers can render a live feed.
+// Orchestrates the run's progress fold/emit cycle: holds the mutable progress
+// value as a module-confined closure local (same "local mutability is fine"
+// precedent as runAgentViaSdk's settled/session locals), folds incoming tool
+// events through the pure reducers above, and re-emits the new value on every
+// change so callers can render a live feed.
 export interface ProgressTracker {
-  onToolEvent(index: number, event: SubagentToolEvent): void;
-  markTaskDone(index: number, usage?: RunUsage): void;
+  onToolEvent(event: SubagentToolEvent): void;
+  markTaskDone(usage?: RunUsage): void;
 }
 
 export function createProgressTracker(
-  agents: readonly string[],
-  emit: (details: { progress: readonly TaskProgress[] }) => void,
+  agent: string,
+  emit: (progress: TaskProgress) => void,
 ): ProgressTracker {
-  const progress: TaskProgress[] = agents.map((agent) => initialTaskProgress(agent));
+  let progress: TaskProgress = initialTaskProgress(agent);
 
   return {
-    onToolEvent(index, event) {
-      if (progress[index].done) return;
-      progress[index] = applyToolEvent(progress[index], event);
-      emit({ progress: [...progress] });
+    onToolEvent(event) {
+      if (progress.done) return;
+      progress = applyToolEvent(progress, event);
+      emit(progress);
     },
-    markTaskDone(index, usage) {
-      progress[index] = markDone(progress[index], usage);
-      emit({ progress: [...progress] });
+    markTaskDone(usage) {
+      progress = markDone(progress, usage);
+      emit(progress);
     },
   };
 }
@@ -98,7 +98,7 @@ function statusFor(progress: TaskProgress): string {
   return "working\u2026";
 }
 
-function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string {
+export function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string {
   const agent = theme.fg("accent", progress.agent);
   // The usage footer only ever appears once the task is done — it's a
   // post-mortem of the run's consumption, not a live counter.
@@ -106,17 +106,4 @@ function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string
   const segments = [`tools: ${progress.history.length}`, statusFor(progress), ...(footer ? [footer] : [])];
   const detail = theme.fg("dim", `\u00b7 ${segments.join(" \u00b7 ")}`);
   return `${agent} ${detail}`;
-}
-
-export function buildProgressLines(progress: readonly TaskProgress[], theme: ProgressTheme): string {
-  return progress.map((p) => buildProgressLine(p, theme)).join("\n");
-}
-
-export function buildProgressStream(progress: readonly TaskProgress[], theme: ProgressTheme): string {
-  return progress
-    .map((p) => {
-      const lines = p.history.map((s) => `  ${theme.fg("dim", s)}`);
-      return [buildProgressLine(p, theme), ...lines].join("\n");
-    })
-    .join("\n");
 }
