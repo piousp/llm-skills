@@ -2,6 +2,15 @@
 
 ## 1.0.0
 
+- **Raised the `pi` dependency floor to `>=1.0.4`.** `peerDependencies` and `devDependencies` for
+  `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` now require `>=1.0.4`/`^1.0.4`
+  (was `>=0.99.0`/`0.99.1`). Verified clean against 1.0.4: typecheck and all 554 unit tests pass
+  unchanged; no breaking API changes in 0.99.2–1.0.4 affect this package.
+- **`tools`/`disallowedTools` entries can now be `*` patterns**, not just exact names (e.g.
+  `mcp__mde-build__*` matches every tool of that server). This was already passed straight
+  through to the SDK's `tools`/`excludeTools` without validation on our side; the capability
+  comes from the new floor, not a code change here. Updated the `subagent` tool's schema
+  description and `docs/REFERENCE.md`, which previously said wildcards were unsupported.
 - **Fix: deeply nested subagents (a subagent dispatching another subagent) could make session
   persistence fail with `ENAMETOOLONG`.** Each nesting level added one more
   `<runId>/run-N/session` segment to the persisted session path; confirmed in the wild, real
