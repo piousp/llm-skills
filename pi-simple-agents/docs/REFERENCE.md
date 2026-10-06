@@ -176,8 +176,8 @@ MCP tools are registered as `mcp__<server>__<tool>`, e.g. `mcp__mde-build__mvn` 
 When an agent has a `tools` list (frontmatter, `settings.json` override, or per call), pi filters by exact name before anything else:
 
 - A tool that isn't on the list is never registered in that subagent. `tool_search` can't find it and `codemode` can't call it.
-- There are no wildcards. `mcp__mde-build__*` matches nothing.
-- `disallowedTools` removes tools by exact name after `tools` is applied.
+- Entries can be exact names or `*` patterns, where `*` matches any characters, e.g. `mcp__mde-build__*` matches every tool of the `mde-build` server (requires pi >=1.0.4; pin pi-simple-agents's `@earendil-works/pi-coding-agent` peer dep to that floor).
+- `disallowedTools` removes tools by exact name or pattern after `tools` is applied.
 - A per-call `tools` replaces the agent's list, it doesn't add to it. Repeat the agent's own tools if it still needs them.
 
 An agent with no `tools` list gets every tool the session has, every MCP tool included.
@@ -203,6 +203,7 @@ Measured against a real `mcp.json` with `mde-build` (`direct`: `mvn`, `sbt`, `np
 | `[read, tool_search, mcp__codegraph__codegraph_explore]` | `tool_search`, plus `codegraph_explore` for it to load |
 | `[read, codemode]` | `codemode`, and no MCP tools |
 | `[read, codemode, mcp__mde-build__mvn]` | `codemode` and `mvn`, both active |
+| `[read, codemode, mcp__mde-build__*]` | `codemode` and every `mde-build` tool (`mvn`, `sbt`, `npm`), all active |
 | none | Every MCP tool, `tool_search` active, `codemode` registered but inactive |
 
 `codemode` is only active by default when some server uses `codemode` or `codemode-deferred` exposure, or when `defaultTools` in `settings.json` includes `"+codemode"`. Listing it in `tools` activates it.
