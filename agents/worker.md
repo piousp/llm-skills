@@ -7,7 +7,7 @@ description: >
   don't fit a specialized agent or that need a clean, independent context.
   Accepts an optional lens file (`Lens: <path>`) that overrides its default
   method and output contract.
-tools: read, write, edit, bash, grep, find, ls
+tools: read, write, edit, bash, grep, find, ls, codemode, mcp__*
 systemPromptMode: replace
 inheritProjectContext: false
 ---
