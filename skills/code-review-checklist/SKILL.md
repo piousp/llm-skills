@@ -54,7 +54,7 @@ silence is the output).
 
 | ID | Situation | Action |
 |---|---|---|
-| G1 | Evidence line is in test/fixture/test-helper code (src/test, `*Test`, `*Spec`, `*Fixture`, test modules of an integration-test repo) and the rule comes from Complexity, Config vs Code, Abstractions, or Boundaries | Do not report. Test code is judged ONLY by the Tests section and Red Flags. A hardcoded timeout, a 30-line helper, or a single-use overload in a test is not a violation |
+| G1 | Evidence line is in test/fixture/test-helper code (src/test, `*Test`, `*Spec`, `*Fixture`, test modules of an integration-test repo) and the rule comes from Complexity, Config vs Code, Abstractions, Immutability & FP, or Boundaries | Do not report. Test code is judged ONLY by the Tests section and Red Flags. A hardcoded timeout, a 30-line helper, a single-use overload, or a mutable variable/mutated argument in a test is not a violation |
 | G2 | A dependency version bump (pom.xml, build.sbt, package.json) not exercised by any other hunk in the diff | One FYI line max, never a Major/Blocker. Exception: a SNAPSHOT/mutable ref on a branch NOT marked POC/draft stays a Major (reproducibility) |
 | G3 | The evidence line is not inside a changed hunk of this diff | Do not report, regardless of how real the issue is. If it gates a changed line's correctness, phrase it as a Question naming the exact file to check |
 | G4 | Pure style preference (formatting, indentation, trailing newline, import order) in a file the branch touched for other reasons | FYI at most, one line |
@@ -128,12 +128,14 @@ verdict and never take more than one line each.
 
 ### Abstractions (Major)
 
-- New abstraction without a second concrete use case today
+- New abstraction without a second concrete use case today (YAGNI)
 - Generic utility for a single call site
 - Error handling for a scenario that cannot occur
 - Enterprise sludge: factories/builders/managers/config knobs layered onto a trivial task
 - Examples per language: read `references/abstractions.scala.md`, `references/abstractions.java.md`,
   `references/abstractions.ts.md`
+- For a quantified, branch-scoped deep-dive on SRP/OCP violations and structural duplication,
+  see `refactor-identification`.
 
 ### Config vs Code (Major)
 

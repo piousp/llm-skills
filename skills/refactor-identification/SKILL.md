@@ -3,8 +3,10 @@ name: refactor-identification
 description: >
   Evidence-based detection of structural refactor candidates within the current branch's diff
   (Java, Scala, JavaScript, TypeScript). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
-  duplication), (A2) weak encapsulation, (A3) poor data types (primitives, clumps, null-checks
-  instead of Option/Either/ADT), (A4) flags/switch where a sealed ADT fits. Findings need
+  duplication, inheritance for reuse, mixed-phase functions), (A2) weak encapsulation (mutable
+  state, CQS violations, ambient dependencies, delegate chains), (A3) poor data types
+  (primitives, clumps, null-checks instead of Option/Either/ADT, redundant derived fields,
+  aliased mutable values), (A4) flags/switch where a sealed ADT fits. Findings need
   file:line evidence and pass a When-NOT-to-report (YAGNI/KISS) gate. Identifies direction only,
   defers how to gof-design-patterns/functional-programming. TRIGGER: deciding if a refactor
   belongs in this branch, "refactor candidates" requests, or as the deep-dive behind a broader
@@ -17,9 +19,9 @@ description: >
 Use this skill for a deep, quantified dive on exactly 4 structural categories, when the question
 is not "does this diff pass review" but "is there a structural refactor worth investing in here".
 Do not use it as a substitute for a broader code-review checklist pass: that pass already covers
-two of these categories superficially (its "Abstractions" and "Structural Code Smells" sections)
-as part of a broad, fast merge gate; reach for this skill only when that surface-level pass isn't
-enough. Identify candidates only; never execute a refactor and never explain *how* to apply a
+part of A1 superficially (its "Abstractions" section and the SRP/OCP portion of "Structural
+Code Smells") as part of a broad, fast merge gate; reach for this skill only when that
+surface-level pass isn't enough. See Boundaries below for the exact split. Identify candidates only; never execute a refactor and never explain *how* to apply a
 pattern once one is chosen. Route the "how" to `gof-design-patterns` (pattern catalog) and
 `functional-programming` (FP mechanics); route the cut-off criterion (when NOT to bother) to
 `pablo-code-philosophy`.
@@ -56,15 +58,16 @@ This skill never scans a whole repository. It only looks at what the current bra
 
 | ID | Category | One-line definition | Threshold anchor |
 |---|---|---|---|
-| A1 | Missing or misplaced abstractions | SRP/OCP violated, or the same structural/business logic duplicated | Structural dup ≥2, business dup ≥3 (`pablo-code-philosophy` DRY rule) |
-| A2 | Weak encapsulation | Mutable state exposed, invariants unprotected or checked by callers instead of the object | 1 occurrence anchored in the diff, unless noted otherwise |
-| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow | Varies per smell, see the A3 table below |
+| A1 | Missing or misplaced abstractions | SRP/OCP violated, the same structural/business logic duplicated, inheritance used for reuse rather than variation, or mixed-phase functions | Structural dup ≥2, business dup ≥3 (`pablo-code-philosophy` DRY rule) |
+| A2 | Weak encapsulation | Mutable state exposed, invariants unprotected or checked by callers instead of the object, mixed query/mutation, hidden ambient dependencies, or read-through delegate chains | 1 occurrence anchored in the diff, unless noted otherwise |
+| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow; redundant derived fields; mutable references used as values | Varies per smell, see the A3 table below |
 | A4 | Flag/enum-modeled variants | A discriminator (boolean/enum/string) drives dispatch that a sealed ADT + pattern matching would express directly | Varies per smell, see the A4 table below |
 
 ## A1: Missing or misplaced abstractions
 
-A class or function carries more than one reason to change, or the same shape of logic is
-copy-pasted with only the types or literals differing.
+A class or function carries more than one reason to change, the same shape of logic is
+copy-pasted with only the types or literals differing, it inherits for reuse rather than
+variation, or it mixes separable phases in one body.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
@@ -73,11 +76,21 @@ copy-pasted with only the types or literals differing.
 | SRP violation in a touched class | Diff adds methods/fields serving a second axis of change: new imports/collaborators from an unrelated domain; methods that share no fields with the rest of the class. | Class `file:line` + list of the ≥2 axes of change + the added members' lines | ≥2 distinct reasons-to-change, ≥1 introduced/extended by the branch |
 | OCP violation (dispatch modified, not extended) | The branch ADDS a case/branch to an existing `switch`/`if-else` chain selecting behavior, instead of extending via a new implementation. | Chain `file:line`, the added branch's hunk lines, chain length after change | Chain length ≥3 after the change |
 | Misplaced logic (feature envy) | Touched method calls ≥3 getters/fields of one foreign type and ≤1 of its own class; the computation belongs on the foreign type. | Method `file:line` + count "N foreign accessor calls vs M own" | ≥3 foreign accessor calls (calibrable) |
+| Inheritance used for reuse, not variation§ | A subclass shares fields/methods of its parent with no behavioral variation: it overrides a method only to leave it empty/pass-through, or never overrides anything: composition would carry the same state without the "is-a" claim. Does not count: a subclass required by a framework/language (`extends Exception`, a framework base class), or a sealed hierarchy (that's A4). | Subclass `file:line` + the parent member it reuses/leaves empty | 1 occurrence, ≥1 touched by the branch |
+| Mixed-phase function (no Split Phase) | A touched method does two genuinely separable jobs end to end in one body (e.g. parse/validate raw input, then compute a business result from it), with no named structure between the phases; phase-1 locals feed phase-2 logic across a long body. | Method `file:line` + the two phase line-ranges, named in one sentence each | ≥2 independently nameable phases |
+
+§ Inheritance-for-reuse is narrower than the deep-inheritance smells `code-review-checklist`
+deliberately excludes (Call super, Circle-ellipse, Yo-yo, Poltergeist): those are style-level
+nitpicks this codebase rarely has; this row only fires when composition would carry the same
+behavior without an "is-a" claim, operationalizing `pablo-code-philosophy`'s composition-over-
+inheritance rule (SOLID.md, the L section). Refactor direction: Replace Subclass/Superclass
+with Delegate, Remove Subclass; never an open subclass hierarchy as the "fix".
 
 ## A2: Weak encapsulation
 
 State that should be private and self-protecting is instead exposed, mutable, or trusted to be
-validated by every caller.
+validated by every caller, or a method mixes query with mutation, reads ambient state, or
+reaches through a delegate chain.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
@@ -86,11 +99,15 @@ validated by every caller.
 | Invariant bypassed by mutator | Constructor/factory validates a condition but a setter/mutator on the same field doesn't (or `copy` in Scala bypasses a smart-constructor check). | Validation `file:line` + unguarded mutator `file:line` | 1 |
 | Invariant enforced by callers (check-then-act) | ≥2 call sites perform the same precondition check before calling the same method; the check belongs inside the callee. | Each caller `file:line` + callee `file:line` | ≥2 call sites, ≥1 touched by the branch |
 | Mutation through reached-into internals | Touched code does `a.getB().getC().setX(...)` / `a.b.c = x`; mutating another object's internals through a chain. | `file:line` of the chain + depth | Chain depth ≥2 with terminal mutation |
+| Query/mutator mixed (CQS violation) | A touched method returns a value AND mutates a field of `this` or a mutable argument passed in, in the same call (not a local accumulator that dies with the stack frame). Does not count: idiomatic query+mutate operations (`pop`, `poll`, `getAndIncrement`, `compareAndSet`, a `Map.put` returning the previous value) or a builder/fluent setter returning `this`. | Method `file:line` + what it mutates vs what it returns | 1 occurrence anchored in the diff |
+| Hidden dependency on ambient state | A touched method reads a static/global/singleton/system clock/env variable directly instead of receiving it as a parameter, so it can't be exercised in isolation (`pablo-code-philosophy` FP.md, "Scientific code"). Does not count: a static logger, or a `static final` immutable constant. | Method `file:line` + the ambient source read | 1 occurrence anchored in the diff |
+| Read-through delegate chain | Touched code reads (no mutation) through a chain of ≥3 accessors (`a.getB().getC().getD()`) to reach a value that belongs closer to `a`, repeated at ≥2 sites. | Each chain `file:line` + depth | Depth ≥3, ≥2 occurrences; gate N3 before proposing a new middle-man wrapper |
 
 ## A3: Poor data types
 
-Domain concepts are carried by bare primitives or `null`, or expected outcomes are signaled by
-throwing instead of by the return type.
+Domain concepts are carried by bare primitives or `null`, expected outcomes are signaled by
+throwing instead of by the return type, a field stores a value it could derive instead, or a
+mutable value is aliased where it should be copied.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
@@ -99,6 +116,8 @@ throwing instead of by the return type.
 | null as domain absence | Java: method returns `null` for an expected "not found"/"missing" outcome; callers null-check. Scala: any `null`, `Option.get`, `.getOrElse(null)`. JS/TS: return of null/undefined for an expected "not found", callers guarding with ?./??/!x; TS: also optional ? members and non-null assertions | Producer `file:line` + each null-checking caller `file:line` | Java: ≥2 null-checks on the same value; Scala: 1; JS/TS: ≥2 guards, or 1 for a ! assertion |
 | Exceptions as control flow | `throw` for an expected domain outcome (validation failed, not found) with a caller that catches to branch on it. | `throw` `file:line` + catching caller `file:line` | 1 (throw+catch pair present) |
 | Data clump | The same group of ≥3 parameters traveling together through multiple signatures (same names/types in the same order). | Each signature `file:line` + the clump members | Group of ≥3 params in ≥2 touched signatures |
+| Redundant derived field | A field stores a value already derivable from another field the same object holds, at the point of use; the invariant that makes the derivation total is visible in the same file. | Field `file:line` + the field it duplicates | 1 occurrence, derivation invariant visible locally; else N9 |
+| Shared mutable reference used as a value | An object with no identity meaning (an amount, a range, a coordinate) is passed/stored by mutable reference and aliased across ≥2 owners, so mutating one silently affects the other. | Alias site `file:line` + mutation site `file:line` | 1 occurrence of aliasing + mutation on the same reference |
 
 ## A4: Flag/enum-modeled variants
 
@@ -246,9 +265,9 @@ caller's prompt explicitly asks for them.
 
 | Category | This skill (identification) | The "how" (cross-reference, never duplicate) |
 |---|---|---|
-| A1 | detect + measure | `gof-design-patterns`: Strategy / Template Method / Factory Method rows; `functional-programming`: higher-order-function row (structural dup with no shared state); `pablo-code-philosophy` `references/principles/DRY.md` (2-vs-3 rule) |
-| A2 | detect + measure | `functional-programming`: immutability principle; `gof-design-patterns`: Builder row (validated construction); `pablo-code-philosophy`: "Scientific code" |
-| A3 | detect + measure | `functional-programming`: typed error handling + `references/patterns.md` (validation pipeline, accumulating errors); its `references/java.md` / `references/scala.md` for idioms |
+| A1 | detect + measure | `gof-design-patterns`: Strategy / Template Method / Factory Method rows; `functional-programming`: higher-order-function row (structural dup with no shared state); `pablo-code-philosophy` `references/principles/DRY.md` (2-vs-3 rule); `references/principles/SOLID.md` (the L section, composition over inheritance) for the inheritance-for-reuse row |
+| A2 | detect + measure | `functional-programming`: immutability principle; `gof-design-patterns`: Builder row (validated construction); `pablo-code-philosophy`: "Scientific code" (`references/principles/FP.md`), which also grounds the CQS and ambient-dependency rows |
+| A3 | detect + measure | `functional-programming`: typed error handling + `references/patterns.md` (validation pipeline, accumulating errors); its `references/java.md` / `references/scala.md` for idioms; `pablo-code-philosophy` `references/principles/KISS.md` ("No field that another field already carries") for the derived-field row, `references/principles/FP.md` ("structural equality is not identity") for the value/reference row |
 | A4 | detect + measure | `functional-programming` `references/scala.md` (sealed trait + case classes + match); `gof-design-patterns`: State row (complex per-state behavior), and its Visitor caveat (never Visitor an ADT) |
 | Gate | n/a | `pablo-code-philosophy`: pipeline YAGNI→KISS→DRY→SOLID; conflict matrix KISS > DRY > SOLID; the gate N1–N10 is its instantiation |
 
@@ -264,9 +283,16 @@ implementer reads the recipe from its source of truth.
 
 ## Worked examples
 
-`references/examples.md` has 4 resolved examples (one per category, snippet → filled `[RF-n]`
-block), 1 filtered-by-gate example, and 1 Unresolved (N9) example. Read it before your first
-run.
+`references/examples.md` has 5 resolved examples (one per category, plus the A3 "Redundant
+derived field" row, snippet → filled `[RF-n]` block), 1 filtered-by-gate example, and 1
+Unresolved (N9) example. Read it before your first run.
+
+## Fowler catalog mapping
+
+For refactoring.com/catalog's refactorings, `references/fowler-catalog.md` names each one's
+owner (a row here, the `pablo-code-simplify` gate, a `code-review-checklist` section, another
+skill) or the `pablo-code-philosophy` principle that excludes it. Check it before assuming a
+catalog item is an uncovered gap.
 
 ## Boundaries (explicitly out of scope)
 
