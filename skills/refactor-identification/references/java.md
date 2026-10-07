@@ -13,6 +13,8 @@ reported.
 | New unrelated import in a touched class | `git diff` on the file's import block; new imports from a package unrelated to the class's existing domain | Class `file:line`, new import lines |
 | Added switch/if-else branch | `grep -n "case \|else if"` inside a chain the diff touches; count total branches after the change | Chain `file:line`, added branch hunk lines, branch count |
 | Feature envy | Count `\.get[A-Z]` calls per foreign type inside a touched method vs. calls to `this.` | Method `file:line`, "N foreign vs M own" |
+| Inheritance for reuse, not variation | `extends` where the subclass overrides a method to do nothing, calls `super.x()` only to ignore the result, or never overrides anything | Subclass `file:line`, the reused/empty member |
+| Mixed-phase function | A touched method parses/validates raw input in its first half, then computes a business result from it in the second, with no struct/record between the phases | Method `file:line`, the two phase line-ranges |
 
 ## A2: Weak encapsulation
 
@@ -23,6 +25,9 @@ reported.
 | Invariant bypassed by mutator | Constructor has a validation `if`/`Objects.requireNonNull`/throw; a `setX` on the same field has none | Constructor validation `file:line`, unguarded setter `file:line` |
 | Check-then-act at call sites | Same `if (x.isValid())`/`if (x != null)` guard immediately before calling the same method, repeated at ≥2 call sites | Each caller `file:line`, callee `file:line` |
 | Reach-through mutation | `grep -n "\.get[A-Z][a-zA-Z]*()\.\(get\|set\)"`; chained accessor followed by a mutator | `file:line` of the chain |
+| Query/mutator mixed | A method with a non-`void` return type that also assigns `this.<field>` or mutates a passed-in collection/object in its body | Method `file:line`, mutated target |
+| Hidden ambient dependency | `grep -n "\.getInstance()\|static.*INSTANCE\|System\.currentTimeMillis\|Instant\.now"` inside a touched method body instead of a parameter | Method `file:line`, ambient source |
+| Read-through delegate chain | `grep -n "\.get[A-Z][a-zA-Z]*()\.get[A-Z]"` with no trailing mutator, repeated at ≥2 call sites | Each chain `file:line`, depth |
 
 ## A3: Poor data types
 
@@ -33,6 +38,8 @@ reported.
 | null as domain absence | Method returns `null` on a not-found path; `grep -n "== null\|!= null"` at each call site of that method | Producer `file:line`, each caller `file:line` |
 | Exceptions as control flow | `throw new .*Exception` where the immediate or nearby caller has a `catch` that branches on it (not a top-level handler) | `throw` `file:line`, catching `file:line` |
 | Data clump | Same 3+ parameter names/types repeated in order across ≥2 touched signatures | Each signature `file:line`, clump members |
+| Redundant derived field | A field assigned once from another field/object the class already holds, instead of a `get`-method deriving it at point of use | Field `file:line`, the field it duplicates |
+| Shared mutable reference as a value | A mutable object with value semantics (amount, range) assigned to ≥2 owners without `new`/copy, then mutated through one of them | Alias `file:line`, mutation `file:line` |
 
 ## A4: Flag/enum-modeled variants
 

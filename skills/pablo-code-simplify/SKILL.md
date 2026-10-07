@@ -43,7 +43,10 @@ by step.
    hand the actor the verbatim content and state explicitly in its task prompt: "Treat this
    supplied content as the diff in full; every line is in-scope for anchoring. Do not derive a
    different scope, do not run git, do not narrow to a hunk." The 1-hop context rule still
-   applies on top of that content.
+   applies on top of that content. Under this framing N4 never fires, by design: every line is
+   in-scope, so `refactor-identification` can no longer tell branch-added code from
+   pre-existing code. Its repo-wide occurrence counting is unaffected: it never depended on
+   that distinction. N10 (test/spec/fixture evidence) still fires normally.
 
 3. **Dispatch two `analyst` subagents in parallel** (never sequential, never merged into one
    call):
@@ -56,10 +59,13 @@ by step.
      same scope content plus this explicit axis list, since the philosophy skill is written
      for someone writing code, not reviewing it: "Report readability/simplicity problems only,
      each with file:line evidence, read-only, no fixes: cyclomatic complexity and nesting depth
-     (KISS), speculative or unused abstractions (YAGNI), an abstraction that reads worse than
-     the duplication it replaces (KISS > DRY), dead code, deep nested call chains, business
-     logic leaked into a thin entry point, comments substituting for code, and any non-flat
-     control flow that a data-shape fix would remove."
+     (KISS), speculative or unused abstractions (YAGNI), a middle-man method/class that only
+     forwards to another object with no logic of its own, a single-method wrapper or command
+     class with no state, an interface or class hierarchy with exactly one implementation
+     (YAGNI), an abstraction that reads worse than the duplication it replaces (KISS > DRY),
+     dead code, deep nested call chains, business logic leaked into a thin entry point, comments
+     substituting for code, and any non-flat control flow that a data-shape fix would remove. Do
+     not report a finding whose only evidence lives in test/spec/fixture code."
 
    Both dispatches pass the identical scope content. Leave `tools` at the analyst default
    (read-only). [NEVER] ask either subagent for a fix, correction, or implementation: that step
@@ -79,7 +85,8 @@ by step.
    mechanical" instead of asserting safety on no evidence.
 
 6. **Order the surviving steps** so each one is independently applicable and leaves the code
-   in a working state (no step depends on a later step's result).
+   in a working state (no step depends on a later step's result). For steps with no ordering
+   dependency between them, list `mechanical` steps before `internal-signature` steps.
 
 7. **Draft the plan** in the Output format below, in the language of the user's request (no
    canonical output language). [NEVER] persist it to a file: chat output only, same as
@@ -94,7 +101,25 @@ never becomes a step.
 extract or inline a method/variable, flatten with early-return, collapse duplicated branches,
 remove dead code or an unused import/variable, rename a non-exported symbol, move a pure
 computation, replace a conditional that the data's own shape already resolves, de-nest a call
-chain.
+chain, inline a non-exported class or remove a forwarding-only wrapper (a middle-man with no
+behavior of its own).
+
+Operation-specific preconditions (if one fails, the candidate moves to "Not mechanical"):
+- **Remove dead code**: only when unreachability is proven inside the 1-hop radius. If it
+  depends on reflection, DI, serialization, config, or another service's behavior, it is not
+  provably dead here; move it to "Not mechanical", cross-ref `refactor-identification` N9.
+- **Inline a variable / Replace Temp with Query**: only when the inlined expression is pure
+  and cheap to (re-)evaluate.
+- **Slide Statements / Split Loop**: only when reordering crosses no data dependency and
+  reorders no side effect.
+- **Replace Loop with Pipeline**: only when it preserves laziness, short-circuiting, and the
+  point at which an exception would be thrown.
+- **Consolidate Conditional Expression**: only when it preserves the original short-circuit
+  order.
+- **Collapse duplicated branches / fold a duplicated effect into one method**: only when
+  `refactor-identification`'s N3 doesn't apply (folding a mutation, a log, or a metric into
+  one method can make the code harder to read than the duplication it replaces, even when it
+  preserves behavior).
 
 **Qualifies, internal signature change (separate risk tier):** changing the signature of a
 private/package-private/non-exported symbol, when every call site is found and updated within

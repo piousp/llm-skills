@@ -1,8 +1,8 @@
 # Worked Examples
 
-One resolved example per category, one candidate filtered by the gate, and one candidate left
-Unresolved (N9). Each shows the before-snippet (as it appears in a branch's diff) and the exact
-block it produces.
+One resolved example per category (plus one for the A3 "Redundant derived field" row), one
+candidate filtered by the gate, and one candidate left Unresolved (N9). Each shows the
+before-snippet (as it appears in a branch's diff) and the exact block it produces.
 
 ## A1: Structural duplication (Java)
 
@@ -176,4 +176,36 @@ assuming the occurrence count locally observed is the true count.
   Tier.PREMIUM && order.getTotal() > 500`, 2 occurrences locally, below the >=3 threshold),
   missing fact: does a 3rd occurrence of this predicate exist in mds-pricing-engine, resolves
   via: `grep-across-repos` on mds-pricing-engine for the same eligibility predicate
+```
+
+## A3: Redundant derived field (Java)
+
+Branch diff adds a `fullName` field to `Customer.java`, set once in the constructor from two
+fields the same class already holds.
+
+```java
+// Customer.java:9 (touched by this branch)
+class Customer {
+    private final String firstName;
+    private final String lastName;
+    private final String fullName;
+
+    Customer(String firstName, String lastName) {
+        this.firstName = firstName;
+        this.lastName = lastName;
+        this.fullName = firstName + " " + lastName;
+    }
+}
+```
+
+```markdown
+#### [RF-5] A3 Redundant derived field: P1
+- Evidence: `Customer.java:12` (`fullName` duplicates `firstName` + `lastName`, both held by the
+  same object)
+- Anchored in branch: `Customer.java:9-16` (added hunk)
+- Gate: checked N1–N10, passes; N8 doesn't apply: removing the field eliminates a second
+  source of truth, not a trivial extract
+- Refactor direction: derive `fullName()` as a method at the point of use instead of storing it
+  → see `pablo-code-philosophy` `references/principles/KISS.md`, "No field that another field
+  already carries" (direction only; the how lives there)
 ```

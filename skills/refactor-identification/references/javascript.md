@@ -17,6 +17,8 @@ well.
 | New unrelated import in a touched module | `git diff` on the import block; new `import`/`require` from a folder unrelated to the module's domain | Module `file:line`, new import lines |
 | Added switch/else-if branch | `grep -n "case \|else if"` inside a chain the diff touches; count branches after the change | Chain `file:line`, added hunk lines, branch count |
 | Feature envy | In a touched function, count property reads on one foreign object (`obj.a`, `obj.getX()`) vs `this.`/own params | Function `file:line`, "N foreign vs M own" |
+| Inheritance for reuse, not variation | `class X extends Y` where `X` overrides a method only to call `super.m()` and no-op, or never overrides anything | Subclass `file:line`, the reused/empty member |
+| Mixed-phase function | A touched function parses/validates raw input, then computes a business result from it, with no intermediate named object between the phases | Function `file:line`, the two phase line-ranges |
 
 ## A2: Weak encapsulation
 
@@ -28,6 +30,9 @@ well.
 | Invariant bypassed by mutator | Constructor or factory validates (guard/`throw`), but a setter, `Object.assign(obj, …)`, or a direct property write on the same field does not | Validation `file:line`, unguarded mutator `file:line` |
 | Check-then-act at call sites | Same guard (`if (x && x.length)`, `if (x !== null)`) immediately before calling the same function, at ≥2 call sites | Each caller `file:line`, callee `file:line` |
 | Reach-through mutation | Chain into another object's internals ending in a write: `a.b.items.push(...)`, `a.b.c = x`, `.splice(` | Chain `file:line`, depth |
+| Query/mutator mixed | A function with a `return` that also mutates `this.<field>` or a passed-in object/array parameter | Function `file:line`, mutated target |
+| Hidden ambient dependency | `grep -n "Date\.now()\|new Date()\|globalThis\.\|process\.env\."` inside a touched function instead of a parameter | Function `file:line`, ambient source |
+| Read-through delegate chain | Chained property reads with no trailing mutation (`a.b.c.d`), repeated at ≥2 call sites | Each chain `file:line`, depth |
 
 ## A3: Poor data types
 
@@ -38,6 +43,8 @@ well.
 | null/undefined as domain absence | Function returns `null`/`undefined` for an expected "not found"; callers guard with `== null`, `!x`, `?.`, `??` | Producer `file:line`, each guarding caller `file:line` |
 | Exceptions as control flow | `throw new Error(...)` for an expected outcome, with a nearby `catch` branching on `err.message`/`err.code` instead of rethrowing | `throw` `file:line`, catching `file:line`, the sniffed field |
 | Data clump | Same 3+ params, or the same ad-hoc object-literal shape, repeated in order across ≥2 touched signatures | Each signature `file:line`, clump members |
+| Redundant derived field | A property assigned once from another field the object already holds, instead of a getter deriving it at point of use | Field `file:line`, the field it duplicates |
+| Shared mutable reference as a value | A mutable object with value semantics (amount, range) assigned (not spread-copied) to ≥2 owners, mutated through one | Alias `file:line`, mutation `file:line` |
 | Untyped boundary payload | `JSON.parse` / `res.json()` / `req.body` consumed field-by-field with inline guards in ≥2 places, no single parse-into-domain-object step | Each consumption `file:line`, the fields read |
 
 ## A4: Flag/enum-modeled variants
