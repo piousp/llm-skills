@@ -9,6 +9,7 @@ import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker } from "../../src/progress.ts";
+import { jobNotFoundText } from "../../src/job-view.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
 import { childSessionDir } from "../../src/subagent-session.ts";
 import type { AgentConfig } from "../../src/agents.ts";
@@ -340,6 +341,126 @@ test("wiring: /subagents clear with no finished jobs reports nothing to clear", 
 
   assert.equal(ctx.notifications.length, 1);
   assert.match(ctx.notifications[0].message, /No finished jobs/);
+});
+
+test("wiring: /subagents status <unknown-id> reports not-found as a warning (shared wording)", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("status S9999", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, jobNotFoundText("S9999"));
+});
+
+test("wiring: /subagents with no args lists; 'status' and 'cancel' with no id are usage errors", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const statusCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("status", statusCtx);
+  assert.equal(statusCtx.notifications[0].type, "warning");
+  assert.match(statusCtx.notifications[0].message, /Usage: \/subagents status <id>/);
+});
+
+// A nested session whose prompt hangs (so the job stays running) and whose
+// subscribe() keeps the listeners, so the test can drive the same session
+// events the real coding-agent session emits during a run. abort() resolves
+// the prompt like the real session does, so cancelling the job at the end of
+// a test settles the run (eventually releasing the 10-min prompt-timeout
+// timer) instead of leaving the test process hanging until it fires.
+function hangingStreamingSession() {
+  const listeners: Array<(event: any) => void> = [];
+  let unblockPrompt: (() => void) | undefined;
+  const session = {
+    getAllTools: () => [],
+    bindExtensions: async () => {},
+    extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+    subscribe: (listener: (event: any) => void) => {
+      listeners.push(listener);
+      return () => {};
+    },
+    prompt: () => new Promise<void>((resolve) => { unblockPrompt = resolve; }),
+    getLastAssistantText: () => "",
+    getContextUsage: () => ({ tokens: 500, contextWindow: 200000, percent: 0.25 }),
+    dispose: () => {},
+    abort: () => { unblockPrompt?.(); },
+  } as any;
+  const emit = (events: any[]) => listeners.forEach((listener) => events.forEach((event) => listener(event)));
+  return { session, emit, listeners };
+}
+
+// Settles a still-hanging job created against hangingStreamingSession so the
+// test process can exit: cancels through the command handler (user cancel)
+// and waits for the run to settle and deliver.
+async function settleRunningJob(pi: ReturnType<typeof makeFakePi>, jobId: string): Promise<void> {
+  await pi.commands.get("subagents")!.handler(`cancel ${jobId}`, fakeCommandCtx());
+  await waitUntil(() => pi.sentMessages.length > 0);
+}
+
+test("wiring: end-to-end — a real job's stream phases, tools, and usage reach the widget and /subagents status", async () => {
+  const pi = makeFakePi();
+  const { session, emit, listeners } = hangingStreamingSession();
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => undefined } as unknown as ModelRuntime;
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession);
+
+  const widgetLines: Array<string[] | undefined> = [];
+  const ctx = fakeExecuteCtx();
+  (ctx.ui as any).setWidget = (_key: string, lines: string[] | undefined) => widgetLines.push(lines);
+
+  const result = await pi.tool.execute("call-7", { agent: "scout", task: "think then act" }, undefined, undefined, ctx);
+  const jobId = (result.details as { jobId: string }).jobId;
+
+  // The run starts on a later microtask; wait until the nested session is
+  // actually subscribed before driving its events.
+  await waitUntil(() => listeners.length > 0);
+
+  // Same dispatch order a real run produces: thinking delta, then a tool
+  // executes (activity: read), then an assistant message settles with usage.
+  emit([
+    { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "hm", partial: {} } },
+    { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } },
+    { type: "message_end", message: { role: "assistant", provider: "anthropic", usage: { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.005 } } } },
+  ]);
+
+  // Widget shows the running job with the tool word (running tool wins).
+  const liveWidget = widgetLines.at(-1);
+  assert.ok(liveWidget);
+  assert.match(liveWidget.find((l) => l.includes(jobId))!, /<dim>read<\/dim>/);
+
+  // /subagents status reports the live extras the list view lacks.
+  const statusCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`status ${jobId}`, statusCtx);
+  const statusText = statusCtx.notifications.at(-1)!.message;
+  assert.match(statusText, new RegExp(`^${jobId} running`));
+  assert.match(statusText, /activity: read/);
+  assert.match(statusText, /tool: read a\.ts/);
+  assert.match(statusText, /usage: /);
+  assert.match(statusText, /\$0\.005/);
+
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: end-to-end — no UI events yet, a just-launched job status shows waiting", async () => {
+  const pi = makeFakePi();
+  const { session } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+
+  const ctx = fakeExecuteCtx();
+  const result = await pi.tool.execute("call-8", { agent: "scout", task: "x" }, undefined, undefined, ctx);
+  const jobId = (result.details as { jobId: string }).jobId;
+
+  const statusCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`status ${jobId}`, statusCtx);
+  const statusText = statusCtx.notifications.at(-1)!.message;
+  assert.match(statusText, new RegExp(`^${jobId} running`));
+  assert.match(statusText, /activity: waiting/);
+
+  await settleRunningJob(pi, jobId);
 });
 
 test("wiring: session_shutdown does not throw even with no jobs ever started", async () => {

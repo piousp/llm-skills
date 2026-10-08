@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import {
   initialTaskProgress,
   applyToolEvent,
+  applyProgressEvent,
   markDone,
   buildProgressLine,
   createProgressTracker,
   toSubagentToolEvent,
+  toStreamPhaseEvent,
+  shortToolName,
+  activityWord,
   type TaskProgress,
   type ProgressTheme,
 } from "../../src/progress.ts";
@@ -213,7 +217,7 @@ test("createProgressTracker: emits a new TaskProgress on every event", () => {
   const emitted: TaskProgress[] = [];
   const tracker = createProgressTracker("scout", (p) => emitted.push(p));
 
-  tracker.onToolEvent({ type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
+  tracker.onEvent({ type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts" });
   tracker.markTaskDone();
 
   assert.equal(emitted.length, 2);
@@ -222,14 +226,14 @@ test("createProgressTracker: emits a new TaskProgress on every event", () => {
   assert.equal(emitted[1].done, true);
 });
 
-test("createProgressTracker: onToolEvent after markTaskDone is a no-op (no further emit)", () => {
+test("createProgressTracker: onEvent after markTaskDone is a no-op (no further emit)", () => {
   const emitted: TaskProgress[] = [];
   const tracker = createProgressTracker("scout", (p) => emitted.push(p));
 
   tracker.markTaskDone();
   const emitCountAfterDone = emitted.length;
 
-  tracker.onToolEvent({ type: "tool_start", toolCallId: "x", toolName: "read", summary: "read foo.ts" });
+  tracker.onEvent({ type: "tool_start", toolCallId: "x", toolName: "read", summary: "read foo.ts" });
 
   assert.equal(emitted.length, emitCountAfterDone);
 });
@@ -243,4 +247,189 @@ test("createProgressTracker: markTaskDone with usage attaches it to the emitted 
   const last = emitted[emitted.length - 1];
   assert.equal(last.done, true);
   assert.equal(last.usage, sampleUsage);
+});
+
+// --- SubagentProgressEvent / applyProgressEvent ---
+
+test("applyProgressEvent: stream_phase sets streamPhase through the thinking -> output transition", () => {
+  let p = initialTaskProgress("scout");
+  p = applyProgressEvent(p, { type: "stream_phase", phase: "thinking" });
+  assert.equal(p.streamPhase, "thinking");
+  p = applyProgressEvent(p, { type: "stream_phase", phase: "output" });
+  assert.equal(p.streamPhase, "output");
+});
+
+test("applyProgressEvent: repeating the stored phase returns the SAME object (per-token delta dedupe)", () => {
+  const p = applyProgressEvent(initialTaskProgress("scout"), { type: "stream_phase", phase: "thinking" });
+  const again = applyProgressEvent(p, { type: "stream_phase", phase: "thinking" });
+  assert.equal(again, p);
+});
+
+test("applyProgressEvent: a different phase returns a new object with the rest of the state intact", () => {
+  const started = applyToolEvent(initialTaskProgress("scout"), {
+    type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts",
+  });
+  const next = applyProgressEvent(started, { type: "stream_phase", phase: "output" });
+  assert.notEqual(next, started);
+  assert.equal(next.streamPhase, "output");
+  assert.deepEqual(next.runningTools, started.runningTools);
+  assert.deepEqual(next.history, started.history);
+});
+
+test("applyProgressEvent: usage event attaches the usage snapshot without touching anything else", () => {
+  const started = applyToolEvent(initialTaskProgress("scout"), {
+    type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts",
+  });
+  const next = applyProgressEvent(started, { type: "usage", usage: sampleUsage });
+  assert.equal(next.usage, sampleUsage);
+  assert.deepEqual(next.runningTools, started.runningTools);
+  assert.deepEqual(next.history, started.history);
+  assert.equal(next.done, false);
+});
+
+test("applyProgressEvent: tool events delegate to applyToolEvent unchanged", () => {
+  const p = applyProgressEvent(initialTaskProgress("scout"), {
+    type: "tool_start", toolCallId: "a", toolName: "read", summary: "read foo.ts",
+  });
+  assert.deepEqual(p.runningTools, [{ toolCallId: "a", toolName: "read" }]);
+  assert.equal(p.streamPhase, undefined);
+});
+
+// --- toStreamPhaseEvent ---
+
+test("toStreamPhaseEvent: thinking_start/thinking_delta map to thinking", () => {
+  for (const type of ["thinking_start", "thinking_delta"]) {
+    const event = toStreamPhaseEvent({
+      type: "message_update",
+      message: {},
+      assistantMessageEvent: { type, delta: "x", partial: {} },
+    } as any);
+    assert.deepEqual(event, { type: "stream_phase", phase: "thinking" });
+  }
+});
+
+test("toStreamPhaseEvent: text_start/text_delta map to output", () => {
+  for (const type of ["text_start", "text_delta"]) {
+    const event = toStreamPhaseEvent({
+      type: "message_update",
+      message: {},
+      assistantMessageEvent: { type, delta: "x", partial: {} },
+    } as any);
+    assert.deepEqual(event, { type: "stream_phase", phase: "output" });
+  }
+});
+
+test("toStreamPhaseEvent: non-delta assistant events and other session events are ignored", () => {
+  for (const assistantType of ["start", "done", "toolcall_delta", "text_end", "thinking_end"]) {
+    assert.equal(
+      toStreamPhaseEvent({ type: "message_update", message: {}, assistantMessageEvent: { type: assistantType } } as any),
+      undefined,
+    );
+  }
+  assert.equal(toStreamPhaseEvent({ type: "tool_execution_start", toolCallId: "a", toolName: "read", args: {} } as any), undefined);
+  assert.equal(toStreamPhaseEvent({ type: "turn_start" } as any), undefined);
+});
+
+// --- shortToolName ---
+
+test("shortToolName: mcp tools collapse to their server name", () => {
+  assert.equal(shortToolName("mcp__playwright__navigate"), "playwright");
+  assert.equal(shortToolName("mcp__a__b"), "a");
+});
+
+test("shortToolName: plain and malformed names pass through unchanged", () => {
+  assert.equal(shortToolName("read"), "read");
+  assert.equal(shortToolName("mcp__only-one-segment"), "mcp__only-one-segment");
+});
+
+// --- activityWord ---
+
+test("activityWord: a running tool wins over everything, named via shortToolName", () => {
+  const p: TaskProgress = {
+    agent: "scout",
+    runningTools: [{ toolCallId: "a", toolName: "read" }],
+    history: ["read a.ts"],
+    done: false,
+    streamPhase: "thinking",
+  };
+  assert.equal(activityWord(p), "read");
+});
+
+test("activityWord: mcp running tool shows the server name", () => {
+  const p: TaskProgress = {
+    agent: "scout",
+    runningTools: [{ toolCallId: "a", toolName: "mcp__playwright__navigate" }],
+    history: ["playwright/navigate"],
+    done: false,
+  };
+  assert.equal(activityWord(p), "playwright");
+});
+
+test("activityWord: parallel tools show the most recently started one", () => {
+  const p: TaskProgress = {
+    agent: "scout",
+    runningTools: [
+      { toolCallId: "a", toolName: "read" },
+      { toolCallId: "b", toolName: "grep" },
+    ],
+    history: ["read a.ts", "grep /x/"],
+    done: false,
+  };
+  assert.equal(activityWord(p), "grep");
+});
+
+test("activityWord: no tools falls back to the stream phase", () => {
+  assert.equal(activityWord({ agent: "scout", runningTools: [], history: [], done: false, streamPhase: "thinking" }), "thinking");
+  assert.equal(activityWord({ agent: "scout", runningTools: [], history: [], done: false, streamPhase: "output" }), "output");
+});
+
+test("activityWord: nothing streamed yet is waiting; done is done", () => {
+  assert.equal(activityWord(initialTaskProgress("scout")), "waiting");
+  assert.equal(activityWord({ agent: "scout", runningTools: [], history: ["read a.ts"], done: true, streamPhase: "output" }), "done");
+});
+
+// --- buildProgressLine with streamPhase ---
+
+test("buildProgressLine: no running tools with a stream phase renders the phase instead of working\u2026", () => {
+  const p: TaskProgress = { agent: "scout", runningTools: [], history: [], done: false, streamPhase: "thinking" };
+  assert.equal(buildProgressLine(p, fakeTheme), "<accent>scout</accent> <dim>\u00b7 tools: 0 \u00b7 thinking</dim>");
+});
+
+test("createProgressTracker: two identical stream_phase events emit ONCE (dedupe before widget refresh)", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
+
+  tracker.onEvent({ type: "stream_phase", phase: "thinking" });
+  tracker.onEvent({ type: "stream_phase", phase: "thinking" });
+
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].streamPhase, "thinking");
+});
+
+test("createProgressTracker: a changed phase emits again, usage events emit with the snapshot", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
+
+  tracker.onEvent({ type: "stream_phase", phase: "thinking" });
+  tracker.onEvent({ type: "stream_phase", phase: "output" });
+  tracker.onEvent({ type: "usage", usage: sampleUsage });
+
+  assert.equal(emitted.length, 3);
+  assert.equal(emitted[1].streamPhase, "output");
+  assert.equal(emitted[2].usage, sampleUsage);
+});
+
+test("createProgressTracker: any progress event after markTaskDone is a no-op (guard serves all event types)", () => {
+  const emitted: TaskProgress[] = [];
+  const tracker = createProgressTracker("scout", (p) => emitted.push(p));
+
+  tracker.markTaskDone();
+  const emitCountAfterDone = emitted.length;
+
+  tracker.onEvent({ type: "stream_phase", phase: "thinking" });
+  tracker.onEvent({ type: "usage", usage: sampleUsage });
+  tracker.onEvent({ type: "tool_start", toolCallId: "x", toolName: "read", summary: "read foo.ts" });
+
+  assert.equal(emitted.length, emitCountAfterDone);
+  assert.equal(emitted[emitted.length - 1].streamPhase, undefined);
 });

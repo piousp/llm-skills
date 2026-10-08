@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- **New: `/subagents status <id>`** shows what one job is doing with more detail than the list. A running job reports status, elapsed time, the current activity word, the most recent tool call summary, the last 10 tool calls of the run with older ones elided, and the live usage footer (the list view only carries usage once a job settles). Finished jobs render the same entry the list shows, and an unknown id reports the same warning as `cancel`.
+- **New: one-word activity in the running-jobs widget.** Each running job now shows what the agent is doing right now: the tool currently executing (MCP tools collapse to their server name, `mcp__playwright__navigate` → `playwright`), or the model's stream phase (`thinking`/`output`) when no tool is executing, or `waiting` before the run's first signal. The word is derived at render time from stream and tool session events, never stored, and the per-token delta stream is deduplicated so the widget only repaints when the word changes.
+- Internal: the run options' `onToolEvent` is now `onProgressEvent` and delivers `SubagentProgressEvent`: tool lifecycle plus new stream-phase and live-usage events, all folded by one tracker `onEvent` behind the unchanged post-`done` guard. `src/*` is not a public API of the package (the entry point is `extensions/index.ts`), so integrating callers see no change.
+
 ## 1.0.0
 
 - **Raised the `pi` dependency floor to `>=1.0.4`.** `peerDependencies` and `devDependencies` for

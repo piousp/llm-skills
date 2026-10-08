@@ -10,8 +10,8 @@ export function firstLine(text: string): string {
   return text.trim().split("\n", 1)[0] ?? "";
 }
 
-export function truncate(text: string): string {
-  return text.length > MAX_PREVIEW_WIDTH
-    ? `${text.slice(0, MAX_PREVIEW_WIDTH - 1)}\u2026`
+export function truncate(text: string, maxWidth: number = MAX_PREVIEW_WIDTH): string {
+  return text.length > maxWidth
+    ? `${text.slice(0, maxWidth - 1)}\u2026`
     : text;
 }

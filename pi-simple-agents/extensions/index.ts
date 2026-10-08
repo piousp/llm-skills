@@ -26,7 +26,7 @@ import { childSessionDir, createSubagentSessionManager } from "../src/subagent-s
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, parseSubagentsCommand, describeCancelResult, describeClearResult } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText } from "../src/job-view.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { emitWarnings, toErrorMessage } from "../src/warn.ts";
 
@@ -201,7 +201,7 @@ export async function runSingleTask(
         resourceLoader,
         sessionManager: manager,
         getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
-        onToolEvent: tracker ? (event) => tracker.onToolEvent(event) : undefined,
+        onProgressEvent: tracker ? (event) => tracker.onEvent(event) : undefined,
         mode,
       },
     );
@@ -409,12 +409,21 @@ export default async function (
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents cancel <id> or /subagents clear",
+    description: "List background subagent jobs; /subagents status <id>, cancel <id> or /subagents clear",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
       if (command.kind === "list") {
         ctx.ui.notify(buildJobListText(jobs.list(), Date.now(), ctx.ui.theme), "info");
+        return;
+      }
+      if (command.kind === "status") {
+        const job = jobs.get(command.id);
+        if (!job) {
+          ctx.ui.notify(jobNotFoundText(command.id), "warning");
+          return;
+        }
+        ctx.ui.notify(buildJobStatusText(job, Date.now(), ctx.ui.theme), "info");
         return;
       }
       if (command.kind === "cancel") {

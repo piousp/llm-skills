@@ -1,4 +1,4 @@
-import { buildProgressLine, type ProgressTheme } from "./progress.ts";
+import { buildProgressLine, activityWord, type ProgressTheme } from "./progress.ts";
 import { firstLine, truncate } from "./text-utils.ts";
 import { formatRunUsage } from "./usage.ts";
 import type { AgentRunResult } from "./run.ts";
@@ -15,6 +15,12 @@ export function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
+// One-word "what is it doing" column, derived by progress.ts's activityWord
+// (running tool wins over stream phase; `waiting` when nothing has streamed
+// yet). Preview is capped narrower than the tool-call previews to keep the
+// whole line short enough for the widget.
+const WIDGET_PREVIEW_WIDTH = 48;
+
 function unfinishedTaskLine(job: JobSnapshot, now: number, theme: ProgressTheme): string | undefined {
   if (job.progress.done) return undefined;
 
@@ -24,8 +30,9 @@ function unfinishedTaskLine(job: JobSnapshot, now: number, theme: ProgressTheme)
   const elapsed = theme.fg("dim", formatElapsed(now - job.startedAt));
 
   const agent = theme.fg("accent", job.task.agent);
-  const preview = truncate(firstLine(job.task.task));
-  return `${marker} ${job.id} ${agent}  ${preview}  ${elapsed}${suffix}`;
+  const activity = theme.fg("dim", activityWord(job.progress));
+  const preview = truncate(firstLine(job.task.task), WIDGET_PREVIEW_WIDTH);
+  return `${marker} ${job.id} ${agent} ${activity} ${preview}  ${elapsed}${suffix}`;
 }
 
 // Persistent-widget content: one line per still-running job, or `undefined`
@@ -41,7 +48,12 @@ export function buildJobsWidgetLines(
     .map((job) => unfinishedTaskLine(job, now, theme))
     .filter((line): line is string => line !== undefined);
   if (lines.length === 0) return undefined;
-  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents cancel <id>")];
+  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents status|cancel <id> \u00b7 /subagents clear")];
+}
+
+// Shared not-found wording for both /subagents cancel and /subagents status.
+export function jobNotFoundText(id: string): string {
+  return `No job with id "${id}" in this session.`;
 }
 
 function buildFinishedTaskLine(result: AgentRunResult, theme: ProgressTheme): string {
@@ -80,6 +92,7 @@ export function buildJobListText(jobs: readonly JobSnapshot[], now: number, them
 export type SubagentsCommand =
   | { readonly kind: "list" }
   | { readonly kind: "cancel"; readonly id: string }
+  | { readonly kind: "status"; readonly id: string }
   | { readonly kind: "clear" }
   | { readonly kind: "usage-error"; readonly message: string };
 
@@ -93,14 +106,48 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     if (!id) return { kind: "usage-error", message: "Usage: /subagents cancel <id>" };
     return { kind: "cancel", id };
   }
+  if (sub === "status") {
+    const id = rest[0];
+    if (!id) return { kind: "usage-error", message: "Usage: /subagents status <id>" };
+    return { kind: "status", id };
+  }
   if (sub === "clear") return { kind: "clear" };
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [cancel <id>|clear]` };
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status <id>|cancel <id>|clear]` };
 }
 
 export function describeClearResult(removed: number): string {
   return removed > 0
     ? `Cleared ${removed} finished job${removed === 1 ? "" : "s"}.`
     : "No finished jobs to clear.";
+}
+
+// How much of a running job's tool history `/subagents status <id>` shows
+// before eliding the older entries.
+const STATUS_HISTORY_CAP = 10;
+
+// Detailed single-job view for `/subagents status <id>`. Settled jobs reuse
+// buildJobListEntry verbatim (header + result/error + usage footer) — that
+// view already says everything a settled job can say. Running jobs get the
+// live extras the list view doesn't show: the current activity word, the last
+// tool call summary, the (capped) tool history, and usage so far.
+export function buildJobStatusText(job: JobSnapshot, now: number, theme: ProgressTheme): string {
+  if (!isActive(job.state)) return buildJobListEntry(job, now, theme);
+
+  const lines = [
+    `${job.id} ${job.state.status} \u00b7 ${formatElapsed(now - job.startedAt)}`,
+    `  ${theme.fg("accent", job.task.agent)} ${theme.fg("dim", `\u00b7 activity: ${activityWord(job.progress)}`)}`,
+  ];
+  const history = job.progress.history;
+  if (history.length > 0) {
+    lines.push(`  tool: ${history[history.length - 1]}`);
+    const shown = history.slice(-STATUS_HISTORY_CAP);
+    const elided = history.length > STATUS_HISTORY_CAP ? `\u2026 (+${history.length - STATUS_HISTORY_CAP} earlier) \u00b7 ` : "";
+    lines.push(`  tools (${history.length}): ${elided}${shown.join(" \u00b7 ")}`);
+  }
+  if (job.progress.usage) {
+    lines.push(`  usage: ${formatRunUsage(job.progress.usage)}`);
+  }
+  return lines.join("\n");
 }
 
 export function describeCancelResult(result: CancelResult): { text: string; level: "info" | "warning" } {
@@ -113,6 +160,6 @@ export function describeCancelResult(result: CancelResult): { text: string; leve
         level: "warning",
       };
     case "not-found":
-      return { text: `No job with id "${result.id}" in this session.`, level: "warning" };
+      return { text: jobNotFoundText(result.id), level: "warning" };
   }
 }

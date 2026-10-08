@@ -51,7 +51,16 @@ A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `time
 
 ## Background jobs
 
-`subagent` returns right away with a job id, not the result — the result is delivered later as its own message, and (unless cancelled) wakes the model up to act on it. A persistent panel shows jobs still running; `/subagents` lists running and recent ones, `/subagents cancel <id>` stops one, `/subagents clear` drops finished ones. See [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs) for the full behavior.
+`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and hands the task to a background job. When the job settles, the result is delivered as its own message, and unless the job was cancelled the model gets a follow-up turn to act on it.
+
+## The /subagents command
+
+- `/subagents` lists running and recently finished jobs, newest first. A running entry shows the tools in flight (`running: read, grep`) or the model's streaming phase (`thinking`, `output`); a finished one shows success or failure with the usage footer.
+- `/subagents status <id>` details one job. A running job shows status, elapsed time, the current activity word, the last tool call with its arguments, the last ten tool calls of the run, and usage so far. A finished job prints the same entry the list shows. An unknown id warns the same way `cancel` does.
+- `/subagents cancel <id>` stops a running job.
+- `/subagents clear` drops the finished ones; the 50 most recent are kept automatically anyway.
+
+While a job runs, a panel below the editor shows one line per running job with a one-word live status: the executing tool by its own name (`read`), an MCP tool by its server name (`mcp__playwright__navigate` shows as `playwright`), `thinking` or `output` when only the model streams, `waiting` before the run emits its first signal. The word comes from real-time session events and the repaint happens only when the word changes, not per token. See [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs) for formats and edge cases.
 
 ## MCP tools
 

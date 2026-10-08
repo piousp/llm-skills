@@ -4,6 +4,8 @@ import {
   formatElapsed,
   buildJobsWidgetLines,
   buildJobListText,
+  buildJobStatusText,
+  jobNotFoundText,
   parseSubagentsCommand,
   describeCancelResult,
   describeClearResult,
@@ -141,6 +143,24 @@ test("parseSubagentsCommand: 'cancel' with no id is a usage error", () => {
   const result = parseSubagentsCommand("cancel");
   assert.equal(result.kind, "usage-error");
 });
+test("parseSubagentsCommand: 'status <id>' is a status command", () => {
+  assert.deepEqual(parseSubagentsCommand("status S1001"), { kind: "status", id: "S1001" });
+});
+test("parseSubagentsCommand: 'status' with no id is a usage error naming the status usage", () => {
+  const result = parseSubagentsCommand("status");
+  assert.equal(result.kind, "usage-error");
+  if (result.kind === "usage-error") assert.match(result.message, /status <id>/);
+});
+test("parseSubagentsCommand: 'status <id> extra' takes the first token as the id (same rule as cancel)", () => {
+  assert.deepEqual(parseSubagentsCommand("status S1001 extra words"), { kind: "status", id: "S1001" });
+});
+test("parseSubagentsCommand: unknown subcommand lists status in the usage hint", () => {
+  const result = parseSubagentsCommand("foo");
+  if (result.kind === "usage-error") {
+    assert.match(result.message, /status <id>/);
+    assert.match(result.message, /cancel <id>/);
+  }
+});
 test("parseSubagentsCommand: unknown subcommand is a usage error", () => {
   const result = parseSubagentsCommand("foo");
   assert.equal(result.kind, "usage-error");
@@ -176,4 +196,99 @@ test("describeCancelResult: not-found is a warning naming the unknown id", () =>
   const { text, level } = describeCancelResult({ kind: "not-found", id: "S9999" });
   assert.match(text, /S9999/);
   assert.equal(level, "warning");
+});
+test("jobNotFoundText: single shared wording for cancel and status", () => {
+  const cancelView = describeCancelResult({ kind: "not-found", id: "S9999" });
+  assert.equal(jobNotFoundText("S9999"), cancelView.text);
+});
+
+// --- widget: activity word in the running line ---
+
+function jobWithProgress(progressOverrides: Record<string, unknown> = {}, overrides: Partial<JobSnapshot> = {}): JobSnapshot {
+  const base = { agent: "scout", runningTools: [], history: [], done: false, ...progressOverrides };
+  return runningJob({ progress: base, ...overrides });
+}
+
+test("buildJobsWidgetLines: a running tool shows the one-word tool name", () => {
+  const job = jobWithProgress({ runningTools: [{ toolCallId: "a", toolName: "grep" }], history: ["grep /x/"] });
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+  assert.match(lines[0], /<dim>grep<\/dim>/);
+  assert.doesNotMatch(lines[0], /working/);
+});
+
+test("buildJobsWidgetLines: an mcp running tool shows the short server name", () => {
+  const job = jobWithProgress({ runningTools: [{ toolCallId: "a", toolName: "mcp__playwright__navigate" }], history: ["playwright/navigate url=.."] });
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+  assert.match(lines[0], /<dim>playwright<\/dim>/);
+  assert.doesNotMatch(lines[0], /mcp__/);
+});
+
+test("buildJobsWidgetLines: a thinking-only run shows 'thinking', a fresh run shows 'waiting'", () => {
+  const thinking = jobWithProgress({ streamPhase: "thinking" });
+  assert.match(buildJobsWidgetLines([thinking], 2_000, theme)![0], /<dim>thinking<\/dim>/);
+  const fresh = jobWithProgress({});
+  assert.match(buildJobsWidgetLines([fresh], 2_000, theme)![0], /<dim>waiting<\/dim>/);
+});
+
+test("buildJobsWidgetLines: the hint footer mentions the status subcommand", () => {
+  const job = runningJob();
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+  assert.match(lines.at(-1)!, /status\|cancel <id>/);
+});
+
+// --- buildJobStatusText ---
+
+const usageForStatus = { input: 13000, output: 840, cacheRead: 1_200_000, cacheWrite: 3000, cost: 0.412, isSubscription: false, context: undefined };
+
+test("buildJobStatusText: a running job shows activity, last tool, capped history, and live usage", () => {
+  const history = ["read a.ts", "grep /x/", "write b.ts"];
+  const job = jobWithProgress({
+    runningTools: [{ toolCallId: "b", toolName: "grep" }],
+    history,
+    usage: usageForStatus,
+  }, { startedAt: 1_000 });
+  const text = buildJobStatusText(job, 4_000, theme);
+
+  const lines = text.split("\n");
+  assert.match(lines[0], /^S1003 running \u00b7 3s$/);
+  assert.match(lines[1], /scout/);
+  assert.match(lines[1], /activity: grep/); // the running tool wins the word...
+  assert.match(lines[2], /^  tool: write b\.ts$/); // ...but the tool line is the most recently STARTED call
+  assert.match(lines[3], /^  tools \(3\): read a\.ts \u00b7 grep \/x\/ \u00b7 write b\.ts$/);
+  assert.match(lines[4], /^  usage: /);
+  assert.match(lines[4], /\$0\.412/);
+});
+
+test("buildJobStatusText: history beyond 10 entries elides the older ones", () => {
+  const history = Array.from({ length: 12 }, (_, i) => `read f${i}.ts`);
+  const job = jobWithProgress({ history, runningTools: [{ toolCallId: "z", toolName: "read" }] });
+  const text = buildJobStatusText(job, 2_000, theme);
+  assert.match(text, /tools \(12\): \u2026 \(\+2 earlier\) \u00b7 read f2\.ts \u00b7 .*read f11\.ts/);
+  assert.doesNotMatch(text, /read f0\.ts/);
+  assert.doesNotMatch(text, /read f1\.ts /);
+});
+
+test("buildJobStatusText: a fresh running job (no history, no usage) omits the tool/usage lines", () => {
+  const job = jobWithProgress({});
+  const text = buildJobStatusText(job, 2_000, theme);
+  assert.match(text, /activity: waiting/);
+  assert.doesNotMatch(text, /tool:/);
+  assert.doesNotMatch(text, /usage:/);
+});
+
+test("buildJobStatusText: a cancelling job keeps its header status", () => {
+  const job = jobWithProgress({ history: ["read a.ts"] }, { state: { status: "cancelling", reason: "user" } });
+  const text = buildJobStatusText(job, 2_000, theme);
+  assert.match(text, /^S1003 cancelling/);
+});
+
+test("buildJobStatusText: settled jobs render exactly the list entry (reuse pin)", () => {
+  const settled: SettledJob = { ...runningJob(), state: { status: "completed", settledAt: 4_000, result: sampleResult } };
+  assert.equal(buildJobStatusText(settled, 9_000, theme), buildJobListText([settled], 9_000, theme));
+});
+
+test("buildJobStatusText: a failed job shows its error via the list entry", () => {
+  const failed: SettledJob = { ...runningJob(), state: { status: "failed", settledAt: 4_000, error: "boom" } };
+  const text = buildJobStatusText(failed, 9_000, theme);
+  assert.match(text, /boom/);
 });

@@ -97,7 +97,7 @@ test("tracker events update the snapshot's progress and call onChange", async ()
   await Promise.resolve();
   await Promise.resolve();
 
-  tracker.onToolEvent({ type: "tool_start", toolCallId: "t1", toolName: "read", summary: "read foo" });
+  tracker.onEvent({ type: "tool_start", toolCallId: "t1", toolName: "read", summary: "read foo" });
   const last = changes.at(-1)!;
   assert.equal(last[0].progress.history.length, 1);
   assert.equal(last[0].progress.runningTools.length, 1);
@@ -109,7 +109,7 @@ test("tracker events update the snapshot's progress and call onChange", async ()
   // Re-emitting after done is a no-op: createProgressTracker's own guard
   // (progress.ts) returns early without calling emit once a task is done.
   const beforeReemit = changes.length;
-  tracker.onToolEvent({ type: "tool_start", toolCallId: "t2", toolName: "grep", summary: "grep bar" });
+  tracker.onEvent({ type: "tool_start", toolCallId: "t2", toolName: "grep", summary: "grep bar" });
   assert.equal(changes.length, beforeReemit);
   assert.equal(changes.at(-1)![0].progress.runningTools.length, 0);
 });
@@ -373,6 +373,32 @@ test("list: default retention (no maxRecent override) keeps exactly the 50 most 
   assert.equal(ids.length, 50);
   assert.ok(!ids.includes("S1001")); // the very first job, oldest, is the one dropped
   assert.ok(ids.includes("S1051")); // the most recent of the 51 started
+});
+
+test("get: returns the live snapshot for a running job, and the settled one after completion", async () => {
+  const { registry, settled } = harness();
+  const d = deferred<AgentRunResult>();
+  const running = registry.start({ runId: "r1", task: { agent: "scout", task: "watch me" }, run: () => d.promise });
+
+  assert.deepEqual(registry.get(running.id), running);
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+  const settledSnapshot = registry.get(running.id);
+  assert.equal(settledSnapshot?.state.status, "completed");
+  assert.equal(settled?.length, 1);
+});
+
+test("get: unknown ids return undefined, including ids pruned by maxRecent", async () => {
+  const { registry } = harness(1); // keep at most 1 finished job
+  registry.start({ runId: "r1", task: { agent: "scout", task: "t1" }, run: () => Promise.resolve(sampleRunResult("scout", "t1")) });
+  const second = registry.start({ runId: "r2", task: { agent: "scout", task: "t2" }, run: () => Promise.resolve(sampleRunResult("scout", "t2")) });
+  await registry.whenIdle();
+
+  assert.equal(registry.get("S9999"), undefined); // never existed
+  assert.ok(registry.get(second.id)); // newest finished job kept
+  const firstPruned = "S1001";
+  assert.equal(registry.get(firstPruned), undefined); // pruned by maxRecent
 });
 
 test("clearFinished: drops every settled job, keeps running ones, returns the count removed", async () => {
