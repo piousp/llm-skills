@@ -98,11 +98,29 @@ Jobs are **in-memory only, per pi session**: nothing persists across a restart, 
 
 `/subagents` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
 
+`/subagents status <id>` shows what one job is doing in more detail than the list. For a running job it reports: status, elapsed time, the current **activity** (see below), the most recent tool call with its arguments summary, the last 10 tool calls of the run (`… (+N earlier)` elides older ones), and the live usage footer (the list view only carries usage once a job settles). For a finished job it renders exactly the list view's entry (result or error plus the usage footer). An unknown id reports `No job with id "<id>" in this session.`, the same warning wording as `cancel`.
+
 `/subagents cancel <id>` cancels a running job. `/subagents clear` drops every finished job from the list (running ones are untouched) — useful after a long session accumulates a lot of history; by default the 50 most recent finished jobs are kept automatically even without clearing.
+
+### The activity word (what a job is doing right now)
+
+Both `/subagents status <id>` and the running-jobs widget describe a running job with a single word. The word is derived at render time from the run's real-time session events; nothing about it is stored:
+
+1. A tool currently executing shows that tool, with MCP tools collapsed to their server name (`mcp__playwright__navigate` → `playwright`).
+2. With no tool executing, the model's current streaming phase shows instead: `thinking` or `output`.
+3. With neither (e.g. right after launch, waiting on the turn's first token), it shows `waiting` once the run is underway and `done` once the task finished.
+
+The event stream is deduplicated before it reaches the widget: streaming deltas arrive per token, but the widget only refreshes when the word actually changes, so thinking-heavy phases don't repaint the UI per token.
 
 ### The running-jobs widget
 
-While at least one job is running, a persistent panel appears below the editor: one line per still-running task, with its agent, a truncated preview of the task, and elapsed time, ticking once a second. It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to — the same thing `/subagents` shows on demand, kept visible without asking.
+While at least one job is running, a persistent panel appears below the editor: one line per still-running task, with its agent, the activity word (see above), a truncated preview of the task, and elapsed time, ticking once a second. A sample line:
+
+```
+◯ S1001 scout grep Find all fetch() calls in src/  1m 23s
+```
+
+It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to: the same thing `/subagents` shows on demand, kept visible without asking.
 
 ### Expanding a job's result (Ctrl+O)
 

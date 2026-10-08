@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import { invocationOverrideOf } from "../../src/validate.ts";
-import type { SubagentToolEvent } from "../../src/progress.ts";
+import type { SubagentProgressEvent } from "../../src/progress.ts";
 
 // settleOnce resolves runAgentViaSdk's outer promise synchronously (from a
 // listener or from the try block), but the IIFE's finally block — which
@@ -406,8 +406,8 @@ test("runAgentViaSdk: resolves abort-named error when signal is already aborted"
   assert.match((result as any).error ?? "", /abort/i);
 });
 
-test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into SubagentToolEvent, in order", async () => {
-  const events: SubagentToolEvent[] = [];
+test("runAgentViaSdk: onProgressEvent translates tool_execution_start/end into SubagentProgressEvent, in order", async () => {
+  const events: SubagentProgressEvent[] = [];
   const fakeSession = new FakeAgentSession("done", {
     toolEvents: [
       { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
@@ -419,7 +419,7 @@ test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into Subag
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onProgressEvent: (e) => events.push(e) },
   );
 
   assert.deepEqual(events, [
@@ -428,7 +428,7 @@ test("runAgentViaSdk: onToolEvent translates tool_execution_start/end into Subag
   ]);
 });
 
-test("runAgentViaSdk: no onToolEvent still subscribes once, for usage accumulation", async () => {
+test("runAgentViaSdk: no onProgressEvent still subscribes once, for usage accumulation", async () => {
   const fakeSession = new FakeAgentSession("done", {
     toolEvents: [
       { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
@@ -442,12 +442,155 @@ test("runAgentViaSdk: no onToolEvent still subscribes once, for usage accumulati
     { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
-  // Usage accumulation subscribes unconditionally, independent of onToolEvent.
+  // Usage accumulation subscribes unconditionally, independent of onProgressEvent.
   assert.equal(fakeSession.subscribeCallCount, 1);
 });
 
+test("runAgentViaSdk: message_update deltas translate into stream_phase events, in stream order", async () => {
+  const events: SubagentProgressEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_start", partial: {} } },
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "a", partial: {} } },
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "b", partial: {} } },
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onProgressEvent: (e) => events.push(e) },
+  );
+
+  // Every delta reaches the collector as a stream_phase event — the per-token
+  // dedupe lives in the tracker's reducer, not here (one concern per layer).
+  assert.deepEqual(events, [
+    { type: "stream_phase", phase: "thinking" },
+    { type: "stream_phase", phase: "thinking" },
+    { type: "stream_phase", phase: "thinking" },
+    { type: "stream_phase", phase: "output" },
+  ]);
+});
+
+test("runAgentViaSdk: a delta-heavy run with no collector emits nothing and still succeeds", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "a", partial: {} } },
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: message_end assistant usage arrives as a live usage event with context snapshot", async () => {
+  const events: SubagentProgressEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [assistantMessageEnd({ input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005 })],
+    contextUsage: { tokens: 500, contextWindow: 200000, percent: 0.25 },
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: { isUsingSubscription: () => false, getModel: () => undefined } as any,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      onProgressEvent: (e) => events.push(e),
+    },
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: "usage",
+      usage: {
+        input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: 0.005,
+        isSubscription: false,
+        context: { percent: 0.25, window: 200000 },
+      },
+    },
+  ]);
+});
+
+test("runAgentViaSdk: a message_end that adds no usage emits no usage event", async () => {
+  const events: SubagentProgressEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      { type: "message_end", message: { role: "toolResult", usage: undefined } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: { isUsingSubscription: () => false, getModel: () => undefined } as any,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      onProgressEvent: (e) => events.push(e),
+    },
+  );
+
+  assert.deepEqual(events, []);
+});
+
+test("runAgentViaSdk: stream phases, usage, and tool events keep the session's dispatch order", async () => {
+  const events: SubagentProgressEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "a", partial: {} } },
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } },
+      assistantMessageEnd({ input: 5, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.001 }),
+    ],
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } },
+      { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: { isUsingSubscription: () => false, getModel: () => undefined } as any,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      onProgressEvent: (e) => events.push(e),
+    },
+  );
+
+  // The fake's deterministic order: messageEvents (deltas, then the
+  // message_end that also carries a usage snapshot), then toolEvents.
+  assert.deepEqual(
+    events.map((e) => (e.type === "usage" ? "usage" : e.type === "stream_phase" ? `phase:${e.phase}` : e.type)),
+    [
+      "phase:thinking",
+      "phase:output",
+      "usage",
+      "tool_start",
+      "tool_end",
+    ],
+  );
+});
+
 test("runAgentViaSdk: tool_execution_update events are ignored, not translated", async () => {
-  const events: SubagentToolEvent[] = [];
+  const events: SubagentProgressEvent[] = [];
   const fakeSession = new FakeAgentSession("done", {
     toolEvents: [
       { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
@@ -460,7 +603,7 @@ test("runAgentViaSdk: tool_execution_update events are ignored, not translated",
   await runAgentViaSdk(
     makeAgent(),
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onToolEvent: (e) => events.push(e) },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onProgressEvent: (e) => events.push(e) },
   );
 
   assert.deepEqual(events, [
@@ -908,13 +1051,13 @@ test("runAgentViaSdk: no maxTurns + many turn_start events settles success, neve
   assert.equal(result.status, "success");
   assert.equal((result as any).finalText, "done");
   assert.equal(fakeSession.abortCalled, false);
-  // No maxTurns and no onToolEvent -> only the unconditional usage-accumulation
+  // No maxTurns and no onProgressEvent -> only the unconditional usage-accumulation
   // subscription happens. The if (maxTurns !== undefined) guard is what keeps
   // the turn-counter subscriber from being registered.
   assert.equal(fakeSession.subscribeCallCount, 1);
 });
 
-test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the tool-events subscriber (no turn counter)", async () => {
+test("runAgentViaSdk: no maxTurns + onProgressEvent collector subscribes only the single progress subscriber (no turn counter)", async () => {
   const fakeSession = new FakeAgentSession("done", {
     turnEvents: [
       { type: "turn_start", turnIndex: 0 },
@@ -925,7 +1068,7 @@ test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the to
     ],
   });
   const createSession = async () => ({ session: fakeSession as any });
-  const collected: SubagentToolEvent[] = [];
+  const collected: SubagentProgressEvent[] = [];
 
   const result = await runAgentViaSdk(
     makeAgent(),
@@ -935,18 +1078,18 @@ test("runAgentViaSdk: no maxTurns + onToolEvent collector subscribes only the to
       modelRuntime: {} as any,
       resourceLoader: {} as any,
       sessionManager: {} as any,
-      onToolEvent: (e) => { collected.push(e); },
+      onProgressEvent: (e) => { collected.push(e); },
     },
   );
 
   assert.equal(result.status, "success");
   assert.equal(fakeSession.abortCalled, false);
-  // Two subscriptions: the unconditional usage-accumulation one, plus the
-  // tool-events one for onToolEvent. The turn counter is gated on
-  // maxTurns !== undefined, so with no maxTurns it must NOT register a third.
-  assert.equal(fakeSession.subscribeCallCount, 2);
+  // One subscription now that usage accumulation and progress events share
+  // the same listener. The turn counter is gated on maxTurns !== undefined,
+  // so with no maxTurns it must NOT register a second.
+  assert.equal(fakeSession.subscribeCallCount, 1);
   // Sanity: 5 turn_start events fired to the one subscriber and none of them
-  // had any side effect (no settle, no abort, no extra onToolEvent call).
+  // had any side effect (no settle, no abort, no extra onProgressEvent call).
   assert.deepEqual(collected, []);
 });
 

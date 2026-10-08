@@ -68,7 +68,9 @@ function codemodeSummary(a: Record<string, unknown>): string {
 // Built-in MCP tools are named `mcp__<server>__<tool>`; render them as
 // `server/tool key=value ...`. This matches pi's own `server/tool` title for
 // plain names; sanitized or hash-shortened names show as registered.
-const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/;
+// Exported: progress.ts's shortToolName reuses the same pattern (DRY) to
+// extract the short server name shown in the widget's activity word.
+export const MCP_TOOL_NAME = /^mcp__(.+?)__(.+)$/;
 
 function mcpSummary(toolName: string, a: Record<string, unknown>): string | undefined {
   const match = MCP_TOOL_NAME.exec(toolName);

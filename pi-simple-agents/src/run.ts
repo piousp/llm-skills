@@ -1,9 +1,9 @@
 import type { AgentConfig } from "./agents.ts";
-import type { CreateAgentSessionOptions, CreateAgentSessionResult } from "@earendil-works/pi-coding-agent";
-import type { SubagentToolEvent } from "./progress.ts";
-import { toSubagentToolEvent } from "./progress.ts";
+import type { CreateAgentSessionOptions, CreateAgentSessionResult, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { SubagentProgressEvent } from "./progress.ts";
+import { toSubagentToolEvent, toStreamPhaseEvent } from "./progress.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
-import { applyUsageEvent, emptyUsage, toRunUsage, type RunUsage } from "./usage.ts";
+import { applyUsageEvent, emptyUsage, toRunUsage, type UsageAccumulator, type RunUsage } from "./usage.ts";
 import { needsExtensionBinding, type ExtensionMode } from "./extension-binding.ts";
 
 interface AgentRunResultBase {
@@ -139,7 +139,7 @@ export interface RunAgentViaSdkOptions {
   resourceLoader: CreateAgentSessionOptions["resourceLoader"];
   sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
-  onToolEvent?: (event: SubagentToolEvent) => void;
+  onProgressEvent?: (event: SubagentProgressEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
   /** Host run mode, used to gate MCP/extension initialization to modes that exit cleanly (see bindExtensionsIfNeeded). */
   mode?: ExtensionMode;
@@ -240,17 +240,6 @@ async function shutdownExtensionsIfBound(
   } catch (error) {
     console.warn(`${WARN_PREFIX}failed to shut down extensions for subagent: ${toErrorMessage(error)}`);
   }
-}
-
-function subscribeToolEvents(
-  agentSession: CreateAgentSessionResult["session"],
-  onToolEvent: RunAgentViaSdkOptions["onToolEvent"],
-): void {
-  if (!onToolEvent) return;
-  agentSession.subscribe((event) => {
-    const toolEvent = toSubagentToolEvent(event);
-    if (toolEvent) onToolEvent(toolEvent);
-  });
 }
 
 function subscribeTurnCounter(
@@ -358,10 +347,30 @@ export function runAgentViaSdk(
           return;
         }
 
-        // Unconditional: usage accumulation does not depend on onToolEvent.
-        agentSession.subscribe((event) => { usageAcc = applyUsageEvent(usageAcc, event); });
-
-        subscribeToolEvents(agentSession, options.onToolEvent);
+        // Unconditional single subscription: usage accumulation does not
+        // depend on the collector, and the collector (when present) receives
+        // both translated progress events (tools + stream phases) and live
+        // usage snapshots whenever the accumulator actually changed. The
+        // done-guard and the per-token phase dedupe live in the tracker
+        // (progress.ts), not here.
+        agentSession.subscribe((event) => {
+          const before = usageAcc;
+          usageAcc = applyUsageEvent(usageAcc, event);
+          const onProgressEvent = options.onProgressEvent;
+          if (!onProgressEvent) return;
+          const progressEvent = toSubagentToolEvent(event) ?? toStreamPhaseEvent(event);
+          if (progressEvent) onProgressEvent(progressEvent);
+          if (usageAcc !== before) {
+            onProgressEvent({
+              type: "usage",
+              usage: toRunUsage(
+                usageAcc,
+                agentSession.getContextUsage(),
+                (provider) => options.modelRuntime.isUsingSubscription(provider),
+              ),
+            });
+          }
+        });
 
         const maxTurns = resolveMaxTurns(agent.maxTurns);
         if (maxTurns !== undefined) {

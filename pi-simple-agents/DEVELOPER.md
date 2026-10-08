@@ -381,7 +381,7 @@ export interface RunAgentViaSdkOptions {
   resourceLoader: CreateAgentSessionOptions["resourceLoader"];
   sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
-  onToolEvent?: (event: SubagentToolEvent) => void;
+  onProgressEvent?: (event: SubagentProgressEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
   mode?: "tui" | "rpc" | "json" | "print";
 }
@@ -397,7 +397,7 @@ export interface RunAgentViaSdkOptions {
   returns `undefined` for a well-formed `provider/modelId`, `resolveModel` logs a
   `pi-simple-agents: ` warning and the session falls back to its default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
-- `onToolEvent` — receives `SubagentToolEvent`s derived from the session's subscription mechanism (via `toSubagentToolEvent`), used to drive progress reporting. The `tool_start` variant now also carries a `summary: string`, pre-formatted by `formatToolCall` (`src/format-tool-call.ts`) from the tool's `toolName`/`args`. The event's underlying `result`/`partialResult` is never captured — only `toolName` and the formatted `args` summary flow through `SubagentToolEvent` — so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
+- `onProgressEvent` — receives `SubagentProgressEvent`s from the run's single subscription (`src/progress.ts` for the type): tool lifecycle via `toSubagentToolEvent` (`tool_start` carries a `summary: string` pre-formatted by `formatToolCall` in `src/format-tool-call.ts`), the model's streaming phase via `toStreamPhaseEvent` (one event per `thinking_*`/`text_*` delta, deduplicated downstream), and a live `{ type: "usage" }` snapshot whenever the usage accumulator changed (at most one per `message_end`). Every event passes the tracker's single `onEvent`, which owns the post-`done` guard. The events never capture results: `toolName` and the formatted `args` summary are all that flow through, so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
 - `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTaskOptions`/`runSingleTask`.
 - `extensionBindTimeoutMs` — overrides `EXTENSION_BIND_TIMEOUT_MS` (60s). Test seam; production callers should leave it unset.
 
@@ -924,6 +924,7 @@ type CancelResult =
 
 interface JobRegistry {
   start(input: { runId: string; task: JobTask; run: JobRun }): JobSnapshot;
+  get(id: string): JobSnapshot | undefined; // undefined for unknown ids and for ids pruned by maxRecent
   cancel(id: string): CancelResult;
   cancelAll(): void;
   shutdown(): void;
@@ -1024,10 +1025,13 @@ other status builds `details` from the job's own `result` via `formatRunResult`/
 function formatElapsed(ms: number): string; // "0s", "1m 00s", "1h 00m"
 function buildJobsWidgetLines(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string[] | undefined;
 function buildJobListText(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string;
+function buildJobStatusText(job: JobSnapshot, now: number, theme: ProgressTheme): string;
+function jobNotFoundText(id: string): string;
 
 type SubagentsCommand =
   | { readonly kind: "list" }
   | { readonly kind: "cancel"; readonly id: string }
+  | { readonly kind: "status"; readonly id: string }
   | { readonly kind: "clear" }
   | { readonly kind: "usage-error"; readonly message: string };
 function parseSubagentsCommand(args: string): SubagentsCommand;
@@ -1042,6 +1046,67 @@ time ticking from `now - job.startedAt`, plus a trailing hint line. `buildJobLis
 `/subagents` command, not the widget) reuses `buildProgressLine` (`src/progress.ts`) for a running
 job's body and a local per-task renderer (agent, success/`FAILED`, usage footer) for a finished
 one; it does not re-sort — callers pass `jobs.list()`, already newest-first.
+
+`buildJobStatusText` backs `/subagents status <id>`. Settled jobs reuse `buildJobListEntry` directly (the
+module-local renderer a list entry is built from), so a finished job reports identically in both. A
+running job gets the live extras: its header, the activity word, the last `history` entry (the most
+recently *started* call, which may already have ended), the history capped to the last 10 with
+`… (+N earlier)` eliding older entries, and the live usage snapshot when one has arrived. Unknown ids
+report `jobNotFoundText`, the single shared wording that `describeCancelResult`'s `not-found` case also uses.
+
+### src/progress.ts
+
+```typescript
+type StreamPhase = "thinking" | "output";
+
+interface RunningTool { toolCallId: string; toolName: string }
+
+interface TaskProgress {
+  agent: string;
+  runningTools: RunningTool[];
+  history: readonly string[];
+  done: boolean;
+  usage?: RunUsage;          // live snapshots while running; the final one rides on markTaskDone
+  streamPhase?: StreamPhase; // the only stored signal; the activity word is derived, never stored
+}
+
+type SubagentToolEvent =
+  | { type: "tool_start"; toolCallId: string; toolName: string; summary: string }
+  | { type: "tool_end"; toolCallId: string };
+
+type SubagentProgressEvent =
+  | SubagentToolEvent
+  | { type: "stream_phase"; phase: StreamPhase }
+  | { type: "usage"; usage: RunUsage };
+
+function toSubagentToolEvent(event: AgentSessionEvent): SubagentToolEvent | undefined;
+function toStreamPhaseEvent(event: AgentSessionEvent): SubagentProgressEvent | undefined;
+function applyToolEvent(progress: TaskProgress, event: SubagentToolEvent): TaskProgress;
+function applyProgressEvent(progress: TaskProgress, event: SubagentProgressEvent): TaskProgress;
+function markDone(progress: TaskProgress, usage?: RunUsage): TaskProgress;
+function shortToolName(toolName: string): string;
+function activityWord(progress: TaskProgress): string;
+function buildProgressLine(progress: TaskProgress, theme: ProgressTheme): string;
+function createProgressTracker(agent: string, emit: (progress: TaskProgress) => void): ProgressTracker;
+// ProgressTracker.onEvent(event: SubagentProgressEvent) — also markTaskDone(usage?)
+```
+
+`createProgressTracker` is the only stateful piece here: a closure-local `TaskProgress` replaced by
+value, emitted on every change. Three decisions keep it cheap and honest:
+
+- The word behind both `buildProgressLine` (the list view's `running: read, grep` / `thinking` /
+  `working…`) and `activityWord` (the widget's one word, and `status`'s `activity:`) is derived at
+  render time, from `runningTools` and `streamPhase`. Storing it would go stale the moment `tool_end`
+  emptied `runningTools` while the stored word still named a tool. `activityWord`'s order: `done`,
+  then the most recently started running tool through `shortToolName` (an MCP `mcp__<server>__<tool>`
+  collapses to `<server>` via `format-tool-call.ts`'s exported `MCP_TOOL_NAME`, no second regex),
+  then `streamPhase`, then `waiting`. A running tool always wins over a lingering phase.
+- Dedupe lives in `applyProgressEvent`, not in timers or buffers: a `stream_phase` event for the
+  already-stored phase returns the same object, and the tracker skips the emit for an identical
+  reference. Streaming deltas arrive one per token; that is what keeps the widget from repainting
+  with them.
+- `onEvent` owns the single post-`done` guard, so late events (usage snapshots riding on the settle
+  path, a lost delta) can no longer bring a finished job's progress back.
 
 ### src/job-widget.ts
 
@@ -1084,8 +1149,9 @@ new registrations, and three event handlers — all scoped inside the factory fu
   the global toggle. The closure-local `expanded` this introduces is reset to the current global
   value every time the host rebuilds this component (on the global toggle itself, a resize, or a
   theme change) — a click only persists until the next such rebuild.
-- `pi.registerCommand("subagents", ...)`: `/subagents` (list), `/subagents cancel <id>`,
-  `/subagents clear`, dispatched through `parseSubagentsCommand`.
+- `pi.registerCommand("subagents", ...)`: `/subagents` (list), `/subagents status <id>`,
+  `/subagents cancel <id>`, `/subagents clear`, dispatched through `parseSubagentsCommand`; the
+  `status` case looks the snapshot up with `jobs.get(id)` and renders it with `buildJobStatusText`.
 - `pi.on("agent_before_settle", ...)`: the settle barrier (see `createSettleBarrier` above).
 - `pi.on("agent_settled", ...)`: the `!ctx.hasUI` safety-net cleanup, see above.
 - `pi.on("session_shutdown", ...)`: `jobs.shutdown()` plus `widget.dispose()`, on every shutdown

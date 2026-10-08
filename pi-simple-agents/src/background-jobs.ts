@@ -44,6 +44,8 @@ export type CancelResult =
 
 export interface JobRegistry {
   start(input: { runId: string; task: JobTask; run: JobRun }): JobSnapshot;
+  /** Snapshot of the job with the given id, or undefined when unknown (also for ids pruned by maxRecent). */
+  get(id: string): JobSnapshot | undefined;
   cancel(id: string): CancelResult;
   cancelAll(): void;
   shutdown(): void;
@@ -246,7 +248,12 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     return new Promise((resolve) => idleWaiters.push(resolve));
   }
 
-  return { start, cancel, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
+  function get(id: string): JobSnapshot | undefined {
+    const record = jobs.get(id);
+    return record ? toSnapshot(record) : undefined;
+  }
+
+  return { start, get, cancel, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
 }
 
 /**
