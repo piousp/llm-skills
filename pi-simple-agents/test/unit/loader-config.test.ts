@@ -333,7 +333,7 @@ test("buildLoaderOptions: missing defaultReads file and contradictory skills con
   }
 });
 
-test("buildLoaderOptions: skillsOverride callback warns via console.warn about missing skill names, including the agent name", (t) => {
+test("buildLoaderOptions: skillsOverride callback appends the unknown-skills warning to the live warnings sink, including the agent name", (t) => {
   const cwd = "/some/cwd";
   const homeDir = "/some/home";
 
@@ -345,17 +345,19 @@ test("buildLoaderOptions: skillsOverride callback warns via console.warn about m
     homeDir,
   );
 
+  const before = result.warnings.length;
+
   const base = {
     skills: [{ name: "a" } as FakeSkill, { name: "b" } as FakeSkill],
     diagnostics: [],
   };
   result.options.skillsOverride!(base as never);
 
-  const matchingCalls = warnSpy.mock.calls.filter(
-    (call) =>
-      typeof call.arguments[0] === "string" &&
-      (call.arguments[0] as string).includes("zzz") &&
-      (call.arguments[0] as string).includes("my-agent"),
-  );
-  assert.equal(matchingCalls.length, 1);
+  const appended = result.warnings
+    .slice(before)
+    .filter((w) => w.includes("zzz") && w.includes("my-agent"));
+  assert.equal(appended.length, 1);
+  // The loader-warning channel is the warnings sink, not console.warn (Q2):
+  // runSingleTask emits it later, after reload() resolves.
+  assert.equal(warnSpy.mock.calls.length, 0);
 });

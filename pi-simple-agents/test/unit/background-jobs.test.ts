@@ -140,7 +140,7 @@ test("completion: run resolves -> completed, settledAt = now(), onSettled fires 
   assert.equal(registry.hasRunning(), false);
 });
 
-test("failure: run rejects -> failed with toErrorMessage; start() itself never throws", async () => {
+test("crash: run rejects -> errored with toErrorMessage; start() itself never throws", async () => {
   const { registry, settled } = harness();
   const d = deferred<AgentRunResult>();
   registry.start({ runId: "r1", task: { agent: "scout", task: "x" }, run: () => d.promise });
@@ -151,8 +151,24 @@ test("failure: run rejects -> failed with toErrorMessage; start() itself never t
   await registry.whenIdle();
 
   assert.equal(settled.length, 1);
-  assert.equal(settled[0].state.status, "failed");
+  assert.equal(settled[0].state.status, "errored");
   assert.equal((settled[0].state as { error: string }).error, "boom");
+});
+
+test("failure: run resolves with an error result -> failed, run result retained", async () => {
+  const { registry, settled } = harness();
+  const result: AgentRunResult = { agent: "scout", task: "x", durationMs: 1, status: "error", error: "model not found" };
+  const d = deferred<AgentRunResult>();
+  registry.start({ runId: "r1", task: { agent: "scout", task: "x" }, run: () => d.promise });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  d.resolve(result);
+  await registry.whenIdle();
+
+  assert.equal(settled.length, 1);
+  assert.equal(settled[0].state.status, "failed");
+  assert.deepEqual((settled[0].state as { result: AgentRunResult }).result, result);
 });
 
 test("failure: run throws synchronously -> failed, caught by start()", async () => {
@@ -168,7 +184,7 @@ test("failure: run throws synchronously -> failed, caught by start()", async () 
   });
   await registry.whenIdle();
   assert.equal(settled.length, 1);
-  assert.equal(settled[0].state.status, "failed");
+  assert.equal(settled[0].state.status, "errored");
   assert.equal((settled[0].state as { error: string }).error, "sync boom");
 });
 

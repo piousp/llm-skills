@@ -1,19 +1,12 @@
-import { OVERRIDE_KEYS, type AgentConfig, type InvocationOverride } from "./agents.ts";
+import type { AgentConfig } from "./agents.ts";
+import { invocationOverrideOf, type InvocationOverride } from "./overrides.ts";
 import { WARN_PREFIX } from "./warn.ts";
 
-// Extracts the InvocationOverride carried by validated subagent params,
-// independent of the agent/task fields that ride alongside it. Absent fields
-// on the input stay absent on the output (never present with an `undefined`
-// value), matching applyInvocationOverride's "no override fields present"
-// fast path.
-export function invocationOverrideOf(t: InvocationOverride): InvocationOverride {
-  const result: InvocationOverride = {};
-  for (const key of OVERRIDE_KEYS) {
-    const value = t[key];
-    if (value !== undefined) (result as Record<string, unknown>)[key] = value;
-  }
-  return result;
-}
+// Re-exports: override semantics moved to src/overrides.ts (single home);
+// these keep this module's previous export surface valid for its importers
+// (render-call.ts, extensions/task-runner.ts, run.test.ts, validate.test.ts).
+export { invocationOverrideOf, applyInvocationOverride, applyOverrides, OVERRIDE_KEYS } from "./overrides.ts";
+export type { InvocationOverride } from "./overrides.ts";
 
 export type SubagentParams = { agent: string; task: string } & InvocationOverride;
 
@@ -60,10 +53,10 @@ const OVERRIDE_TYPE_SPEC: ReadonlyArray<readonly [field: "maxTurns" | "timeoutMs
   ["thinking", "string"],
 ];
 
-function warnAndDropIllTypedOverrides<T extends Record<string, unknown>>(
-  record: T,
+function warnAndDropIllTypedOverrides(
+  record: Record<string, unknown>,
   label: string,
-): T {
+): Record<string, unknown> {
   let result = record;
   for (const [field, expected] of OVERRIDE_TYPE_SPEC) {
     if (result[field] !== undefined && typeof result[field] !== expected) {
@@ -71,7 +64,7 @@ function warnAndDropIllTypedOverrides<T extends Record<string, unknown>>(
         `${WARN_PREFIX}invalid ${field} ${JSON.stringify(result[field])} ${label}, ignoring`,
       );
       const { [field]: _dropped, ...rest } = result;
-      result = rest as unknown as T;
+      result = rest;
     }
   }
   return result;

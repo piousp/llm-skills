@@ -12,7 +12,7 @@ export function buildSubagentToolDescription(
 
   const lines = [...agents]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((agent) => `- ${agent.name}: ${(typeof agent.description === "string" ? agent.description : "").trim()}`);
+    .map((agent) => `- ${agent.name}: ${agent.description.trim()}`);
 
   return `${SUBAGENT_BASE_DESCRIPTION}\n\nAvailable agents:\n${lines.join("\n")}`;
 }

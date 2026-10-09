@@ -14,6 +14,9 @@ export type MinimalLoaderOptions = ConstructorParameters<typeof DefaultResourceL
 
 export interface LoaderOptionsResult {
   options: MinimalLoaderOptions;
+  /** Live warnings sink: entries appended by the override closures during
+      DefaultResourceLoader.reload() land in this same array — runSingleTask
+      emits it after reload() resolves (Q2: one emission point). */
   warnings: string[];
 }
 
@@ -62,32 +65,33 @@ function buildAgentsFilesOverride(
 
 function buildSkillsOverride(
   agent: AgentConfig,
-): OverrideResult<MinimalLoaderOptions["skillsOverride"]> {
+  warnings: string[],
+): { override: MinimalLoaderOptions["skillsOverride"] } {
   if (agent.skills === undefined) {
-    return { override: undefined, warnings: [] };
+    return { override: undefined };
   }
 
   if (agent.inheritSkills === false) {
-    return {
-      override: undefined,
-      warnings: [
-        `agent "${agent.name}" sets both "skills" and "inheritSkills: false" (contradictory config); skills filter ignored`,
-      ],
-    };
+    warnings.push(
+      `agent "${agent.name}" sets both "skills" and "inheritSkills: false" (contradictory config); skills filter ignored`,
+    );
+    return { override: undefined };
   }
 
   const requestedSkills = agent.skills;
   const override: MinimalLoaderOptions["skillsOverride"] = (base) => {
     const filtered = filterSkillsByName(base.skills, requestedSkills);
     if (filtered.missing.length > 0) {
-      console.warn(
+      // Q2: appended to the live warnings sink (the same array
+      // buildLoaderOptions returns); emitted post-reload by runSingleTask.
+      warnings.push(
         `${WARN_PREFIX}agent "${agent.name}" requested unknown skills: ${filtered.missing.join(", ")}`,
       );
     }
     return { skills: filtered.skills, diagnostics: base.diagnostics };
   };
 
-  return { override, warnings: [] };
+  return { override };
 }
 
 export function buildLoaderOptions(
@@ -96,7 +100,8 @@ export function buildLoaderOptions(
   homeDir: string,
 ): LoaderOptionsResult {
   const agentsFiles = buildAgentsFilesOverride(agent, cwd, homeDir);
-  const skills = buildSkillsOverride(agent);
+  const warnings: string[] = [...agentsFiles.warnings];
+  const skills = buildSkillsOverride(agent, warnings);
 
   return {
     options: {
@@ -118,6 +123,6 @@ export function buildLoaderOptions(
       skillsOverride: skills.override,
       noThemes: true,
     },
-    warnings: [...agentsFiles.warnings, ...skills.warnings],
+    warnings,
   };
 }

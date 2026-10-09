@@ -100,7 +100,7 @@ test("buildLoaderOptions + real DefaultResourceLoader: skillsOverride filters re
 
     const warn = t.mock.method(console, "warn", () => {});
 
-    const { options } = buildLoaderOptions(
+    const { options, warnings } = buildLoaderOptions(
       baseAgent({ skills: ["alpha", "zzz"] }),
       cwd,
       homeDir,
@@ -114,10 +114,11 @@ test("buildLoaderOptions + real DefaultResourceLoader: skillsOverride filters re
 
     assert.deepEqual(names, ["alpha"], "expected only the requested real skill to survive the filter");
 
-    const warnedUnknown = warn.mock.calls.some((call) =>
-      String(call.arguments[0]).includes("zzz"),
-    );
-    assert.equal(warnedUnknown, true, "expected a warning mentioning the unknown requested skill 'zzz'");
+    // Q2: the unknown-skills warning goes to the live warnings sink (emitted
+    // post-reload by runSingleTask), not console.warn during the closure.
+    const sinkWarning = warnings.some((w) => w.includes("zzz"));
+    assert.equal(sinkWarning, true, "expected the warnings sink to gain a warning mentioning the unknown requested skill 'zzz'");
+    assert.equal(warn.mock.calls.length, 0, "expected no direct console.warn during reload()");
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
     fs.rmSync(homeDir, { recursive: true, force: true });

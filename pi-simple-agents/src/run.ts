@@ -5,6 +5,7 @@ import { toSubagentToolEvent, toStreamPhaseEvent } from "./progress.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 import { applyUsageEvent, emptyUsage, toRunUsage, type UsageAccumulator, type RunUsage } from "./usage.ts";
 import { needsExtensionBinding, type ExtensionMode } from "./extension-binding.ts";
+import { isValidMaxTurns, isValidModelRef } from "./overrides.ts";
 
 interface AgentRunResultBase {
   agent: string;
@@ -33,6 +34,16 @@ function errorResult(ctx: AgentRunContext, error: string): AgentRunResult {
     task: ctx.task,
     status: "error",
     error,
+    durationMs: Date.now() - ctx.startedAt,
+  };
+}
+
+function successResult(ctx: AgentRunContext, finalText: string | undefined): AgentRunResult {
+  return {
+    agent: ctx.agent.name,
+    task: ctx.task,
+    status: "success",
+    finalText,
     durationMs: Date.now() - ctx.startedAt,
   };
 }
@@ -104,22 +115,9 @@ export function resolveTimeoutMs(value: unknown): number {
   return DEFAULT_TIMEOUT_MS;
 }
 
-export const MAX_TURNS_LIMIT = 100;
-
-// Shared predicate: the same valid-set check (positive integer up to the limit)
-// that resolveMaxTurns uses here and that normalizeMaxTurns in frontmatter.ts
-// uses with a different warn sink. Living in one place keeps the two
-// chokepoint's "what counts as a valid maxTurns" definitions in lockstep;
-// each chokepoint still owns its own warn and its own `number | undefined`
-// return shape.
-export function isValidMaxTurns(value: unknown): value is number {
-  return (
-    typeof value === "number"
-    && Number.isInteger(value)
-    && value >= 1
-    && value <= MAX_TURNS_LIMIT
-  );
-}
+// (MAX_TURNS_LIMIT/isValidMaxTurns live in src/overrides.ts, the single home
+// for override-field validation — resolveMaxTurns here, normalizeMaxTurns in
+// frontmatter.ts and validateAgentOverridesEntry share the same predicate.)
 
 export function resolveMaxTurns(value: unknown): number | undefined {
   if (value === undefined) return undefined;
@@ -153,22 +151,38 @@ export interface RunAgentViaSdkOptions {
 // hung handshake would block the whole run indefinitely, uninterruptibly.
 export const EXTENSION_BIND_TIMEOUT_MS = 60_000;
 
+type ModelResolution =
+  | { ok: true; model: CreateAgentSessionOptions["model"] }
+  | { ok: false; error: string };
+
+// Q1: strict, zero fallbacks. The only way to the session default model is no
+// model or "inherit"; any other value must be a well-formed "provider/modelId"
+// ref that resolves in the registry, otherwise the run FAILS with a clear
+// error naming the agent, the value, and the fix. The run — not the config
+// load — is the single validation chokepoint (dropping bad values at load
+// would silently yield the session default, the fallback this removes).
 function resolveModel(
   agent: AgentConfig,
   getModel: RunAgentViaSdkOptions["getModel"],
-): CreateAgentSessionOptions["model"] {
-  if (!agent.model || !getModel) return undefined;
-  const parts = agent.model.split("/");
-  if (parts.length < 2) return undefined;
-  const model = getModel(parts[0], parts.slice(1).join("/"));
-  if (!model) {
-    console.warn(
-      `${WARN_PREFIX}model "${agent.model}" not found in the model registry ` +
-        `(provider "${parts[0]}" is not registered or the model id does not exist) — ` +
-        `falling back to the session default model`,
-    );
+): ModelResolution {
+  if (!agent.model || !getModel) return { ok: true, model: undefined }; // inherit / documented test seam (Q5)
+  if (!isValidModelRef(agent.model)) {
+    return {
+      ok: false,
+      error: `agent "${agent.name}" has an invalid "model" value "${agent.model}": expected "provider/modelId" form (e.g. "anthropic/claude-opus-4-8"), "inherit", or no model at all — the run was not started`,
+    };
   }
-  return model;
+  const slashIndex = agent.model.indexOf("/");
+  const provider = agent.model.slice(0, slashIndex);
+  const modelId = agent.model.slice(slashIndex + 1);
+  const model = getModel(provider, modelId);
+  if (!model) {
+    return {
+      ok: false,
+      error: `model "${agent.model}" (configured for agent "${agent.name}") was not found in the model registry — provider "${provider}" is not registered or the model id does not exist; the run fails instead of falling back to the session default model (fix the "model" setting or remove it to inherit the session default)`,
+    };
+  }
+  return { ok: true, model };
 }
 
 // Emits session_start in the subagent's own nested AgentSession, so
@@ -293,6 +307,7 @@ export function runAgentViaSdk(
 ): Promise<AgentRunResult> {
   const startedAt = Date.now();
   const ctx: AgentRunContext = { agent, task, startedAt };
+  const isSubscription = (provider: string) => options.modelRuntime.isUsingSubscription(provider);
 
   return new Promise((resolve) => {
     let settled = false;
@@ -309,15 +324,22 @@ export function runAgentViaSdk(
       const usage = toRunUsage(
         usageAcc,
         session?.getContextUsage(),
-        (provider) => options.modelRuntime.isUsingSubscription(provider),
+        isSubscription,
       );
       const sessionFile = options.sessionManager?.getSessionFile?.();
-      resolve({ ...result, usage, sessionFile } as AgentRunResult);
+      resolve({ ...result, usage, sessionFile });
     };
 
     (async () => {
       try {
-        const model = resolveModel(agent, options.getModel);
+        const modelResolution = resolveModel(agent, options.getModel);
+        if (!modelResolution.ok) {
+          // Fails before createSession: no session, no tokens spent; the
+          // error carries the run's identity into the job's completion message.
+          settleOnce(errorResult(ctx, modelResolution.error));
+          return;
+        }
+        const model = modelResolution.model;
 
         const thinkingLevel = agent.thinking
           ? clampThinkingLevel(agent.thinking)
@@ -353,7 +375,7 @@ export function runAgentViaSdk(
         // usage snapshots whenever the accumulator actually changed. The
         // done-guard and the per-token phase dedupe live in the tracker
         // (progress.ts), not here.
-        agentSession.subscribe((event) => {
+        const onSessionEvent = (event: AgentSessionEvent) => {
           const before = usageAcc;
           usageAcc = applyUsageEvent(usageAcc, event);
           const onProgressEvent = options.onProgressEvent;
@@ -366,11 +388,12 @@ export function runAgentViaSdk(
               usage: toRunUsage(
                 usageAcc,
                 agentSession.getContextUsage(),
-                (provider) => options.modelRuntime.isUsingSubscription(provider),
+                isSubscription,
               ),
             });
           }
-        });
+        };
+        agentSession.subscribe(onSessionEvent);
 
         const maxTurns = resolveMaxTurns(agent.maxTurns);
         if (maxTurns !== undefined) {
@@ -403,13 +426,7 @@ export function runAgentViaSdk(
 
         const finalText = agentSession.getLastAssistantText() ?? undefined;
 
-        settleOnce({
-          agent: ctx.agent.name,
-          task: ctx.task,
-          status: "success" as const,
-          finalText,
-          durationMs: Date.now() - ctx.startedAt,
-        });
+        settleOnce(successResult(ctx, finalText));
       } catch (err) {
         settleOnce(errorResult(
           ctx,

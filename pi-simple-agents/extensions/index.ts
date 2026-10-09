@@ -1,46 +1,27 @@
 import os from "node:os";
 import path from "node:path";
-import { Type, type Static } from "typebox";
-import type {
-  ExtensionAPI,
-  Theme,
-  ToolRenderResultOptions,
-  AgentToolResult,
-  MessageRenderer,
-  ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
-import { Text, MouseRegion, Box, type Component } from "@earendil-works/pi-tui";
-import { createAgentSession, DefaultResourceLoader, SessionManager, ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "../src/agents.ts";
-import { applyInvocationOverride } from "../src/agents.ts";
-import { createAgentRegistry } from "../src/agent-registry.ts";
-import { runAgentViaSdk, MAX_TIMEOUT_MS, type AgentRunResult, type RunAgentViaSdkOptions } from "../src/run.ts";
+import { Type } from "typebox";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentRegistry, type AgentRegistryPaths } from "../src/agent-registry.ts";
+import { MAX_TIMEOUT_MS, type RunAgentViaSdkOptions } from "../src/run.ts";
 import { SUBAGENT_TOOL_NAME } from "../src/extension-binding.ts";
-import type { ProgressTracker } from "../src/progress.ts";
-import { buildSubagentResultText } from "../src/render-result.ts";
-import { validateSubagentParams, resolveAgent, invocationOverrideOf } from "../src/validate.ts";
-import type { SubagentParams as ValidatedSubagentParams, ValidationResult } from "../src/validate.ts";
-import { buildSubagentCallText } from "../src/render-call.ts";
-import { buildLoaderOptions } from "../src/loader-config.ts";
-import { childSessionDir, createSubagentSessionManager } from "../src/subagent-session.ts";
+import { createRenderSubagentCall, renderSubagentResult, renderSubagentResultMessage, type GetAgents } from "../src/render-extensions.ts";
+import { runSingleTask } from "../src/task-runner.ts";
+import { validateSubagentParams, resolveAgent } from "../src/validate.ts";
+import type { ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
 import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText } from "../src/job-view.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
-import { emitWarnings, toErrorMessage } from "../src/warn.ts";
+import { toErrorMessage } from "../src/warn.ts";
 
+// Production defaults for the agent registry; both derived from the real
+// home. Tests pass per-instance fixture paths via the factory's pathsOverride
+// seam (see the default export below) and never read these.
 const AGENTS_DIR = path.join(os.homedir(), ".pi/agent/agents");
-const SESSION_MANAGER_FACTORY = {
-  forkFrom: (s: string, t: string, d: string) => SessionManager.forkFrom(s, t, d),
-  atPath: (f: string, c: string) => SessionManager.open(f, path.dirname(f), c),
-  inMemory: (c: string) => SessionManager.inMemory(c),
-};
-
-const registry = createAgentRegistry({
-  agentsDir: AGENTS_DIR,
-  userSettingsPath: path.join(os.homedir(), ".pi", "agent", "settings.json"),
-});
+const USER_SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "settings.json");
 
 function errorResult(error: string) {
   return {
@@ -50,30 +31,23 @@ function errorResult(error: string) {
   };
 }
 
-// One discriminated union for every shape the subagent tool's `details` field
-// can take. A type alias (not an interface) is used deliberately: object type
-// aliases carry an implicit index signature, so each member stays assignable
-// to `Record<string, unknown>` wherever the host's tool types expect that
-// shape.
-//
-// execute() launches a background job and returns the `{jobId,...}` ack
-// immediately, without waiting for the run. The settled run's own
-// `{runId,run}` shape only exists on the completion message (see
-// SubagentJobMessageDetails in src/job-messages.ts), delivered later via
-// pi.sendMessage(), not on this tool's own result.
-export type SubagentToolDetails =
-  | { jobId: string; runId: string; task: JobTask }
-  | { error: string };
+export type { SubagentToolDetails } from "../src/render-extensions.ts";
 
 // This package's published entry point (see "pi": { "extensions" } in
 // package.json), so dropping the export entirely is a public API change
-// (needs a deliberate deprecation decision, see docs/FOLLOWUPS.md) — kept
+// (needs a deliberate deprecation decision) — kept
 // even though nothing in this repo calls it anymore. Its signature changed
 // in 1.0.0 (now takes one AgentRunResult, not an array; see CHANGELOG.md),
 // a deliberate breaking change, not a compatibility guarantee. Lives in
 // src/job-messages.ts, which also uses its own assembly logic internally
 // for the background-job completion message, without importing from here.
 export { buildSubagentToolResult };
+
+// Runs one task end-to-end (resource loader, session manager, SDK run,
+// progress teardown); lives in src/task-runner.ts and is re-exported here to
+// keep the entry point's public API unchanged (also imported above for the
+// job wiring's own use).
+export { runSingleTask } from "../src/task-runner.ts";
 
 // The 6 per-invocation override fields reported to the model.
 const overrideProperties = {
@@ -106,198 +80,6 @@ export const SubagentParams = Type.Object({
   task: Type.String(),
   ...overrideProperties,
 });
-type SubagentArgs = Static<typeof SubagentParams>;
-
-// Builds a name→config lookup for the render-time parameter line.
-function toParamAgentsMap(agents: readonly AgentConfig[]): Map<string, AgentConfig> {
-  return new Map(agents.map((agent) => [agent.name, agent]));
-}
-
-// `ToolRenderContext` isn't re-exported from the package's public entry point,
-// so this structural subset (the only fields used here) stands in for it. It
-// stays assignable to the real renderCall context param because every field
-// it declares also exists on the host's ToolRenderContext.
-interface RenderCallContext {
-  cwd: string;
-  argsComplete: boolean;
-  expanded?: boolean;
-}
-
-// Renders the tool_box title. Collapsed: agent name + truncated first line of
-// the task. Expanded (Ctrl+O / click, which also expands the result): the full
-// task under each agent.
-function renderSubagentCall(
-  args: SubagentArgs,
-  theme: Theme,
-  context: RenderCallContext | undefined,
-) {
-  const paramAgents = context?.argsComplete
-    ? toParamAgentsMap(registry.peek(context.cwd)?.agents ?? [])
-    : new Map<string, AgentConfig>();
-  return new Text(buildSubagentCallText(args, theme, paramAgents, context?.expanded === true), 0, 0);
-}
-
-function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultResourceLoader {
-  const result = buildLoaderOptions(agent, cwd, os.homedir());
-  emitWarnings(result.warnings);
-  return new DefaultResourceLoader(result.options);
-}
-
-// childSessionDir's run index. Always 0 now that a job runs exactly one
-// task; kept as a named constant (not inlined) to preserve the "run-0"
-// session path convention downstream usage tooling already reconciles
-// against.
-const RUN_INDEX = 0;
-
-interface RunTaskOptions {
-  cwd: string;
-  signal: AbortSignal | undefined;
-  modelRuntime: ModelRuntime;
-  callerSessionFile: string | undefined;
-  /** The subagent tool call's own toolCallId — the basis for this run's childSessionDir. */
-  runId: string;
-  mode: RunAgentViaSdkOptions["mode"];
-  /** Test seam: defaults to the real createAgentSession. */
-  createSession?: RunAgentViaSdkOptions["createSession"];
-}
-
-// Runs one task end-to-end: resource loader creation/reload, session manager
-// creation, the SDK run, and progress tracking teardown. The tracker (owned
-// by the background job that invoked this) receives tool-use progress (see
-// src/progress.ts); the job registry's `onChange` turns that into the live
-// widget/`/subagents` feed — there is no more direct line to this tool
-// call's own `onUpdate`, since execute() has already returned by the time
-// any of this runs.
-export async function runSingleTask(
-  t: ValidatedSubagentParams,
-  agent: AgentConfig,
-  tracker: ProgressTracker | undefined,
-  options: RunTaskOptions,
-): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession } = options;
-  const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
-  let usage: AgentRunResult["usage"];
-
-  try {
-    const resourceLoader = createMinimalResourceLoader(effectiveAgent, cwd);
-    await resourceLoader.reload();
-
-    const { manager, warnings } = createSubagentSessionManager(
-      effectiveAgent,
-      callerSessionFile,
-      cwd,
-      childSessionDir(callerSessionFile, runId, RUN_INDEX),
-      SESSION_MANAGER_FACTORY,
-    );
-    emitWarnings(warnings);
-
-    const result = await runAgentViaSdk(
-      effectiveAgent,
-      t.task,
-      {
-        modelRuntime,
-        signal,
-        createSession,
-        resourceLoader,
-        sessionManager: manager,
-        getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
-        onProgressEvent: tracker ? (event) => tracker.onEvent(event) : undefined,
-        mode,
-      },
-    );
-    usage = result.usage;
-    return result;
-  } finally {
-    // usage is only set once runAgentViaSdk actually resolves; a throw before
-    // that (e.g. resourceLoader.reload() rejecting) leaves it undefined, which
-    // markTaskDone treats identically to the argument being omitted.
-    tracker?.markTaskDone(usage);
-  }
-}
-
-// Renders the tool call's own immediate result: the launch ack, or the
-// pre-launch `{error}` result for validation/runtime-init failures. The
-// settled run's own output arrives later as a separate `subagent-result`
-// message, rendered by renderSubagentResultMessage below, not here.
-function renderSubagentResult(
-  result: AgentToolResult<SubagentToolDetails | undefined>,
-  options: ToolRenderResultOptions,
-  theme: Theme,
-  _context: { lastComponent?: Component },
-): Text {
-  const content = result.content.map((c) => (c.type === "text" ? c.text : "")).join("\n");
-
-  if (result.details && "jobId" in result.details) {
-    if (!options.expanded) {
-      return new Text(theme.fg("dim", `\u23fa backgrounded job ${result.details.jobId} \u00b7 /subagents to manage`), 0, 0);
-    }
-    return new Text(content, 0, 0);
-  }
-
-  // `{error}` (or no details at all): generic passthrough — collapsed hides,
-  // expanded shows the content.
-  return new Text(
-    buildSubagentResultText({ expanded: options.expanded, content, run: undefined }, theme),
-    0,
-    0,
-  );
-}
-
-// Renders the completion message a background job injects via
-// pi.sendMessage() when it settles. Distinct from renderSubagentResult
-// above: that one renders the launch tool call, this one renders the
-// separate transcript entry the result arrives in later.
-//
-// Styled to match a native tool result — same `Box` + toolSuccessBg/
-// toolErrorBg background the host's own ToolExecutionComponent uses
-// (tool-execution.ts: updateDisplay()), same `toolTitle` token for the
-// header — and wrapped in its own MouseRegion so it is individually
-// clickable to toggle expand, the same mechanism createResultRegion() uses
-// there. CustomMessageComponent (the generic wrapper every
-// registerMessageRenderer output gets) provides neither on its own: no box
-// styling (it only boxes its *default*, non-custom rendering), and no click
-// handling (only the global Ctrl+O toggle reaches a custom renderer). This
-// closure-local `expanded` is what gives this block its own independent
-// click state on top of that global toggle. The parent rebuilds this
-// component from scratch on the next global toggle/resize/theme change, at
-// which point it re-reads `options.expanded` — a click only persists until
-// the next such rebuild.
-const renderSubagentResultMessage: MessageRenderer<SubagentJobMessageDetails> = (message, options, theme) => {
-  const details = message.details;
-  // Optional chain kept deliberately: dev sessions persisted from earlier
-  // 1.0.0 builds may carry the old array-shaped `tasks` field instead of
-  // `task`, and should still render (as "result", with no footer) rather
-  // than throw.
-  const who = details?.task?.agent ?? "result";
-  const status = details?.status ? ` \u00b7 job ${details.jobId} \u00b7 ${details.status}` : "";
-  const title = `${theme.fg("toolTitle", theme.bold(`subagent ${who}`))}${theme.fg("dim", status)}`;
-  const content = typeof message.content === "string" ? message.content : "";
-  const bgToken = details?.isError ? "toolErrorBg" : "toolSuccessBg";
-
-  let expanded = options.expanded;
-  const box = new Box(1, 1, (t) => theme.bg(bgToken, t));
-
-  function refreshBox(): void {
-    box.clear();
-    const body = buildSubagentResultText({ expanded, content, run: details?.run }, theme);
-    box.addChild(new Text(body ? `${title}\n${body}` : title, 0, 0));
-  }
-
-  return new MouseRegion(
-    {
-      render: (width: number) => {
-        refreshBox();
-        return box.render(width);
-      },
-      invalidate: () => box.invalidate(),
-    },
-    (event) => {
-      if (event.type !== "click" || event.button !== "left") return undefined;
-      expanded = !expanded;
-      return { handled: true };
-    },
-  );
-};
 
 // The job registry's onSettled hook, pulled out to its own function so the
 // wiring (build the completion message, hand it to pi.sendMessage with the
@@ -318,7 +100,24 @@ export default async function (
   // production, where runSingleTask's own default (the real
   // createAgentSession) applies.
   createSessionOverride?: RunAgentViaSdkOptions["createSession"],
+  // Test seam only: lets a test point the agent registry at fixture paths
+  // (agents dir + user settings) instead of the real ~/.pi/agent layout, so
+  // the entry's wiring tests are hermetic — no real-home reads at setup,
+  // execute, or nested-loader time. Always undefined in production, where
+  // the real paths above apply. Mirrors createSessionOverride above.
+  pathsOverride?: AgentRegistryPaths,
 ): Promise<void> {
+  const agentsDir = pathsOverride?.agentsDir ?? AGENTS_DIR;
+  const userSettingsPath = pathsOverride?.userSettingsPath ?? USER_SETTINGS_PATH;
+  // agentsDir always has the <home>/.pi/agent/agents layout (package
+  // convention — the default above and every test fixture mirror it), so
+  // two dirname levels recover the home root; production is therefore
+  // os.homedir() exactly, and the nested loader (runSingleTask's homeDir,
+  // src/task-runner.ts) follows pathsOverride for free.
+  const homeDir = path.dirname(path.dirname(agentsDir));
+  const registry = createAgentRegistry({ agentsDir, userSettingsPath });
+  const getAgents: GetAgents = (cwd) => registry.peek(cwd)?.agents ?? [];
+
   let modelRuntimeResult: ValidationResult<ModelRuntime>;
   try {
     modelRuntimeResult = { ok: true, value: await createModelRuntime() };
@@ -359,7 +158,7 @@ export default async function (
     label: "Subagent",
     description,
     parameters: SubagentParams,
-    renderCall: renderSubagentCall,
+    renderCall: createRenderSubagentCall(getAgents),
     renderResult: renderSubagentResult,
     execute: async (toolCallId, rawParams, _signal, _onUpdate, ctx) => {
       captureUi(ctx);
@@ -398,6 +197,7 @@ export default async function (
             // Threads the host's real run mode into this subagent's nested
             // bindExtensions() call (see runSingleTask, src/run.ts).
             mode: ctx.mode,
+            homeDir,
             createSession: createSessionOverride,
           }),
       });

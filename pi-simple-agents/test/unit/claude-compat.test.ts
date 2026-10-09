@@ -44,25 +44,22 @@ test("mapClaudeTools deduplicates inert tools preserving first-occurrence order"
 
 // S10 — normalizeClaudeModel
 
-test("normalizeClaudeModel('inherit') yields undefined model and no alias", () => {
+test("normalizeClaudeModel('inherit') yields undefined model", () => {
   const result = normalizeClaudeModel("inherit");
 
-  assert.equal(result.model, undefined);
-  assert.ok(!result.alias);
+  assert.deepEqual(result, { model: undefined });
 });
 
-test("normalizeClaudeModel resolves a known alias to itself with alias set", () => {
+test("normalizeClaudeModel passes bare words through untouched (no alias metadata)", () => {
   const result = normalizeClaudeModel("sonnet");
 
-  assert.equal(result.model, "sonnet");
-  assert.equal(result.alias, "sonnet");
+  assert.deepEqual(result, { model: "sonnet" });
 });
 
-test("normalizeClaudeModel passes through a full model id with no alias", () => {
+test("normalizeClaudeModel passes through a full model id", () => {
   const result = normalizeClaudeModel("claude-opus-5");
 
-  assert.equal(result.model, "claude-opus-5");
-  assert.ok(!result.alias);
+  assert.deepEqual(result, { model: "claude-opus-5" });
 });
 
 // S11 — claimUnwarned
@@ -98,7 +95,7 @@ test("claimUnwarned re-includes a key whose registry entry is older than ttlMs",
 test("reportInertUsage returns undefined when there is nothing inert", () => {
   const registry = new Map<string, number>();
 
-  const warning = reportInertUsage({ fields: [], tools: [], models: [] }, registry);
+  const warning = reportInertUsage({ fields: [], tools: [] }, registry);
 
   assert.equal(warning, undefined);
 });
@@ -107,7 +104,7 @@ test("reportInertUsage formats a single-group message for one inert field", () =
   const registry = new Map<string, number>();
 
   const warning = reportInertUsage(
-    { fields: ["permissionMode"], tools: [], models: [] },
+    { fields: ["permissionMode"], tools: [] },
     registry,
   );
 
@@ -117,30 +114,29 @@ test("reportInertUsage formats a single-group message for one inert field", () =
   );
 });
 
-test("reportInertUsage formats a combined message when all three groups are present, sorted within each group", () => {
+test("reportInertUsage formats a combined message when both groups are present, sorted within each group", () => {
   const registry = new Map<string, number>();
 
   const warning = reportInertUsage(
     {
       fields: ["hooks", "permissionMode"],
       tools: ["Task"],
-      models: ["sonnet"],
     },
     registry,
   );
 
   assert.equal(
     warning,
-    "pi-simple-agents: accepted but inert in pi \u2014 fields: hooks, permissionMode; tools: Task; model aliases: sonnet (Claude Code compatibility)",
+    "pi-simple-agents: accepted but inert in pi \u2014 fields: hooks, permissionMode; tools: Task",
   );
 });
 
 test("reportInertUsage returns undefined when the registry has already claimed all the keys", () => {
   const registry = new Map<string, number>();
-  reportInertUsage({ fields: ["permissionMode"], tools: ["Task"], models: [] }, registry);
+  reportInertUsage({ fields: ["permissionMode"], tools: ["Task"] }, registry);
 
   const warning = reportInertUsage(
-    { fields: ["permissionMode"], tools: ["Task"], models: [] },
+    { fields: ["permissionMode"], tools: ["Task"] },
     registry,
   );
 
@@ -151,7 +147,7 @@ test("reportInertUsage returns undefined for maxTurns (no longer in CLAUDE_INERT
   const registry = new Map<string, number>();
 
   const warning = reportInertUsage(
-    { fields: ["maxTurns"], tools: [], models: [] },
+    { fields: ["maxTurns"], tools: [] },
     registry,
   );
 

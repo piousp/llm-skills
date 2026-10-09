@@ -912,7 +912,7 @@ Body B.
   }
 });
 
-test("discoverAgents: model alias (e.g. opus) end-to-end produces exactly one console.warn matching 'model aliases: opus'", async (t) => {
+test("discoverAgents: a bare-word model (e.g. opus) passes through verbatim with no 'model aliases' warning", async (t) => {
   const dir = makeTmpDir();
   try {
     writeAgentFile(
@@ -934,8 +934,7 @@ Body.
 
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.model, "opus");
-    assert.equal(warnSpy.mock.calls.length, 1);
-    assert.match(warnSpy.mock.calls[0]!.arguments[0] as string, /model aliases: opus/);
+    assert.equal(warnSpy.mock.calls.length, 0);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1401,7 +1400,7 @@ test("loadSettings: agentOverrides merge — project field wins per-agent over u
       JSON.stringify({
         "pi-simple-agents": {
           agentOverrides: {
-            scout: { model: "user-model", description: "User description" },
+            scout: { model: "user-model", tools: ["custom-tool"] },
           },
         },
       }),
@@ -1422,7 +1421,7 @@ test("loadSettings: agentOverrides merge — project field wins per-agent over u
     const settings = await loadSettings(userSettingsPath, projectSettingsPath);
 
     assert.equal(settings.agentOverrides.scout?.model, "project-model");
-    assert.equal(settings.agentOverrides.scout?.description, "User description");
+    assert.deepEqual(settings.agentOverrides.scout?.tools, ["custom-tool"]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1535,6 +1534,182 @@ test("loadSettings: cache hit within TTL does not re-read the file", async () =>
 
     const second = await loadSettings(settingsPath, undefined, cache);
     assert.equal(second.agentOverrides.scout?.model, "first-model");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: ill-typed model override (123) is dropped at load and never reaches AgentConfig.model as a non-string", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": { agentOverrides: { scout: { model: 123 } } },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.deepStrictEqual(settings.agentOverrides.scout, {});
+    assert.equal(warnSpy.mock.calls.length, 1);
+    assert.equal(
+      warnSpy.mock.calls[0]!.arguments[0],
+      `pi-simple-agents: invalid model 123 in agentOverrides["scout"] (${userSettingsPath}), ignoring`,
+    );
+
+    // Downstream: the dropped override must not replace the agent's string
+    // model with a non-string (resolveModel would TypeError on .split()).
+    const baseAgent: AgentConfig = {
+      name: "scout",
+      description: "finds things",
+      tools: ["read"],
+      model: "frontmatter-model",
+      systemPromptMode: "append",
+      inheritProjectContext: true,
+      defaultReads: [],
+      source: "user",
+      filePath: "/fake/scout.md",
+      systemPrompt: "Frontmatter body.",
+    };
+
+    const [applied] = applyOverrides([baseAgent], settings.agentOverrides);
+    assert.equal(applied!.model, "frontmatter-model");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: project-over-user merge still works with validated partials (ill-typed fields dropped before merging)", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    const projectSettingsPath = path.join(dir, "project-settings.json");
+
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: {
+            scout: { model: "user-model", tools: "read, grep", thinking: "high" },
+          },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      projectSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: {
+            scout: { model: "project-model" },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath, projectSettingsPath);
+
+    assert.deepStrictEqual(settings.agentOverrides.scout, {
+      model: "project-model",
+      thinking: "high",
+    });
+    assert.equal(warnSpy.mock.calls.length, 1);
+    assert.equal(
+      warnSpy.mock.calls[0]!.arguments[0],
+      `pi-simple-agents: invalid tools "read, grep" in agentOverrides["scout"] (${userSettingsPath}), ignoring`,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: excluded systemPrompt override is dropped with the excluded-key warning and never changes the agent's systemPrompt", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": {
+          agentOverrides: { scout: { systemPrompt: "hijacked system prompt" } },
+        },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.deepStrictEqual(settings.agentOverrides.scout, {});
+    assert.equal(warnSpy.mock.calls.length, 1);
+    assert.equal(
+      warnSpy.mock.calls[0]!.arguments[0],
+      `pi-simple-agents: agentOverrides["scout"].systemPrompt in (${userSettingsPath}) is not overridable (identity/lifecycle field), ignoring`,
+    );
+
+    const baseAgent: AgentConfig = {
+      name: "scout",
+      description: "finds things",
+      tools: ["read"],
+      model: "frontmatter-model",
+      systemPromptMode: "append",
+      inheritProjectContext: true,
+      defaultReads: [],
+      source: "user",
+      filePath: "/fake/scout.md",
+      systemPrompt: "Frontmatter body.",
+    };
+
+    const [applied] = applyOverrides([baseAgent], settings.agentOverrides);
+    assert.equal(applied!.systemPrompt, "Frontmatter body.");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadSettings: model \"inherit\" yields no model on the merged agent", async (t) => {
+  const dir = makeTmpDir();
+  try {
+    const userSettingsPath = path.join(dir, "user-settings.json");
+    fs.writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        "pi-simple-agents": { agentOverrides: { scout: { model: "inherit" } } },
+      }),
+      "utf8",
+    );
+
+    const warnSpy = t.mock.method(console, "warn");
+
+    const settings = await loadSettings(userSettingsPath);
+
+    assert.deepStrictEqual(settings.agentOverrides.scout, { model: undefined });
+    assert.equal(warnSpy.mock.calls.length, 0);
+
+    const baseAgent: AgentConfig = {
+      name: "scout",
+      description: "finds things",
+      tools: ["read"],
+      model: "frontmatter-model",
+      systemPromptMode: "append",
+      inheritProjectContext: true,
+      defaultReads: [],
+      source: "user",
+      filePath: "/fake/scout.md",
+      systemPrompt: "Frontmatter body.",
+    };
+
+    const [applied] = applyOverrides([baseAgent], settings.agentOverrides);
+    assert.equal(applied!.model, undefined);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
