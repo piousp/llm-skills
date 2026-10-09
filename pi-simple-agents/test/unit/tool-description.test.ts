@@ -63,14 +63,3 @@ test("buildSubagentToolDescription: a description that is empty after trimming s
     `${SUBAGENT_BASE_DESCRIPTION}\n\nAvailable agents:\n- scout: `,
   );
 });
-
-test("buildSubagentToolDescription: a non-string description (e.g. from an unvalidated agentOverrides JSON value) does not throw and renders as empty", () => {
-  const result = buildSubagentToolDescription([
-    { name: "scout", description: 42 as unknown as string },
-  ]);
-
-  assert.equal(
-    result,
-    `${SUBAGENT_BASE_DESCRIPTION}\n\nAvailable agents:\n- scout: `,
-  );
-});

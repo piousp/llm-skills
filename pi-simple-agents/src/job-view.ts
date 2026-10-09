@@ -73,8 +73,10 @@ function buildJobListEntry(job: JobSnapshot, now: number, theme: ProgressTheme):
     case "running":
     case "cancelling":
       return [header, buildProgressLine(job.progress, theme)].join("\n");
-    case "failed":
+    case "errored":
+      // Infrastructure crash: no run result exists, only the exception message.
       return [header, `  ${state.error}`].join("\n");
+    case "failed":
     case "completed":
     case "cancelled":
       return [header, buildFinishedTaskLine(state.result, theme)].join("\n");

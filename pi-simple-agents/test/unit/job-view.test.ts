@@ -114,10 +114,20 @@ test("buildJobListText: a completed job shows its status and usage footer", () =
   assert.match(text, /\$0\.01/); // formatRunUsage cost footer
 });
 
-test("buildJobListText: a failed job shows its error", () => {
-  const job: SettledJob = { ...runningJob(), state: { status: "failed", settledAt: 4_000, error: "boom" } };
+test("buildJobListText: a failed job shows the FAILED run label", () => {
+  const job: SettledJob = {
+    ...runningJob(),
+    state: { status: "failed", settledAt: 4_000, result: { agent: "scout", task: "s", durationMs: 1, status: "error", error: "boom" } },
+  };
   const text = buildJobListText([job], 9_000, theme);
   assert.match(text, /failed/);
+  assert.match(text, /FAILED/);
+});
+
+test("buildJobListText: an errored job shows its error", () => {
+  const job: SettledJob = { ...runningJob(), state: { status: "errored", settledAt: 4_000, error: "boom" } };
+  const text = buildJobListText([job], 9_000, theme);
+  assert.match(text, /errored/);
   assert.match(text, /boom/);
 });
 
@@ -287,8 +297,12 @@ test("buildJobStatusText: settled jobs render exactly the list entry (reuse pin)
   assert.equal(buildJobStatusText(settled, 9_000, theme), buildJobListText([settled], 9_000, theme));
 });
 
-test("buildJobStatusText: a failed job shows its error via the list entry", () => {
-  const failed: SettledJob = { ...runningJob(), state: { status: "failed", settledAt: 4_000, error: "boom" } };
+test("buildJobStatusText: a failed job shows the FAILED run label via the list entry", () => {
+  const failed: SettledJob = {
+    ...runningJob(),
+    state: { status: "failed", settledAt: 4_000, result: { agent: "scout", task: "s", durationMs: 1, status: "error", error: "boom" } },
+  };
   const text = buildJobStatusText(failed, 9_000, theme);
-  assert.match(text, /boom/);
+  assert.match(text, /failed/);
+  assert.match(text, /FAILED/);
 });

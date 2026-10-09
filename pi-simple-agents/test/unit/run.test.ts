@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns, MAX_TURNS_LIMIT } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns } from "../../src/run.ts";
+import { MAX_TURNS_LIMIT } from "../../src/overrides.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import { invocationOverrideOf } from "../../src/validate.ts";
 import type { SubagentProgressEvent } from "../../src/progress.ts";
@@ -648,28 +649,46 @@ test("runAgentViaSdk: calls getModel with provider and modelId split from agent.
   assert.deepEqual(calls, [["anthropic", "claude-fable-5"]]);
 });
 
-test("runAgentViaSdk: warns and falls back when configured model is not in the registry", async (t) => {
+test("runAgentViaSdk: fails the run when the configured model is not in the registry (no fallback)", async (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
-  let capturedModel: unknown = "sentinel";
-  const fakeSession = new FakeAgentSession("done");
-  const createSession = async (opts: any) => {
-    capturedModel = opts.model;
-    return { session: fakeSession as any };
+  let createSessionCalled = false;
+  const createSession = async () => {
+    createSessionCalled = true;
+    return { session: new FakeAgentSession("done") as any };
   };
   const getModel = (() => undefined) as any;
 
-  await runAgentViaSdk(
+  const result = await runAgentViaSdk(
     makeAgent({ model: "nex-agi/nex-n2-mini" }),
     "find things",
     { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
   );
 
-  assert.equal(capturedModel, undefined);
-  assert.equal(warnSpy.mock.calls.length, 1);
-  const message = warnSpy.mock.calls[0]!.arguments[0] as string;
-  assert.match(message, /nex-agi\/nex-n2-mini/);
-  assert.match(message, /provider "nex-agi"/);
-  assert.match(message, /falling back to the session default model/);
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /nex-agi\/nex-n2-mini/);
+  assert.match((result as any).error, /provider "nex-agi"/);
+  assert.match((result as any).error, /fails instead of falling back/);
+  assert.equal(createSessionCalled, false);
+  assert.equal(warnSpy.mock.calls.length, 0);
+});
+
+test("runAgentViaSdk: fails the run on an invalid model value instead of silently using the session default", async () => {
+  let createSessionCalled = false;
+  const createSession = async () => {
+    createSessionCalled = true;
+    return { session: new FakeAgentSession("done") as any };
+  };
+  const getModel = (() => undefined) as any;
+
+  const result = await runAgentViaSdk(
+    makeAgent({ model: "no-slash" }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /invalid "model" value "no-slash"/);
+  assert.equal(createSessionCalled, false);
 });
 
 test("runAgentViaSdk: no warning when configured model resolves", async (t) => {

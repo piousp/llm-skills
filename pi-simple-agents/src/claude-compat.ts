@@ -36,13 +36,6 @@ export const CLAUDE_INERT_FIELDS: ReadonlySet<string> = new Set([
   "initialPrompt",
 ]);
 
-export const CLAUDE_MODEL_ALIASES: ReadonlySet<string> = new Set([
-  "sonnet",
-  "opus",
-  "haiku",
-  "fable",
-]);
-
 export function mapClaudeTools(names: string[]): { tools: string[]; inert: string[] } {
   const tools: string[] = [];
   const inert: string[] = [];
@@ -64,12 +57,13 @@ export function mapClaudeTools(names: string[]): { tools: string[]; inert: strin
   return { tools, inert };
 }
 
-export function normalizeClaudeModel(model: string): { model?: string; alias?: string } {
+// 3e: no model aliases anywhere — "inherit" maps to undefined (session
+// default); everything else passes through verbatim. Form and resolvability
+// are enforced strictly at resolveModel (run.ts): a malformed or unresolvable
+// model FAILS the run instead of falling back.
+export function normalizeClaudeModel(model: string): { model?: string } {
   if (model === "inherit") {
     return { model: undefined };
-  }
-  if (CLAUDE_MODEL_ALIASES.has(model)) {
-    return { model, alias: model };
   }
   return { model };
 }
@@ -94,8 +88,8 @@ export function claimUnwarned(
 }
 
 // Filters names down to those the inert set recognises, claims each
-// (prefixing only to namespace the shared registry's keys across the three
-// groups — a tool and a model alias could share a literal name), and
+// (prefixing only to namespace the shared registry's keys across the
+// groups — two different groups could share a literal name), and
 // returns the ones actually claimed this cycle, sorted. Grouping happens on
 // the plain names before the prefix is added, so there's no decode step.
 function claimedNamesFor<T extends string>(
@@ -110,21 +104,17 @@ function claimedNamesFor<T extends string>(
 }
 
 export function reportInertUsage(
-  usage: { fields: Iterable<string>; tools: Iterable<string>; models: Iterable<string> },
+  usage: { fields: Iterable<string>; tools: Iterable<string> },
   registry: Map<string, number>,
 ): string | undefined {
   const fields = claimedNamesFor("field", CLAUDE_INERT_FIELDS, usage.fields, registry);
   const tools = claimedNamesFor("tool", CLAUDE_INERT_TOOLS, usage.tools, registry);
-  const models = claimedNamesFor("model", CLAUDE_MODEL_ALIASES, usage.models, registry);
 
-  if (fields.length === 0 && tools.length === 0 && models.length === 0) return undefined;
+  if (fields.length === 0 && tools.length === 0) return undefined;
 
   const parts: string[] = [];
   if (fields.length > 0) parts.push(`fields: ${fields.join(", ")}`);
   if (tools.length > 0) parts.push(`tools: ${tools.join(", ")}`);
-  if (models.length > 0) {
-    parts.push(`model aliases: ${models.join(", ")} (Claude Code compatibility)`);
-  }
 
   return `${WARN_PREFIX}accepted but inert in pi — ${parts.join("; ")}`;
 }

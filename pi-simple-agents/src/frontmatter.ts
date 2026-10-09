@@ -1,6 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { mapClaudeTools, normalizeClaudeModel, CLAUDE_INERT_FIELDS } from "./claude-compat.ts";
-import { isValidMaxTurns, MAX_TURNS_LIMIT } from "./run.ts";
+import { isValidMaxTurns, MAX_TURNS_LIMIT } from "./overrides.ts";
 import { toErrorMessage } from "./warn.ts";
 
 const SYSTEM_PROMPT_MODES = ["append", "replace"] as const;
@@ -33,7 +33,6 @@ export interface FrontmatterResult {
   body: string;
   inertFields: string[];
   inertTools: string[];
-  modelAlias?: string;
   warnings: string[];
 }
 
@@ -154,7 +153,7 @@ function normalizeTools(
 export function normalizeFrontmatterFields(
   raw: Record<string, unknown>,
   warnings: string[],
-): { normalized: Record<string, unknown>; modelAlias?: string; inertTools: string[] } {
+): { normalized: Record<string, unknown>; inertTools: string[] } {
   const normalized: Record<string, unknown> = {};
   const inertToolNames = new Set<string>();
 
@@ -179,11 +178,8 @@ export function normalizeFrontmatterFields(
     normalized[field] = normalizeScalar(raw[field], field, warnings);
   }
 
-  let modelAlias: string | undefined;
   if (typeof normalized.model === "string") {
-    const resolved = normalizeClaudeModel(normalized.model);
-    normalized.model = resolved.model;
-    modelAlias = resolved.alias;
+    normalized.model = normalizeClaudeModel(normalized.model).model;
   }
 
   for (const { key, allowed } of ENUM_FIELDS) {
@@ -204,7 +200,7 @@ export function normalizeFrontmatterFields(
     normalized.timeoutMs = normalizeTimeoutMs(raw.timeoutMs, warnings);
   }
 
-  return { normalized, modelAlias, inertTools: [...inertToolNames] };
+  return { normalized, inertTools: [...inertToolNames] };
 }
 
 function emptyResult(body: string, warnings: string[] = []): FrontmatterResult {
@@ -325,7 +321,7 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     .filter((key) => CLAUDE_INERT_FIELDS.has(key))
     .sort();
 
-  const { normalized, modelAlias, inertTools } = normalizeFrontmatterFields(raw, warnings);
+  const { normalized, inertTools } = normalizeFrontmatterFields(raw, warnings);
 
   const frontmatter: ParsedFrontmatter = { ...raw, ...normalized } as ParsedFrontmatter;
 
@@ -338,7 +334,6 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     body,
     inertFields,
     inertTools,
-    modelAlias,
     warnings,
   };
 }

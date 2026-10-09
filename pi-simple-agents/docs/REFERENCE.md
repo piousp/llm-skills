@@ -32,7 +32,7 @@ It can also be done by natural language:
 Use the agent scout with model "anthropic/claude-opus-4-8" to find all the functions that use fetch in src
 ```
 
-As with frontmatter `model`, registry existence isn't checked. A well-formed but unknown model falls back to the session default, logging a `pi-simple-agents: ` warning naming the model and provider. A bare alias without a `/` (e.g. `"sonnet"`) is rejected outright: the whole `subagent` call fails with a validation error before any agent runs. Always use the full `provider/modelId` form. See [Model aliases](#model-aliases).
+As with frontmatter `model`, the reference is validated strictly and there is no silent fallback: a well-formed but **unknown** model (unregistered provider, or a model id that does not exist) makes the run settle as an error — the error names the model, the provider, and the fix (remove the `model` value to inherit the session default). A bare alias without a `/` (e.g. `"sonnet"`) is rejected outright: the whole `subagent` call fails with a validation error before any agent runs. Always use the full `provider/modelId` form.
 
 ### Overriding tools per invocation
 
@@ -169,7 +169,7 @@ field instead, once the job settles, alongside the run itself at `details.run`.
 | `description` | string | — **(required)** | Short description visible in the UI. Also used to build the `subagent` tool's description shown to the model (a `name: description` line per discovered agent), computed once when the pi session starts: agents added or renamed while pi is running aren't reflected until restart. |
 | `tools` | list | `[]` | Tools the agent is allowed to use, by exact name. Comma-separated in YAML. Accepts pi tool names, MCP tools as `mcp__<server>__<tool>` (see [MCP tools in subagents](#mcp-tools-in-subagents)), or Claude Code tool names (see [Claude Code compatibility](#claude-code-compatibility)). |
 | `disallowedTools` | list | `[]` | Tools the agent is denied, applied after `tools`. Comma-separated in YAML. Same name compatibility as `tools`. Forwarded to the SDK as `excludeTools`. |
-| `model` | string | *inherited from parent session* | Model to use, in `provider/modelId` form, e.g. `openrouter/gpt-4o`. Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`, `inherit`) are also accepted but have no effect on model resolution. See [Claude Code compatibility](#claude-code-compatibility). |
+| `model` | string | *inherited from parent session* | Model to use, in `provider/modelId` form, e.g. `openrouter/gpt-4o`. Also accepted: `inherit` (same as omitting the field). Strict validation at run time: a well-formed but unknown model makes the run fail; a bare alias (no `/`) is an invalid value and also fails the run. |
 | `systemPromptMode` | `append` or `replace` | `append` | `append`: the agent's system prompt is added to the parent session context. `replace`: replaces the entire system context. |
 | `inheritProjectContext` | boolean | `true` | If `false`, the agent starts without loading project context files (AGENTS.md, CLAUDE.md, etc.). |
 | `inheritSkills` | boolean | `true` | If `false`, the agent does not inherit the parent's active skills. |
@@ -261,19 +261,14 @@ Agent files written for Claude Code's subagent frontmatter format (`.claude/agen
 
 Some Claude Code tool names have no pi equivalent (`Task`, `TodoWrite`, `NotebookEdit`, `SlashCommand`, `KillShell`, `BashOutput`, `ExitPlanMode`, `AskUserQuestion`). They pass through in the `tools`/`disallowedTools` array unchanged (harmless: the SDK is unlikely to ever match them) and are reported in the aggregated inert-fields warning below, not per file.
 
-### Model aliases
-
-`model` accepts Claude Code's model aliases (`sonnet`, `opus`, `haiku`, `fable`) and `inherit`. `inherit` normalizes to using the session's default model, same as omitting `model` entirely. Aliases are **not** resolved to a real model ID: pi has no such registry lookup, they pass through as literal strings. Model resolution only acts on values containing a `/` (`provider/modelId` form), so a bare alias like `sonnet` degrades gracefully to "use the session's default model", the same mechanism as `inherit`. **To force a specific model, use pi's `provider/modelId` format, not a bare Claude Code alias**: e.g. `openrouter/anthropic/claude-sonnet-4-20250514` instead of `sonnet` or `claude-sonnet-4-20250514`.
-
 ### Inert fields
 
 These Claude Code frontmatter fields are accepted without error and their values are preserved on the parsed frontmatter, but they have no functional effect in pi: `permissionMode`, `mcpServers`, `hooks`, `memory`, `background`, `isolation`, `color`, `effort`, `initialPrompt`.
 
-Inert fields, inert tool names, and model aliases are reported together in one aggregated `console.warn`, at most once per 60 seconds (not per file), e.g.:
+Inert fields and inert tool names are reported together in one aggregated `console.warn`, at most once per 60 seconds (not per file), e.g.:
 
 ```
-pi-simple-agents: accepted but inert in pi — fields: permissionMode, hooks; tools: Task;
-model aliases: sonnet (Claude Code compatibility)
+pi-simple-agents: accepted but inert in pi — fields: permissionMode, hooks; tools: Task
 ```
 
 ## Overriding agent configuration (overrides)
@@ -310,7 +305,7 @@ Use either the `pi-simple-agents.agentOverrides` or `subagents.agentOverrides` k
 }
 ```
 
-> `model` must use pi's `provider/modelId` form to actually take effect. A bare Claude Code model name or alias (no `/`) is accepted without error but has no effect on model resolution. See [Claude Code compatibility](#claude-code-compatibility).
+> `model` must be a well-formed `provider/modelId` reference, or `"inherit"` (same as omitted). Validation is strict: a non-string value is warned and dropped at load; a bare alias (no `/`) or a well-formed but unknown model makes the run fail with a clear error — there is no silent fallback to the session default.
 
 > `timeoutMs` (number, milliseconds) bounds how long a subagent run may take before it's aborted. It can be set at any layer: frontmatter, settings-level `agentOverrides`, or per invocation (see [Overriding timeoutMs per invocation](#overriding-timeoutms-per-invocation)). Default when unset: `600000` (10 minutes). A ceiling of `7200000` ms (2 hours) applies everywhere: a finite value above it is clamped to the ceiling with a `console.warn`, not rejected. An invalid value (`0`, negative, `NaN`, `Infinity`, or a non-numeric value from raw JSON) falls back to the default with a `console.warn`. On expiry, the run settles as an error (`"timed out after <N>ms"`) and any partial output is discarded: it is not returned as a truncated success. The example above raises `planner`'s timeout to 30 minutes for a heavy-thinking, long-running agent. It bounds only the model/prompt execution phase: session creation and resource-loader setup happen before the timer starts and are not covered.
 

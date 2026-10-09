@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { parse as parseYaml } from "yaml";
 import { parseFrontmatter, normalizeFrontmatterFields } from "../../src/frontmatter.ts";
 
 test("valid frontmatter with all 4 Claude-Code fields parses into correct object and body", () => {
@@ -22,12 +23,15 @@ Rest of the content.
   assert.equal(body, "# Body\n\nRest of the content.\n");
 });
 
-test("normalizeFrontmatterFields resolves modelAlias from the already-normalized model scalar", () => {
+test("normalizeFrontmatterFields maps model inherit to undefined and passes full refs through", () => {
   const warnings: string[] = [];
-  const { normalized, modelAlias } = normalizeFrontmatterFields({ model: "sonnet" }, warnings);
+  const inherit = normalizeFrontmatterFields({ model: "inherit" }, warnings);
 
-  assert.equal(normalized.model, "sonnet");
-  assert.equal(modelAlias, "sonnet");
+  assert.equal(inherit.normalized.model, undefined);
+
+  const full = normalizeFrontmatterFields({ model: "anthropic/claude-opus-4-8" }, warnings);
+
+  assert.equal(full.normalized.model, "anthropic/claude-opus-4-8");
 });
 
 test("tools list is split on comma and trimmed", () => {
@@ -388,37 +392,34 @@ body`;
   assert.deepEqual(inertTools, ["Task", "TodoWrite"]);
 });
 
-test("model given as a Claude alias stays resolved to itself and records the alias", () => {
+test("model given as a bare word passes through untouched (fails later, at resolveModel)", () => {
   const content = `---
 model: opus
 ---
 body`;
-  const { frontmatter, modelAlias } = parseFrontmatter(content);
+  const { frontmatter } = parseFrontmatter(content);
 
   assert.equal(frontmatter.model, "opus");
-  assert.equal(modelAlias, "opus");
 });
 
-test("model: inherit normalizes to undefined with no alias recorded", () => {
+test("model: inherit normalizes to undefined", () => {
   const content = `---
 model: inherit
 ---
 body`;
-  const { frontmatter, modelAlias } = parseFrontmatter(content);
+  const { frontmatter } = parseFrontmatter(content);
 
   assert.equal(frontmatter.model, undefined);
-  assert.equal(modelAlias, undefined);
 });
 
-test("model given as a full model id (not a Claude alias) passes through with no alias recorded", () => {
+test("model given as a full model id passes through", () => {
   const content = `---
 model: claude-3-5-sonnet-20241022
 ---
 body`;
-  const { frontmatter, modelAlias } = parseFrontmatter(content);
+  const { frontmatter } = parseFrontmatter(content);
 
   assert.equal(frontmatter.model, "claude-3-5-sonnet-20241022");
-  assert.equal(modelAlias, undefined);
 });
 
 test("Claude-only keys present in the frontmatter are reported in inertFields, sorted, without altering their raw values", () => {
@@ -566,4 +567,182 @@ body`;
   assert.equal(result.body, content);
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0], /./);
+});
+
+// --- Golden characterization: normalizeFrontmatterFields over YAML-authored fixtures —
+// every field, valid + invalid variants, pinned as complete { normalized, inertTools }
+// objects plus the exact ordered warnings array. The expected literals are
+// hand-computed worked examples (independent of the implementation), never recomputed
+// from the function's output. Three fixtures because a field holds one value per fixture:
+// A pins the well-formed shapes, B the invalid shapes, C the remaining variants
+// (null tools, bare-word model passthrough, non-mapped defaultReads, non-integer maxTurns).
+// Model semantics per 3e: no aliases anywhere — "inherit" → undefined; full refs and bare
+// words pass through untouched (a bare word fails later, at resolveModel). ---
+
+test("normalizeFrontmatterFields golden: one fixture exercising every field's valid and invalid variants, pinned as a complete object", () => {
+  // Fixture A — well-formed values: block-list tools (with a Claude name mapped),
+  // comma-string disallowedTools (Claude mapping + inert collection + dedupe),
+  // comma-string defaultReads/skills (NOT Claude-mapped), number-coerced name,
+  // full provider/modelId model ref, valid enums, native/string-coerced/invalid booleans,
+  // valid maxTurns and timeoutMs.
+  const rawA: Record<string, unknown> = parseYaml(`name: 42
+description: Golden scout agent
+tools:
+  - Read
+  - grep
+disallowedTools: Bash, TodoWrite, bash
+defaultReads: README.md, docs/PLAN-FOLLOWUPS.md
+skills: code-review, testing
+model: anthropic/claude-opus-4-8
+thinking: medium
+systemPromptMode: replace
+defaultContext: fresh
+inheritProjectContext: true
+inheritSkills: "false"
+inheritExtensions: maybe
+maxTurns: 5
+timeoutMs: 900000
+`);
+
+  const warningsA: string[] = [];
+  const resultA = normalizeFrontmatterFields(rawA, warningsA);
+
+  assert.deepEqual(resultA, {
+    normalized: {
+      tools: ["read", "grep"],
+      disallowedTools: ["bash", "TodoWrite"],
+      defaultReads: ["README.md", "docs/PLAN-FOLLOWUPS.md"],
+      skills: ["code-review", "testing"],
+      name: "42",
+      description: "Golden scout agent",
+      model: "anthropic/claude-opus-4-8",
+      thinking: "medium",
+      systemPromptMode: "replace",
+      defaultContext: "fresh",
+      inheritProjectContext: true,
+      inheritSkills: false,
+      inheritExtensions: undefined,
+      maxTurns: 5,
+      timeoutMs: 900000,
+    },
+    inertTools: ["TodoWrite"],
+  });
+  assert.deepEqual(warningsA, [
+    'Field "inheritExtensions" must be a boolean or "true"/"false" string; got "maybe" - value ignored.',
+  ]);
+
+  // Fixture B — invalid values: mapping-typed tools/defaultReads, number-typed skills,
+  // non-scalar name/thinking, number-coerced description, "inherit" model (→ undefined),
+  // invalid enums, invalid boolean string, out-of-range maxTurns,
+  // string-typed timeoutMs.
+  const rawB: Record<string, unknown> = parseYaml(`name:
+  - a
+  - b
+description: 7
+tools:
+  a: 1
+disallowedTools: write, edit
+defaultReads:
+  path: 1
+skills: 3
+model: inherit
+thinking:
+  enabled: true
+systemPromptMode: banana
+defaultContext: whenever
+inheritProjectContext: false
+inheritSkills: "true"
+inheritExtensions: "yes"
+maxTurns: 101
+timeoutMs: "900000"
+`);
+
+  const warningsB: string[] = [];
+  const resultB = normalizeFrontmatterFields(rawB, warningsB);
+
+  assert.deepEqual(resultB, {
+    normalized: {
+      tools: undefined,
+      disallowedTools: ["write", "edit"],
+      defaultReads: undefined,
+      skills: undefined,
+      name: undefined,
+      description: "7",
+      model: undefined,
+      thinking: undefined,
+      systemPromptMode: undefined,
+      defaultContext: undefined,
+      inheritProjectContext: false,
+      inheritSkills: true,
+      inheritExtensions: undefined,
+      maxTurns: undefined,
+      timeoutMs: undefined,
+    },
+    inertTools: [],
+  });
+  assert.deepEqual(warningsB, [
+    'Field "tools" must be a string, list, or omitted; got {"a":1} - value ignored.',
+    'Field "defaultReads" must be a string, list, or omitted; got {"path":1} - value ignored.',
+    'Field "skills" must be a string, list, or omitted; got 3 - value ignored.',
+    'Field "name" must be a scalar value; got ["a","b"] - value ignored.',
+    'Field "thinking" must be a scalar value; got {"enabled":true} - value ignored.',
+    'Field "systemPromptMode" must be one of append, replace; got "banana" - value ignored.',
+    'Field "defaultContext" must be one of forked, fresh; got "whenever" - value ignored.',
+    'Field "inheritExtensions" must be a boolean or "true"/"false" string; got "yes" - value ignored.',
+    'Field "maxTurns" must be an integer between 1 and 100; got 101 - value ignored.',
+    'Field "timeoutMs" must be a number; got "900000" - value ignored.',
+  ]);
+
+  // Fixture C — remaining variants: null tools (→ []), empty-list disallowedTools,
+  // block-list defaultReads keeping the literal "Read" (not Claude-mapped), non-scalar
+  // description, bare-word model "opus" (passthrough; fails later at run),
+  // number-coerced thinking, "true"-string boolean, non-integer maxTurns.
+  const rawC: Record<string, unknown> = parseYaml(`name: web-scout
+description:
+  - nope
+tools:
+disallowedTools: []
+defaultReads:
+  - Read
+skills:
+  a: 1
+model: opus
+thinking: 70
+systemPromptMode: append
+defaultContext: forked
+inheritProjectContext: "true"
+inheritSkills: false
+inheritExtensions: true
+maxTurns: 2.5
+timeoutMs: 1800000
+`);
+
+  const warningsC: string[] = [];
+  const resultC = normalizeFrontmatterFields(rawC, warningsC);
+
+  assert.deepEqual(resultC, {
+    normalized: {
+      tools: [],
+      disallowedTools: [],
+      defaultReads: ["Read"],
+      skills: undefined,
+      name: "web-scout",
+      description: undefined,
+      model: "opus",
+      thinking: "70",
+      systemPromptMode: "append",
+      defaultContext: "forked",
+      inheritProjectContext: true,
+      inheritSkills: false,
+      inheritExtensions: true,
+      maxTurns: undefined,
+      timeoutMs: 1800000,
+    },
+    inertTools: [],
+  });
+  assert.deepEqual(warningsC, [
+    'Field "skills" must be a string, list, or omitted; got {"a":1} - value ignored.',
+    'Field "description" must be a scalar value; got ["nope"] - value ignored.',
+    'Field "maxTurns" must be an integer between 1 and 100; got 2.5 - value ignored.',
+  ]);
 });

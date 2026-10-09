@@ -10,12 +10,19 @@ export interface JobTask {
 /** Who asked for a cancellation: "user" (a specific `/subagents cancel <id>`) or "system" (cancelAll \u2014 shutdown, or the headless safety nets in extensions/index.ts). Carried from "cancelling" through to "cancelled" so the completion message can word it accurately (see src/job-messages.ts). */
 export type CancelReason = "user" | "system";
 
+// Settled-state semantics (1.2.0 remap, deliberate 1.2.0 behavior change):
+// - `failed` = the run itself settled with an error result (timeout, maxTurns,
+//   unresolvable model, ...) — the errored result is retained (with its usage:
+//   the tokens were spent); error text lives in result.error.
+// - `errored` = the job's promise rejected (infrastructure/unexpected) — no
+//   result exists, only the exception message.
 export type JobState =
   | { readonly status: "running" }
   | { readonly status: "cancelling"; readonly reason: CancelReason }
   | { readonly status: "completed"; readonly settledAt: number; readonly result: AgentRunResult }
   | { readonly status: "cancelled"; readonly settledAt: number; readonly result: AgentRunResult; readonly reason: CancelReason }
-  | { readonly status: "failed"; readonly settledAt: number; readonly error: string };
+  | { readonly status: "failed"; readonly settledAt: number; readonly result: AgentRunResult }
+  | { readonly status: "errored"; readonly settledAt: number; readonly error: string };
 
 export interface JobSnapshot {
   readonly id: string;
@@ -62,11 +69,11 @@ const MAX_RECENT_JOBS = 50;
 const FIRST_JOB_NUMBER = 1001;
 
 function isSettled(state: JobState): state is Extract<JobState, { settledAt: number }> {
-  return state.status === "completed" || state.status === "cancelled" || state.status === "failed";
+  return "settledAt" in state;
 }
 
 export function isActive(state: JobState): boolean {
-  return state.status === "running" || state.status === "cancelling";
+  return !isSettled(state);
 }
 
 interface JobRecord {
@@ -193,11 +200,16 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
           if (record.state.status === "cancelling") {
             finalizeSettle(record, { status: "cancelled", settledAt: deps.now(), result, reason: record.state.reason });
           } else {
-            finalizeSettle(record, { status: "completed", settledAt: deps.now(), result });
+            finalizeSettle(
+              record,
+              result.status === "error"
+                ? { status: "failed", settledAt: deps.now(), result }
+                : { status: "completed", settledAt: deps.now(), result },
+            );
           }
         },
         (err) => {
-          finalizeSettle(record, { status: "failed", settledAt: deps.now(), error: toErrorMessage(err) });
+          finalizeSettle(record, { status: "errored", settledAt: deps.now(), error: toErrorMessage(err) });
         },
       );
 

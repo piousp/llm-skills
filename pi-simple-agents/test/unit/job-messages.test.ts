@@ -142,14 +142,29 @@ test("buildJobCompletionMessage: a system-cancelled job (shutdown/headless safet
   assert.deepEqual(options, { triggerTurn: false });
 });
 
-test("buildJobCompletionMessage: failed header carries the error, isError true, no run, no usage", () => {
+test("buildJobCompletionMessage: failed (run-level error) carries the run, isError true", () => {
   const snapshot = runningSnapshot({ task: { agent: "scout", task: "a" } });
-  const job = settledOf(snapshot, { status: "failed", settledAt: 2000, error: "boom" });
+  const result: AgentRunResult = { agent: "scout", task: "a", durationMs: 1, status: "error", error: "boom" };
+  const job = settledOf(snapshot, { status: "failed", settledAt: 2000, result });
 
   const { message, options } = buildJobCompletionMessage(job);
-  assert.match(message.content, /failed: boom/);
+  assert.match(message.content, /finished \u2014 failed/);
+  assert.match(message.content, /Agent "scout" failed: boom/);
+  assert.equal(message.details.status, "failed");
   assert.equal(message.details.isError, true);
-  assert.equal(message.details.run, undefined);
-  assert.equal(message.details.usage, undefined);
+  assert.deepEqual((message.details as { run: AgentRunResult }).run, result);
+  assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
+});
+
+test("buildJobCompletionMessage: errored (infrastructure) header carries the exception, no run", () => {
+  const snapshot = runningSnapshot({ task: { agent: "scout", task: "a" } });
+  const job = settledOf(snapshot, { status: "errored", settledAt: 2000, error: "boom" });
+
+  const { message, options } = buildJobCompletionMessage(job);
+  assert.match(message.content, /errored: boom/);
+  assert.equal(message.details.status, "errored");
+  assert.equal(message.details.isError, true);
+  assert.equal("run" in message.details, false);
+  assert.equal("usage" in message.details, false);
   assert.deepEqual(options, { triggerTurn: true, deliverAs: "followUp" });
 });

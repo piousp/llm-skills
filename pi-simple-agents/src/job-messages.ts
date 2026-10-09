@@ -41,15 +41,33 @@ export function buildSubagentAckResult(job: JobSnapshot) {
 
 export const SUBAGENT_RESULT_MESSAGE_TYPE = "subagent-result";
 
-export interface SubagentJobMessageDetails {
+interface SubagentJobMessageDetailsBase {
   jobId: string;
   runId: string;
-  status: SettledJob["state"]["status"];
   task: JobTask;
-  run?: AgentRunResult;
-  usage?: AggregatedUsage;
   isError: boolean;
 }
+
+// Status-keyed discriminated union over SettledJob["state"]["status"]:
+// completed/cancelled jobs carry the settled run and its aggregated usage;
+// failed jobs carry neither (there is no run result to show). Type-only
+// tightening — the persisted message shape is unchanged (JSON.stringify
+// elides undefined values either way).
+export type SubagentJobMessageDetails =
+  | (SubagentJobMessageDetailsBase & {
+      status: "completed" | "cancelled";
+      run: AgentRunResult;
+      usage?: AggregatedUsage;
+    })
+  | (SubagentJobMessageDetailsBase & {
+      // failed = run-level error; the errored run result is carried so the
+      // consumption footer keeps working (tokens were spent).
+      status: "failed";
+      run: AgentRunResult;
+      usage?: AggregatedUsage;
+      isError: true;
+    })
+  | (SubagentJobMessageDetailsBase & { status: "errored"; isError: true });
 
 export interface SubagentJobMessage {
   customType: typeof SUBAGENT_RESULT_MESSAGE_TYPE;
@@ -69,17 +87,23 @@ function buildCompletionHeader(job: SettledJob): string {
       return `Background subagent job ${job.id} finished \u2014 ${by}`;
     }
     case "failed":
-      return `Background subagent job ${job.id} finished \u2014 failed: ${job.state.error}`;
+      // The formatted run result in the body already carries the error text;
+      // the header just labels the settlement.
+      return `Background subagent job ${job.id} finished \u2014 failed`;
+    case "errored":
+      return `Background subagent job ${job.id} finished \u2014 errored: ${job.state.error}`;
   }
 }
 
 // Delivery options depend only on job.state.status — cancellation is user
-// intent, so it's informational only (`triggerTurn: false`); completed and
-// failed both wake the model as a follow-up.
+// intent, so it's informational only (`triggerTurn: false`); completed, failed
+// (run-level error) and errored (infrastructure crash) all wake the model as a
+// follow-up.
 const DELIVERY_OPTIONS_BY_STATUS: Record<SettledJob["state"]["status"], SubagentJobDeliveryOptions> = {
   completed: { triggerTurn: true, deliverAs: "followUp" },
   cancelled: { triggerTurn: false },
   failed: { triggerTurn: true, deliverAs: "followUp" },
+  errored: { triggerTurn: true, deliverAs: "followUp" },
 };
 
 // Builds the message injected back into the conversation when a background
@@ -96,10 +120,22 @@ export function buildJobCompletionMessage(job: SettledJob): { message: SubagentJ
   let content = header;
   let details: SubagentJobMessageDetails;
 
-  if (job.state.status === "failed") {
+  if (job.state.status === "errored") {
     details = {
-      jobId: job.id, runId: job.runId, status: "failed", task: job.task,
-      run: undefined, usage: undefined, isError: true,
+      jobId: job.id, runId: job.runId, status: "errored", task: job.task, isError: true,
+    };
+  } else if (job.state.status === "failed") {
+    const result = job.state.result;
+    const formatted = formatRunResult(result);
+    content = `${header}\n\n${formatted.text}`;
+    details = {
+      jobId: job.id,
+      runId: job.runId,
+      status: "failed",
+      task: job.task,
+      run: result,
+      usage: toAggregatedUsage(result.usage),
+      isError: true,
     };
   } else {
     const result = job.state.result;

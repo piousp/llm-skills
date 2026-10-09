@@ -15,33 +15,55 @@ npm install pi-simple-agents
 
 ## Exported functions
 
+The package exposes exactly one public entry point to integrators: `extensions/index.ts` (the pi extension registered via `"pi": { "extensions" }` in package.json; there is no `main`/`exports`). `src/*` is internal (1.1.0 precedent) — its named exports are per-module, e.g.:
+
 ```typescript
-import {
-  discoverAgents,
-  loadSettings,
-  applyOverrides,
-  applyInvocationOverride,
-  runAgentViaSdk,
-  clampThinkingLevel,
-  validateSubagentParams,
-  resolveAgent,
-  formatRunResult,
-  createAgentRegistry,
-  type AgentConfig,
-  type AgentOverrides,
-  type InvocationOverride,
-  type AgentRunResult,
-  type CacheEntry,
-  type RunAgentViaSdkOptions,
-  type SubagentParams,
-  type ValidationResult,
-  type FormattedResults,
-  type SubagentSettings,
-  type AgentRegistry,
-  type LoadedAgents,
-  type AgentRegistryPaths,
-} from "pi-simple-agents";
+// src is internal; these are the dev-facing module homes, not package exports
+import { discoverAgents, loadSettings, applyOverrides, applyInvocationOverride } from "../src/agents.ts"; // re-exports from src/overrides.ts
+import { runAgentViaSdk, clampThinkingLevel, type AgentRunResult } from "../src/run.ts";
+import { validateSubagentParams, resolveAgent, invocationOverrideOf } from "../src/validate.ts";
+import { createAgentRegistry } from "../src/agent-registry.ts";
 ```
+
+### Module map (1.2.0)
+
+- `extensions/index.ts` — the published extension: typebox schema, registrations, job wiring,
+  `deliverJobResult`, `SubagentToolDetails` re-export, `runSingleTask` re-export. Thin wiring only.
+- `src/render-extensions.ts` — the renderers (call/result/message), with the agent registry
+  injected as a `GetAgents(cwd)` parameter instead of a closure over the entry's module state.
+- `src/task-runner.ts` — task orchestration: `RunTaskOptions`, `RUN_INDEX`, `SESSION_MANAGER_FACTORY`,
+  `runSingleTask`. Loader warnings are emitted here, in ONE point, right after the loader's
+  `reload()` resolves (Q2: previously the unknown-skills warning fired mid-reload via a direct
+  `console.warn`; texts unchanged, ordering deliberately changed).
+- `src/overrides.ts` — the single home for override semantics: `InvocationOverride`, `OVERRIDE_KEYS`,
+  `invocationOverrideOf`, `applyInvocationOverride`/`applyOverrides` (moved verbatim), the settings
+  field whitelists (`SETTINGS_EXCLUDED_FIELDS`/`SETTINGS_OVERRIDABLE_FIELDS`),
+  `validateAgentOverridesEntry`, and the shared field guards (`isValidModelRef`, `isValidMaxTurns`,
+  `MAX_TURNS_LIMIT` — moved here so `run.ts`/`frontmatter.ts`/`validate.ts` all import one module
+  and the runtime import graph stays acyclic). `validate.ts`/`agents.ts` re-export the moved symbols
+  so existing import sites stay valid.
+- `src/run.ts` — `runAgentViaSdk` keeps its `new Promise` + async-IIFE shape on purpose: `settleOnce`
+  must be externally callable by timeout/maxTurns/abort listeners. The two abort checks are
+  phase-distinct (pre-bind, post-prompt) and live apart deliberately.
+
+### Defensive optionality (test seams)
+
+Several optionals in `runAgentViaSdk`/`runSingleTask`/`loadSettings` are always passed by the only
+production caller yet stay optional deliberately (Q5): `tracker`/`onProgressEvent` (runSingleTask),
+`getModel` (run options), `cache`/`projectSettingsPath` (loadSettings). Each dead-in-production
+branch is a pinned test seam — a unit test exercises it and pins a guarantee (e.g. the run still
+settles with an accurate usage snapshot when no event collector is passed; settings load works
+without a cache). Removing the optionality would delete the branch the corresponding test exercises
+and lose the guarantee; don't make them required without re-cutting those test plans.
+
+### SubagentJobMessageDetails union (1.2.0)
+
+The completion-message details are a `status`-keyed discriminated union: `failed` carries no
+`run`/`usage` keys at all; `completed`/`cancelled` always carry `run` (usage optional, mirroring
+`AgentRunResult.usage`'s deliberated optionality for legacy persisted sessions). The persisted
+message JSON is byte-identical to pre-union output (`run: undefined` keys were never serialized),
+and renderers keep their defensive `details?.` chains because the host hydrates persisted sessions
+verbatim with no validation or migration.
 
 ## AgentConfig
 
@@ -192,11 +214,12 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
 - `CLAUDE_TOOL_MAP` — capitalized Claude Code tool name → lowercase pi tool name.
 - `CLAUDE_INERT_TOOLS` — Claude Code tool names with no pi equivalent.
 - `CLAUDE_INERT_FIELDS` — Claude Code frontmatter fields with no functional effect in pi.
-- `CLAUDE_MODEL_ALIASES` — recognized Claude Code model aliases (`sonnet`, `opus`, `haiku`, `fable`).
 - `mapClaudeTools(names): { tools, inert }` — maps a tool-name list through `CLAUDE_TOOL_MAP`,
   dedupes the result, and separately reports which input names were inert.
-- `normalizeClaudeModel(model): { model?, alias? }` — turns `"inherit"` into `undefined`; tags
-  recognized aliases with `alias` while passing the literal string through as `model`.
+- `normalizeClaudeModel(model): { model? }` — turns `"inherit"` into `undefined`; everything else
+  passes through verbatim. No model aliases exist (removed with the strict-model change, 1.2.0):
+  form and resolvability are enforced strictly at `resolveModel` (`src/run.ts`), where a malformed
+  or unresolvable model FAILS the run instead of falling back.
 - `claimUnwarned(keys, registry, ttlMs = 60_000): string[]` — generic once-per-TTL dedup: given a
   list of keys, returns only the ones not "claimed" (warned about) within the last `ttlMs`
   milliseconds, recording a claim timestamp for each returned key. Used to throttle the aggregated
@@ -258,7 +281,7 @@ stays deterministic despite the parallel I/O.
   invalid `systemPromptMode` silently dropped the entire system prompt.
 - `warnRegistry` — **required** `Map<string, number>` used by `claimUnwarned` (via
   `reportInertUsage`) to throttle the aggregated Claude-compatibility warning (inert
-  fields/tools/model aliases) to once per 60 seconds. There is no default/shared fallback —
+  fields/tools) to once per 60 seconds. There is no default/shared fallback —
   every caller owns its own registry's lifetime explicitly (`createAgentRegistry` creates one per
   registry instance; pass your own `Map` in tests to isolate throttling).
 - **Never rejects.** An unreadable directory resolves to `[]`; an unexpected error anywhere in the
@@ -394,8 +417,11 @@ export interface RunAgentViaSdkOptions {
 - `createSession` — factory wrapping pi's `createAgentSession`. The library calls it with the resolved model, thinking level, `tools`, and `excludeTools` (from `agent.disallowedTools`).
 - `getModel` — resolver for `provider/modelId` syntax. Called when `agent.model` contains a `/`.
   In the extension, this is `(provider, modelId) => modelRuntime.getModel(provider, modelId)`. If it
-  returns `undefined` for a well-formed `provider/modelId`, `resolveModel` logs a
-  `pi-simple-agents: ` warning and the session falls back to its default model.
+  returns `undefined` for a well-formed `provider/modelId`, the run FAILS (`resolveModel` returns
+  `{ ok: false, error }` and `runAgentViaSdk` settles the error before `createSession` — no
+  session, no tokens). There is no silent fallback (Q1/1.2.0): the only way to the session default
+  model is no `model` value or `"inherit"`. A malformed `model` value (no `/`, empty side) fails
+  the same way, with an error naming the agent and the expected form.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onProgressEvent` — receives `SubagentProgressEvent`s from the run's single subscription (`src/progress.ts` for the type): tool lifecycle via `toSubagentToolEvent` (`tool_start` carries a `summary: string` pre-formatted by `formatToolCall` in `src/format-tool-call.ts`), the model's streaming phase via `toStreamPhaseEvent` (one event per `thinking_*`/`text_*` delta, deduplicated downstream), and a live `{ type: "usage" }` snapshot whenever the usage accumulator changed (at most one per `message_end`). Every event passes the tracker's single `onEvent`, which owns the post-`done` guard. The events never capture results: `toolName` and the formatted `args` summary are all that flow through, so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
 - `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTaskOptions`/`runSingleTask`.
@@ -771,8 +797,11 @@ default export is now `async function (pi: ExtensionAPI): Promise<void>` (was sy
 awaits `registry.load(process.cwd())` before building the tool description and calling
 `pi.registerTool(...)`. It:
 
-1. Loads agents and settings via one `createAgentRegistry({ agentsDir: AGENTS_DIR, userSettingsPath: ... })`
-   instance's `registry.load(cwd)` — this composes `discoverAgents` (`~/.pi/agent/agents/`) and
+1. Loads agents and settings via one `createAgentRegistry({ agentsDir, userSettingsPath })`
+   instance created **inside the factory** (per session — a nested child session loading this
+   extension again gets its own instance, with its own caches and warn-throttle registry;
+   construction is I/O-free). The module-level `AGENTS_DIR`/`USER_SETTINGS_PATH` consts are the
+   production defaults. Its `registry.load(cwd)` — this composes `discoverAgents` (the agents dir) and
    `loadSettings` (`~/.pi/agent/settings.json` + `{cwd}/.pi/settings.json`) plus `applyOverrides`,
    replacing the old module-level `agentCache`/`overridesCache`/
    `loadAvailableAgents` helpers, which combined `discoverAgents` + `loadOverrides` +
@@ -817,8 +846,8 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    `createJobRegistry`), a per-session, in-memory registry living in the extension factory's
    closure (not module-level — a nested child session loads this extension again and must get its
    own independent registry, never the parent's). `start()` returns a `JobSnapshot` synchronously
-   and launches `run` on a later microtask, so a synchronous throw inside it is also caught as a
-   `failed` job rather than an unhandled rejection. `execute()` then returns immediately via
+   and launches `run` on a later microtask, so a synchronous throw inside it is also caught as an
+   `errored` job rather than an unhandled rejection. `execute()` then returns immediately via
    `buildSubagentAckResult(job)` (`src/job-messages.ts`): a job id (`S1001`, `S1002`, …,
    `FIRST_JOB_NUMBER = 1001`), the agent/task, and explicit model-facing instructions not to
    call `subagent` again to poll. The tool call's own `signal` is deliberately **not** passed to
@@ -826,7 +855,7 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    the end of the turn that launched it. (Esc no longer cancels a subagent run; only
    `/subagents cancel <id>` and a session shutdown do.)
 
-   When the job settles (`JobState` becomes `completed`/`cancelled`/`failed`), the registry's
+   When the job settles (`JobState` becomes `completed`/`cancelled`/`failed`/`errored`), the registry's
    `onSettled` hook builds a completion message via `buildJobCompletionMessage(job)` and delivers
    it with `pi.sendMessage(message, options)`: a `subagent-result`-typed `CustomMessage` carrying
    a `runId`/`run`/aggregate-`usage` assembly built directly in `buildJobCompletionMessage`
@@ -834,7 +863,7 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    `extensions/index.ts` as a public API, but is no longer called anywhere in this package — the
    completion message only needs a subset of that function's shape). `cancelled` jobs deliver with
    `{ triggerTurn: false }` (informational,
-   doesn't wake the model); `completed`/`failed` jobs deliver with
+   doesn't wake the model); `completed`/`failed`/`errored` jobs deliver with
    `{ triggerTurn: true, deliverAs: "followUp" }` (queued until the model's current turn ends, then
    starts a new one). See [Background jobs](#background-jobs) below for the full architecture
    (registry, settle barrier, widget, `/subagents`). The `onSettled` hook itself is a one-line call
@@ -851,6 +880,20 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
    `execute()`'s actual happy path, the lifecycle handlers' effect on a real (if fake-backed) job,
    and the `/subagents` command against a real job are all exercisable without a network/model call.
    See `test/unit/extensions-index.test.ts`'s `fakeAgentSession`/`waitUntil` helpers.
+
+A fourth optional parameter, `pathsOverride?: AgentRegistryPaths` (from `src/agent-registry.ts`),
+is a test seam mirroring `createSessionOverride`: always `undefined` in production, it points the
+registry at fixture paths (agents dir + user settings) instead of the real ~/.pi/agent layout.
+`test/unit/extensions-index.test.ts`'s `makeAgentFixture(t)` builds the per-test tmpdir home
+(`<home>/.pi/agent/agents/scout.md` + empty `<home>/.pi/agent/settings.json` + an empty project
+`<home>/.pi/settings.json` at the fixture cwd — the registry derives project settings from the
+context's cwd), passed as the 4th argument. The entry also derives the nested loader's home root
+from the effective agents dir's `<home>/.pi/agent/agents` layout, so the nested
+`DefaultResourceLoader` follows the override for free. **Policy: the wiring unit tests are
+hermetic — no test reads the real `~/.pi/agent` configuration; validating against real
+machine-local config is the live e2e smoke's job (`PI_LIVE_E2E=1 npm run test:e2e`).** A hermetic
+suite passes with an empty home: `HOME="$(mktemp -d)" npm test` (POSIX-only gate; `os.homedir()`
+uses `USERPROFILE` on Windows).
 
 The job's per-run worker, `runSingleTask(t, agent, tracker, options)` (resource loader
 creation/reload, session manager creation, the SDK run, and progress-tracker teardown), is
@@ -891,12 +934,17 @@ interface JobTask { readonly agent: string; readonly task: string }
 // buildJobCompletionMessage can word the two differently.
 type CancelReason = "user" | "system";
 
+// Settled-state semantics (1.2.0 remap): `failed` = the run settled with an
+// error result (kept in `result`, with its usage — tokens were spent);
+// `errored` = the job's promise rejected (infrastructure) — exception message
+// only, no run.
 type JobState =
   | { readonly status: "running" }
   | { readonly status: "cancelling"; readonly reason: CancelReason }
   | { readonly status: "completed"; readonly settledAt: number; readonly result: AgentRunResult }
   | { readonly status: "cancelled"; readonly settledAt: number; readonly result: AgentRunResult; readonly reason: CancelReason }
-  | { readonly status: "failed"; readonly settledAt: number; readonly error: string };
+  | { readonly status: "failed"; readonly settledAt: number; readonly result: AgentRunResult }
+  | { readonly status: "errored"; readonly settledAt: number; readonly error: string };
 
 interface JobSnapshot {
   readonly id: string;        // "S1001", "S1002", … sequential, FIRST_JOB_NUMBER = 1001
@@ -985,11 +1033,13 @@ function buildSubagentToolResult(result: AgentRunResult, runId: string): AgentTo
 function buildSubagentAckResult(job: JobSnapshot): AgentToolResult<...>;
 
 const SUBAGENT_RESULT_MESSAGE_TYPE = "subagent-result";
-interface SubagentJobMessageDetails {
-  jobId: string; runId: string; status: SettledJob["state"]["status"];
-  task: JobTask; run?: AgentRunResult;
-  usage?: AggregatedUsage; isError: boolean;
-}
+type SubagentJobMessageDetails =
+  | (SubagentJobMessageDetailsBase & { status: "completed" | "cancelled"; run: AgentRunResult; usage?: AggregatedUsage })
+  | (SubagentJobMessageDetailsBase & { status: "failed"; run: AgentRunResult; usage?: AggregatedUsage; isError: true })
+  | (SubagentJobMessageDetailsBase & { status: "errored"; isError: true });
+// failed = run-level error (carries the errored run result, so the usage
+// footer keeps working); errored = infrastructure crash (no run — exception
+// message only). Base members: jobId, runId, task, isError.
 function buildJobCompletionMessage(job: SettledJob): {
   message: { customType: "subagent-result"; content: string; display: true; details: SubagentJobMessageDetails };
   options: { triggerTurn: true; deliverAs: "followUp" } | { triggerTurn: false };
@@ -1301,7 +1351,7 @@ in-progress stream (see [src/render-result.ts](#srcrender-resultts) below).
 - **`write`'s `content` and `edit`'s `edits[].oldText`/`newText` are never read or included** —
   only `path` and, for `edit`, the edit count. This is deliberate: these summaries are retained in
   `TaskProgress.history` for the lifetime of a running subagent, so including full file contents
-  there would defeat the point of not capturing tool results (see the `onToolEvent` note above).
+  there would defeat the point of not capturing tool results (see the `onProgressEvent` note above).
 - Pure, total, never throws (`args` that isn't an object is treated as `{}` for the known-tool
   formatters, and `safeJson` catches non-serializable `args` for the fallback).
 
@@ -1576,7 +1626,7 @@ across `src/` that needs to log/report an error message (`agents.ts`, `frontmatt
 ## Running tests
 
 ```bash
-npm test          # unit tests (node:test)
+npm test          # unit tests (node:test); hermetic — see the pathsOverride seam note above
 npm run test:types # tsc --noEmit type check
 ```
 

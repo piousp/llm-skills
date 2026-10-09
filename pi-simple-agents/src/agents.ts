@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseFrontmatter, type FrontmatterResult } from "./frontmatter.ts";
 import { claimUnwarned, reportInertUsage } from "./claude-compat.ts";
 import { WARN_PREFIX, toErrorMessage } from "./warn.ts";
+import { validateAgentOverridesEntry } from "./overrides.ts";
 
 export interface AgentConfig {
   name: string;
@@ -70,19 +71,17 @@ function cachedPromise<T>(
 }
 
 function aggregateInertUsage(
-  perFileResults: Array<Pick<FrontmatterResult, "inertFields" | "inertTools" | "modelAlias">>,
-): { fields: Set<string>; tools: Set<string>; models: Set<string> } {
+  perFileResults: Array<Pick<FrontmatterResult, "inertFields" | "inertTools">>,
+): { fields: Set<string>; tools: Set<string> } {
   const fields = new Set<string>();
   const tools = new Set<string>();
-  const models = new Set<string>();
 
   for (const result of perFileResults) {
     for (const name of result.inertFields) fields.add(name);
     for (const name of result.inertTools) tools.add(name);
-    if (result.modelAlias) models.add(result.modelAlias);
   }
 
-  return { fields, tools, models };
+  return { fields, tools };
 }
 
 const MANIFEST_FILENAME = "AGENT.md";
@@ -297,8 +296,14 @@ async function readSettingsFile(settingsPath: string): Promise<SubagentSettings>
       );
       return { agentOverrides: {} };
     }
+    // Each entry is validated (typed, whitelisted) here at load, so the
+    // merged partials are always well-typed before they reach AgentConfig.
+    const validated: AgentOverrides = {};
+    for (const [agentName, rawEntry] of Object.entries(agentOverrides ?? {})) {
+      validated[agentName] = validateAgentOverridesEntry(agentName, rawEntry, settingsPath);
+    }
     return {
-      agentOverrides: agentOverrides ?? {},
+      agentOverrides: validated,
     };
   } catch {
     console.warn(`${WARN_PREFIX}failed to parse settings file ${settingsPath}`);
@@ -326,60 +331,9 @@ export function loadSettings(
   });
 }
 
-export interface InvocationOverride {
-  model?: string;
-  tools?: string[];
-  skills?: string[];
-  /** Per-invocation thinking-level override. Presence-gated like the other
-      override fields: undefined means "inherit", any string replaces the
-      frontmatter/settings value (invalid levels warn at the clampThinkingLevel
-      chokepoint, not here). */
-  thinking?: string;
-  /** Per-invocation maxTurns override (1..100). Presence-gated like the
-      other override fields: undefined means "inherit", any integer 1..100
-      replaces the frontmatter/settings value. */
-  maxTurns?: number;
-  /** Per-invocation timeoutMs override, in ms. Presence-gated like the other
-      override fields: undefined means "inherit", any value replaces the
-      frontmatter/settings value (range/ceiling enforced at the
-      resolveTimeoutMs chokepoint, not here). */
-  timeoutMs?: number;
-}
-
-// Single source of truth for the 6 invocation-override fields, in the
-// order they're checked/copied/rejected everywhere they appear (this file,
-// src/validate.ts, extensions/index.ts's SubagentParams schema).
-export const OVERRIDE_KEYS = ["model", "tools", "skills", "thinking", "maxTurns", "timeoutMs"] as const;
-
-function copyOverrideKey<K extends (typeof OVERRIDE_KEYS)[number]>(
-  target: AgentConfig,
-  source: InvocationOverride,
-  key: K,
-): void {
-  const value = source[key];
-  if (value !== undefined) (target as Record<K, unknown>)[key] = value;
-}
-
-export function applyInvocationOverride(
-  agent: AgentConfig,
-  override: InvocationOverride,
-): AgentConfig {
-  if (OVERRIDE_KEYS.every((key) => override[key] === undefined)) {
-    return agent;
-  }
-
-  const result: AgentConfig = { ...agent };
-  for (const key of OVERRIDE_KEYS) copyOverrideKey(result, override, key);
-  return result;
-}
-
-export function applyOverrides(
-  agents: AgentConfig[],
-  overrides: AgentOverrides,
-): AgentConfig[] {
-  return agents.map((agent) => {
-    const override = overrides[agent.name];
-    if (!override) return agent;
-    return { ...agent, ...override };
-  });
-}
+// Re-exports: override semantics moved to src/overrides.ts (single home);
+// these keep this module's previous export surface valid for its importers
+// (agent-registry.ts, extensions/task-runner.ts, render-call.ts, run.test.ts,
+// agents.test.ts) until the docs close-out re-documents the home.
+export { invocationOverrideOf, applyInvocationOverride, applyOverrides, OVERRIDE_KEYS } from "./overrides.ts";
+export type { InvocationOverride } from "./overrides.ts";

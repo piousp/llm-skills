@@ -49,13 +49,13 @@ export function toStreamPhaseEvent(event: AgentSessionEvent): SubagentProgressEv
 }
 
 export interface RunningTool {
-  toolCallId: string;
-  toolName: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
 }
 
 export interface TaskProgress {
   agent: string;
-  runningTools: RunningTool[];
+  runningTools: readonly RunningTool[];
   history: readonly string[];
   done: boolean;
   usage?: RunUsage;

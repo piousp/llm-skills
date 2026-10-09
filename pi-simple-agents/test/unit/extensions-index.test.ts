@@ -13,6 +13,7 @@ import { jobNotFoundText } from "../../src/job-view.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
 import { childSessionDir } from "../../src/subagent-session.ts";
 import type { AgentConfig } from "../../src/agents.ts";
+import type { AgentRegistryPaths } from "../../src/agent-registry.ts";
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pi-simple-agents-extensions-index-"));
 }
@@ -42,7 +43,7 @@ function loadExtensionFakePi() {
   };
 }
 
-async function loadExtension(createModelRuntime?: () => Promise<ModelRuntime>): Promise<any> {
+async function loadExtension(createModelRuntime?: () => Promise<ModelRuntime>, pathsOverride?: AgentRegistryPaths): Promise<any> {
   let captured: any;
   const fakePi = {
     ...loadExtensionFakePi(),
@@ -50,7 +51,7 @@ async function loadExtension(createModelRuntime?: () => Promise<ModelRuntime>): 
       captured = cfg;
     },
   } as unknown as ExtensionAPI;
-  await extensionFactory(fakePi, createModelRuntime);
+  await extensionFactory(fakePi, createModelRuntime, undefined, pathsOverride);
   return captured;
 }
 
@@ -98,10 +99,10 @@ function fakeAgentSession(finalText: string) {
   };
 }
 
-function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal } = {}) {
+function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?: string } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
   return {
-    cwd: process.cwd(),
+    cwd: overrides.cwd ?? process.cwd(),
     mode: "tui" as const,
     hasUI: overrides.hasUI ?? true,
     signal: overrides.signal,
@@ -144,6 +145,39 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+// Hermetic wiring fixture: one tmpdir per test, laid out exactly like the
+// real home it replaces — <home>/.pi/agent/agents/scout.md (name +
+// description only, nothing else), <home>/.pi/agent/settings.json (user
+// settings, empty) — plus an empty project <home>/.pi/settings.json at the
+// fixture cwd, because the registry derives project settings from the
+// context's cwd. The entry's pathsOverride seam (the factory's 4th param)
+// and the entry-derived homeDir (nested loader) both follow this layout, so
+// no wiring test reads the real ~/.pi/agent.
+function makeAgentFixture(t: { after: (fn: () => void) => void }): {
+  paths: AgentRegistryPaths;
+  cwd: string;
+  homeDir: string;
+} {
+  const home = makeTmpDir();
+  fs.mkdirSync(path.join(home, ".pi", "agent", "agents"), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, ".pi", "agent", "agents", "scout.md"),
+    "---\nname: scout\ndescription: hermetic fixture scout for wiring tests\n---\n",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(home, ".pi", "agent", "settings.json"), "{}", "utf8");
+  fs.writeFileSync(path.join(home, ".pi", "settings.json"), "{}", "utf8");
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  return {
+    paths: {
+      agentsDir: path.join(home, ".pi", "agent", "agents"),
+      userSettingsPath: path.join(home, ".pi", "agent", "settings.json"),
+    },
+    cwd: home,
+    homeDir: home,
+  };
+}
+
 // (S16) Smoke-level only: full schema-shape assertions belong to
 // test/unit/schema-consistency.test.ts (Bucket 4); this just confirms the
 // tools/skills keys exist at the top level and agent/task are required.
@@ -177,20 +211,31 @@ test("execute: missing agent/task returns validateSubagentParams' own error mess
 });
 
 // (b)
-test("execute: unknown agent name returns isError with resolveAgent's unknown-agent message", async () => {
-  const captured = await loadExtension();
+test("execute: unknown agent name returns isError with resolveAgent's unknown-agent message", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const captured = await loadExtension(undefined, fixture.paths);
 
   const result = await captured.execute(
     "call-2",
     { agent: "definitely-not-a-real-agent-name-xyz", task: "x" },
     undefined,
     undefined,
-    { cwd: process.cwd() },
+    { cwd: fixture.cwd },
   );
 
   assert.equal(result.isError, true);
   const text = result.content[0].text as string;
   assert.match(text, /Unknown agent: definitely-not-a-real-agent-name-xyz/);
+});
+
+test("factory: pathsOverride points the agent registry at the fixture paths (hermetic wiring seam)", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const captured = await loadExtension(undefined, fixture.paths);
+
+  // The tool description is built from the factory's setup registry.load;
+  // if the override were ignored it would reflect the real ~/.pi/agent (or
+  // contain no agents at all on a clean machine), not the fixture scout.
+  assert.match(captured.description, /hermetic fixture scout for wiring tests/);
 });
 
 // (c)
@@ -400,15 +445,19 @@ async function settleRunningJob(pi: ReturnType<typeof makeFakePi>, jobId: string
   await waitUntil(() => pi.sentMessages.length > 0);
 }
 
-test("wiring: end-to-end — a real job's stream phases, tools, and usage reach the widget and /subagents status", async () => {
+test("wiring: end-to-end — a real job's stream phases, tools, and usage reach the widget and /subagents status", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { session, emit, listeners } = hangingStreamingSession();
-  const modelRuntime = { isUsingSubscription: () => false, getModel: () => undefined } as unknown as ModelRuntime;
+  // getModel resolves a fake model: the entry derives the nested loader's
+  // homeDir from pathsOverride, and the fixture scout has no model, so no
+  // real model resolution happens — this test's subject is stream phases.
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => ({ fake: true }) } as unknown as ModelRuntime;
   const createSession = async () => ({ session } as any);
-  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
 
   const widgetLines: Array<string[] | undefined> = [];
-  const ctx = fakeExecuteCtx();
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
   (ctx.ui as any).setWidget = (_key: string, lines: string[] | undefined) => widgetLines.push(lines);
 
   const result = await pi.tool.execute("call-7", { agent: "scout", task: "think then act" }, undefined, undefined, ctx);
@@ -444,13 +493,14 @@ test("wiring: end-to-end — a real job's stream phases, tools, and usage reach 
   await settleRunningJob(pi, jobId);
 });
 
-test("wiring: end-to-end — no UI events yet, a just-launched job status shows waiting", async () => {
+test("wiring: end-to-end — no UI events yet, a just-launched job status shows waiting", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { session } = hangingStreamingSession();
   const createSession = async () => ({ session } as any);
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const ctx = fakeExecuteCtx();
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
   const result = await pi.tool.execute("call-8", { agent: "scout", task: "x" }, undefined, undefined, ctx);
   const jobId = (result.details as { jobId: string }).jobId;
 
@@ -577,6 +627,68 @@ test("wiring: the subagent-result message renderer renders a themed block and to
   assert.ok(afterClick.join("\n").includes("Hello from scout"));
 });
 
+// (wiring) A failed job's completion message carries the failed-shape details
+// ({jobId, runId, status: "failed", task, isError: true} — no run/usage keys,
+// per the SubagentJobMessageDetails union) and must render with the error
+// background, like a failed native tool result.
+test("wiring: the subagent-result message renderer styles a failed job with the error background and the failed title", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const renderer = pi.messageRenderers.get("subagent-result")!;
+  assert.ok(renderer);
+
+  const message = {
+    customType: "subagent-result",
+    // 1.2.0 remap: a failed job carries its errored run result.
+    content: "Background subagent job S1002 finished \u2014 failed\n\nAgent \"scout\" failed: boom",
+    display: true as const,
+    details: {
+      jobId: "S1002", runId: "call-2", status: "failed",
+      task: { agent: "scout", task: "x" },
+      run: { agent: "scout", task: "x", durationMs: 1, status: "error", error: "boom" },
+      isError: true,
+    },
+  };
+
+  const component = renderer(message as any, { expanded: false, outputPad: 1 }, fakeTheme as any);
+  assert.ok(component);
+  const lines = (component as any).render(80);
+  const text = lines.join("\n");
+  assert.ok(text.includes("<bg:toolErrorBg>"));
+  assert.ok(!text.includes("toolSuccessBg"));
+  // The remap's motivating fix: the collapsed title names the RUN outcome,
+  // not the job lifecycle's "completed".
+  assert.ok(text.includes("\u00b7 failed"));
+  assert.ok(!text.includes("\u00b7 completed"));
+});
+
+test("wiring: the subagent-result message renderer styles an errored (infrastructure) job with no run", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const renderer = pi.messageRenderers.get("subagent-result")!;
+  assert.ok(renderer);
+
+  const message = {
+    customType: "subagent-result",
+    content: "Background subagent job S1003 finished \u2014 errored: boom",
+    display: true as const,
+    details: {
+      jobId: "S1003", runId: "call-3", status: "errored",
+      task: { agent: "scout", task: "x" },
+      isError: true,
+    },
+  };
+
+  const component = renderer(message as any, { expanded: false, outputPad: 1 }, fakeTheme as any);
+  assert.ok(component);
+  const text = (component as any).render(80).join("\n");
+  assert.ok(text.includes("<bg:toolErrorBg>"));
+  assert.ok(text.includes("\u00b7 errored"));
+  assert.ok(!text.includes("\u00b7 completed"));
+});
+
 // (wiring, end-to-end) These tests inject a fake AgentSession through the
 // default export's test-only 3rd param (createSessionOverride), so a real
 // job can launch and settle without any network/model call \u2014 the only way
@@ -591,12 +703,13 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 4000): Promise<vo
   }
 }
 
-test("execute(): happy path returns the ack immediately, without waiting for the job; the job later delivers via pi.sendMessage", async () => {
+test("execute(): happy path returns the ack immediately, without waiting for the job; the job later delivers via pi.sendMessage", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const createSession = async () => ({ session: fakeAgentSession("hi from scout") as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const ctx = fakeExecuteCtx();
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
   const result = await pi.tool.execute("call-1", { agent: "scout", task: "say hi" }, undefined, undefined, ctx);
 
   assert.equal(result.isError, false);
@@ -610,13 +723,14 @@ test("execute(): happy path returns the ack immediately, without waiting for the
   assert.deepEqual(sent.options, { triggerTurn: true, deliverAs: "followUp" });
 });
 
-test("execute(): the launching tool call's own signal is not wired to the job \u2014 aborting it does not stop the job from completing (Q4)", async () => {
+test("execute(): the launching tool call's own signal is not wired to the job \u2014 aborting it does not stop the job from completing (Q4)", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const createSession = async () => ({ session: fakeAgentSession("still here") as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
   const controller = new AbortController();
-  const ctx = fakeExecuteCtx();
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
   const result = await pi.tool.execute("call-2", { agent: "scout", task: "x" }, controller.signal, undefined, ctx);
   controller.abort(); // abort right after launch, as Esc would
 
@@ -626,16 +740,17 @@ test("execute(): the launching tool call's own signal is not wired to the job \u
   assert.equal(sent.message.details.status, "completed"); // not "cancelled"
 });
 
-test("wiring: session_shutdown cancels running jobs, clears the widget, and suppresses further delivery", async () => {
+test("wiring: session_shutdown cancels running jobs, clears the widget, and suppresses further delivery", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   let resolvePrompt!: () => void;
   const session = fakeAgentSession("never reached");
   session.prompt = () => new Promise<void>((resolve) => (resolvePrompt = resolve));
   const createSession = async () => ({ session: session as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
   const widgetCalls: Array<string[] | undefined> = [];
-  const ctx = fakeExecuteCtx({ hasUI: true });
+  const ctx = fakeExecuteCtx({ hasUI: true, cwd: fixture.cwd });
   (ctx.ui as any).setWidget = (_key: string, lines: string[] | undefined) => widgetCalls.push(lines);
 
   // The fake session never fires a tool_execution_start event, so onChange
@@ -655,19 +770,20 @@ test("wiring: session_shutdown cancels running jobs, clears the widget, and supp
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(pi.sentMessages.length, sentBefore); // shutdown suppressed delivery
 
-  const listCtx = fakeExecuteCtx();
+  const listCtx = fakeExecuteCtx({ cwd: fixture.cwd });
   await pi.commands.get("subagents")!.handler("", listCtx);
   assert.match(listCtx.notifications.at(-1)!.message, /cancelled/);
 });
 
-test("wiring: agent_settled cancels still-running jobs when the session has no UI (headless safety net)", async () => {
+test("wiring: agent_settled cancels still-running jobs when the session has no UI (headless safety net)", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const session = fakeAgentSession("never reached");
   session.prompt = () => new Promise<void>(() => {}); // never resolves on its own
   const createSession = async () => ({ session: session as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const ctx = fakeExecuteCtx({ hasUI: false });
+  const ctx = fakeExecuteCtx({ hasUI: false, cwd: fixture.cwd });
   await pi.tool.execute("call-4", { agent: "scout", task: "x" }, undefined, undefined, ctx);
 
   await pi.handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
@@ -676,15 +792,16 @@ test("wiring: agent_settled cancels still-running jobs when the session has no U
   assert.equal(sent.message.details.status, "cancelled");
 });
 
-test("wiring: agent_before_settle with no UI waits for a running job to finish before resolving", async () => {
+test("wiring: agent_before_settle with no UI waits for a running job to finish before resolving", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   let resolvePrompt!: () => void;
   const session = fakeAgentSession("headless result");
   session.prompt = () => new Promise<void>((resolve) => (resolvePrompt = resolve));
   const createSession = async () => ({ session: session as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const ctx = fakeExecuteCtx({ hasUI: false });
+  const ctx = fakeExecuteCtx({ hasUI: false, cwd: fixture.cwd });
   await pi.tool.execute("call-5", { agent: "scout", task: "x" }, undefined, undefined, ctx);
   await waitUntil(() => resolvePrompt !== undefined); // let the chain actually reach prompt()
 
@@ -701,14 +818,15 @@ test("wiring: agent_before_settle with no UI waits for a running job to finish b
   assert.equal(settledBarrier, true);
 });
 
-test("wiring: /subagents cancel on a real running job, then /subagents clear, through the command handler", async () => {
+test("wiring: /subagents cancel on a real running job, then /subagents clear, through the command handler", async (t) => {
+  const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const session = fakeAgentSession("never reached");
   session.prompt = () => new Promise<void>(() => {});
   const createSession = async () => ({ session: session as any });
-  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const ctx = fakeExecuteCtx();
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
   const result = await pi.tool.execute("call-6", { agent: "scout", task: "x" }, undefined, undefined, ctx);
   const jobId = (result.details as { jobId: string }).jobId;
 
@@ -720,7 +838,7 @@ test("wiring: /subagents cancel on a real running job, then /subagents clear, th
   await pi.commands.get("subagents")!.handler("clear", ctx);
   assert.match(ctx.notifications.at(-1)!.message, /Cleared 1 finished job/);
 
-  const afterClearCtx = fakeExecuteCtx();
+  const afterClearCtx = fakeExecuteCtx({ cwd: fixture.cwd });
   await pi.commands.get("subagents")!.handler("", afterClearCtx);
   assert.doesNotMatch(afterClearCtx.notifications.at(-1)!.message, new RegExp(jobId));
 });
@@ -759,6 +877,57 @@ test("runSingleTask: resourceLoader.reload() rejecting still calls tracker.markT
   // argument was passed at all.
   const [usage] = doneSpy.mock.calls[0].arguments;
   assert.equal(usage, undefined);
+});
+
+// (f) Q2: loader warnings are emitted by runSingleTask AFTER the loader's
+// reload() resolves — the skillsOverride closure appends its unknown-skills
+// warning to the live warnings sink during reload, and emitWarnings runs
+// right after the await. The ordering marker proves the emission point.
+test("runSingleTask: loader warnings are emitted after reload() resolves", async (t) => {
+  const homeDir = makeTmpDir();
+  const cwd = makeTmpDir();
+  try {
+    const log: string[] = [];
+    const originalReload = DefaultResourceLoader.prototype.reload;
+    t.mock.method(DefaultResourceLoader.prototype, "reload", async function (this: DefaultResourceLoader) {
+      const result = await originalReload.call(this);
+      log.push("reload-done");
+      return result;
+    });
+    t.mock.method(console, "warn", (...args: unknown[]) => {
+      log.push(`warn:${String(args[0])}`);
+    });
+
+    // An unknown requested skill → the skillsOverride closure appends its
+    // warning to the live sink during reload(); real skills discovery runs
+    // against the tmp homeDir (empty skills dir → nothing matches).
+    const result = await runSingleTask(
+      { agent: "scout", task: "do it" },
+      makeAgent({ name: "scout", skills: ["zzz"] }),
+      undefined,
+      {
+        cwd,
+        signal: undefined,
+        modelRuntime: { getModel: () => { throw new Error("boom"); } } as unknown as ModelRuntime,
+        callerSessionFile: undefined,
+        runId: "call-1",
+        mode: "tui" as const,
+        homeDir,
+      },
+    );
+
+    assert.equal(result.status, "error");
+    const reloadDone = log.indexOf("reload-done");
+    const warnIndex = log.findIndex((entry) => entry.startsWith("warn:") && entry.includes("zzz"));
+    assert.notEqual(warnIndex, -1, "expected a warning mentioning the unknown skill 'zzz'");
+    assert.ok(
+      warnIndex > reloadDone,
+      `expected the warn (${warnIndex}) after reload() resolved (${reloadDone}); log: ${JSON.stringify(log)}`,
+    );
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  }
 });
 
 // (e2)
@@ -801,7 +970,9 @@ test("runSingleTask: forwards the run's usage snapshot to tracker.markTaskDone",
 // omission (mode is required on RunTaskOptions), but not a wrong constant.
 // This test exercises the real threading through an injected createSession,
 // asserting the mode that actually reaches bindExtensions.
-test("runSingleTask: forwards options.mode through to the nested session's bindExtensions call", async () => {
+test("runSingleTask: forwards options.mode through to the nested session's bindExtensions call", async (t) => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-simple-agents-extensions-index-"));
+  t.after(() => fs.rmSync(homeDir, { recursive: true, force: true }));
   const agent = makeAgent({
     tools: ["read"],
   } as Partial<AgentConfig>);
@@ -830,6 +1001,7 @@ test("runSingleTask: forwards options.mode through to the nested session's bindE
     runId: "call-3",
     mode: "rpc",
     createSession,
+    homeDir,
   });
 
   assert.deepEqual(capturedBindings, { mode: "rpc" });
@@ -866,6 +1038,7 @@ test("runSingleTask: persists its session at the conventional childSessionDir pa
       cwd: tmpCwd,
       signal: undefined,
       modelRuntime,
+      homeDir: tmpCwd,
       callerSessionFile,
       runId: "call-xyz",
       mode: "rpc",
@@ -913,8 +1086,9 @@ test("runSingleTask: getModel resolver calls modelRuntime.getModel with the pars
 });
 
 // (f)
-test("execute: when ModelRuntime.create() rejects, the tool still registers and every invocation returns a clear error", async () => {
-  const captured = await loadExtension(() => Promise.reject(new Error("boom")));
+test("execute: when ModelRuntime.create() rejects, the tool still registers and every invocation returns a clear error", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const captured = await loadExtension(() => Promise.reject(new Error("boom")), fixture.paths);
 
   assert.ok(captured);
 
@@ -923,7 +1097,7 @@ test("execute: when ModelRuntime.create() rejects, the tool still registers and 
     { agent: "scout", task: "find things" },
     undefined,
     undefined,
-    { cwd: process.cwd() },
+    { cwd: fixture.cwd },
   );
 
   assert.equal(result.isError, true);
