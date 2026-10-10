@@ -325,6 +325,59 @@ test("runAgentViaSdk: resolves success with finalText from session", async () =>
   assert.equal(result.finalText, "found it");
 });
 
+// Fail-loud: a run must never start a prompt when tools the agent (or the
+// invocation whitelist) explicitly requested never registered. The silent
+// variant of this failure mode is what shipped broken jobs that ended
+// "completed" with the model's faked tool call as its whole output.
+test("runAgentViaSdk: requested tool that never registers fails the run before the prompt, naming the missing tool", async () => {
+  const fakeSession = new FakeAgentSession("", {
+    tools: [{ name: "read", sourceInfo: { origin: "top-level", source: "builtin", path: "builtin:read" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "web_search"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /web_search/);
+  assert.ok(!fakeSession.callOrder.includes("prompt"), "the run must not prompt when a requested tool is missing");
+});
+
+// Wildcard tool entries cannot be resolved to a registered name; they must
+// not fail the check.
+test("runAgentViaSdk: wildcard tool patterns are exempt from the registered-tools check", async () => {
+  const fakeSession = new FakeAgentSession("found it");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["mcp__*"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+});
+
+// Fail-loud: a session that ends without any assistant text must settle as
+// an error, never as an empty "success" ("(agent produced no final answer)"
+// delivered as a completed job).
+test("runAgentViaSdk: run ending with empty assistant text settles as an error", async () => {
+  const fakeSession = new FakeAgentSession("");
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /final/i);
+});
+
 test("runAgentViaSdk: success result carries sessionFile from options.sessionManager.getSessionFile()", async () => {
   const fakeSession = new FakeAgentSession("found it");
   const createSession = async () => ({ session: fakeSession as any });

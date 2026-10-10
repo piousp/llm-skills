@@ -145,6 +145,20 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
+// Bounded poll: the launch ack returns before the background job reaches
+// createSession, so agentDir-observation tests must wait for the capture.
+async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise<void>((resolve, reject) => {
+    const check = () => {
+      if (predicate()) return resolve();
+      if (Date.now() > deadline) return reject(new Error(`${label} was not met within ${timeoutMs}ms`));
+      setTimeout(check, 0);
+    };
+    check();
+  });
+}
+
 // Hermetic wiring fixture: one tmpdir per test, laid out exactly like the
 // real home it replaces — <home>/.pi/agent/agents/scout.md (name +
 // description only, nothing else), <home>/.pi/agent/settings.json (user
@@ -1103,4 +1117,42 @@ test("execute: when ModelRuntime.create() rejects, the tool still registers and 
   assert.equal(result.isError, true);
   const text = result.content[0].text as string;
   assert.match(text, /failed to initialize model runtime/);
+});
+
+// Root-cause wiring for the nested loader: the agentDir the child session's
+// DefaultResourceLoader actually receives must be the fixture's
+// <home>/.pi/agent (same layout as the real ~/.pi/agent). A derivation bug
+// here produced <home>/.pi/.pi/agent — a directory that does not exist, so
+// the child silently loaded no user settings/packages and every agent
+// requesting package tools ran tool-less. Captured through the
+// createSessionOverride seam: the session options carry resourceLoader.
+test("factory: nested loader's agentDir follows <home>/.pi/agent, not a doubled path", async (t) => {
+  const fixture = makeAgentFixture(t);
+  let capturedAgentDir: string | undefined;
+  const createSessionOverride = (options: Record<string, any>) => {
+    capturedAgentDir = (options as any)?.resourceLoader?.agentDir;
+    return Promise.resolve({
+      session: {
+        getAllTools: () => [],
+        bindExtensions: async () => {},
+        extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+        subscribe: () => () => {},
+        prompt: async () => {},
+        getLastAssistantText: () => "done",
+        getContextUsage: () => undefined,
+        dispose: () => {},
+        abort: () => {},
+      } as any,
+    } as any);
+  };
+
+  const fakePi = makeFakePi() as unknown as ExtensionAPI;
+  await extensionFactory(fakePi, async () => ({ } as unknown as ModelRuntime), createSessionOverride, fixture.paths);
+
+  await (fakePi as any).tool.execute("call-wiring", { agent: "scout", task: "find things" }, undefined, undefined, { cwd: fixture.cwd, sessionManager: { getSessionFile: () => undefined }, mode: "json" });
+
+  await waitFor(() => capturedAgentDir !== undefined, 2000, "createSessionOverride to run");
+  const expectedAgentDir = path.join(fixture.homeDir, ".pi", "agent");
+  assert.equal(capturedAgentDir, expectedAgentDir);
+  assert.ok(!capturedAgentDir!.includes(`.pi${path.sep}.pi`), `agentDir must not be a doubled path: ${capturedAgentDir}`);
 });
