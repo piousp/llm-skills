@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.1
+
+- **Fix: subagent child sessions silently lost every user package tool.** The 1.2.0 entry's `homeDir` derivation from `agentsDir` was one `dirname` short: the nested loader got `<home>/.pi/.pi/agent`, a nonexistent path whose empty settings loaded zero user packages — agents asking for package tools (`web_search`, `web_read`, …) ran tool-less and the model faked its tool calls as plain text, which settled as a `completed` job carrying that garbage as its result. The derivation now recovers the real home root (agents → agent → .pi → home), so the nested loader reads `<home>/.pi/agent` like 1.1.0 did.
+- **Behavior change: fail loud on requested tools that never registered.** After the extension bind, if a tool the agent (or the per-invocation `tools` whitelist) explicitly requested is still not registered, the run settles as an error naming the missing tools instead of prompting into a tool-less session. Wildcard entries and inert Claude Code tool names are exempt (shared `missingRequestedTools` predicate with the bind decision in `src/extension-binding.ts`).
+- **Behavior change: a run ending with no assistant text settles as an error.** A session whose last turn produced no text (e.g. a thinking-only degenerate ending mid-task) no longer marks the job `completed` with an empty "(agent produced no final answer)" result; it fails with an actionable message and the run's session file for the transcript.
+- Tests: nested-loader `agentDir` wiring test (captures the loader through the `createSessionOverride` seam), requested-tool-missing and empty-final-text cases at the `runAgentViaSdk` seam, wildcard exemption.
+
 ## 1.2.0
 
 - Internal: the entry point's default export gains an optional `pathsOverride` test-seam parameter (mirroring `createSessionOverride`), the agent registry moved from a module-level singleton into the factory, and `RunTaskOptions` gains a `homeDir` test seam. Wiring unit tests are now hermetic (per-test fixture home; no real `~/.pi/agent` reads, the nested resource loader included); production behavior is unchanged.
