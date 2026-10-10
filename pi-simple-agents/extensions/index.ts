@@ -111,10 +111,12 @@ export default async function (
   const userSettingsPath = pathsOverride?.userSettingsPath ?? USER_SETTINGS_PATH;
   // agentsDir always has the <home>/.pi/agent/agents layout (package
   // convention — the default above and every test fixture mirror it), so
-  // two dirname levels recover the home root; production is therefore
-  // os.homedir() exactly, and the nested loader (runSingleTask's homeDir,
-  // src/task-runner.ts) follows pathsOverride for free.
-  const homeDir = path.dirname(path.dirname(agentsDir));
+  // ~THREE dirname levels recover the home root (agents → agent → .pi → home).
+  // Two levels yields <home>/.pi, and buildLoaderOptions would then assemble
+  // the nested loader's agentDir as <home>/.pi/.pi/agent — a nonexistent path
+  // whose empty settings silently strip every user package tool from child
+  // sessions (1.2.0 regression, fixed here).
+  const homeDir = path.dirname(path.dirname(path.dirname(agentsDir)));
   const registry = createAgentRegistry({ agentsDir, userSettingsPath });
   const getAgents: GetAgents = (cwd) => registry.peek(cwd)?.agents ?? [];
 

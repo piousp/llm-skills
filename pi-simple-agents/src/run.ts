@@ -4,7 +4,7 @@ import type { SubagentProgressEvent } from "./progress.ts";
 import { toSubagentToolEvent, toStreamPhaseEvent } from "./progress.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 import { applyUsageEvent, emptyUsage, toRunUsage, type UsageAccumulator, type RunUsage } from "./usage.ts";
-import { needsExtensionBinding, type ExtensionMode } from "./extension-binding.ts";
+import { missingRequestedTools, needsExtensionBinding, type ExtensionMode } from "./extension-binding.ts";
 import { isValidMaxTurns, isValidModelRef } from "./overrides.ts";
 
 interface AgentRunResultBase {
@@ -369,6 +369,20 @@ export function runAgentViaSdk(
           return;
         }
 
+        // Fail-loud tool check (after bind: extension tools have had their
+        // session_start chance). A run that prompts while a requested tool is
+        // missing produces a model that without tool definitions fakes its
+        // tool calls as plain text — the run then settles "successfully" with
+        // that faked text as its output. Never prompt into that state.
+        const missingTools = missingRequestedTools(agentSession.getAllTools(), agent.tools);
+        if (missingTools.length > 0) {
+          settleOnce(errorResult(ctx,
+            `agent "${agent.name}" did not start: requested tool(s) never registered in the subagent session: ` +
+            `${missingTools.join(", ")}. The loader or its extensions silently failed earlier in the run — ` +
+            `this error replaces what would have been a tool-less session emitting faked tool calls as text.`));
+          return;
+        }
+
         // Unconditional single subscription: usage accumulation does not
         // depend on the collector, and the collector (when present) receives
         // both translated progress events (tools + stream phases) and live
@@ -426,6 +440,16 @@ export function runAgentViaSdk(
 
         const finalText = agentSession.getLastAssistantText() ?? undefined;
 
+        // Fail-loud text check: a run whose last assistant turn has no text
+        // (e.g. a thinking-only degenerate ending mid-task) is a broken
+        // completion, not an answer; marking it success would deliver
+        // "(agent produced no final answer)" as a completed job.
+        if (finalText === undefined || finalText.trim() === "") {
+          settleOnce(errorResult(ctx,
+            `agent "${agent.name}" finished the task without emitting any final text reply ` +
+            `(see the run's session file for the transcript and any partial work).`));
+          return;
+        }
         settleOnce(successResult(ctx, finalText));
       } catch (err) {
         settleOnce(errorResult(

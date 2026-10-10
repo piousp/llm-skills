@@ -44,9 +44,28 @@ export function needsExtensionBinding(
 ): boolean {
   const candidates = tools.filter((tool) => tool.name !== SUBAGENT_TOOL_NAME);
   if (candidates.some(isBindingTool)) return true;
+  // Same predicate as the fail-loud check after bind in runAgentViaSdk: the
+  // bind decision and the missing-tools verdict must agree on what counts as
+  // missing (shared predicate, src/run.ts).
+  return missingRequestedTools(tools, requestedToolNames).length > 0;
+}
+
+/** Requested tool names that are not registered — the names a session will
+    never be able to execute. Wildcard entries (`*` patterns) cannot be
+    matched to a registered name at this point, so they are exempt.
+    Inert Claude Code tool names have no pi equivalent by design, so they
+    never count as missing. */
+export function missingRequestedTools(
+  tools: readonly ToolSource[],
+  requestedToolNames: readonly string[] = [],
+): string[] {
   const registered = new Set(tools.map((tool) => tool.name));
-  return requestedToolNames.some(
-    (name) => name !== SUBAGENT_TOOL_NAME && !CLAUDE_INERT_TOOLS.has(name) && !registered.has(name),
+  return requestedToolNames.filter(
+    (name) =>
+      name !== SUBAGENT_TOOL_NAME
+      && !CLAUDE_INERT_TOOLS.has(name)
+      && !name.includes("*")
+      && !registered.has(name),
   );
 }
 
