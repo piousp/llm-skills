@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 — 2026-10-12
+
+- Docs only. README trimmed from 865 to 654 words with the section structure intact: "Background jobs" now states the full model in three plain sentences (ack with job id, result delivered as its own message with a follow-up turn, in-memory only) and absorbs the running-jobs widget paragraph; the `/subagents` bullets lost every detail that was already documented in
+  [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs), keeping one essential sentence per command.
+- Two stale README claims fixed: the install note now says pi 1.0.4 (the real `peerDependencies` floor) instead of 0.99.0, and the MCP tools section no longer says wildcards are unsupported — `tools`/`disallowedTools` entries accept `*` patterns (`mcp__<server>__*`), a capability the SDK added at that floor.
+- No code changes; the test suite and behavior are unchanged.
+
 ## 1.3.0 — 2026-10-12
 
 - **New: `/subagents peek [id]` — a live window over a background job's activity.** A floating overlay renders the job's transcript as it streams: assistant text, the last few lines of the agent's thinking, and tool calls with their results, tailed and elided to fit. With no id it opens on the single active job (several actives report the ids to pick from) or the newest settled one; an unknown id warns exactly like `cancel`. While the job runs, a 250 ms pulse repaints the window — it stops itself the moment the job settles, and the frame freezes to the final result line (success/`FAILED`/error text, with the usage footer). `w` toggles between the floating window (80% × 50%) and a fullscreen takeover; Esc or `q` closes. Requires an interactive TUI session; other modes get a warning. The body scrolls with `↑/↓`, PgUp/PgDn, or the mouse wheel and auto re-follows once you return to the bottom; the scroll position survives a `w` toggle, and the window follows the session's thinking-visibility and tools-expanded preferences. Read-only this iteration — peeking never steers the peeked subagent (no input/steering channel; future work).

@@ -11,7 +11,7 @@ Subagents for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent
 pi install npm:pi-simple-agents
 ```
 
-Needs pi 0.99.0 or later.
+Needs pi 1.0.4 or later.
 
 ## Define an agent
 
@@ -51,24 +51,26 @@ A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `time
 
 ## Background jobs
 
-`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and hands the task to a background job. When the job settles, the result is delivered as its own message, and unless the job was cancelled the model gets a follow-up turn to act on it.
+`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and runs the task in the background. When the run settles, its result arrives as its own message and the model gets a follow-up turn to act on it, unless the job was cancelled.
+
+Jobs live in memory: nothing carries over after a restart. While at least one is running, a panel below the editor shows a line per job with a one-word status. The word is the tool currently executing (`read`, or `playwright` for `mcp__playwright__navigate`), `thinking` or `output` while only the model streams, `waiting` before the first signal. The panel disappears once nothing is running.
 
 ## The /subagents command
 
-- `/subagents` lists running and recently finished jobs, newest first. A running entry shows the tools in flight (`running: read, grep`) or the model's streaming phase (`thinking`, `output`); a finished one shows success or failure with the usage footer.
-- `/subagents status <id>` details one job. A running job shows status, elapsed time, the current activity word, the last tool call with its arguments, the last ten tool calls of the run, and usage so far. A finished job prints the same entry the list shows. An unknown id warns the same way `cancel` does.
-- `/subagents peek [id]` opens a floating live window over one job's activity: streamed text, the tail of the agent's thinking, and tool calls with their results. With no id it picks the single active job (several actives ask for an id) or the newest settled one, and an unknown id warns like `cancel`. The window re-renders on a light pulse while the job runs and freezes to its final result (success or failure, with the usage footer) when it settles. The body scrolls with `↑/↓`, PgUp/PgDn, or the mouse wheel and auto re-follows once you return to the bottom; the scroll position survives a `w` toggle. The window follows the session's thinking-visibility and tools-expanded preferences. `w` toggles between the floating window and a fullscreen takeover; Esc or `q` closes. Requires an interactive TUI session — other modes get a warning.
-- `/subagents cancel <id>` stops a running job.
-- `/subagents clear` drops the finished ones; the 50 most recent are kept automatically anyway.
-- `/subagents session` reports the token and cost usage of the session's subagent runs, reconstructed from the child sessions persisted on disk: aggregate totals (input with a cached/uncached split and cache hit rate, output, a per-model cost breakdown with tool results and compaction summaries under `Tools/summaries`, and the cache re-billed cost) plus a per-agent breakdown like `scout: 3 runs, 1.2M tokens, $0.980`. Nested subagents are included and each child session is counted once. A child session with no matching completion message (a process that died mid-run) shows as `unknown (orphaned)` with the run's first user message as the task, or as `running` while its job is still active. Needs a persisted session; it warns and exits before the session has ever been written to disk.
+With no id, `status` and `peek` pick the single active job on their own (several actives ask for an id); `status` also falls back to the newest finished one when nothing is active.
 
-While a job runs, a panel below the editor shows one line per running job with a one-word live status: the executing tool by its own name (`read`), an MCP tool by its server name (`mcp__playwright__navigate` shows as `playwright`), `thinking` or `output` when only the model streams, `waiting` before the run emits its first signal. The word comes from real-time session events and the repaint happens only when the word changes, not per token. See [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs) for formats and edge cases.
+- `/subagents` lists running and recently finished jobs, newest first, with a usage footer once a job settles.
+- `/subagents status [id]` details one job: the current activity, the last tool calls of the run, and usage so far.
+- `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results. `w` alternates between the floating window and fullscreen; Esc or `q` closes it. Needs an interactive TUI session; other modes get a warning.
+- `/subagents cancel [id]` stops a running job.
+- `/subagents clear` drops finished jobs from the list.
+- `/subagents session` reports what the session's subagent runs spent, reconstructed from the child sessions persisted on disk: token totals with a cache hit rate, cost per model, and one line per agent, like `scout: 3 runs, 1.2M tokens, $0.980`. The current session must be persisted to disk; otherwise the command warns and exits.
 
 ## MCP tools
 
 Subagents use pi's built-in MCP (`~/.pi/agent/mcp.json`). `pi-mcp-adapter` is not supported.
 
-If the agent has a `tools` list, name each MCP tool exactly as pi registers it, `mcp__<server>__<tool>`. There are no wildcards, and a tool left off the list doesn't exist for that agent, not even through `tool_search` or `codemode`:
+If the agent has a `tools` list, name each MCP tool exactly as pi registers it, `mcp__<server>__<tool>`. `mcp__<server>__*` brings in every tool of that server. A tool left off the list doesn't exist for that agent, not even through `tool_search` or `codemode`:
 
 ```
 subagent agent: "worker", task: "Compile the project", tools: ["read", "mcp__mde-build__mvn"]
