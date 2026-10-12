@@ -418,14 +418,129 @@ test("wiring: /subagents status <unknown-id> reports not-found as a warning (sha
   assert.equal(ctx.notifications[0].message, jobNotFoundText("S9999"));
 });
 
-test("wiring: /subagents with no args lists; 'status' and 'cancel' with no id are usage errors", async () => {
+test("wiring: bare 'status' with no jobs reports the empty-registry message (auto-resolve none)", async () => {
   const pi = makeFakePi();
   await extensionFactory(pi as unknown as ExtensionAPI);
 
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("status", ctx);
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  assert.match(ctx.notifications[0].message, /No background subagent jobs/);
+});
+
+test("wiring: bare 'status' auto-picks the single active job and renders its status text", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-status-auto", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
   const statusCtx = fakeCommandCtx();
   await pi.commands.get("subagents")!.handler("status", statusCtx);
-  assert.equal(statusCtx.notifications[0].type, "warning");
-  assert.match(statusCtx.notifications[0].message, /Usage: \/subagents status <id>/);
+  assert.equal(statusCtx.notifications.length, 1);
+  assert.equal(statusCtx.notifications[0].type, "info");
+  assert.match(statusCtx.notifications[0].message, new RegExp(`^${jobId} running`));
+  assert.match(statusCtx.notifications[0].message, /activity: waiting/);
+
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: bare 'status' with only settled jobs shows the newest settled one", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const createSession = async () => ({ session: fakeAgentSession("done") as any });
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-status-settled", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => pi.sentMessages.length > 0); // the run settled and delivered
+
+  const statusCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("status", statusCtx);
+  assert.equal(statusCtx.notifications.length, 1);
+  assert.equal(statusCtx.notifications[0].type, "info");
+  assert.match(statusCtx.notifications[0].message, new RegExp(`^${jobId} completed`));
+  assert.match(statusCtx.notifications[0].message, /success/);
+});
+
+test("wiring: bare 'cancel' auto-cancels the single active job (notification + state flips to cancelling)", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-cancel-auto", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  const cancelCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("cancel", cancelCtx);
+  assert.equal(cancelCtx.notifications.length, 1);
+  assert.equal(cancelCtx.notifications[0].type, "info");
+  assert.match(cancelCtx.notifications[0].message, new RegExp(`Cancelling job ${jobId}`));
+
+  // The job actually flipped to cancelling: the list view shows the state.
+  const listCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("", listCtx);
+  assert.match(listCtx.notifications[0].message, new RegExp(`${jobId} cancelling`));
+
+  await waitUntil(() => pi.sentMessages.length > 0);
+});
+
+test("wiring: bare 'cancel' with no running jobs warns 'No running jobs to cancel.'", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("cancel", ctx);
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, "No running jobs to cancel.");
+});
+
+test("wiring: bare 'status' and 'cancel' with several active jobs ask for an id, newest-first", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  // One fresh hanging session per launch: two independent active jobs.
+  const launched: ReturnType<typeof hangingStreamingSession>[] = [];
+  const createSession = async () => {
+    const hanging = hangingStreamingSession();
+    launched.push(hanging);
+    return { session: hanging.session } as any;
+  };
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const launchCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+  const r1 = await pi.tool.execute("call-multi-a", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  const jobA = (r1.details as { jobId: string }).jobId;
+  await waitUntil(() => launched.length > 0 && launched[0].listeners.length > 0);
+  const r2 = await pi.tool.execute("call-multi-b", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  const jobB = (r2.details as { jobId: string }).jobId;
+  await waitUntil(() => launched.length > 1 && launched[1].listeners.length > 0);
+
+  for (const args of ["status", "cancel"]) {
+    const ctx = fakeCommandCtx();
+    await pi.commands.get("subagents")!.handler(args, ctx);
+    assert.equal(ctx.notifications.length, 1);
+    assert.equal(ctx.notifications[0].type, "info");
+    assert.match(ctx.notifications[0].message, /Several jobs running \u2014 specify an id: /);
+    const message = ctx.notifications[0].message;
+    assert.ok(message.includes(jobA) && message.includes(jobB), `ids listed: ${message}`);
+    // list() is newest-first, so the newest job (launched last) comes first.
+    assert.ok(message.indexOf(jobB) < message.indexOf(jobA));
+  }
+
+  // Settle both jobs so the test process can exit.
+  await pi.commands.get("subagents")!.handler(`cancel ${jobB}`, fakeCommandCtx());
+  await waitUntil(() => pi.sentMessages.length >= 1);
+  await pi.commands.get("subagents")!.handler(`cancel ${jobA}`, fakeCommandCtx());
+  await waitUntil(() => pi.sentMessages.length >= 2);
 });
 
 // A nested session whose prompt hangs (so the job stays running) and whose
@@ -930,7 +1045,7 @@ test("wiring: /subagents peek with a single running job mounts the overlay float
   const jobId = (result.details as { jobId: string }).jobId;
   await waitUntil(() => listeners.length > 0);
 
-  // Bare peek (no id): resolvePeekTarget picks the single active job.
+  // Bare peek (no id): resolveAutoTarget picks the single active job.
   await pi.commands.get("subagents")!.handler("peek", ctx as any);
 
   assert.equal(ctx.notifications.length, 0);
