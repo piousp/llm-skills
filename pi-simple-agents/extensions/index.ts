@@ -11,9 +11,10 @@ import { runSingleTask } from "../src/task-runner.ts";
 import { validateSubagentParams, resolveAgent } from "../src/validate.ts";
 import type { ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
-import { createJobRegistry, createSettleBarrier, type JobTask, type SettledJob } from "../src/background-jobs.ts";
+import { createJobRegistry, createSettleBarrier, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolvePeekTarget } from "../src/job-view.ts";
+import { createPeekManager } from "../src/peek-window.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { toErrorMessage } from "../src/warn.ts";
 
@@ -147,6 +148,27 @@ export default async function (
     cancel: (handle) => clearTimeout(handle as NodeJS.Timeout),
   });
 
+  // /subagents peek's live overlay: same schedule/cancel pair as the widget
+  // (unref'd timers), so the pulse never holds the process open. Render
+  // prefs track the session's thinking visibility and the TUI's tool
+  // expansion state, read live on every rendered frame.
+  const peekManager = createPeekManager({
+    getUi: () => (uiRef?.hasUI ? uiRef.ui : undefined),
+    now: Date.now,
+    getRenderPrefs: () => ({
+      // Runtime guard (=== true / ?? true): the host API types declare both
+      // fields, but test fakes and older hosts may not supply them.
+      hideThinking: pi.getSettings().hideThinkingBlock === true,
+      toolsExpanded: uiRef?.ui?.getToolsExpanded?.() ?? true,
+    }),
+    schedule: (fn, ms) => {
+      const handle = setTimeout(fn, ms);
+      handle.unref?.();
+      return handle;
+    },
+    cancel: (handle) => clearTimeout(handle as NodeJS.Timeout),
+  });
+
   const jobs = createJobRegistry({
     now: Date.now,
     onSettled: (job) => deliverJobResult(pi, job),
@@ -189,7 +211,7 @@ export default async function (
         // Deliberately NOT the tool call's own `signal`: coupling them would
         // abort the job the instant this launching turn ends. Only
         // /subagents cancel and shutdown should abort a background job.
-        run: ({ signal: jobSignal, tracker }) =>
+        run: ({ signal: jobSignal, tracker, transcript }) =>
           runSingleTask(params, resolved.value, tracker, {
             cwd: ctx.cwd,
             signal: jobSignal,
@@ -200,6 +222,9 @@ export default async function (
             // bindExtensions() call (see runSingleTask, src/run.ts).
             mode: ctx.mode,
             homeDir,
+            // Feed the run's raw session events into the job's transcript
+            // for /subagents peek (Wave 2 renders it; append-only).
+            onSessionEvent: (e) => transcript.onSessionEvent(e),
             createSession: createSessionOverride,
           }),
       });
@@ -211,7 +236,7 @@ export default async function (
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents status <id>, cancel <id> or /subagents clear",
+    description: "List background subagent jobs; /subagents peek|status|cancel <id> or /subagents clear",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
@@ -231,6 +256,39 @@ export default async function (
       if (command.kind === "cancel") {
         const { text, level } = describeCancelResult(jobs.cancel(command.id));
         ctx.ui.notify(text, level);
+        return;
+      }
+      if (command.kind === "peek") {
+        // The overlay needs the real TUI: custom components only mount in
+        // interactive mode, so anything else degrades to a warning.
+        if (ctx.mode !== "tui" || !ctx.hasUI) {
+          ctx.ui.notify("peek requires an interactive TUI session", "warning");
+          return;
+        }
+        // With an id, the same not-found wording as cancel/status. Bare peek
+        // picks its target: the single active job, or the newest settled one;
+        // several actives are ambiguous and ask for an id.
+        let job: JobSnapshot;
+        if (command.id) {
+          const found = jobs.get(command.id);
+          if (!found) {
+            ctx.ui.notify(jobNotFoundText(command.id), "warning");
+            return;
+          }
+          job = found;
+        } else {
+          const target = resolvePeekTarget(jobs.list());
+          if (target.kind === "ambiguous") {
+            ctx.ui.notify(`Several jobs running \u2014 specify an id: ${target.ids.join(", ")}`, "info");
+            return;
+          }
+          if (target.kind === "none") {
+            ctx.ui.notify(NO_JOBS_TEXT, "info");
+            return;
+          }
+          job = target.job;
+        }
+        peekManager.open(job, () => jobs.get(job.id), () => jobs.getTranscript(job.id));
         return;
       }
       if (command.kind === "clear") {
@@ -255,5 +313,6 @@ export default async function (
     captureUi(ctx);
     jobs.shutdown();
     widget.dispose();
+    peekManager.close();
   });
 }

@@ -48,7 +48,7 @@ export function buildJobsWidgetLines(
     .map((job) => unfinishedTaskLine(job, now, theme))
     .filter((line): line is string => line !== undefined);
   if (lines.length === 0) return undefined;
-  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents status|cancel <id> \u00b7 /subagents clear")];
+  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents peek|status|cancel <id> \u00b7 clear")];
 }
 
 // Shared not-found wording for both /subagents cancel and /subagents status.
@@ -56,7 +56,13 @@ export function jobNotFoundText(id: string): string {
   return `No job with id "${id}" in this session.`;
 }
 
-function buildFinishedTaskLine(result: AgentRunResult, theme: ProgressTheme): string {
+// Shared empty-registry wording for the /subagents list view and the bare
+// /subagents peek fallback (nothing to open a window on).
+export const NO_JOBS_TEXT = "No background subagent jobs in this session.";
+
+// One settled-task outcome line (agent — success|FAILED · usage), shared by
+// the list/status views and the peek window's frozen result line.
+export function buildFinishedTaskLine(result: AgentRunResult, theme: ProgressTheme): string {
   const label = result.status === "error" ? "FAILED" : "success";
   const footerText = result.usage ? formatRunUsage(result.usage) : "";
   const footer = footerText ? ` \u00b7 ${theme.fg("dim", footerText)}` : "";
@@ -87,7 +93,7 @@ function buildJobListEntry(job: JobSnapshot, now: number, theme: ProgressTheme):
 // order the caller wants shown (the registry's `list()` is already
 // newest-first); this function does not re-sort.
 export function buildJobListText(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string {
-  if (jobs.length === 0) return "No background subagent jobs in this session.";
+  if (jobs.length === 0) return NO_JOBS_TEXT;
   return jobs.map((job) => buildJobListEntry(job, now, theme)).join("\n");
 }
 
@@ -95,6 +101,7 @@ export type SubagentsCommand =
   | { readonly kind: "list" }
   | { readonly kind: "cancel"; readonly id: string }
   | { readonly kind: "status"; readonly id: string }
+  | { readonly kind: "peek"; readonly id?: string }
   | { readonly kind: "clear" }
   | { readonly kind: "usage-error"; readonly message: string };
 
@@ -113,8 +120,30 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     if (!id) return { kind: "usage-error", message: "Usage: /subagents status <id>" };
     return { kind: "status", id };
   }
+  if (sub === "peek") {
+    // Extra args ignored, same rule as status/cancel: first token is the id.
+    const id = rest[0];
+    return id ? { kind: "peek", id } : { kind: "peek" };
+  }
   if (sub === "clear") return { kind: "clear" };
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status <id>|cancel <id>|clear]` };
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] <id> [|clear]` };
+}
+
+// Picks the default target for a bare `/subagents peek` (no id): exactly one
+// active job wins, several actives are ambiguous (ids in the caller's order —
+// newest-first when the caller passes jobs.list()), and with no active jobs
+// the newest settled one (jobs[0], list() is newest-first) is shown.
+export type PeekTarget =
+  | { readonly kind: "job"; readonly job: JobSnapshot }
+  | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
+  | { readonly kind: "none" };
+
+export function resolvePeekTarget(jobs: readonly JobSnapshot[]): PeekTarget {
+  const active = jobs.filter((j) => isActive(j.state));
+  if (active.length === 1) return { kind: "job", job: active[0] };
+  if (active.length > 1) return { kind: "ambiguous", ids: active.map((j) => j.id) };
+  if (jobs.length > 0) return { kind: "job", job: jobs[0] };
+  return { kind: "none" };
 }
 
 export function describeClearResult(removed: number): string {

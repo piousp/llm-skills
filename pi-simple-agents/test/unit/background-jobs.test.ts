@@ -8,6 +8,13 @@ import {
   type SettledJob,
 } from "../../src/background-jobs.ts";
 import type { AgentRunResult } from "../../src/run.ts";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+
+function asEvent(value: unknown): AgentSessionEvent {
+  return value as AgentSessionEvent;
+}
+
+type JobIo = Parameters<Parameters<JobRegistry["start"]>[0]["run"]>[0];
 
 function sampleRunResult(agent: string, task: string): AgentRunResult {
   return { agent, task, status: "success", finalText: "ok", durationMs: 1 };
@@ -415,6 +422,64 @@ test("get: unknown ids return undefined, including ids pruned by maxRecent", asy
   assert.ok(registry.get(second.id)); // newest finished job kept
   const firstPruned = "S1001";
   assert.equal(registry.get(firstPruned), undefined); // pruned by maxRecent
+});
+
+test("getTranscript: every started job gets a transcript; events fed through the run io land in it", async () => {
+  const { registry } = harness();
+  let transcript!: JobIo["transcript"];
+  const job = registry.start({
+    runId: "r1",
+    task: { agent: "scout", task: "x" },
+    run: (io) => {
+      transcript = io.transcript;
+      transcript.onSessionEvent(asEvent({ type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } }));
+      return new Promise(() => {});
+    },
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const snapshot = registry.getTranscript(job.id);
+  assert.ok(snapshot);
+  assert.equal(snapshot.entries.length, 1);
+  const entry = snapshot.entries[0];
+  assert.equal(entry && entry.kind === "tool-start" ? entry.label : undefined, "read a.ts");
+
+  assert.equal(registry.getTranscript("S9999"), undefined); // unknown id
+});
+
+test("getTranscript: transcripts of pruned jobs are gone with the job", async () => {
+  const { registry } = harness(1); // keep at most 1 finished job
+  registry.start({ runId: "r1", task: { agent: "scout", task: "t1" }, run: () => Promise.resolve(sampleRunResult("scout", "t1")) });
+  registry.start({ runId: "r2", task: { agent: "scout", task: "t2" }, run: () => Promise.resolve(sampleRunResult("scout", "t2")) });
+  await registry.whenIdle();
+  assert.equal(registry.getTranscript("S1001"), undefined); // pruned together with the job
+  assert.ok(registry.getTranscript("S1002"));
+});
+
+test("transcript: feeding session events does NOT add any onChange emissions (no widget refresh for peek)", async () => {
+  const fed = harness();
+  const unfed = harness();
+  const events: AgentSessionEvent[] = [
+    asEvent({ type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } }),
+    asEvent({ type: "message_update", message: {}, assistantMessageEvent: { type: "text_end", content: "hi", partial: {} } }),
+    asEvent({ type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } }),
+    asEvent({ type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false }),
+  ];
+  const run = (io: JobIo, feed: boolean): Promise<AgentRunResult> => {
+    if (feed) for (const event of events) io.transcript.onSessionEvent(event);
+    return Promise.resolve(sampleRunResult("scout", "x"));
+  };
+  fed.registry.start({ runId: "r1", task: { agent: "scout", task: "x" }, run: (io) => run(io, true) });
+  unfed.registry.start({ runId: "r1", task: { agent: "scout", task: "x" }, run: (io) => run(io, false) });
+  await fed.registry.whenIdle();
+  await unfed.registry.whenIdle();
+
+  // Same run shape, same settle notifications — the transcript feed alone
+  // must be invisible to onChange (the perf invariant pin).
+  assert.equal(fed.changes.length, unfed.changes.length);
+  // And the fed registry actually captured the events.
+  assert.ok((fed.registry.getTranscript("S1001")?.entries.length ?? 0) >= 2);
 });
 
 test("clearFinished: drops every settled job, keeps running ones, returns the count removed", async () => {

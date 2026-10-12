@@ -31,6 +31,10 @@ export interface RunTaskOptions {
   /** The subagent tool call's own toolCallId — the basis for this run's childSessionDir. */
   runId: string;
   mode: RunAgentViaSdkOptions["mode"];
+  /** Raw session-event tap passed verbatim to runAgentViaSdk; the job
+      registry feeds these into the run's transcript (see src/transcript.ts).
+      Independent of `tracker`: present even when no progress tracking. */
+  onSessionEvent?: RunAgentViaSdkOptions["onSessionEvent"];
   /** Test seam: defaults to the real createAgentSession. */
   createSession?: RunAgentViaSdkOptions["createSession"];
   /** Test seam: the home root the nested loader derives agentDir from
@@ -46,14 +50,16 @@ export interface RunTaskOptions {
 // src/progress.ts); the job registry's `onChange` turns that into the live
 // widget/`/subagents` feed — there is no more direct line to this tool
 // call's own `onUpdate`, since execute() has already returned by the time
-// any of this runs.
+// any of this runs. The optional `onSessionEvent` observer (independent of
+// the tracker) receives the run's RAW session events so the job can record
+// a transcript for `/subagents peek` (see src/transcript.ts).
 export async function runSingleTask(
   t: ValidatedSubagentParams,
   agent: AgentConfig,
   tracker: ProgressTracker | undefined,
   options: RunTaskOptions,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession, homeDir = os.homedir() } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -86,6 +92,7 @@ export async function runSingleTask(
         sessionManager: manager,
         getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
         onProgressEvent: tracker ? (event) => tracker.onEvent(event) : undefined,
+        onSessionEvent,
         mode,
       },
     );

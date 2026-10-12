@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns } from "../../src/run.ts";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { MAX_TURNS_LIMIT } from "../../src/overrides.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
 import { invocationOverrideOf } from "../../src/validate.ts";
@@ -480,6 +481,54 @@ test("runAgentViaSdk: onProgressEvent translates tool_execution_start/end into S
     { type: "tool_start", toolCallId: "t1", toolName: "read", summary: "read" },
     { type: "tool_end", toolCallId: "t1" },
   ]);
+});
+
+test("runAgentViaSdk: onSessionEvent receives the RAW session events, before any translation", async () => {
+  const raw: AgentSessionEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [
+      { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } },
+    ],
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } },
+      { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onSessionEvent: (e) => raw.push(e) },
+  );
+
+  assert.deepEqual(raw, [
+    { type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta: "hi", partial: {} } },
+    { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } },
+    { type: "tool_execution_end", toolCallId: "t1", toolName: "read", result: "ok", isError: false },
+  ]);
+});
+
+test("runAgentViaSdk: onSessionEvent fires even when onProgressEvent is absent", async () => {
+  const raw: AgentSessionEvent[] = [];
+  const fakeSession = new FakeAgentSession("done", {
+    toolEvents: [
+      { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onSessionEvent: (e) => raw.push(e) },
+  );
+
+  // The transcript hook must not be gated behind the progress collector's
+  // early return; the run itself stays unaffected.
+  assert.equal(result.status, "success");
+  assert.equal(raw.length, 1);
+  assert.equal((raw[0] as { type: string }).type, "tool_execution_start");
 });
 
 test("runAgentViaSdk: no onProgressEvent still subscribes once, for usage accumulation", async () => {
