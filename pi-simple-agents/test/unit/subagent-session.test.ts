@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import {
   childSessionDir,
   createSubagentSessionManager,
+  runIdDirName,
   type SessionManagerFactory,
 } from "../../src/subagent-session.ts";
 
@@ -278,4 +280,45 @@ test("createSubagentSessionManager: forkFrom throwing falls back to in-memory wi
   assert.equal(result.warnings.length, 1);
   assert.match(result.warnings[0], /scout/);
   assert.match(result.warnings[0], /Cannot fork: source session file is empty or invalid/);
+});
+
+// --- runIdDirName (the exported single source of truth for the segment) ---
+
+test("runIdDirName: a normal runId passes through unchanged", () => {
+  assert.equal(runIdDirName("abc123"), "abc123");
+  assert.equal(runIdDirName("toolu_1A2b3C"), "toolu_1A2b3C");
+});
+
+test("runIdDirName: characters outside [A-Za-z0-9._-] become underscores", () => {
+  assert.equal(runIdDirName("tool:call/1"), "tool_call_1");
+});
+
+test("runIdDirName: degenerate runIds fall back to 'run' (no traversal, no empty segment)", () => {
+  assert.equal(runIdDirName("..."), "run");
+  assert.equal(runIdDirName("___"), "run");
+  assert.equal(runIdDirName(".."), "run");
+  assert.equal(runIdDirName("."), "run");
+});
+
+test("runIdDirName: runIds over the 64-byte cap are truncated with a stable hash suffix", () => {
+  const runId = "toolu_" + "y".repeat(300);
+  const segment = runIdDirName(runId);
+  assert.ok(segment.length <= 64, `expected segment length <= 64, got ${segment.length}`);
+  assert.match(segment, /^toolu_y+_[0-9a-f]{8}$/);
+  assert.equal(runIdDirName(runId), segment); // deterministic
+});
+
+test("runIdDirName: two long runIds sharing a long common prefix map to different segments", () => {
+  const prefix = "a".repeat(100);
+  assert.notEqual(runIdDirName(`${prefix}-one`), runIdDirName(`${prefix}-two`));
+});
+
+test("runIdDirName: agrees with the segment childSessionDir embeds (single source of truth)", () => {
+  for (const raw of ["abc123", "tool:call/1", "...", "___", "x".repeat(500)]) {
+    assert.equal(
+      childSessionDir("/a/b/parent.jsonl", raw, 0),
+      join("/a/b/parent", runIdDirName(raw), "run-0"),
+      raw,
+    );
+  }
 });

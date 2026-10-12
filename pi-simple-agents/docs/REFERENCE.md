@@ -102,6 +102,8 @@ Jobs are **in-memory only, per pi session**: nothing persists across a restart, 
 
 `/subagents cancel <id>` cancels a running job. `/subagents clear` drops every finished job from the list (running ones are untouched) — useful after a long session accumulates a lot of history; by default the 50 most recent finished jobs are kept automatically even without clearing.
 
+`/subagents session` reports the token and cost usage of the current session's subagent runs, reconstructed from the child sessions persisted on disk (see [Session persistence](#session-persistence)): aggregate totals mirroring pi's `/session` output — input with a cached/uncached split and cache hit rate, output, per-model cost rows (tool results and compaction summaries group under `Tools/summaries`), and the cache re-billed cost — plus a per-agent breakdown in the form `scout: 3 runs, 1.2M tokens, $0.980`. Nested subagents are included and each child session is counted exactly once. A child session on disk with no matching completion message (the process died before it settled) is attributed to `unknown` with the run's first user message as the task and marked `(orphaned)`; if a job with that run id is still active in the current session it is labeled `running` instead. The command needs a persisted session; before the session has ever been written to disk it warns and exits.
+
 ### The activity word (what a job is doing right now)
 
 Both `/subagents status <id>` and the running-jobs widget describe a running job with a single word. The word is derived at render time from the run's real-time session events; nothing about it is stored:

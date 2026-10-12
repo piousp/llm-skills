@@ -46,6 +46,21 @@ function truncateAtDepth(sessionFile: string, depth: number): string {
 }
 
 /**
+ * Directory-segment name a runId maps to under the parent's session dir: the
+ * sanitization + degenerate-guard + length-bound pipeline childSessionDir
+ * applies, exported as the single source of truth so path-convention
+ * reconciliation (src/session-reconcile.ts) maps runIds to the exact segment
+ * names on disk without duplicating this logic.
+ */
+export function runIdDirName(rawRunId: string): string {
+  const sanitized = rawRunId.replace(/[^A-Za-z0-9._-]/g, "_");
+  // Guards against "_"-only (degenerate) runIds and against "."/".." surviving
+  // sanitization, which would otherwise resolve to the parent or grandparent
+  // directory instead of a run-scoped one.
+  return /^[._]*$/.test(sanitized) ? "run" : boundRunIdSegment(sanitized);
+}
+
+/**
  * Directory where a subagent run's session should be persisted so usage
  * dashboards that reconcile nested-agent sessions by path convention (a
  * pattern several /usage tools follow, not one specific extension) can
@@ -62,11 +77,7 @@ export function childSessionDir(
   resultIndex: number,
 ): string | undefined {
   if (!callerSessionFile) return undefined;
-  const sanitized = runId.replace(/[^A-Za-z0-9._-]/g, "_");
-  // Guards against "_"-only (degenerate) runIds and against "."/".." surviving
-  // sanitization, which would otherwise resolve to the parent or grandparent
-  // directory instead of a run-scoped one.
-  const sanitizedRunId = /^[._]*$/.test(sanitized) ? "run" : boundRunIdSegment(sanitized);
+  const sanitizedRunId = runIdDirName(runId);
 
   if (nestingDepth(callerSessionFile) < MAX_LITERAL_NESTING_DEPTH) {
     const parentDir = dirname(callerSessionFile);

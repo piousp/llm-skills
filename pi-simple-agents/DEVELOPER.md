@@ -56,6 +56,11 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
   `createPeekManager` (fire-and-forget `ctx.ui.custom` overlay, floating-first with `w` cycling to
   fullscreen, warn-path on rejection). Structural `Peek*` theme/keybindings/tui subsets keep it
   testable without pi-tui.
+- `src/session-reconcile.ts` — pure reconciliation of a session's subagent spend from disk
+  (backing `/subagents session`): structural shapes for pi `.jsonl` entries, ports of pi's
+  `getSessionStats`/`getUsageCostBreakdown`/`computeCacheWaste`, and `buildSubagentSessionReport`
+  (see its section below). FS access is injected (`ReconcileFs`), so all aggregation is testable
+  with in-memory fixtures; the only node I/O lives in one wiring adapter.
 
 ### Defensive optionality (test seams)
 
@@ -1091,11 +1096,14 @@ function jobNotFoundText(id: string): string;
 
 type SubagentsCommand =
   | { readonly kind: "list" }
-  | { readonly kind: "cancel"; readonly id: string }
-  | { readonly kind: "status"; readonly id: string }
+  | { readonly kind: "cancel"; readonly id?: string }
+  | { readonly kind: "status"; readonly id?: string }
+  | { readonly kind: "peek"; readonly id?: string }
   | { readonly kind: "clear" }
+  | { readonly kind: "session" }
   | { readonly kind: "usage-error"; readonly message: string };
 function parseSubagentsCommand(args: string): SubagentsCommand;
+function buildSubagentSessionText(report: SubagentSessionReport, theme: ProgressTheme): string;
 function describeCancelResult(result: CancelResult): { text: string; level: "info" | "warning" };
 function describeClearResult(removed: number): string;
 ```
@@ -1114,6 +1122,71 @@ running job gets the live extras: its header, the activity word, the last `histo
 recently *started* call, which may already have ended), the history capped to the last 10 with
 `… (+N earlier)` eliding older entries, and the live usage snapshot when one has arrived. Unknown ids
 report `jobNotFoundText`, the single shared wording that `describeCancelResult`'s `not-found` case also uses.
+Since 1.3.0 bare `status`/`cancel`/`peek` carry `id?: string` and auto-select like `peek` does.
+
+`buildSubagentSessionText` backs `/subagents session`: it renders a `SubagentSessionReport`
+(see `src/session-reconcile.ts` below) in the layout of pi's own `/session` command — token totals
+with the cached/uncached split and hit rate, the per-model cost breakdown only when there is more
+than one bucket, `Cache Re-billed` with pi's $0.0001 threshold, and the per-agent rows. Locale for
+the counters is pinned to `en-US` so the rendered text is byte-identical across machines. With no
+runs it renders a single short message instead of the layout.
+
+### src/session-reconcile.ts
+
+```typescript
+export function parseSessionEntries(text: string): SessionEntry[];
+export function sumUsageTotals(entries: readonly SessionEntry[]): UsageTotals;
+export function usageCostBreakdown(entries: readonly SessionEntry[]): UsageBreakdownRow[];
+export function computeCacheWaste(entries: readonly SessionEntry[],
+  readPerTokenFallback?: (provider: string, model: string) => number | undefined): CacheWaste;
+export function assistantTurnCount(entries: readonly SessionEntry[]): number;
+export function buildSubagentSessionReport(rootSessionFile: string, fs: ReconcileFs,
+  activeRunIds?: ReadonlySet<string>): SubagentSessionReport;
+
+export interface ReconcileFs {
+  readTextFile(path: string): string | undefined; // undefined = missing/unreadable
+  listDir(path: string): string[] | undefined;    // undefined = missing
+}
+```
+
+Pure reconciliation of `/subagents session`: pi's `/session` only counts the parent session's own
+entries, and background subagent runs are separate SDK sessions it never sees. `buildSubagentSessionReport`
+closes that gap entirely from already-persisted data — nothing new is written:
+
+- **Parse**: `parseSessionEntries` reads the parent `.jsonl` with pi's own tolerance (blank and
+  malformed lines are skipped), and structural entry shapes mirror `docs/session-format.md`
+  (pi does not export its session types; the same "structural shape" pattern as `MessageUsage` in
+  `src/usage.ts`).
+- **Algorithms are ports of pi** (verified against 0.84.2's `dist/core/`): `sumUsageTotals`
+  reproduces `getSessionStats` (assistant usage + toolResult usage + compaction/branch_summary
+  usage + `type:"usage"` entries); `usageCostBreakdown` reproduces `getUsageCostBreakdown`
+  (grouping by `provider/responseModel ?? model`, toolResult/compaction under `Tools/summaries`,
+  `tokens = input + output + cacheRead + cacheWrite`); `computeCacheWaste` reproduces
+  `detectMiss`/`scan` (`min(prev.promptTokens, promptTokens) - cacheRead`, 1024-token noise floor,
+  compaction reset, Unix-ms message timestamps). The only asset not derivable is contextUsage —
+  it needs the live model registry, so the report omits it.
+- **Attribution**: the whole descendant tree is walked under the `childSessionDir` path convention
+  (`<parent-without-ext>/<runId>/run-N/`, deep-nesting collapse included), each resolved child
+  path visited once (dedupe also neutralizes the `deep-<hash16>` collision case). A child dir is
+  attributed via `runIdDirName` (`src/subagent-session.ts`) to the matching `subagent-result`
+  completion message in its immediate parent `.jsonl`; nested runs resolve themselves because
+  level-N+1 completion messages live in the level-N child's own file. Grandchildren count toward
+  the session total exactly once.
+- **Disk-first effective usage**: when the child's `session.jsonl` exists, its parsed stats are
+  canonical (per-model breakdown, turns from assistant messages, cache waste); otherwise the
+  completion message's aggregate `details.usage` feeds an `unattributed` breakdown bucket. A
+  completion whose status is `errored` (no `run`, no usage) counts as a run at zero usage; a
+  child dir with no matching completion message is an orphan — agent `unknown`, task recovered
+  from the child's first user message, `running` when its runId is in `activeRunIds` (the only
+  use of the in-memory job registry, for labeling — never a usage source), else `unknown (orphaned)`.
+- **Branches**: the whole parent file is read, no branch filtering — the same scope as pi's
+  `/session` (`getSessionStats` iterates every entry), and a run billed in an abandoned branch
+  still happened.
+
+The report shape is `SubagentSessionReport { runs, totals, breakdown, cacheWaste, byAgent, counts }`;
+`buildSubagentSessionText` (`src/job-view.ts`) renders it. The wiring passes
+`ReconcileFs` built from `node:fs` with per-call try/catch (throwing never crashes the command;
+an unreadable child is just skipped).
 
 ### src/progress.ts
 
