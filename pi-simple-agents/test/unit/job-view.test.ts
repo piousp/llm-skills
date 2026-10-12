@@ -5,6 +5,7 @@ import {
   buildJobsWidgetLines,
   buildJobListText,
   buildJobStatusText,
+  buildSubagentSessionText,
   jobNotFoundText,
   parseSubagentsCommand,
   resolveAutoTarget,
@@ -15,6 +16,7 @@ import {
 import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import type { ProgressTheme } from "../../src/progress.ts";
 import type { AgentRunResult } from "../../src/run.ts";
+import type { ReconciledRun, SubagentSessionReport } from "../../src/session-reconcile.ts";
 
 const theme: ProgressTheme = { fg: (c, t) => `<${c}>${t}</${c}>` };
 
@@ -368,4 +370,148 @@ test("buildJobStatusText: a failed job shows the FAILED run label via the list e
   const text = buildJobStatusText(failed, 9_000, theme);
   assert.match(text, /failed/);
   assert.match(text, /FAILED/);
+});
+
+// --- parseSubagentsCommand: session ---
+
+test("parseSubagentsCommand: 'session' with no arguments is a session command", () => {
+  assert.deepEqual(parseSubagentsCommand("session"), { kind: "session" });
+  assert.deepEqual(parseSubagentsCommand("  session  "), { kind: "session" });
+});
+
+test("parseSubagentsCommand: 'session' with ANY extra argument is a usage error naming the session usage string", () => {
+  for (const args of ["session --runs", "session foo", "session --runs 5", "session extra words"]) {
+    const result = parseSubagentsCommand(args);
+    assert.deepEqual(result, { kind: "usage-error", message: "Usage: /subagents session" }, args);
+  }
+});
+
+// --- buildSubagentSessionText ---
+
+// Render tests use a passthrough theme (no markup, and no bold — the theme
+// fake omits bold, which ProgressTheme allows) so the pin below is readable.
+const plainTheme: ProgressTheme = { fg: (_c, t) => t };
+
+function noWaste() {
+  return { missedTokens: 0, missedCost: 0, missCount: 0 };
+}
+
+function stubRun(overrides: Partial<ReconciledRun> = {}): ReconciledRun {
+  return {
+    runId: "r",
+    depth: 1,
+    agent: "scout",
+    status: "completed",
+    orphaned: false,
+    ...overrides,
+  };
+}
+
+function sessionReport(overrides: Partial<SubagentSessionReport> = {}): SubagentSessionReport {
+  return {
+    runs: [
+      stubRun({ runId: "r1", agent: "scout", stats: { turns: 7, userMessages: 1, toolResults: 2, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, breakdown: [], cacheWaste: noWaste() } }),
+      stubRun({ runId: "r2", agent: "planner", status: "failed", stats: { turns: 3, userMessages: 1, toolResults: 0, totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, breakdown: [], cacheWaste: noWaste() } }),
+    ],
+    totals: { input: 900, output: 300, cacheRead: 110_000, cacheWrite: 2_000, cost: 1.234 },
+    breakdown: [
+      { key: "anthropic/claude-sonnet-4", cost: 1.1, tokens: 1_200_000 },
+      { key: "Tools/summaries", cost: 0.01, tokens: 45_000 },
+      { key: "unattributed", cost: 0.124, tokens: 120_000 },
+    ],
+    cacheWaste: { missedTokens: 12_345, missedCost: 0.016, missCount: 3 },
+    byAgent: [
+      { agent: "scout", runs: 3, tokens: 1_200_000, cost: 0.98, orphaned: false },
+      { agent: "planner", runs: 2, tokens: 80_000, cost: 0.254, orphaned: false },
+      { agent: "unknown", runs: 1, tokens: 2_000, cost: 0, orphaned: true },
+    ],
+    counts: { completed: 1, failed: 1, cancelled: 0, errored: 0, running: 0, unknown: 0 },
+    ...overrides,
+  };
+}
+
+test("buildSubagentSessionText: an empty report is a short no-runs message", () => {
+  assert.equal(buildSubagentSessionText(sessionReport({ runs: [] }), plainTheme), "No subagent runs recorded for this session.");
+});
+
+test("buildSubagentSessionText: full report renders the /session layout, byAgent ordered, orphaned suffix", () => {
+  // Hit rate: 110,000 / (900 + 110,000 + 2,000) = 97.4%. Tokens via
+  // formatTokens; counters via toLocaleString.
+  const expected = [
+    "Subagent Session Report",
+    "",
+    "Runs: 2 (completed 1, failed 1, cancelled 0, errored 0, running 0, unknown 0)",
+    "Turns: 10",
+    "",
+    "Subagent Totals",
+    "Tokens:",
+    "  Input: 112,900",
+    "    Cached: 110,000 (97.4%)",
+    "    Uncached: 2,900 (2,000 written to cache)",
+    "  Output: 300",
+    "  Total: 113,200",
+    "Cost:",
+    "  Total: $1.234",
+    "  anthropic/claude-sonnet-4: $1.100 (1.2M tokens)",
+    "  Tools/summaries: $0.010 (45k tokens)",
+    "  unattributed: $0.124 (120k tokens)",
+    "Cache Re-billed: $0.016 (12,345 tokens, 3 misses)",
+    "",
+    "By Agent",
+    "  scout: 3 runs, 1.2M tokens, $0.980",
+    "  planner: 2 runs, 80k tokens, $0.254",
+    "  unknown: 1 run, 2.0k tokens, $0.000 (orphaned)",
+  ].join("\n");
+  assert.equal(buildSubagentSessionText(sessionReport(), plainTheme), expected);
+});
+
+test("buildSubagentSessionText: the theme's bold and dim are applied when present", () => {
+  const boldTheme: ProgressTheme = { fg: (c, t) => `<${c}>${t}</${c}>`, bold: (t) => `<b>${t}</b>` };
+  const text = buildSubagentSessionText(sessionReport(), boldTheme);
+  assert.match(text, /^<b>Subagent Session Report<\/b>/);
+  assert.match(text, /<dim>Runs:<\/dim> 2/);
+  assert.match(text, /<dim>Cache Re-billed:<\/dim>/);
+  assert.match(text, /<dim> \(orphaned\)<\/dim>/);
+});
+
+test("buildSubagentSessionText: the Cost section is omitted when cost is zero and nothing was re-billed", () => {
+  const text = buildSubagentSessionText(sessionReport({
+    totals: { input: 500, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    breakdown: [{ key: "anthropic/m", cost: 0, tokens: 500 }],
+    cacheWaste: noWaste(),
+    byAgent: [{ agent: "scout", runs: 2, tokens: 510, cost: 0, orphaned: false }],
+  }), plainTheme);
+  assert.doesNotMatch(text, /Cost:/);
+  assert.doesNotMatch(text, /Cache Re-billed/);
+  assert.doesNotMatch(text, /Total: \$/);
+  assert.match(text, /  scout: 2 runs, 510 tokens, \$0\.000/);
+});
+
+test("buildSubagentSessionText: the cached/uncached split appears only with cache activity", () => {
+  const withCache = buildSubagentSessionText(sessionReport(), plainTheme);
+  assert.match(withCache, /Cached: 110,000 \(97\.4%\)/);
+  assert.match(withCache, /Uncached: 2,900 \(2,000 written to cache\)/);
+
+  const withoutCache = buildSubagentSessionText(sessionReport({
+    totals: { input: 500, output: 10, cacheRead: 0, cacheWrite: 0, cost: 1.0 },
+  }), plainTheme);
+  assert.doesNotMatch(withoutCache, /Cached:/);
+  assert.doesNotMatch(withoutCache, /Uncached:/);
+  assert.match(withoutCache, /Input: 500/);
+});
+
+test("buildSubagentSessionText: per-key breakdown rows appear only with more than one bucket; unattributed only when message-only runs exist", () => {
+  const singleBucket = buildSubagentSessionText(sessionReport({
+    breakdown: [{ key: "anthropic/m", cost: 0.5, tokens: 1_000 }],
+  }), plainTheme);
+  assert.doesNotMatch(singleBucket, /anthropic\/m:/); // single bucket just repeats Total
+  assert.doesNotMatch(singleBucket, /unattributed/);
+});
+
+test("buildSubagentSessionText: cache re-billed below the $0.0001 cost threshold still shows its token detail", () => {
+  const text = buildSubagentSessionText(sessionReport({
+    cacheWaste: { missedTokens: 2_000, missedCost: 0.00005, missCount: 1 },
+  }), plainTheme);
+  assert.match(text, /Cache Re-billed: 2,000 tokens, 1 miss/);
+  assert.doesNotMatch(text, /Cache Re-billed: \$/);
 });

@@ -120,12 +120,15 @@ function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?
   };
 }
 
-function fakeCommandCtx(overrides: { hasUI?: boolean } = {}) {
+function fakeCommandCtx(overrides: { hasUI?: boolean; sessionFile?: string } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
   return {
     hasUI: overrides.hasUI ?? true,
     signal: undefined,
     cwd: process.cwd(),
+    // /subagents session reads the session through the same interface the
+    // real host ctx exposes; undefined = not persisted yet.
+    sessionManager: { getSessionFile: () => overrides.sessionFile },
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
@@ -1426,4 +1429,106 @@ test("factory: nested loader's agentDir follows <home>/.pi/agent, not a doubled 
   const expectedAgentDir = path.join(fixture.homeDir, ".pi", "agent");
   assert.equal(capturedAgentDir, expectedAgentDir);
   assert.ok(!capturedAgentDir!.includes(`.pi${path.sep}.pi`), `agentDir must not be a doubled path: ${capturedAgentDir}`);
+});
+
+// --- /subagents session wiring ---
+
+const sessionJsonLine = (entry: unknown): string => JSON.stringify(entry);
+const sessionHeaderEntry = { type: "session", version: 1, id: "s", cwd: "/work" };
+const completedSubagentResult = (runId: string, agent: string): unknown => ({
+  type: "custom_message",
+  customType: "subagent-result",
+  timestamp: "2026-01-01T00:00:05.000Z",
+  details: { jobId: "S1001", runId, status: "completed", task: { agent, task: "do the thing" }, isError: false },
+});
+
+function makeSessionDir(t: { after: (fn: () => void) => void }): string {
+  const dir = makeTmpDir();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test("wiring: /subagents session without a persisted session warns exactly once and does not crash", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  // fakeCommandCtx's sessionManager.getSessionFile() is undefined by default.
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("session", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, "No session file on disk yet - /subagents session needs a persisted session.");
+});
+
+test("wiring: /subagents session on a persisted session with a child run reports the info report", async (t) => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  // Real tmpdir fixture in childSessionDir's own convention:
+  // <parent-without-ext>/<runId>/run-0/session.jsonl.
+  const dir = makeSessionDir(t);
+  const parentFile = path.join(dir, "session.jsonl");
+  const childFile = path.join(dir, "session", "call-scout", "run-0", "session.jsonl");
+  fs.mkdirSync(path.dirname(childFile), { recursive: true });
+  fs.writeFileSync(parentFile, [
+    sessionJsonLine(sessionHeaderEntry),
+    sessionJsonLine(completedSubagentResult("call-scout", "scout")),
+  ].join("\n"), "utf8");
+  fs.writeFileSync(childFile, [
+    sessionJsonLine({ ...sessionHeaderEntry, id: "c" }),
+    sessionJsonLine({ type: "message", message: { role: "user", content: "Find fetch calls" } }),
+    sessionJsonLine({
+      type: "message",
+      message: {
+        role: "assistant", provider: "anthropic", model: "claude-sonnet-4", timestamp: 1_700_000_000_000,
+        usage: { input: 700, output: 80, cacheRead: 0, cacheWrite: 0, cost: { total: 0.0041 } },
+      },
+    }),
+  ].join("\n"), "utf8");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("session", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  assert.match(ctx.notifications[0].message, /Subagent Session Report/);
+  assert.match(ctx.notifications[0].message, /scout: 1 run/);
+});
+
+test("wiring: an active registry job labels its orphaned child directory as running", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  // Launch a real hanging job; the registry's runId is the tool call id.
+  const result = await pi.tool.execute("call-orphan-live", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  // The run's child dir exists on disk, but its completion message never
+  // reached the fixture parent session file: the orphan branch applies, and
+  // the still-active registry job labels it "running" instead of "unknown".
+  const dir = makeSessionDir(t);
+  const parentFile = path.join(dir, "session.jsonl");
+  const childFile = path.join(dir, "session", "call-orphan-live", "run-0", "session.jsonl");
+  fs.mkdirSync(path.dirname(childFile), { recursive: true });
+  fs.writeFileSync(parentFile, sessionJsonLine(sessionHeaderEntry), "utf8");
+  fs.writeFileSync(childFile, [
+    sessionJsonLine({ ...sessionHeaderEntry, id: "c" }),
+    sessionJsonLine({ type: "message", message: { role: "user", content: "mid-flight task" } }),
+  ].join("\n"), "utf8");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("session", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  assert.match(ctx.notifications[0].message, /Subagent Session Report/);
+  assert.match(ctx.notifications[0].message, /running 1/);
+  assert.match(ctx.notifications[0].message, /unknown: 1 run/);
+
+  await settleRunningJob(pi, jobId);
 });

@@ -133,6 +133,9 @@ export function createProgressTracker(
 
 export interface ProgressTheme {
   fg(color: "accent" | "dim", text: string): string;
+  /** Bolder emphasis, mirroring pi's theme.bold; optional so plain-text
+   *  fakes stay valid — renderers that want bold fall back to plain text. */
+  bold?(text: string): string;
 }
 
 function statusFor(progress: TaskProgress): string {

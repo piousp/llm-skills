@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -11,9 +12,10 @@ import { runSingleTask } from "../src/task-runner.ts";
 import { validateSubagentParams, resolveAgent } from "../src/validate.ts";
 import type { ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
-import { createJobRegistry, createSettleBarrier, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
+import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, buildSubagentSessionText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
+import { buildSubagentSessionReport, type ReconcileFs } from "../src/session-reconcile.ts";
 import { createPeekManager } from "../src/peek-window.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { toErrorMessage } from "../src/warn.ts";
@@ -29,6 +31,30 @@ function errorResult(error: string) {
     content: [{ type: "text" as const, text: error }],
     details: { error },
     isError: true,
+  };
+}
+
+// The ReconcileFs seam for /subagents session: thin synchronous node reads
+// where every failure (missing session.jsonl, unreadable dir) degrades to
+// undefined, which the reconciliation treats as "not there" — a run whose
+// child file vanished falls back to its completion message's usage, a
+// missing directory just ends the walk.
+function nodeReconcileFs(): ReconcileFs {
+  return {
+    readTextFile: (p) => {
+      try {
+        return readFileSync(p, "utf8");
+      } catch {
+        return undefined;
+      }
+    },
+    listDir: (p) => {
+      try {
+        return readdirSync(p);
+      } catch {
+        return undefined;
+      }
+    },
   };
 }
 
@@ -236,7 +262,7 @@ export default async function (
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents peek|status|cancel <id> or /subagents clear",
+    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents clear, or /subagents session",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
@@ -325,6 +351,19 @@ export default async function (
       }
       if (command.kind === "clear") {
         ctx.ui.notify(describeClearResult(jobs.clearFinished()), "info");
+        return;
+      }
+      if (command.kind === "session") {
+        const sessionFile = ctx.sessionManager.getSessionFile();
+        if (!sessionFile) {
+          ctx.ui.notify("No session file on disk yet - /subagents session needs a persisted session.", "warning");
+          return;
+        }
+        // Registry used ONLY to label in-flight orphans as "running", never
+        // as a usage source (usage is always read from disk).
+        const activeRunIds = new Set(jobs.list().filter((j) => isActive(j.state)).map((j) => j.runId));
+        const report = buildSubagentSessionReport(sessionFile, nodeReconcileFs(), activeRunIds);
+        ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
         return;
       }
       ctx.ui.notify(command.message, "warning");

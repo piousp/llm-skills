@@ -1,8 +1,9 @@
 import { buildProgressLine, activityWord, type ProgressTheme } from "./progress.ts";
 import { firstLine, truncate } from "./text-utils.ts";
-import { formatRunUsage } from "./usage.ts";
+import { formatRunUsage, formatTokens } from "./usage.ts";
 import type { AgentRunResult } from "./run.ts";
 import { isActive, type CancelResult, type JobSnapshot } from "./background-jobs.ts";
+import { RECONCILED_RUN_STATUSES, type ReconciledRunStatus, type SubagentSessionReport } from "./session-reconcile.ts";
 
 /** "0s", "1m 00s", "1h 00m" — stable-width, no fractional seconds. */
 export function formatElapsed(ms: number): string {
@@ -103,6 +104,7 @@ export type SubagentsCommand =
   | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
   | { readonly kind: "clear" }
+  | { readonly kind: "session" }
   | { readonly kind: "usage-error"; readonly message: string };
 
 export function parseSubagentsCommand(args: string): SubagentsCommand {
@@ -126,7 +128,13 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     return id ? { kind: "peek", id } : { kind: "peek" };
   }
   if (sub === "clear") return { kind: "clear" };
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] [id] [|clear]` };
+  if (sub === "session") {
+    // session takes no arguments (v1: no --runs, no filters) — anything extra
+    // is a usage error rather than a silently ignored suffix.
+    if (rest.length > 0) return { kind: "usage-error", message: "Usage: /subagents session" };
+    return { kind: "session" };
+  }
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] [id] [|clear|session]` };
 }
 
 // Shared ambiguous-target wording for the bare /subagents peek, status and
@@ -211,4 +219,86 @@ export function describeCancelResult(result: CancelResult): { text: string; leve
     case "not-found":
       return { text: jobNotFoundText(result.id), level: "warning" };
   }
+}
+
+// --- /subagents session ---
+
+// The per-agent rows render exactly like the totals' cost rows; the optional
+// bold emphasis mirrors pi's section headers (theme.bold on the real TUI
+// theme; ProgressTheme keeps it optional so plain-text fakes still work).
+function buildSubagentSessionSections(report: SubagentSessionReport, theme: ProgressTheme): string {
+  const bold = theme.bold ? (text: string) => theme.bold!(text) : (text: string) => text;
+  const dim = (text: string) => theme.fg("dim", text);
+  // Locale pinned so report text is byte-identical across machines (bare
+  // toLocaleString() follows the host locale: some render a narrow space).
+  const counter = (n: number) => n.toLocaleString("en-US");
+
+  const lines: string[] = [];
+  lines.push(bold("Subagent Session Report"));
+  lines.push("");
+
+  const countsText = RECONCILED_RUN_STATUSES.map((status) => `${status} ${counter(report.counts[status])}`).join(", ");
+  lines.push(`${dim("Runs:")} ${counter(report.runs.length)} (${countsText})`);
+  const turns = report.runs.reduce((sum, run) => sum + (run.stats?.turns ?? 0), 0);
+  lines.push(`${dim("Turns:")} ${counter(turns)}`);
+
+  lines.push("");
+  lines.push(bold("Subagent Totals"));
+  lines.push(dim("Tokens:"));
+  const { input, cacheRead, cacheWrite } = report.totals;
+  // "Input" is the full prompt volume. With cache activity, split it into
+  // cached (served from cache) vs uncached (everything else) — the only
+  // provider-independent split. Cache writes, where reported, are a detail
+  // of the uncached portion. (pi's own split rule, verbatim.)
+  const promptTokens = input + cacheRead + cacheWrite;
+  lines.push(`  ${dim("Input:")} ${counter(promptTokens)}`);
+  if (promptTokens > 0 && (cacheRead > 0 || cacheWrite > 0)) {
+    const hitRate = dim(`(${((cacheRead / promptTokens) * 100).toFixed(1)}%)`);
+    lines.push(`    ${dim("Cached:")} ${counter(cacheRead)} ${hitRate}`);
+    const written = cacheWrite > 0 ? ` ${dim(`(${counter(cacheWrite)} written to cache)`)}` : "";
+    lines.push(`    ${dim("Uncached:")} ${counter(input + cacheWrite)}${written}`);
+  }
+  lines.push(`  ${dim("Output:")} ${counter(report.totals.output)}`);
+  lines.push(`  ${dim("Total:")} ${counter(promptTokens + report.totals.output)}`);
+
+  if (report.totals.cost > 0 || report.cacheWaste.missedTokens > 0) {
+    lines.push(dim("Cost:"));
+    lines.push(`  ${dim("Total:")} $${report.totals.cost.toFixed(3)}`);
+    // Per-key rows only when there is more than one bucket — a single bucket
+    // just repeats the Total above (pi's rule).
+    if (report.breakdown.length > 1) {
+      for (const row of report.breakdown) {
+        lines.push(`  ${dim(`${row.key}:`)} $${row.cost.toFixed(3)} ${dim(`(${formatTokens(row.tokens)} tokens)`)}`);
+      }
+    }
+    if (report.cacheWaste.missedTokens > 0) {
+      const missLabel = report.cacheWaste.missCount === 1 ? "1 miss" : `${report.cacheWaste.missCount} misses`;
+      const detail = `${counter(report.cacheWaste.missedTokens)} tokens, ${missLabel}`;
+      lines.push(
+        report.cacheWaste.missedCost >= 0.0001
+          ? `${dim("Cache Re-billed:")} $${report.cacheWaste.missedCost.toFixed(3)} ${dim(`(${detail})`)}`
+          : `${dim("Cache Re-billed:")} ${detail}`,
+      );
+    }
+  }
+
+  if (report.byAgent.length > 0) {
+    lines.push("");
+    lines.push(bold("By Agent"));
+    for (const row of report.byAgent) {
+      const orphanSuffix = row.orphaned ? dim(" (orphaned)") : "";
+      lines.push(
+        `  ${row.agent}: ${counter(row.runs)} ${row.runs === 1 ? "run" : "runs"}, ${formatTokens(row.tokens)} tokens, $${row.cost.toFixed(3)}${orphanSuffix}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+// Full /subagents session view: aggregate totals plus a per-agent breakdown,
+// mirroring pi's /session layout (bold section headers, dim labels) but
+// scoped to the session's subagent runs.
+export function buildSubagentSessionText(report: SubagentSessionReport, theme: ProgressTheme): string {
+  if (report.runs.length === 0) return "No subagent runs recorded for this session.";
+  return buildSubagentSessionSections(report, theme);
 }
