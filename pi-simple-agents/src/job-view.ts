@@ -126,7 +126,7 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     return id ? { kind: "peek", id } : { kind: "peek" };
   }
   if (sub === "clear") return { kind: "clear" };
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] <id> [|clear]` };
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] [id] [|clear]` };
 }
 
 // Shared ambiguous-target wording for the bare /subagents peek, status and
