@@ -13,7 +13,7 @@ import type { ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolvePeekTarget } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
 import { createPeekManager } from "../src/peek-window.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { toErrorMessage } from "../src/warn.ts";
@@ -245,16 +245,48 @@ export default async function (
         return;
       }
       if (command.kind === "status") {
-        const job = jobs.get(command.id);
-        if (!job) {
-          ctx.ui.notify(jobNotFoundText(command.id), "warning");
-          return;
+        let job: JobSnapshot;
+        if (command.id) {
+          const found = jobs.get(command.id);
+          if (!found) {
+            ctx.ui.notify(jobNotFoundText(command.id), "warning");
+            return;
+          }
+          job = found;
+        } else {
+          // Bare status auto-picks its target: the single active job, or the
+          // newest settled one; several actives are ambiguous and ask for an id.
+          const target = resolveAutoTarget(jobs.list());
+          if (target.kind === "ambiguous") {
+            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
+            return;
+          }
+          if (target.kind === "none") {
+            ctx.ui.notify(NO_JOBS_TEXT, "info");
+            return;
+          }
+          job = target.job;
         }
         ctx.ui.notify(buildJobStatusText(job, Date.now(), ctx.ui.theme), "info");
         return;
       }
       if (command.kind === "cancel") {
-        const { text, level } = describeCancelResult(jobs.cancel(command.id));
+        let cancelId = command.id;
+        if (!cancelId) {
+          // Bare cancel only targets active jobs (a settled job is nothing to
+          // cancel); several actives are ambiguous and ask for an id.
+          const target = resolveActiveTarget(jobs.list());
+          if (target.kind === "ambiguous") {
+            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
+            return;
+          }
+          if (target.kind === "none") {
+            ctx.ui.notify("No running jobs to cancel.", "warning");
+            return;
+          }
+          cancelId = target.job.id;
+        }
+        const { text, level } = describeCancelResult(jobs.cancel(cancelId));
         ctx.ui.notify(text, level);
         return;
       }
@@ -277,9 +309,9 @@ export default async function (
           }
           job = found;
         } else {
-          const target = resolvePeekTarget(jobs.list());
+          const target = resolveAutoTarget(jobs.list());
           if (target.kind === "ambiguous") {
-            ctx.ui.notify(`Several jobs running \u2014 specify an id: ${target.ids.join(", ")}`, "info");
+            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
             return;
           }
           if (target.kind === "none") {

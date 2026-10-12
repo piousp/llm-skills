@@ -99,8 +99,8 @@ export function buildJobListText(jobs: readonly JobSnapshot[], now: number, them
 
 export type SubagentsCommand =
   | { readonly kind: "list" }
-  | { readonly kind: "cancel"; readonly id: string }
-  | { readonly kind: "status"; readonly id: string }
+  | { readonly kind: "cancel"; readonly id?: string }
+  | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
   | { readonly kind: "clear" }
   | { readonly kind: "usage-error"; readonly message: string };
@@ -111,14 +111,14 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
 
   const [sub, ...rest] = trimmed.split(/\s+/);
   if (sub === "cancel") {
+    // Bare cancel auto-resolves its target (active jobs only).
     const id = rest[0];
-    if (!id) return { kind: "usage-error", message: "Usage: /subagents cancel <id>" };
-    return { kind: "cancel", id };
+    return id ? { kind: "cancel", id } : { kind: "cancel" };
   }
   if (sub === "status") {
+    // Bare status auto-resolves its target (active first, newest settled fallback).
     const id = rest[0];
-    if (!id) return { kind: "usage-error", message: "Usage: /subagents status <id>" };
-    return { kind: "status", id };
+    return id ? { kind: "status", id } : { kind: "status" };
   }
   if (sub === "peek") {
     // Extra args ignored, same rule as status/cancel: first token is the id.
@@ -129,20 +129,38 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
   return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] <id> [|clear]` };
 }
 
-// Picks the default target for a bare `/subagents peek` (no id): exactly one
-// active job wins, several actives are ambiguous (ids in the caller's order —
-// newest-first when the caller passes jobs.list()), and with no active jobs
-// the newest settled one (jobs[0], list() is newest-first) is shown.
+// Shared ambiguous-target wording for the bare /subagents peek, status and
+// cancel fallbacks (several active jobs — the user must pick an id).
+export function ambiguousJobsText(ids: readonly string[]): string {
+  return `Several jobs running \u2014 specify an id: ${ids.join(", ")}`;
+}
+
+// Picks the default target for a bare `/subagents peek|status` (no id):
+// exactly one active job wins, several actives are ambiguous (ids in the
+// caller's order — newest-first when the caller passes jobs.list()), and
+// with no active jobs the newest settled one (jobs[0], list() is
+// newest-first) is shown.
 export type PeekTarget =
   | { readonly kind: "job"; readonly job: JobSnapshot }
   | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
   | { readonly kind: "none" };
 
-export function resolvePeekTarget(jobs: readonly JobSnapshot[]): PeekTarget {
+export function resolveAutoTarget(jobs: readonly JobSnapshot[]): PeekTarget {
   const active = jobs.filter((j) => isActive(j.state));
   if (active.length === 1) return { kind: "job", job: active[0] };
   if (active.length > 1) return { kind: "ambiguous", ids: active.map((j) => j.id) };
   if (jobs.length > 0) return { kind: "job", job: jobs[0] };
+  return { kind: "none" };
+}
+
+// Picks the default target for a bare `/subagents cancel` (no id): only
+// ACTIVE jobs are candidates (a settled job is nothing to cancel). Same union
+// and shape as resolveAutoTarget, but with no active jobs the result is
+// always none — no settled fallback.
+export function resolveActiveTarget(jobs: readonly JobSnapshot[]): PeekTarget {
+  const active = jobs.filter((j) => isActive(j.state));
+  if (active.length === 1) return { kind: "job", job: active[0] };
+  if (active.length > 1) return { kind: "ambiguous", ids: active.map((j) => j.id) };
   return { kind: "none" };
 }
 

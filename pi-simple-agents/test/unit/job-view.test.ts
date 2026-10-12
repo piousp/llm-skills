@@ -7,7 +7,8 @@ import {
   buildJobStatusText,
   jobNotFoundText,
   parseSubagentsCommand,
-  resolvePeekTarget,
+  resolveAutoTarget,
+  resolveActiveTarget,
   describeCancelResult,
   describeClearResult,
 } from "../../src/job-view.ts";
@@ -150,17 +151,14 @@ test("parseSubagentsCommand: whitespace-only is list", () => {
 test("parseSubagentsCommand: 'cancel <id>' is a cancel command", () => {
   assert.deepEqual(parseSubagentsCommand("cancel S1002"), { kind: "cancel", id: "S1002" });
 });
-test("parseSubagentsCommand: 'cancel' with no id is a usage error", () => {
-  const result = parseSubagentsCommand("cancel");
-  assert.equal(result.kind, "usage-error");
+test("parseSubagentsCommand: bare 'cancel' auto-resolves its target", () => {
+  assert.deepEqual(parseSubagentsCommand("cancel"), { kind: "cancel" });
 });
 test("parseSubagentsCommand: 'status <id>' is a status command", () => {
   assert.deepEqual(parseSubagentsCommand("status S1001"), { kind: "status", id: "S1001" });
 });
-test("parseSubagentsCommand: 'status' with no id is a usage error naming the status usage", () => {
-  const result = parseSubagentsCommand("status");
-  assert.equal(result.kind, "usage-error");
-  if (result.kind === "usage-error") assert.match(result.message, /status <id>/);
+test("parseSubagentsCommand: bare 'status' auto-resolves its target", () => {
+  assert.deepEqual(parseSubagentsCommand("status"), { kind: "status" });
 });
 test("parseSubagentsCommand: 'status <id> extra' takes the first token as the id (same rule as cancel)", () => {
   assert.deepEqual(parseSubagentsCommand("status S1001 extra words"), { kind: "status", id: "S1001" });
@@ -192,30 +190,50 @@ test("parseSubagentsCommand: 'peek S1002 extra' takes the first token as the id 
   assert.deepEqual(parseSubagentsCommand("peek S1002 extra words"), { kind: "peek", id: "S1002" });
 });
 
-// --- resolvePeekTarget ---
+// --- resolveAutoTarget ---
 
-test("resolvePeekTarget: exactly one active job wins", () => {
+test("resolveAutoTarget: exactly one active job wins", () => {
   const job = runningJob({ id: "S1001" });
-  assert.deepEqual(resolvePeekTarget([job]), { kind: "job", job });
+  assert.deepEqual(resolveAutoTarget([job]), { kind: "job", job });
 });
-test("resolvePeekTarget: several active jobs are ambiguous, ids newest-first (caller's list order)", () => {
+test("resolveAutoTarget: several active jobs are ambiguous, ids newest-first (caller's list order)", () => {
   const a = runningJob({ id: "S1002" });
   const b = runningJob({ id: "S1003" });
   const c = runningJob({ id: "S1004" });
-  const result = resolvePeekTarget([c, b, a]);
+  const result = resolveAutoTarget([c, b, a]);
   assert.deepEqual(result, { kind: "ambiguous", ids: ["S1004", "S1003", "S1002"] });
 });
-test("resolvePeekTarget: no active jobs -> the newest settled one (jobs[0])", () => {
+test("resolveAutoTarget: no active jobs -> the newest settled one (jobs[0])", () => {
   const older: SettledJob = { ...runningJob({ id: "S1001" }), state: { status: "completed", settledAt: 2_000, result: sampleResult } };
   const newer: SettledJob = { ...runningJob({ id: "S1002" }), state: { status: "completed", settledAt: 3_000, result: sampleResult } };
-  assert.deepEqual(resolvePeekTarget([newer, older]), { kind: "job", job: newer });
+  assert.deepEqual(resolveAutoTarget([newer, older]), { kind: "job", job: newer });
 });
-test("resolvePeekTarget: an empty list is none", () => {
-  assert.deepEqual(resolvePeekTarget([]), { kind: "none" });
+test("resolveAutoTarget: an empty list is none", () => {
+  assert.deepEqual(resolveAutoTarget([]), { kind: "none" });
 });
-test("resolvePeekTarget: a cancelling job still counts as active", () => {
+test("resolveAutoTarget: a cancelling job still counts as active", () => {
   const job = runningJob({ state: { status: "cancelling", reason: "user" } });
-  assert.deepEqual(resolvePeekTarget([job]), { kind: "job", job });
+  assert.deepEqual(resolveAutoTarget([job]), { kind: "job", job });
+});
+
+// --- resolveActiveTarget ---
+
+test("resolveActiveTarget: exactly one active job wins", () => {
+  const job = runningJob({ id: "S1001" });
+  assert.deepEqual(resolveActiveTarget([job]), { kind: "job", job });
+});
+test("resolveActiveTarget: several active jobs are ambiguous, ids newest-first (caller's list order)", () => {
+  const a = runningJob({ id: "S1002" });
+  const b = runningJob({ id: "S1003" });
+  const result = resolveActiveTarget([b, a]);
+  assert.deepEqual(result, { kind: "ambiguous", ids: ["S1003", "S1002"] });
+});
+test("resolveActiveTarget: no active jobs -> none, even when settled jobs exist", () => {
+  const settled: SettledJob = { ...runningJob({ id: "S1001" }), state: { status: "completed", settledAt: 2_000, result: sampleResult } };
+  assert.deepEqual(resolveActiveTarget([settled]), { kind: "none" });
+});
+test("resolveActiveTarget: an empty list is none", () => {
+  assert.deepEqual(resolveActiveTarget([]), { kind: "none" });
 });
 
 test("describeClearResult: some removed reports the count, singular for 1", () => {
