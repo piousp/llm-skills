@@ -138,6 +138,10 @@ export interface RunAgentViaSdkOptions {
   sessionManager: CreateAgentSessionOptions["sessionManager"];
   signal?: AbortSignal;
   onProgressEvent?: (event: SubagentProgressEvent) => void;
+  /** Raw (untranslated) AgentSessionEvent tap, invoked before usage/progress
+   * translation and independent of onProgressEvent — the transcript feed
+   * (src/transcript.ts) is the intended consumer. */
+  onSessionEvent?: (event: AgentSessionEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
   /** Host run mode, used to gate MCP/extension initialization to modes that exit cleanly (see bindExtensionsIfNeeded). */
   mode?: ExtensionMode;
@@ -390,6 +394,10 @@ export function runAgentViaSdk(
         // done-guard and the per-token phase dedupe live in the tracker
         // (progress.ts), not here.
         const onSessionEvent = (event: AgentSessionEvent) => {
+          // The transcript hook fires first, before usage/translation logic,
+          // so it sees every raw event even when the progress collector is
+          // absent (the early return below would otherwise skip it).
+          options.onSessionEvent?.(event);
           const before = usageAcc;
           usageAcc = applyUsageEvent(usageAcc, event);
           const onProgressEvent = options.onProgressEvent;

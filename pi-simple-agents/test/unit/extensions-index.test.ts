@@ -75,6 +75,10 @@ function makeFakePi() {
       return () => handlers.delete(event);
     },
     sendMessage: (message: unknown, options?: unknown) => sentMessages.push({ message, options }),
+    // Host settings seam: the peek overlay's render prefs read
+    // hideThinkingBlock through pi.getSettings(); tests that need a specific
+    // value override this in place.
+    getSettings: () => ({}),
     commands,
     messageRenderers,
     handlers,
@@ -462,7 +466,7 @@ async function settleRunningJob(pi: ReturnType<typeof makeFakePi>, jobId: string
 test("wiring: end-to-end — a real job's stream phases, tools, and usage reach the widget and /subagents status", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
-  const { session, emit, listeners } = hangingStreamingSession();
+  const { session, listeners, emit } = hangingStreamingSession();
   // getModel resolves a fake model: the entry derives the nested loader's
   // homeDir from pathsOverride, and the fixture scout has no model, so no
   // real model resolution happens — this test's subject is stream phases.
@@ -855,6 +859,158 @@ test("wiring: /subagents cancel on a real running job, then /subagents clear, th
   const afterClearCtx = fakeExecuteCtx({ cwd: fixture.cwd });
   await pi.commands.get("subagents")!.handler("", afterClearCtx);
   assert.doesNotMatch(afterClearCtx.notifications.at(-1)!.message, new RegExp(jobId));
+});
+
+// --- /subagents peek wiring ---
+
+// Command ctx with the custom() seam the peek handler opens its overlay
+// through: every call is recorded with its factory and options, and the
+// returned promise stays pending until the test resolves it via its gate.
+function fakePeekCommandCtx(overrides: { mode?: string; hasUI?: boolean } = {}) {
+  const notifications: Array<{ message: string; type?: string }> = [];
+  const customCalls: Array<{ factory: Function; options: any }> = [];
+  const customGates: Array<(value: "toggle" | undefined) => void> = [];
+  return {
+    mode: overrides.mode ?? "tui",
+    hasUI: overrides.hasUI ?? true,
+    signal: undefined,
+    cwd: process.cwd(),
+    sessionManager: { getSessionFile: () => undefined },
+    ui: {
+      notify: (message: string, type?: string) => notifications.push({ message, type }),
+      setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
+      theme: fakeTheme,
+      custom: (factory: Function, options: any) => {
+        customCalls.push({ factory, options });
+        return new Promise<"toggle" | undefined>((resolve) => customGates.push(resolve));
+      },
+    },
+    notifications,
+    customCalls,
+    customGates,
+  };
+}
+
+test("wiring: /subagents peek in a non-TUI context warns and never opens the overlay", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const ctx = fakePeekCommandCtx({ mode: "print" });
+  await pi.commands.get("subagents")!.handler("peek", ctx as any);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.match(ctx.notifications[0].message, /peek requires an interactive TUI session/);
+  assert.equal(ctx.customCalls.length, 0);
+});
+
+test("wiring: /subagents peek with an unknown id warns with the shared jobNotFoundText", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const ctx = fakePeekCommandCtx();
+  await pi.commands.get("subagents")!.handler("peek S9999", ctx as any);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, jobNotFoundText("S9999"));
+  assert.equal(ctx.customCalls.length, 0);
+});
+
+test("wiring: /subagents peek with a single running job mounts the overlay floating, rendering a live frame", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => ({ fake: true }) } as unknown as ModelRuntime;
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
+
+  const ctx = fakePeekCommandCtx();
+  const result = await pi.tool.execute("call-peek", { agent: "scout", task: "stream for peek" }, undefined, undefined, ctx as any);
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  // Bare peek (no id): resolvePeekTarget picks the single active job.
+  await pi.commands.get("subagents")!.handler("peek", ctx as any);
+
+  assert.equal(ctx.notifications.length, 0);
+  assert.equal(ctx.customCalls.length, 1);
+  assert.equal(ctx.customCalls[0].options.overlay, true);
+  assert.equal(ctx.customCalls[0].options.overlayOptions.width, "80%"); // floating first (decision C)
+
+  // Mount through the captured factory with fake TUI/keybindings: the fresh
+  // component must render non-empty, width-fitting lines with a footer.
+  const component = ctx.customCalls[0].factory(
+    { requestRender: () => {} },
+    fakeTheme,
+    { matches: () => false },
+    () => ctx.customGates[0](undefined),
+  ) as { render(width: number): string[]; dispose(): void };
+
+  const lines = component.render(80);
+  assert.ok(lines.length > 0);
+  // Footer sits above the bottom border line (the peek frame is a full box).
+  assert.match(lines.at(-2)!, /Esc\/q close/);
+  assert.match(lines[0], new RegExp(jobId));
+  for (const line of lines) {
+    assert.ok(line.replace(/<[^>]+>/g, "").length <= 80, `line too wide: ${line}`);
+  }
+
+  // Clean teardown: stop the component's pulse, then settle the job so the
+  // test process can exit (same hygiene as the other end-to-end tests).
+  component.dispose();
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: peek render prefs read the host settings and the TUI tool-expansion state on every render", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  (pi as any).getSettings = () => ({ hideThinkingBlock: true });
+  const { session, listeners, emit } = hangingStreamingSession();
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => ({ fake: true }) } as unknown as ModelRuntime;
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
+
+  const ctx = fakePeekCommandCtx();
+  (ctx.ui as any).getToolsExpanded = () => false; // the TUI reports collapsed tool output
+  const result = await pi.tool.execute("call-peek", { agent: "scout", task: "stream for peek" }, undefined, undefined, ctx as any);
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  // Same dispatch order a real run produces: a thinking delta, then a tool
+  // executes and finishes.
+  emit([
+    { type: "message_update", message: {}, assistantMessageEvent: { type: "thinking_delta", delta: "secret hunch", partial: {} } },
+    { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: { path: "a.ts" } },
+    { type: "tool_execution_end", toolCallId: "t1", result: "file contents", isError: false },
+  ]);
+
+  await pi.commands.get("subagents")!.handler("peek", ctx as any);
+  assert.equal(ctx.customCalls.length, 1);
+
+  const component = ctx.customCalls[0].factory(
+    { requestRender: () => {} },
+    fakeTheme,
+    { matches: () => false },
+    () => ctx.customGates[0](undefined),
+  ) as { render(width: number): string[]; dispose(): void };
+
+  const hidden = component.render(80).join("\n");
+  assert.doesNotMatch(hidden, /secret hunch/); // hideThinkingBlock=true from the host settings
+  assert.doesNotMatch(hidden, /file contents/); // getToolsExpanded=false: results collapsed
+  assert.match(hidden, /\u25b8 read/); // collapsed tools keep their start line
+
+  // Flip both prefs: the same component instance renders differently on the
+  // next frame (prefs are read live on every render, never cached).
+  (pi as any).getSettings = () => ({});
+  (ctx.ui as any).getToolsExpanded = () => true;
+  const shown = component.render(80).join("\n");
+  assert.match(shown, /secret hunch/);
+  assert.match(shown, /file contents/);
+
+  // Clean teardown (same hygiene as the other peek wiring tests).
+  component.dispose();
+  await settleRunningJob(pi, jobId);
 });
 
 // (e)

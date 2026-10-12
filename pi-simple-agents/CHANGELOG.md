@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **New: `/subagents peek [id]` — a live window over a background job's activity.** A floating overlay renders the job's transcript as it streams: assistant text, the last few lines of the agent's thinking, and tool calls with their results, tailed and elided to fit. With no id it opens on the single active job (several actives report the ids to pick from) or the newest settled one; an unknown id warns exactly like `cancel`. While the job runs, a 250 ms pulse repaints the window — it stops itself the moment the job settles, and the frame freezes to the final result line (success/`FAILED`/error text, with the usage footer). `w` toggles between the floating window (80% × 50%) and a fullscreen takeover; Esc or `q` closes. Requires an interactive TUI session; other modes get a warning. The body scrolls with `↑/↓`, PgUp/PgDn, or the mouse wheel and auto re-follows once you return to the bottom; the scroll position survives a `w` toggle, and the window follows the session's thinking-visibility and tools-expanded preferences. Read-only this iteration — peeking never steers the peeked subagent (no input/steering channel; future work).
+- The capture side is unchanged in cost: session events fold into the bounded transcript (`src/transcript.ts`) regardless of whether anyone is watching, and nothing re-renders unless a peek window is actually open — the perf guarantee of the widget's dedupe path is preserved.
+
 ## 1.2.1
 
 - **Fix: subagent child sessions silently lost every user package tool.** The 1.2.0 entry's `homeDir` derivation from `agentsDir` was one `dirname` short: the nested loader got `<home>/.pi/.pi/agent`, a nonexistent path whose empty settings loaded zero user packages — agents asking for package tools (`web_search`, `web_read`, …) ran tool-less and the model faked its tool calls as plain text, which settled as a `completed` job carrying that garbage as its result. The derivation now recovers the real home root (agents → agent → .pi → home), so the nested loader reads `<home>/.pi/agent` like 1.1.0 did.

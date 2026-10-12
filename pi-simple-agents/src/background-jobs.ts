@@ -1,4 +1,5 @@
 import { createProgressTracker, initialTaskProgress, type ProgressTracker, type TaskProgress } from "./progress.ts";
+import { createTranscriptSink, type TranscriptSink, type TranscriptState } from "./transcript.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 import type { AgentRunResult } from "./run.ts";
 
@@ -35,7 +36,7 @@ export interface JobSnapshot {
 
 export type SettledJob = JobSnapshot & { readonly state: Extract<JobState, { settledAt: number }> };
 
-export type JobRun = (io: { signal: AbortSignal; tracker: ProgressTracker }) => Promise<AgentRunResult>;
+export type JobRun = (io: { signal: AbortSignal; tracker: ProgressTracker; transcript: TranscriptSink }) => Promise<AgentRunResult>;
 
 export interface JobRegistryDeps {
   now: () => number;
@@ -53,6 +54,8 @@ export interface JobRegistry {
   start(input: { runId: string; task: JobTask; run: JobRun }): JobSnapshot;
   /** Snapshot of the job with the given id, or undefined when unknown (also for ids pruned by maxRecent). */
   get(id: string): JobSnapshot | undefined;
+  /** Transcript snapshot of the job with the given id, or undefined when unknown (also for ids pruned by maxRecent) — same semantics as `get`. */
+  getTranscript(id: string): TranscriptState | undefined;
   cancel(id: string): CancelResult;
   cancelAll(): void;
   shutdown(): void;
@@ -84,6 +87,7 @@ interface JobRecord {
   progress: TaskProgress;
   state: JobState;
   controller: AbortController;
+  transcript: TranscriptSink;
 }
 
 function toSnapshot(record: JobRecord): JobSnapshot {
@@ -175,6 +179,9 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     const id = `S${nextId}`;
     nextId += 1;
     const controller = new AbortController();
+    // Append-only transcript of the run's raw session events (see
+    // src/transcript.ts); append-only means feeding it never emits onChange,
+    // so the live widget feed is unaffected.
     const record: JobRecord = {
       id,
       runId: input.runId,
@@ -183,6 +190,7 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
       progress: initialTaskProgress(input.task.agent),
       state: { status: "running" },
       controller,
+      transcript: createTranscriptSink(),
     };
     jobs.set(id, record);
 
@@ -194,7 +202,7 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     // Scheduled on a later microtask so start() always returns before `run`
     // begins — a synchronous throw inside `run` is caught here too.
     Promise.resolve()
-      .then(() => input.run({ signal: controller.signal, tracker }))
+      .then(() => input.run({ signal: controller.signal, tracker, transcript: record.transcript }))
       .then(
         (result) => {
           if (record.state.status === "cancelling") {
@@ -265,7 +273,12 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     return record ? toSnapshot(record) : undefined;
   }
 
-  return { start, get, cancel, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
+  function getTranscript(id: string): TranscriptState | undefined {
+    const record = jobs.get(id);
+    return record ? record.transcript.snapshot() : undefined;
+  }
+
+  return { start, get, getTranscript, cancel, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
 }
 
 /**

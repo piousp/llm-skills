@@ -45,6 +45,17 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
 - `src/run.ts` — `runAgentViaSdk` keeps its `new Promise` + async-IIFE shape on purpose: `settleOnce`
   must be externally callable by timeout/maxTurns/abort listeners. The two abort checks are
   phase-distinct (pre-bind, post-prompt) and live apart deliberately.
+- `src/transcript.ts` — bounded in-memory transcript of a background job's live activity
+  (`TranscriptEntry`/`TranscriptState`, pure `applySessionEvent` reducer, one `createTranscriptSink`
+  factory). Fed through `runSingleTask`'s `onSessionEvent` seam (`src/run.ts` → `src/task-runner.ts` →
+  `src/background-jobs.ts`, which exposes it as `jobs.getTranscript(id)`); append-only, render-free —
+  capturing costs nothing unless a peek window renders it.
+- `src/peek-window.ts` — the `/subagents peek` overlay: pure `buildPeekLines` (transcript tail —
+  text, 5-line thinking cap, tool starts/ends, elision, frozen settled result), the
+  `PeekOverlayComponent` (owns the 250 ms pulse that stops itself once the job settles), and
+  `createPeekManager` (fire-and-forget `ctx.ui.custom` overlay, floating-first with `w` cycling to
+  fullscreen, warn-path on rejection). Structural `Peek*` theme/keybindings/tui subsets keep it
+  testable without pi-tui.
 
 ### Defensive optionality (test seams)
 

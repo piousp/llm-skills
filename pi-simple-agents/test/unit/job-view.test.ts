@@ -7,6 +7,7 @@ import {
   buildJobStatusText,
   jobNotFoundText,
   parseSubagentsCommand,
+  resolvePeekTarget,
   describeCancelResult,
   describeClearResult,
 } from "../../src/job-view.ts";
@@ -167,8 +168,8 @@ test("parseSubagentsCommand: 'status <id> extra' takes the first token as the id
 test("parseSubagentsCommand: unknown subcommand lists status in the usage hint", () => {
   const result = parseSubagentsCommand("foo");
   if (result.kind === "usage-error") {
-    assert.match(result.message, /status <id>/);
-    assert.match(result.message, /cancel <id>/);
+    assert.match(result.message, /status\|peek\|cancel/);
+    assert.match(result.message, /\|clear/);
   }
 });
 test("parseSubagentsCommand: unknown subcommand is a usage error", () => {
@@ -177,6 +178,44 @@ test("parseSubagentsCommand: unknown subcommand is a usage error", () => {
 });
 test("parseSubagentsCommand: 'clear' is a clear command", () => {
   assert.deepEqual(parseSubagentsCommand("clear"), { kind: "clear" });
+});
+
+// --- parseSubagentsCommand: peek ---
+
+test("parseSubagentsCommand: bare 'peek' targets nothing yet", () => {
+  assert.deepEqual(parseSubagentsCommand("peek"), { kind: "peek" });
+});
+test("parseSubagentsCommand: 'peek S1002' targets that id", () => {
+  assert.deepEqual(parseSubagentsCommand("peek S1002"), { kind: "peek", id: "S1002" });
+});
+test("parseSubagentsCommand: 'peek S1002 extra' takes the first token as the id (same rule as status/cancel)", () => {
+  assert.deepEqual(parseSubagentsCommand("peek S1002 extra words"), { kind: "peek", id: "S1002" });
+});
+
+// --- resolvePeekTarget ---
+
+test("resolvePeekTarget: exactly one active job wins", () => {
+  const job = runningJob({ id: "S1001" });
+  assert.deepEqual(resolvePeekTarget([job]), { kind: "job", job });
+});
+test("resolvePeekTarget: several active jobs are ambiguous, ids newest-first (caller's list order)", () => {
+  const a = runningJob({ id: "S1002" });
+  const b = runningJob({ id: "S1003" });
+  const c = runningJob({ id: "S1004" });
+  const result = resolvePeekTarget([c, b, a]);
+  assert.deepEqual(result, { kind: "ambiguous", ids: ["S1004", "S1003", "S1002"] });
+});
+test("resolvePeekTarget: no active jobs -> the newest settled one (jobs[0])", () => {
+  const older: SettledJob = { ...runningJob({ id: "S1001" }), state: { status: "completed", settledAt: 2_000, result: sampleResult } };
+  const newer: SettledJob = { ...runningJob({ id: "S1002" }), state: { status: "completed", settledAt: 3_000, result: sampleResult } };
+  assert.deepEqual(resolvePeekTarget([newer, older]), { kind: "job", job: newer });
+});
+test("resolvePeekTarget: an empty list is none", () => {
+  assert.deepEqual(resolvePeekTarget([]), { kind: "none" });
+});
+test("resolvePeekTarget: a cancelling job still counts as active", () => {
+  const job = runningJob({ state: { status: "cancelling", reason: "user" } });
+  assert.deepEqual(resolvePeekTarget([job]), { kind: "job", job });
 });
 
 test("describeClearResult: some removed reports the count, singular for 1", () => {
@@ -244,6 +283,12 @@ test("buildJobsWidgetLines: the hint footer mentions the status subcommand", () 
   const job = runningJob();
   const lines = buildJobsWidgetLines([job], 2_000, theme)!;
   assert.match(lines.at(-1)!, /status\|cancel <id>/);
+});
+
+test("buildJobsWidgetLines: the hint footer mentions the unified peek|status|cancel", () => {
+  const job = runningJob();
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+  assert.match(lines.at(-1)!, /peek\|status\|cancel <id>/);
 });
 
 // --- buildJobStatusText ---
