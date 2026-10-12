@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 — 2026-10-12
 
 - **New: `/subagents peek [id]` — a live window over a background job's activity.** A floating overlay renders the job's transcript as it streams: assistant text, the last few lines of the agent's thinking, and tool calls with their results, tailed and elided to fit. With no id it opens on the single active job (several actives report the ids to pick from) or the newest settled one; an unknown id warns exactly like `cancel`. While the job runs, a 250 ms pulse repaints the window — it stops itself the moment the job settles, and the frame freezes to the final result line (success/`FAILED`/error text, with the usage footer). `w` toggles between the floating window (80% × 50%) and a fullscreen takeover; Esc or `q` closes. Requires an interactive TUI session; other modes get a warning. The body scrolls with `↑/↓`, PgUp/PgDn, or the mouse wheel and auto re-follows once you return to the bottom; the scroll position survives a `w` toggle, and the window follows the session's thinking-visibility and tools-expanded preferences. Read-only this iteration — peeking never steers the peeked subagent (no input/steering channel; future work).
 - **New: bare `/subagents status` and `/subagents cancel` auto-select their target, like `peek`.** The single active job wins; several actives report the ids to pick from. `status` falls back to the newest settled job when nothing is active; `cancel` looks only at active jobs and warns `No running jobs to cancel.` when there are none. Explicit ids behave exactly as before.
