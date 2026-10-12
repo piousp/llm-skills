@@ -1672,10 +1672,13 @@ test("awaitAtMost: work rejects before the deadline returns outcome 'failed' wit
 
 test("awaitAtMost: work never settling returns outcome 'timeout' at the deadline", async () => {
   const hung = new Promise<void>(() => {});
-  const start = Date.now();
+  const start = performance.now();
   const result = await awaitAtMost(hung, 20);
   assert.deepEqual(result, { outcome: "timeout" });
-  assert.ok(Date.now() - start >= 20);
+  // performance.now: sub-ms precision, immune to Date.now truncation. A 1ms
+  // margin: libuv timers can fire ~0.5ms ahead of the nominal delay when
+  // compared against the monotonic clock (measured min for a 20ms timeout).
+  assert.ok(performance.now() - start >= 19);
 });
 
 test("awaitAtMost: signal aborted before work settles returns outcome 'aborted'", async () => {
