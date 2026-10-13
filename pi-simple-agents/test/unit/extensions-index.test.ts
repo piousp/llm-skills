@@ -1264,7 +1264,9 @@ test("runSingleTask: forwards options.mode through to the nested session's bindE
   const agent = makeAgent({
     tools: ["read"],
   } as Partial<AgentConfig>);
-  const capturedTools = [{ sourceInfo: { origin: "package" as const, source: "some-extension-package" } }];
+  // "read" in the roster: the agent requests it, so without a name the run
+  // would spend its grace window waiting for a tool the fake never registers.
+  const capturedTools = [{ name: "read", sourceInfo: { origin: "package" as const, source: "some-extension-package" } }];
   let capturedBindings: unknown;
 
   const fakeSession = {

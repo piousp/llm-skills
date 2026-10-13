@@ -191,12 +191,12 @@ pi's CLI loads its built-in `mcp`, `tool-search` and `codemode` extensions on it
 
 ### Tool names and the `tools` list
 
-MCP tools are registered as `mcp__<server>__<tool>`, e.g. `mcp__mde-build__mvn` for the `mvn` tool of a server named `mde-build`. `pi mcp list` shows the servers.
+MCP tools are registered as `mcp__<server>__<tool>`, with every server name character other than letters, digits, and `_` replaced by `_` — a server named `mde-build` registers `mcp__mde_build__mvn` for its `mvn` tool, and its `tools`-list name is `mcp__mde_build__mvn`. `pi mcp list` shows the servers; match what it prints.
 
 When an agent has a `tools` list (frontmatter, `settings.json` override, or per call), pi filters by exact name before anything else:
 
 - A tool that isn't on the list is never registered in that subagent. `tool_search` can't find it and `codemode` can't call it.
-- Entries can be exact names or `*` patterns, where `*` matches any characters, e.g. `mcp__mde-build__*` matches every tool of the `mde-build` server (requires pi >=1.0.4; pin pi-simple-agents's `@earendil-works/pi-coding-agent` peer dep to that floor).
+- Entries can be exact names or `*` patterns, where `*` matches any characters, e.g. `mcp__mde-build__*` matches every tool of the `mde-build` server (requires pi >=1.0.4; pin pi-simple-agents's `@earendil-works/pi-coding-agent` peer dep to that floor). A `*` pattern counts for the extension bind too, and after the bind the subagent waits up to 10 s for every requested name or pattern to register — pi connects MCP servers in the background when session_start fires (the host's own order) — and a pattern that still matches nothing after the wait fails the run naming it.
 - `disallowedTools` removes tools by exact name or pattern after `tools` is applied.
 - A per-call `tools` replaces the agent's list, it doesn't add to it. Repeat the agent's own tools if it still needs them.
 

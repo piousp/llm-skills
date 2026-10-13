@@ -83,6 +83,12 @@ class FakeAgentSession {
     return this._tools;
   }
 
+  /** Test seam: registers a tool after construction, simulating a background
+   * MCP registration landing between bind and the grace poll. */
+  registerTool(tool: any): void {
+    this._tools.push(tool);
+  }
+
   onBind?: () => void | Promise<void>;
 
   async bindExtensions(bindings: unknown): Promise<void> {
@@ -339,7 +345,7 @@ test("runAgentViaSdk: requested tool that never registers fails the run before t
   const result = await runAgentViaSdk(
     makeAgent({ tools: ["read", "web_search"] }),
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 25 },
   );
 
   assert.equal(result.status, "error");
@@ -347,19 +353,150 @@ test("runAgentViaSdk: requested tool that never registers fails the run before t
   assert.ok(!fakeSession.callOrder.includes("prompt"), "the run must not prompt when a requested tool is missing");
 });
 
-// Wildcard tool entries cannot be resolved to a registered name; they must
-// not fail the check.
-test("runAgentViaSdk: wildcard tool patterns are exempt from the registered-tools check", async () => {
-  const fakeSession = new FakeAgentSession("found it");
+// Wildcards are pattern-aware since 1.3.2: a `*` entry counts in the bind
+// decision and is verified after the grace window, like an exact name. Here
+// the tool registers 30ms after bind (background MCP registration), inside
+// the grace window — the run must wait for it and succeed.
+test("runAgentViaSdk: wildcard pattern satisfied by a tool registering after bind succeeds, binding exactly once", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  fakeSession.onBind = () => {
+    setTimeout(() => fakeSession.registerTool({ name: "mcp__x__echo", sourceInfo: { path: "builtin:mcp", origin: "top-level", source: "builtin" } }), 30);
+  };
   const createSession = async () => ({ session: fakeSession as any });
 
   const result = await runAgentViaSdk(
-    makeAgent({ tools: ["mcp__*"] }),
+    makeAgent({ tools: ["read", "mcp__x__*"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 1000 },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal(fakeSession.bindCallCount, 1);
+  assert.ok(fakeSession.callOrder.includes("prompt"), "the run must prompt once the requested tool registers");
+});
+
+test("runAgentViaSdk: an exact requested name registering after bind succeeds inside the grace window", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  fakeSession.onBind = () => {
+    setTimeout(() => fakeSession.registerTool({ name: "mcp__mde-build__mvn", sourceInfo: { path: "builtin:mcp", origin: "top-level", source: "builtin" } }), 30);
+  };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__mde-build__mvn"] }),
+    "build it",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 1000 },
+  );
+
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: an exact requested name arriving after the grace window fails the run (pre-fix false positive)", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  fakeSession.onBind = () => {
+    setTimeout(() => fakeSession.registerTool({ name: "mcp__mde-build__mvn", sourceInfo: { path: "builtin:mcp", origin: "top-level", source: "builtin" } }), 200);
+  };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__mde-build__mvn"] }),
+    "build it",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 50 },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /mcp__mde-build__mvn/);
+  assert.ok(!fakeSession.callOrder.includes("prompt"), "no prompt when the tool never made it inside the grace window");
+});
+
+test("runAgentViaSdk: a wildcard pattern matching nothing fails the run after the grace, naming the pattern", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  fakeSession.onBind = () => {
+    setTimeout(() => fakeSession.registerTool({ name: "mcp__other__tool", sourceInfo: { path: "builtin:mcp", origin: "top-level", source: "builtin" } }), 30);
+  };
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__no-such-server__*"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 100 },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /mcp__no-such-server__\*/);
+  assert.ok(!fakeSession.callOrder.includes("prompt"), "the run must not prompt when a requested pattern matches nothing");
+});
+
+test("runAgentViaSdk: a codemode-exposure roster entry whose NAME matches the requested pattern satisfies it (resolution ignores exposure)", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [
+      { name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } },
+      { name: "mcp__x__echo", sourceInfo: { path: "builtin:codemode", origin: "top-level", source: "builtin" } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__x__*"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 1000 },
+  );
+
+  assert.equal(result.status, "success");
+});
+
+test("runAgentViaSdk: an abort during the grace window settles as 'run was aborted' with bind, shutdown and dispose in order", async () => {
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [{ name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } }],
+  });
+  const controller = new AbortController();
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__x__*"] }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal, toolGraceMs: 5000 },
+  );
+  setTimeout(() => controller.abort(), 50);
+  const result = await promise;
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /abort/i);
+  assert.ok(!fakeSession.callOrder.includes("prompt"), "an aborted grace window must not reach the prompt");
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+  for (const step of ["bind", "shutdown", "dispose"]) {
+    assert.ok(fakeSession.callOrder.includes(step), `expected "${step}" in callOrder; got: ${fakeSession.callOrder.join(", ")}`);
+  }
+});
+
+test("runAgentViaSdk: a wildcard pattern already matched by a registered tool skips the grace entirely and never binds", async () => {
+  // The registered match is an SDK custom tool (not an extension tool), so
+  // the extension-presence clause of the bind gate does not fire either: the
+  // satisfied pattern alone must not trigger a bind or a grace wait.
+  const fakeSession = new FakeAgentSession("found it", {
+    tools: [
+      { name: "read", sourceInfo: { path: "builtin:read", origin: "top-level", source: "builtin" } },
+      { name: "mcp__x__echo", sourceInfo: { path: "/ext/mcp__x__echo.ts", origin: "top-level", source: "sdk" } },
+    ],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "mcp__x__*"] }),
     "find things",
     { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
   );
 
   assert.equal(result.status, "success");
+  assert.equal(fakeSession.bindCallCount, 0);
 });
 
 // Fail-loud: a session that ends without any assistant text must settle as
@@ -906,7 +1043,7 @@ test("runAgentViaSdk: passes tools from agent.tools", async () => {
   await runAgentViaSdk(
     makeAgent({ tools: ["read", "write"] }),
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 25 },
   );
 
   assert.deepEqual(capturedTools, ["read", "write"]);
@@ -977,7 +1114,7 @@ test("runAgentViaSdk: model override via applyOverrides flows through getModel",
   await runAgentViaSdk(
     overridden!,
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel, toolGraceMs: 25 },
   );
 
   assert.equal(capturedModel, "openrouter/gpt-4");
@@ -1015,7 +1152,7 @@ test("runAgentViaSdk: precedence chain — invocation override wins over setting
   await runAgentViaSdk(
     afterInvocationOverride,
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel, toolGraceMs: 25 },
   );
 
   assert.deepEqual(capturedModel, { provider: "anthropic", modelId: "claude-opus-4-8" });
@@ -1798,7 +1935,7 @@ test("runAgentViaSdk: an agent.tools entry not registered before bind (e.g. a bu
   await runAgentViaSdk(
     makeAgent({ tools: ["read", "mcp__mde-build__mvn"] }),
     "build it",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui" },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui", toolGraceMs: 25 },
   );
 
   assert.equal(fakeSession.bindCallCount, 1);

@@ -442,6 +442,7 @@ export interface RunAgentViaSdkOptions {
 - `onProgressEvent` — receives `SubagentProgressEvent`s from the run's single subscription (`src/progress.ts` for the type): tool lifecycle via `toSubagentToolEvent` (`tool_start` carries a `summary: string` pre-formatted by `formatToolCall` in `src/format-tool-call.ts`), the model's streaming phase via `toStreamPhaseEvent` (one event per `thinking_*`/`text_*` delta, deduplicated downstream), and a live `{ type: "usage" }` snapshot whenever the usage accumulator changed (at most one per `message_end`). Every event passes the tracker's single `onEvent`, which owns the post-`done` guard. The events never capture results: `toolName` and the formatted `args` summary are all that flow through, so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
 - `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTaskOptions`/`runSingleTask`.
 - `extensionBindTimeoutMs` — overrides `EXTENSION_BIND_TIMEOUT_MS` (60s). Test seam; production callers should leave it unset.
+- `toolGraceMs` — overrides `REQUESTED_TOOL_GRACE_MS` (10s), the post-bind wait for background MCP registration. Test seam; production callers should leave it unset.
 
 ### AgentRunResult
 
@@ -580,6 +581,22 @@ still emitted and some servers may have partially started — so the caller know
 symmetric shutdown is owed. A `bindExtensions` failure or timeout is logged via `console.warn`
 (`WARN_PREFIX` + `toErrorMessage`, `src/warn.ts`) rather than propagated — the subagent still
 runs, same degraded-but-alive behavior as before this mechanism existed.
+
+After the bind, `runAgentViaSdk` grants a grace window for background MCP registration: pi
+connects the configured servers when session_start fires but does not await them (pi 1.0.4
+verified, 1.1.0 documented), so `bindExtensions()` resolves before any server has registered a
+tool. When `missingRequestedTools` (the same shared predicate that feeds the bind gate, now
+pattern-aware via `matchesToolEntries` in `src/extension-binding.ts`) reports anything
+unsatisfied right after the bind, `waitForRequestedTools` polls `getAllTools()` every 100 ms
+until every requested name or pattern registers, for at most `REQUESTED_TOOL_GRACE_MS` (10 s —
+the same wait the host's own first prompt grants direct-tool servers; overridable via
+`RunAgentViaSdkOptions.toolGraceMs`, a test seam production callers should leave unset). The
+wait is skipped entirely when everything already registered, is wrapped in `awaitAtMost` so the
+job's abort signal cancels it (landing in the existing `signal.aborted` check right after,
+which settles "run was aborted"), and an unmatched request after the grace reaches the
+unchanged fail-loud check, whose error message now notes the wait
+(`waited ${graceMs}ms for the requested tools to register — background MCP connects at session
+start`).
 
 `shutdownExtensionsIfBound(agentSession, bound)` is the symmetric counterpart, called in
 `runAgentViaSdk`'s `finally` block before `session.dispose()`. When `bound` is `true`, it checks
