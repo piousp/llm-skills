@@ -50,23 +50,45 @@ export function needsExtensionBinding(
   return missingRequestedTools(tools, requestedToolNames).length > 0;
 }
 
+/** Matches a tool name against entries (exact names or `*` patterns).
+ * Inline mirror of the SDK's core/mcp-servers.ts createToolNameMatcher (not exported from the
+ * package root — same inlining precedent as ExtensionMode): `*` matches any characters,
+ * everything else is literal. */
+export function matchesToolEntries(entries: readonly string[], name: string): boolean {
+  const literals = new Set<string>();
+  const patterns: RegExp[] = [];
+  for (const entry of entries) {
+    if (!entry.includes("*")) {
+      literals.add(entry);
+    } else {
+      const source = entry
+        .split("*")
+        .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join(".*");
+      patterns.push(new RegExp(`^${source}$`));
+    }
+  }
+  if (literals.has(name)) return true;
+  return patterns.some((pattern) => pattern.test(name));
+}
+
 /** Requested tool names that are not registered — the names a session will
-    never be able to execute. Wildcard entries (`*` patterns) cannot be
-    matched to a registered name at this point, so they are exempt.
+    never be able to execute. Entries without `*` are unsatisfied unless an
+    exact registered name matches; entries with `*` are unsatisfied unless at
+    least one registered tool name matches the pattern (matchesToolEntries,
+    so a matching pattern counts as satisfied and the check stays pattern-aware).
     Inert Claude Code tool names have no pi equivalent by design, so they
     never count as missing. */
 export function missingRequestedTools(
   tools: readonly ToolSource[],
   requestedToolNames: readonly string[] = [],
 ): string[] {
-  const registered = new Set(tools.map((tool) => tool.name));
-  return requestedToolNames.filter(
-    (name) =>
-      name !== SUBAGENT_TOOL_NAME
-      && !CLAUDE_INERT_TOOLS.has(name)
-      && !name.includes("*")
-      && !registered.has(name),
-  );
+  const registered = tools.map((tool) => tool.name);
+  return requestedToolNames.filter((name) => {
+    if (name === SUBAGENT_TOOL_NAME || CLAUDE_INERT_TOOLS.has(name)) return false;
+    if (!name.includes("*")) return !registered.includes(name);
+    return !registered.some((toolName) => matchesToolEntries([name], toolName));
+  });
 }
 
 /**

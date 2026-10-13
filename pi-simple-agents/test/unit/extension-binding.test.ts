@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { needsExtensionBinding, SUBAGENT_TOOL_NAME, type ToolSource } from "../../src/extension-binding.ts";
+import {
+  needsExtensionBinding,
+  SUBAGENT_TOOL_NAME,
+  missingRequestedTools,
+  type ToolSource,
+} from "../../src/extension-binding.ts";
 
 // Shapes mirror what pi 0.99's AgentSession.getAllTools() really returns:
 // base tools and built-in extension tools are all origin "top-level" +
@@ -73,4 +78,47 @@ test("needsExtensionBinding: requesting the subagent tool alone never triggers b
 
 test("needsExtensionBinding: inert Claude Code tools kept in agent.tools (Task, TodoWrite, ...) are never registered and never trigger binding", () => {
   assert.equal(needsExtensionBinding([builtinTool("read")], ["read", "Task", "TodoWrite"]), false);
+});
+
+// Wildcard entries are pattern-aware since 1.3.2: a pattern that matches no
+// registered tool counts in the bind decision, because only an extension can
+// still register a tool matching it at session_start.
+test("needsExtensionBinding: a wildcard-only requested pattern with no matching registered tool returns true", () => {
+  assert.equal(needsExtensionBinding([builtinTool("read")], ["read", "mcp__x__*"]), true);
+});
+
+test("needsExtensionBinding: a requested pattern already matched by a registered name returns false (no bind cost)", () => {
+  // The registered match is an SDK custom tool (not an extension tool): the
+  // only bind-relevant signal is the requested pattern, and it is satisfied.
+  assert.equal(
+    needsExtensionBinding(
+      [builtinTool("read"), localTool("mcp__x__echo", "sdk")],
+      ["read", "mcp__x__*"],
+    ),
+    false,
+  );
+});
+
+test("missingRequestedTools: a wildcard pattern matching no registered tool is returned as missing", () => {
+  assert.deepEqual(
+    missingRequestedTools([builtinTool("read")], ["read", "mcp__x__*"]),
+    ["mcp__x__*"],
+  );
+});
+
+test("missingRequestedTools: a wildcard pattern matching a registered tool is not returned", () => {
+  assert.deepEqual(
+    missingRequestedTools(
+      [builtinTool("read"), builtinExtensionTool("mcp__x__echo", "mcp")],
+      ["read", "mcp__x__*"],
+    ),
+    [],
+  );
+});
+
+test("missingRequestedTools: inert names and the subagent tool are still never missing (pinned 1.2.1 behavior)", () => {
+  assert.deepEqual(
+    missingRequestedTools([builtinTool("read")], ["read", "Task", "TodoWrite", SUBAGENT_TOOL_NAME]),
+    [],
+  );
 });

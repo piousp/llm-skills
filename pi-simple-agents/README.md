@@ -76,7 +76,7 @@ If the agent has a `tools` list, name each MCP tool exactly as pi registers it, 
 subagent agent: "worker", task: "Compile the project", tools: ["read", "mcp__mde-build__mvn"]
 ```
 
-A server with `"exposure": "deferred"` also needs `tool_search` in the list, and one with the default `codemode` exposure needs `codemode`. An agent with no `tools` list gets every tool the session has. [docs/REFERENCE.md](docs/REFERENCE.md#mcp-tools-in-subagents) has the details.
+A server with `"exposure": "deferred"` also needs `tool_search` in the list, and one with the default `codemode` exposure needs `codemode`. An agent with no `tools` list gets every tool the session has. pi connects MCP servers in the background at session start; the subagent waits up to 10 s for the requested tools (names or patterns) to register before starting, and fails naming whatever never appeared. [docs/REFERENCE.md](docs/REFERENCE.md#mcp-tools-in-subagents) has the details.
 
 ## More
 

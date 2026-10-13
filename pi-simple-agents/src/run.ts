@@ -147,6 +147,8 @@ export interface RunAgentViaSdkOptions {
   mode?: ExtensionMode;
   /** Overrides EXTENSION_BIND_TIMEOUT_MS. Test seam; production callers should leave this unset. */
   extensionBindTimeoutMs?: number;
+  /** Overrides REQUESTED_TOOL_GRACE_MS. Test seam; production callers should leave this unset. */
+  toolGraceMs?: number;
 }
 
 // bindExtensions reaches out to child processes/sockets (an MCP server
@@ -154,6 +156,13 @@ export interface RunAgentViaSdkOptions {
 // prompt phase (see runWithTimeoutAndAbort below), so without this bound a
 // hung handshake would block the whole run indefinitely, uninterruptibly.
 export const EXTENSION_BIND_TIMEOUT_MS = 60_000;
+
+/** Grace window for background MCP registration: the host connects servers at session_start
+ * without awaiting (pi 1.0.4 verified, 1.1.0 documented, docs/mcp.md:100); its own first prompt
+ * waits 10 s for direct-tool servers. Mirror that order here. Test seam; production callers
+ * should leave unset. */
+export const REQUESTED_TOOL_GRACE_MS = 10_000;
+const REQUESTED_TOOL_POLL_INTERVAL_MS = 100;
 
 type ModelResolution =
   | { ok: true; model: CreateAgentSessionOptions["model"] }
@@ -258,6 +267,34 @@ async function shutdownExtensionsIfBound(
   } catch (error) {
     console.warn(`${WARN_PREFIX}failed to shut down extensions for subagent: ${toErrorMessage(error)}`);
   }
+}
+
+// Post-bind counterpart of bindExtensionsIfNeeded: MCP servers connect in the
+// background when session_start fires, so bindExtensions() resolves before
+// any server has registered a tool. Poll getAllTools() until every requested
+// name/pattern registers, or the grace window ends, or the signal aborts.
+// The first check is synchronous: tools already registered (or a synchronous
+// host) end the wait without paying even one poll interval. The loop stops
+// on its own deadline too, so it never outlives the grace it guards.
+async function waitForRequestedTools(
+  agentSession: CreateAgentSessionResult["session"],
+  requestedToolNames: readonly string[] | undefined,
+  graceMs: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const work = (async () => {
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline && !signal?.aborted) {
+      if (missingRequestedTools(agentSession.getAllTools(), requestedToolNames).length === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, REQUESTED_TOOL_POLL_INTERVAL_MS));
+    }
+  })();
+  // awaitAtMost supplies the timeout and abort outcomes (abort-cancelation is
+  // free) and swallows a late poll-loop rejection. No timeout/abort warning
+  // here: the caller re-checks after the wait — the fail-loud check settles
+  // the run when anything is still missing, and the pre-existing
+  // signal.aborted check settles an abort during the grace as "run was aborted".
+  await awaitAtMost(work, graceMs, signal);
 }
 
 function subscribeTurnCounter(
@@ -368,14 +405,26 @@ export function runAgentViaSdk(
           agent.tools,
         );
 
+        // Grace window for background MCP registration (see
+        // waitForRequestedTools): skipped entirely when every requested
+        // tool already registered — zero cost for those agents. Runs even
+        // when the shared predicate did not fire the bind: the wait is
+        // about tools, not about who supplies them.
+        const graceMs = options.toolGraceMs ?? REQUESTED_TOOL_GRACE_MS;
+        const unsatisfiedBeforeGrace = missingRequestedTools(agentSession.getAllTools(), agent.tools);
+        if (unsatisfiedBeforeGrace.length > 0) {
+          await waitForRequestedTools(agentSession, agent.tools, graceMs, options.signal);
+        }
+
         if (options.signal?.aborted) {
           settleOnce(errorResult(ctx, "run was aborted"));
           return;
         }
 
-        // Fail-loud tool check (after bind: extension tools have had their
-        // session_start chance). A run that prompts while a requested tool is
-        // missing produces a model that without tool definitions fakes its
+        // Fail-loud tool check (after bind AND the grace window: extension
+        // tools have had their session_start chance plus the registration
+        // grace). A run that prompts while a requested tool is missing
+        // produces a model that without tool definitions fakes its
         // tool calls as plain text — the run then settles "successfully" with
         // that faked text as its output. Never prompt into that state.
         const missingTools = missingRequestedTools(agentSession.getAllTools(), agent.tools);
@@ -383,7 +432,8 @@ export function runAgentViaSdk(
           settleOnce(errorResult(ctx,
             `agent "${agent.name}" did not start: requested tool(s) never registered in the subagent session: ` +
             `${missingTools.join(", ")}. The loader or its extensions silently failed earlier in the run — ` +
-            `this error replaces what would have been a tool-less session emitting faked tool calls as text.`));
+            `this error replaces what would have been a tool-less session emitting faked tool calls as text. ` +
+            `(waited ${graceMs}ms for the requested tools to register — background MCP connects at session start)`));
           return;
         }
 

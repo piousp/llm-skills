@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.2
+
+- **Fix: an agent requesting MCP tools failed before the server connected, or ran on without
+  them.** pi connects MCP servers in the background when session_start fires; the requested-tools
+  fail-loud check ran immediately after bind, before any server had registered a tool. With an
+  exact name the run failed with a false "requested tool(s) never registered"; with a
+  wildcard-only list the pattern was exempt from both the bind gate and the check, so the run
+  skipped bind entirely and prompted into a session without the MCP tools (the
+  `tool_search`-in-the-list workaround only worked by accident). Two changes, one shared
+  predicate (`missingRequestedTools`, now pattern-aware): a requested `*` pattern that matches no
+  registered tool counts in the bind decision, and after the bind the run waits up to 10 s — the
+  host's own first-prompt order (`REQUESTED_TOOL_GRACE_MS`, overridable via the
+  `RunAgentViaSdkOptions.toolGraceMs` test seam) — polling `getAllTools()` for the requested
+  names and patterns to register before the fail-loud check; the job's abort signal cancels the
+  wait. A pattern that still matches nothing after the grace fails the run naming the pattern.
+  Codemode-exposure servers are covered (their tools are registered and match the pattern;
+  verified against the real extension). Tools already registered (or a synchronous host) end the
+  wait on its first check.
+
 ## 1.3.1 — 2026-10-12
 
 - Docs only. README trimmed from 865 to 654 words with the section structure intact: "Background jobs" now states the full model in three plain sentences (ack with job id, result delivered as its own message with a follow-up turn, in-memory only) and absorbs the running-jobs widget paragraph; the `/subagents` bullets lost every detail that was already documented in
