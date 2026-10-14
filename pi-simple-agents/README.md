@@ -11,7 +11,7 @@ Subagents for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent
 pi install npm:pi-simple-agents
 ```
 
-Needs pi 1.0.4 or later.
+Needs pi 1.0.4 or later. Per-tool durations in the peek window and precise abort labeling (an externally aborted run settling as failed instead of completed) need pi 1.1.0 or later; on older hosts both degrade gracefully to the previous behavior.
 
 ## Define an agent
 
@@ -61,7 +61,7 @@ With no id, `status` and `peek` pick the single active job on their own (several
 
 - `/subagents` lists running and recently finished jobs, newest first, with a usage footer once a job settles.
 - `/subagents status [id]` details one job: the current activity, the last tool calls of the run, and usage so far.
-- `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results. `w` alternates between the floating window and fullscreen; Esc or `q` closes it. Needs an interactive TUI session; other modes get a warning.
+- `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results and per-tool durations. `w` alternates between the floating window and fullscreen; Esc or `q` closes it; `Ctrl+O` toggles tool output expansion, following the host keybinding. `Ctrl+T` (thinking visibility) is not supported while the window is open — close it (Esc/q) and press `Ctrl+T` in the main UI. Needs an interactive TUI session; other modes get a warning.
 - `/subagents cancel [id]` stops a running job.
 - `/subagents clear` drops finished jobs from the list.
 - `/subagents session` reports what the session's subagent runs spent, reconstructed from the child sessions persisted on disk: token totals with a cache hit rate, cost per model, and one line per agent, like `scout: 3 runs, 1.2M tokens, $0.980`. The current session must be persisted to disk; otherwise the command warns and exits.

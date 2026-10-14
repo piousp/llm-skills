@@ -1,6 +1,6 @@
 {
   "name": "pi-simple-agents",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "private": false,
   "repository": {
     "type": "git",
@@ -36,8 +36,8 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^1.0.4",
-    "@earendil-works/pi-tui": "^1.0.4",
+    "@earendil-works/pi-coding-agent": "^1.2.0",
+    "@earendil-works/pi-tui": "^1.2.0",
     "typebox": "^1.3.8",
     "typescript": "^7.0.2"
   }

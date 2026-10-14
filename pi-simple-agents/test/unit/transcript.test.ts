@@ -35,8 +35,12 @@ function thinkingEnd(content: string): AgentSessionEvent {
 function toolStart(toolCallId: string, toolName: string, args: unknown): AgentSessionEvent {
   return asEvent({ type: "tool_execution_start", toolCallId, toolName, args });
 }
-function toolEnd(toolCallId: string, result: unknown, isError = false): AgentSessionEvent {
-  return asEvent({ type: "tool_execution_end", toolCallId, toolName: "read", result, isError });
+function toolEnd(toolCallId: string, result: unknown, isError = false, durationMs?: number): AgentSessionEvent {
+  // durationMs is optional on the event: included only when supplied, so
+  // the 1.0.x (field-absent) shape is what the fold actually receives.
+  const base: Record<string, unknown> = { type: "tool_execution_end", toolCallId, toolName: "read", result, isError };
+  if (durationMs !== undefined) base.durationMs = durationMs;
+  return asEvent(base);
 }
 
 // --- initialTranscriptState ---
@@ -184,6 +188,35 @@ test("tool_execution_end: isError marks ok=false", () => {
   const state = applySessionEvent(initialTranscriptState(), toolEnd("t1", "boom", true));
   const entry = state.entries[0];
   assert.equal(entry && entry.kind === "tool-end" ? entry.ok : undefined, false);
+});
+
+test("tool_execution_end with durationMs carries it onto the tool-end entry", () => {
+  const state = applySessionEvent(initialTranscriptState(), toolEnd("t1", "done", false, 1234));
+  const entry = state.entries[0];
+  assert.equal(entry && entry.kind === "tool-end" ? entry.durationMs : undefined, 1234);
+});
+
+test("tool_execution_end without durationMs leaves the field absent (1.0.x shape)", () => {
+  const state = applySessionEvent(initialTranscriptState(), toolEnd("t1", "done"));
+  const entry = state.entries[0];
+  assert.ok(entry !== undefined);
+  assert.equal(entry.kind, "tool-end");
+  // Byte-identical to the pre-1.3.3 shape: no own property at all.
+  assert.ok(!("durationMs" in entry), "no own durationMs property on 1.0.x entries");
+});
+
+test("durationMs changes no eviction budget: entries, dropped and chars match the no-duration fold", () => {
+  // storedChars counts only strings (summary/label/content); a numeric
+  // optional field must not leak into the head-eviction math.
+  let withDuration = initialTranscriptState();
+  let withoutDuration = initialTranscriptState();
+  for (let i = 0; i < MAX_TRANSCRIPT_ENTRIES + 5; i += 1) {
+    withDuration = applySessionEvent(withDuration, toolEnd(`t${i}`, `r${i}`, false, 1234));
+    withoutDuration = applySessionEvent(withoutDuration, toolEnd(`t${i}`, `r${i}`));
+  }
+  assert.equal(withDuration.entries.length, withoutDuration.entries.length);
+  assert.equal(withDuration.dropped, withoutDuration.dropped);
+  assert.equal(withDuration.chars, withoutDuration.chars);
 });
 
 // --- identity / ignored events ---
