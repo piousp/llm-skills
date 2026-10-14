@@ -6,6 +6,7 @@ description: >
   evaluates, and reports. No project-specific context. Use for tasks that
   need an independent, unbiased review without risk of modification.
 tools: read, bash, grep, find, ls, subagent, codemode
+timeoutMs: 1800000
 systemPromptMode: append
 inheritProjectContext: false
 ---
