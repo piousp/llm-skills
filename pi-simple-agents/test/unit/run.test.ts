@@ -1955,3 +1955,116 @@ test("runAgentViaSdk: a tool from a built-in extension (path builtin:tool-search
 
   assert.equal(fakeSession.bindCallCount, 1);
 });
+
+// --- precise abort labeling via agent_settled (pi >= 1.1.0) ---
+
+// CRITICAL ORDER: every test below emits agent_settled through the fake's
+// messageEvents — the FIRST dispatch inside prompt(), synchronously before
+// prompt() resolves. The real host mirrors this order (agent-session emits
+// agent_settled inside the finally that awaits _emitAgentSettled, so the
+// flag is always set before the run's settle check runs); emitting the
+// event any later than prompt()'s resolution would make these tests pass
+// vacuously (the flag read before it was ever set).
+test("runAgentViaSdk: agent_settled aborted:true with partial final text settles as 'run was aborted', not completed", async () => {
+  const fakeSession = new FakeAgentSession("partial answer", {
+    messageEvents: [{ type: "agent_settled", aborted: true }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  // The pre-1.3.3 behavior settled this as success carrying the partial
+  // text — the behavior delta this change documents in the CHANGELOG.
+  assert.equal(result.status, "error");
+  assert.equal((result as any).error, "run was aborted");
+});
+
+test("runAgentViaSdk: agent_settled aborted:true with no final text settles as 'run was aborted', not the no-final-text error", async () => {
+  const fakeSession = new FakeAgentSession("", {
+    messageEvents: [{ type: "agent_settled", aborted: true }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal((result as any).error, "run was aborted");
+});
+
+test("runAgentViaSdk: agent_settled without an aborted field (1.0.x host) keeps the no-final-text error", async () => {
+  const fakeSession = new FakeAgentSession("", {
+    messageEvents: [{ type: "agent_settled" }], // no aborted field at all
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  // The === true guard leaves the 1.0.x heuristic path untouched.
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /final/i);
+  assert.notEqual((result as any).error, "run was aborted");
+});
+
+test("runAgentViaSdk: agent_settled aborted:false with no final text keeps the no-final-text error", async () => {
+  const fakeSession = new FakeAgentSession("", {
+    messageEvents: [{ type: "agent_settled", aborted: false }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /final/i);
+});
+
+test("runAgentViaSdk: settleOnce precedence — a maxTurns settle survives a later aborted:true agent_settled (no relabel)", async () => {
+  const fakeSession = new FakeAgentSession("ignored", {
+    turnEvents: [{ type: "turn_start" }, { type: "turn_start" }],
+    // toolEvents fire after turnEvents (still inside prompt()): the abort
+    // flag lands only after the maxTurns path has already settled the run.
+    toolEvents: [{ type: "agent_settled", aborted: true }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent({ maxTurns: 1 }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "error");
+  assert.equal((result as any).error, "reached maxTurns limit of 1"); // NOT relabeled
+  assert.equal(fakeSession.abortCalled, true);
+});
+
+test("runAgentViaSdk: a normal agent_settled (aborted: false) leaves the happy path unchanged", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [{ type: "agent_settled", aborted: false }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal((result as any).finalText, "done");
+});

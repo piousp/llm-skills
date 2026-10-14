@@ -443,11 +443,18 @@ export function runAgentViaSdk(
         // usage snapshots whenever the accumulator actually changed. The
         // done-guard and the per-token phase dedupe live in the tracker
         // (progress.ts), not here.
+        // Precise abort labeling (pi >= 1.1.0): agent_settled carries an
+        // explicit `aborted` flag, recorded here and read once after the
+        // prompt resolves. The `=== true` guard below is deliberate — on
+        // 1.0.x hosts the field is absent (undefined) and the settle-path
+        // heuristics keep their current behavior.
+        let sessionAborted = false;
         const onSessionEvent = (event: AgentSessionEvent) => {
           // The transcript hook fires first, before usage/translation logic,
           // so it sees every raw event even when the progress collector is
           // absent (the early return below would otherwise skip it).
           options.onSessionEvent?.(event);
+          if (event.type === "agent_settled" && event.aborted === true) sessionAborted = true;
           const before = usageAcc;
           usageAcc = applyUsageEvent(usageAcc, event);
           const onProgressEvent = options.onProgressEvent;
@@ -492,6 +499,17 @@ export function runAgentViaSdk(
         // against races with the timeout or maxTurns paths (already-settled
         // runs are no-ops here).
         if (options.signal?.aborted) {
+          settleOnce(errorResult(ctx, "run was aborted"));
+          return;
+        }
+
+        // An externally aborted session (agent_settled with aborted === true)
+        // settles as an abort even when partial assistant text exists — the
+        // text of a killed run is partial work, not an answer. Checked after
+        // the signal path (signal-driven cancel keeps its identical error
+        // text; settleOnce dedupes the race) and before final-text extraction
+        // so a partially-streamed abort is never labeled completed.
+        if (sessionAborted) {
           settleOnce(errorResult(ctx, "run was aborted"));
           return;
         }

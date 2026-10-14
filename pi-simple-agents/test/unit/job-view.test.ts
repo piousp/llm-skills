@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   formatElapsed,
+  formatToolDuration,
   buildJobsWidgetLines,
   buildJobListText,
   buildJobStatusText,
@@ -45,6 +46,13 @@ test("formatElapsed: 59s stays in seconds", () => assert.equal(formatElapsed(59_
 test("formatElapsed: 60s rolls over to minutes", () => assert.equal(formatElapsed(60_000), "1m 00s"));
 test("formatElapsed: 3599s is just under an hour", () => assert.equal(formatElapsed(3_599_000), "59m 59s"));
 test("formatElapsed: 3600s rolls over to hours", () => assert.equal(formatElapsed(3_600_000), "1h 00m"));
+
+// --- formatToolDuration ---
+
+test("formatToolDuration: 420ms stays milliseconds", () => assert.equal(formatToolDuration(420), "420ms"));
+test("formatToolDuration: 1234ms rolls over to one decimal second", () => assert.equal(formatToolDuration(1234), "1.2s"));
+test("formatToolDuration: 0 is '0ms'", () => assert.equal(formatToolDuration(0), "0ms"));
+test("formatToolDuration: negatives clamp to '0ms'", () => assert.equal(formatToolDuration(-50), "0ms"));
 
 // --- buildJobsWidgetLines ---
 

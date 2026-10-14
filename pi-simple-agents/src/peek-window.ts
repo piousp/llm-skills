@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { isActive, type JobSnapshot, type JobState } from "./background-jobs.ts";
-import { buildFinishedTaskLine, formatElapsed } from "./job-view.ts";
+import { buildFinishedTaskLine, formatElapsed, formatToolDuration } from "./job-view.ts";
 import { firstLine } from "./text-utils.ts";
 import type { TranscriptState } from "./transcript.ts";
 import { formatRunUsage } from "./usage.ts";
@@ -149,9 +149,14 @@ function buildFullBody(
     } else if (e.kind === "tool-start") {
       blocks.push({ kind: "lines", lines: [`\u25b8 ${e.label}`] });
     } else if (!collapseTools) {
+      // Per-tool duration (pi >= 1.1.0): appended only when the entry
+      // carries it — hosts without the field render the same line as
+      // before. Nested tool calls make their own entries, each with its
+      // own durationMs, so no line can carry a misattributed duration.
+      const duration = e.durationMs !== undefined ? ` \u00b7 ${formatToolDuration(e.durationMs)}` : "";
       blocks.push({
         kind: "lines",
-        lines: [e.ok ? theme.fg("dim", `\u25aa ${e.summary}`) : theme.fg("error", `\u25aa ${e.summary}`)],
+        lines: [e.ok ? theme.fg("dim", `\u25aa ${e.summary}${duration}`) : theme.fg("error", `\u25aa ${e.summary}${duration}`)],
       });
     }
   }
@@ -284,6 +289,10 @@ export interface PeekOverlayDeps {
   scrollOffset?: number;
   /** Notified after every keyboard/wheel scroll with the new offset. */
   onScroll?: (offset: number) => void;
+  /** Notified on the app.tools.expand key: the manager routes it to the
+   * main view's tool-expansion toggle (optional like onScroll, so test
+   * fakes keep compiling without it). */
+  onToggleTools?: () => void;
 }
 
 /** One overlay instance per open (one-interaction-per-instance rule): it owns
@@ -390,6 +399,14 @@ export class PeekOverlayComponent {
       this.done("toggle");
       return;
     }
+    // Tool-output expansion (Ctrl+O by default), resolved through the
+    // injected keybindings so user rebindings are respected. Delegated to
+    // the manager, which routes it to the main view's toggle: the window
+    // stays open (no stopPulse, no done, no scrollOffset move).
+    if (this.keybindings.matches(data, "app.tools.expand")) {
+      this.deps.onToggleTools?.();
+      return;
+    }
     // Scrolling, resolved through the injected keybindings: Up/PageUp move
     // toward the past (the offset grows), Down/PageDn back toward the
     // bottom. Pages are half the body's visible capacity.
@@ -410,7 +427,12 @@ export class PeekOverlayComponent {
       this.stepScroll(-page);
       return;
     }
-    // Any other input is ignored.
+    // Any other input is ignored. That includes Ctrl+T (thinking
+    // visibility): the host keybinding matches, but there is no
+    // extension-visible setter for hideThinkingBlock (pi.getSettings()
+    // returns a copy; SettingsManager.setHideThinkingBlock is internal),
+    // so it is not supported while the peek window is open — close it
+    // (Esc/q) and press Ctrl+T in the main UI.
   }
 
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -438,6 +460,11 @@ export interface PeekManagerUi {
   custom: ExtensionUIContext["custom"];
   notify(message: string, level?: "info" | "warning" | "error"): void;
   theme: PeekTheme;
+  /** Tool-output expansion state of the MAIN view: the peek window's
+   * Ctrl+O routes here (ExtensionUIContext supplies both; the real
+   * getUi() in extensions/index.ts satisfies it as-is). */
+  getToolsExpanded(): boolean;
+  setToolsExpanded(expanded: boolean): void;
 }
 
 export interface PeekManagerDeps {
@@ -498,6 +525,10 @@ export function createPeekManager(deps: PeekManagerDeps): PeekManager {
         onScroll: (offset) => {
           lastScrollOffset = offset;
         },
+        // Parity with the host's own Ctrl+O: flipping the main view's
+        // toggle triggers the host re-render, and the window reads the
+        // prefs fresh on its next frame — no local state to keep.
+        onToggleTools: () => ui.setToolsExpanded(!ui.getToolsExpanded()),
       });
       return current;
     }, { overlay: true, overlayOptions }).then((result) => {

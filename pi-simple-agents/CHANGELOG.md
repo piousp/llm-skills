@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.3.3
+
+- **Behavior change: an externally aborted child run is now labeled as an abort, not a
+  completion.** pi >= 1.1.0 emits `agent_settled` with an explicit `aborted` flag before
+  `prompt()` resolves; the run now records it and settles with the `run was aborted` error
+  instead of falling through to the final-text checks. Previously an external abort (host-side
+  shutdown, an abort outside the extension's own signal) of a run that had already streamed
+  some assistant text settled as `completed` carrying that partial text as its result; a
+  defensive case — the extension's own cancel path already settles correctly via its
+  AbortController. Affects `/subagents session` reconcile counts: such runs now count as failed
+  runs instead of completed ones. On hosts < 1.1.0 the flag is absent and the previous
+  heuristics keep applying unchanged.
+- **New: per-tool durations in the peek window.** `tool_execution_end` events carry
+  `durationMs` on pi >= 1.1.0; the transcript's tool-end entries now record it and the peek
+  window appends it to each tool result line (`▪ read a.ts: ok · 420ms`), formatted by the new
+  `formatToolDuration` (whole milliseconds under a second, one decimal above it, negatives
+  clamped to 0ms). Hosts without the field render the same lines as before.
+- **New: Ctrl+O toggles tool output while the peek window is open** — parity with the host's
+  own toggle, resolved through the host keybindings (`app.tools.expand`, so user rebindings
+  are respected) and routed to the main view's expansion state, which the window follows on
+  its next frame. The window stays open and its scroll position is untouched. Ctrl+T
+  (thinking visibility) is not supported while the peek window is open: there is no
+  extension-visible setter for it — close the window (Esc/q) and press Ctrl+T in the main UI.
+- Passive host improvements (pi >= 1.2.0, no local code involved): delivery of a settled run's
+  result via `pi.sendMessage({triggerTurn: true})` no longer competes with a starting run —
+  the host queues the follow-up turn instead of failing it with "Agent is already processing" —
+  and child-session compaction serializes without thinking blocks.
+
 ## 1.3.2
 
 - **Fix: an agent requesting MCP tools failed before the server connected, or ran on without

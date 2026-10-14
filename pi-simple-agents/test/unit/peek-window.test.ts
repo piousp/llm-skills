@@ -262,6 +262,44 @@ test("buildPeekLines: hideThinking renders no thinking at all \u2014 entries, el
   assert.equal(linesOut.filter((l) => l.includes("\u2026") && !l.includes("earlier")).length, 0);
 });
 
+test("buildPeekLines: tool-end entries with durationMs append the per-tool duration segment", () => {
+  const transcript = state([
+    entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts", durationMs: 420 }),
+    entry({ kind: "tool-end", toolCallId: "t2", ok: false, summary: "no such file", durationMs: 1234 }),
+  ]);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const body = linesOut.slice(1, -1);
+
+  assert.match(body.join("\n"), /contents of a\.ts \u00b7 420ms/);
+  assert.match(body.join("\n"), /no such file \u00b7 1\.2s/); // formatToolDuration rolls over at a second
+  assert.match(body.find((l) => l.includes("no such file"))!, /<error>/); // the error theme keeps the segment
+});
+
+test("buildPeekLines: tool-end entries without durationMs render with no duration segment", () => {
+  const transcript = state([
+    entry({ kind: "tool-start", toolCallId: "t1", label: "read a.ts" }),
+    entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts" }),
+  ]);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const body = linesOut.slice(1, -1).join("\n");
+
+  assert.match(body, /\u25aa contents of a\.ts/);
+  assert.doesNotMatch(body, /\dms/); // no duration segment anywhere
+});
+
+test("buildPeekLines: toolsExpanded=false drops the whole tool-end line, duration segment included", () => {
+  const transcript = state([
+    entry({ kind: "tool-start", toolCallId: "t1", label: "read a.ts" }),
+    entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts", durationMs: 420 }),
+  ]);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, { toolsExpanded: false });
+  const frame = linesOut.join("\n");
+
+  assert.doesNotMatch(frame, /\u25aa/); // the whole result line is gone, duration included
+  assert.doesNotMatch(frame, /420ms/);
+  assert.match(frame, /\u25b8 read a\.ts/); // tool-start lines stay
+});
+
 test("buildPeekLines: toolsExpanded=false omits tool-end lines and keeps tool-start plus the settled result", () => {
   const transcript = state([
     entry({ kind: "tool-start", toolCallId: "t1", label: "read a.ts" }),
@@ -346,11 +384,14 @@ function fakeTui() {
 
 // The real KeybindingsManager resolves Esc to tui.select.cancel; the fake
 // matches only that action, so "esc" is indistinguishable from any other
-// data — exactly the seam handleInput relies on.
+// data — exactly the seam handleInput relies on. The ctrl+o entry answers
+// app.tools.expand the same way (the real default binding for that action).
 const keybindings: PeekKeybindings = {
   // The real matcher pairs the action with the incoming data; a fake keyed
   // only on the action would match EVERY key and close the window on w.
-  matches: (data, action) => data === "esc" && action === "tui.select.cancel",
+  matches: (data, action) =>
+    (data === "esc" && action === "tui.select.cancel") ||
+    (data === "ctrl+o" && action === "app.tools.expand"),
 };
 
 function mount(
@@ -461,6 +502,42 @@ test("PeekOverlayComponent: other input is ignored", () => {
 
   assert.equal(doneResults.length, 0);
   assert.equal(scheduler.pendingCount(), 1); // still pulsing
+});
+
+test("PeekOverlayComponent: Ctrl+O (via app.tools.expand) calls onToggleTools exactly once and leaves the window alone", () => {
+  const jobRef = { current: runningJob() as JobSnapshot | undefined };
+  const toggles: number[] = [];
+  const onScrolls: number[] = [];
+  const { component, scheduler, doneResults } = mount(jobRef, {
+    getTranscript: scrollTranscript,
+    onScroll: (o) => onScrolls.push(o),
+    onToggleTools: () => toggles.push(1),
+  });
+  component.render(80); // fixes the scroll cap (30 - 24 = 6)
+
+  component.handleInput("ctrl+o");
+
+  assert.deepEqual(toggles, [1]); // exactly once
+  assert.equal(doneResults.length, 0); // the window stays open: no done()
+  assert.equal(scheduler.pendingCount(), 1); // the pulse keeps running
+  assert.deepEqual(onScrolls, []); // the scroll offset did not move
+  assert.match(component.render(80).join("\n"), /line 30/); // still in follow mode
+});
+
+test("PeekOverlayComponent: Ctrl+O without onToggleTools wired is a no-op (done, pulse, scroll untouched)", () => {
+  const jobRef = { current: runningJob() as JobSnapshot | undefined };
+  const onScrolls: number[] = [];
+  const { component, scheduler, doneResults } = mount(jobRef, {
+    getTranscript: scrollTranscript,
+    onScroll: (o) => onScrolls.push(o),
+  });
+  component.render(80);
+
+  component.handleInput("ctrl+o");
+
+  assert.equal(doneResults.length, 0);
+  assert.equal(scheduler.pendingCount(), 1);
+  assert.deepEqual(onScrolls, []);
 });
 
 test("PeekOverlayComponent: a pulse tick re-renders while the job is active and reschedules itself", () => {
@@ -636,6 +713,9 @@ test("PeekOverlayComponent: short body \u2014 footer has no scroll hint and Up s
 // --- createPeekManager ---
 
 function fakePeekUi() {
+  // The fake carries the main view's tool-expansion state, the same state
+  // PeekManagerUi.getToolsExpanded/setToolsExpanded read and flip.
+  let toolsExpanded = true;
   const calls: Array<{
     factory: (tui: unknown, theme: PeekTheme, keybindings: PeekKeybindings, done: (r: "toggle" | undefined) => void) => unknown;
     options: { overlay?: boolean; overlayOptions?: Record<string, unknown> };
@@ -656,6 +736,8 @@ function fakePeekUi() {
     },
     notify: (_m: string, _level?: "info" | "warning" | "error") => {},
     theme,
+    getToolsExpanded: () => toolsExpanded,
+    setToolsExpanded: (expanded: boolean) => { toolsExpanded = expanded; },
   };
   // Assignment cast: the fake's property-typed custom has the host's
   // contravariant factory params, so it needs the cast to PeekManagerUi
@@ -720,6 +802,10 @@ test("createPeekManager: a rejected custom promise takes the warn path", async (
       custom: () => Promise.reject(new Error("overlay exploded")),
       notify: (_m: string, _level?: "info" | "warning" | "error") => {},
       theme,
+      // Structural stubs: PeekManagerUi requires the tool-expansion pair,
+      // though the rejection path never reaches them.
+      getToolsExpanded: () => true,
+      setToolsExpanded: (_expanded: boolean) => {},
     };
     const manager = createPeekManager({ getUi: () => ui, now: () => 0, schedule: () => 0, cancel: () => {} });
     const job = runningJob();
@@ -757,7 +843,11 @@ test("createPeekManager: close stops the live window's pulse idempotently, witho
 // --- createPeekManager scroll persistence ---
 
 const componentShape = (component: unknown) =>
-  component as { render(width: number): string[]; handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined };
+  component as {
+    render(width: number): string[];
+    handleInput(data: string): void;
+    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+  };
 
 test("createPeekManager: the scroll offset persists across a w-toggle reopen", async () => {
   const { ui, calls, gates } = fakePeekUi();
@@ -808,4 +898,30 @@ test("createPeekManager: close() resets the scroll offset for the next open too"
   const frame = second.render(80).join("\n");
   assert.match(frame, /line 30/); // following again, not the scrolled affordance
   assert.doesNotMatch(frame, /\u0028\+2 earlier\u0029/); // the scrolled offset did not leak
+});
+
+// --- createPeekManager tool-expansion toggle wiring ---
+
+test("createPeekManager: onToggleTools flips the ui's tool expansion through the main-view toggle, per press", () => {
+  const { ui, calls, gates } = fakePeekUi();
+  const manager = createPeekManager({ getUi: () => ui, now: () => 0, schedule: () => 0, cancel: () => {} });
+  const job = runningJob();
+  manager.open(job, () => job, () => undefined);
+
+  // Mount the window and press the expansion key twice: each press routes
+  // through onToggleTools to ui.setToolsExpanded(!ui.getToolsExpanded()).
+  let doneInvoked = false;
+  const component = componentShape(
+    calls[0].factory({ requestRender: () => {} }, theme, keybindings, (r) => {
+      doneInvoked = true;
+      gates[0](r);
+    }),
+  );
+
+  component.handleInput("ctrl+o");
+  assert.equal(ui.getToolsExpanded(), false); // flipped off (default true)
+  component.handleInput("ctrl+o");
+  assert.equal(ui.getToolsExpanded(), true); // and back on
+
+  assert.equal(doneInvoked, false); // done() never fired: the window stays open
 });

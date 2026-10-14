@@ -16,6 +16,13 @@ export function formatElapsed(ms: number): string {
   return `${seconds}s`;
 }
 
+/** "420ms", "1.2s" — per-tool durations for the peek transcript lines
+ * (one decimal second above a full second; negatives clamp to 0ms). */
+export function formatToolDuration(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, ms)}ms`;
+  return `${(Math.max(0, ms) / 1000).toFixed(1)}s`;
+}
+
 // One-word "what is it doing" column, derived by progress.ts's activityWord
 // (running tool wins over stream phase; `waiting` when nothing has streamed
 // yet). Preview is capped narrower than the tool-call previews to keep the

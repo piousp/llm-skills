@@ -21,7 +21,7 @@ export type TranscriptEntry =
   | { kind: "text"; seq: number; content: string }
   | { kind: "thinking"; seq: number; content: string }
   | { kind: "tool-start"; seq: number; toolCallId: string; label: string }
-  | { kind: "tool-end"; seq: number; toolCallId: string; ok: boolean; summary: string };
+  | { kind: "tool-end"; seq: number; toolCallId: string; ok: boolean; summary: string; durationMs?: number };
 
 export interface TranscriptState {
   /** Bounded ring: entries[0] is the oldest surviving entry (head-evicted). */
@@ -76,7 +76,7 @@ export type EntryDraft =
   | { kind: "text"; content: string }
   | { kind: "thinking"; content: string }
   | { kind: "tool-start"; toolCallId: string; label: string }
-  | { kind: "tool-end"; toolCallId: string; ok: boolean; summary: string };
+  | { kind: "tool-end"; toolCallId: string; ok: boolean; summary: string; durationMs?: number };
 
 // The single append point for every entry: assigns a per-transcript
 // monotonic seq (dropped + length = entries pushed so far, so it stays
@@ -163,9 +163,15 @@ export function applySessionEvent(state: TranscriptState, event: AgentSessionEve
   }
   if (event.type === "tool_execution_end") {
     const summary = truncate(toolResultPreview(event.result), TOOL_RESULT_MAX_CHARS);
+    // durationMs is optional on the event (hosts < 1.1.0 omit it): copied
+    // only when present, so a 1.0.x tool-end entry stays byte-identical to
+    // the pre-1.3.3 shape (no own property at all) and storedChars budgets
+    // are untouched (they count only strings).
     return pushEntry(
       state,
-      { kind: "tool-end", toolCallId: event.toolCallId, ok: !event.isError, summary },
+      event.durationMs !== undefined
+        ? { kind: "tool-end", toolCallId: event.toolCallId, ok: !event.isError, summary, durationMs: event.durationMs }
+        : { kind: "tool-end", toolCallId: event.toolCallId, ok: !event.isError, summary },
       summary.length,
     );
   }
