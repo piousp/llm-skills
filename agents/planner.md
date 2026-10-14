@@ -5,10 +5,10 @@ description: >
   plan (PLAN / TECHNICAL) with automatic lens selection. Supports task/project,
   research, writing, and code domains.
 tools: read, grep, find, ls, bash, subagent
+timeoutMs: 1800000
 systemPromptMode: replace
 thinking: high
 inheritProjectContext: false
-timeoutMs: 1200000
 skills: pablo-code-planning, pablo-tdd, refactor-identification
 ---
 

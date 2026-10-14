@@ -6,6 +6,7 @@ description: >
      The critical-thinker is not a decision maker; it's job is similar to an advisor but it is
      more antogonistic (but unbiased) in nature. 
 tools: read, grep, find, ls, subagent
+timeoutMs: 1800000
 systemPromptMode: append
 defaultContext: forked
 inheritProjectContext: true
