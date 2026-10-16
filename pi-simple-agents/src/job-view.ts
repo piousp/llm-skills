@@ -160,23 +160,29 @@ export type PeekTarget =
   | { readonly kind: "ambiguous"; readonly ids: readonly string[] }
   | { readonly kind: "none" };
 
-export function resolveAutoTarget(jobs: readonly JobSnapshot[]): PeekTarget {
+// Shared core of resolveAutoTarget/resolveActiveTarget: exactly one active
+// job wins, several actives are ambiguous (ids in the caller's order —
+// newest-first when the caller passes jobs.list()), and no actives fall back
+// to the caller's chosen PeekTarget.
+function resolveTargetByActive(jobs: readonly JobSnapshot[], noActive: PeekTarget): PeekTarget {
   const active = jobs.filter((j) => isActive(j.state));
   if (active.length === 1) return { kind: "job", job: active[0] };
   if (active.length > 1) return { kind: "ambiguous", ids: active.map((j) => j.id) };
-  if (jobs.length > 0) return { kind: "job", job: jobs[0] };
-  return { kind: "none" };
+  return noActive;
+}
+
+export function resolveAutoTarget(jobs: readonly JobSnapshot[]): PeekTarget {
+  return resolveTargetByActive(
+    jobs,
+    jobs.length > 0 ? { kind: "job", job: jobs[0] } : { kind: "none" },
+  );
 }
 
 // Picks the default target for a bare `/subagents cancel` (no id): only
-// ACTIVE jobs are candidates (a settled job is nothing to cancel). Same union
-// and shape as resolveAutoTarget, but with no active jobs the result is
-// always none — no settled fallback.
+// ACTIVE jobs are candidates (a settled job is nothing to cancel), so the
+// no-active fallback is always none.
 export function resolveActiveTarget(jobs: readonly JobSnapshot[]): PeekTarget {
-  const active = jobs.filter((j) => isActive(j.state));
-  if (active.length === 1) return { kind: "job", job: active[0] };
-  if (active.length > 1) return { kind: "ambiguous", ids: active.map((j) => j.id) };
-  return { kind: "none" };
+  return resolveTargetByActive(jobs, { kind: "none" });
 }
 
 export function describeClearResult(removed: number): string {
