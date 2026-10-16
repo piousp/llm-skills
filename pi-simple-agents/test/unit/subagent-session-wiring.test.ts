@@ -18,7 +18,7 @@ function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pi-simple-agents-subagent-session-wiring-"));
 }
 
-// Same shape as SESSION_MANAGER_FACTORY in extensions/index.ts — the real
+// Same shape as SESSION_MANAGER_FACTORY in src/task-runner.ts — the real
 // factory, not a fake.
 const REAL_FACTORY = {
   forkFrom: (s: string, t: string, d: string) => SessionManager.forkFrom(s, t, d),

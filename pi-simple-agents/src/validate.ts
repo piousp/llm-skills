@@ -1,10 +1,11 @@
 import type { AgentConfig } from "./agents.ts";
-import { invocationOverrideOf, type InvocationOverride } from "./overrides.ts";
+import { invocationOverrideOf, isValidModelRef, type InvocationOverride } from "./overrides.ts";
 import { WARN_PREFIX } from "./warn.ts";
 
 // Re-exports: override semantics moved to src/overrides.ts (single home);
-// these keep this module's previous export surface valid for its importers
-// (render-call.ts, extensions/task-runner.ts, run.test.ts, validate.test.ts).
+// these keep this module's previous export surface valid. render-call.ts
+// and task-runner.ts import invocationOverrideOf through this re-export;
+// applyInvocationOverride consumers resolve it via agents.ts's re-export.
 export { invocationOverrideOf, applyInvocationOverride, applyOverrides, OVERRIDE_KEYS } from "./overrides.ts";
 export type { InvocationOverride } from "./overrides.ts";
 
@@ -20,13 +21,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isValidModelRef(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0) return false;
-  return slashIndex < value.length - 1;
-}
-
+// isValidModelRef comes from src/overrides.ts — its single home.
 function validateModelRef(value: unknown, label: string): string | undefined {
   if (value === undefined || isValidModelRef(value)) return undefined;
   return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
