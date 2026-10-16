@@ -92,8 +92,8 @@ The caller may supply additional domain-context lens paths (e.g. a team wiki-usa
 
 ## The conglomerate: QA bug-hunting lenses
 
-[WHEN] applying this lens to a diff, read `references/lenses.md` for the 7 lenses (logic, data,
-business-rule, regression, concurrency, oracle, degradation), distilled from practitioner best
+[WHEN] applying this lens to a diff, read `references/lenses.md` for the 8 lenses (logic, data,
+business-rule, regression, concurrency, oracle, degradation, security), distilled from practitioner best
 practices (BrowserStack, QA Madness, Virtuoso, Ranger on AI-generated code) and academic
 foundations (regression test selection, mutation testing, the oracle problem / metamorphic
 testing). Citations at the bottom of this file.
@@ -126,7 +126,7 @@ For the changed path, report one of:
 ### Findings (most severe first)
 1. [BLOCK|HIGH|MEDIUM|LOW] <file:line>: <one-line defect>
    Failure scenario: <concrete inputs/state → wrong output/crash>
-   Lens: <logic|data|business-rule|regression|concurrency|oracle|degradation>
+   Lens: <logic|data|business-rule|regression|concurrency|oracle|degradation|security>
 2. ...
 (If none survive a concrete scenario: "No confirmed defects.")
 

@@ -63,3 +63,21 @@ whole). Flag any change that could violate such an invariant.
 - Error messages/codes that changed and would mislead operators or break consumers parsing them.
 - **Assumed-dependency probe**: name every dependency the code assumes is present (a lock, a DB, an
   upstream service, guaranteed ordering); what happens when it is absent or degraded instead?
+
+### Lens 8: Security (attacker lens)
+- Review the changed lines as an attacker would; OWASP Top 10 classes, concretely:
+  - **Injection**: user-controlled input concatenated into SQL, OS commands, templates,
+    LDAP/NoSQL queries instead of parameterized/bound.
+  - **Broken access control / IDOR**: an endpoint or query that touches an object by id
+    without an ownership/role check; guessable ids; forced browsing of hidden routes.
+  - **Auth/session**: tokens in URLs or logs, missing auth on a new route, session
+    fixation, missing rate limiting on a new credential path.
+  - **Sensitive data exposure**: secrets, keys or PII hardcoded, logged, or returned in
+    API responses wider than the caller needs.
+  - **XSS / output encoding**: user data rendered without context-appropriate escaping.
+  - **SSRF / unsafe deserialization**: a new URL fetch built from request data; user data
+    fed to a deserializer.
+- Only report with the same rigor as every other lens: named input, entry path that
+  exists, concrete exploit outcome. "Could be exploited" is a doubt, not a finding.
+- Pre-existing vulnerability outside the diff is not a finding; route it to Open
+  Questions with the exact lookup.
