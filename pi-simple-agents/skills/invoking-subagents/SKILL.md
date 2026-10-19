@@ -1,6 +1,6 @@
 ---
 name: invoking-subagents
-description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}) and the six optional per-invocation overrides (model, tools, skills, thinking, maxTurns, timeoutMs) for one call. Each call starts its own independent background job and returns a job id immediately; the result arrives later as a message. Running several agents at once means calling the tool once per task, in the same turn. Use when delegating work to a subagent, running several subagents concurrently, or overriding which model, tools, skills, thinking level, turn cap, or timeout a single subagent run uses. [DO NOT] use this for defining new agents or configuring persistent overrides; see the pi-simple-agents README for that."
+description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}) and the six optional per-invocation overrides (model, tools, skills, thinking, maxTurns, timeoutMs) for one call. Each call starts its own independent background job and returns a job id immediately; the result arrives later as a message. Running several agents at once means calling the tool once per task, in the same turn. A running job can also be redirected mid-task with /subagents steer or given a follow-up with /subagents followUp, only at the user's explicit request. Use when delegating work to a subagent, running several subagents concurrently, overriding which model, tools, skills, thinking level, turn cap, or timeout a single subagent run uses, or (at the user's request) redirecting a running job. [DO NOT] use this for defining new agents or configuring persistent overrides; see the pi-simple-agents README for that."
 ---
 
 # Invoking subagents
@@ -19,6 +19,10 @@ One agent, one task, per call. The call returns almost immediately with a job id
 agent's final output. The result is delivered later as its own message in the conversation, and
 (unless cancelled) wakes the model up with a follow-up turn to act on it. **Do not call
 `subagent` again to poll** for that job's result; it arrives automatically.
+
+A result can also reflect what the user injected into the run while it was in flight (see
+[Steering a running job](#steering-a-running-job)): a job that answers something other than its
+original task may have been redirected — that is by design, not a malfunction.
 
 ## Running several at once
 
@@ -50,6 +54,12 @@ Each is a top-level field alongside `agent`/`task`:
 ```
 
 ### `model`
+
+[ALWAYS] omit `model`: the agent's inherited model — resolved through frontmatter/settings
+before the call even starts — is what runs unless the caller overrides it. Set `model` [ONLY]
+when the user explicitly names one for that call (e.g. "run scout with opus"); if the user asks
+for a model change without naming it, confirm the exact `provider/modelId` before passing it.
+Never pick a model on your own initiative.
 
 Format `provider/modelId`; multi-slash IDs are valid (e.g.
 `"openrouter/anthropic/claude-sonnet-4-5"`). Precedence: invocation `model` > project settings >
@@ -92,6 +102,18 @@ frontmatter `timeoutMs` > the 10-minute default. Values above the 2-hour ceiling
 `Infinity` values are warned and fall back to the 10-minute default. On expiry, the run settles
 as an error (`"timed out after <N>ms"`).
 
+## Steering a running job
+
+While a job is running, the user can inject a message into its live session via the
+`/subagents` command: `/subagents steer <id> <message>` (delivered after the job's current
+assistant turn, redirects the in-flight work) or `/subagents followUp <id> <message>`
+(queued until the run finishes its pending work; it extends the run, so the job settles only
+after it is processed). The extension is not free: the extra turn counts toward `maxTurns`,
+and the run can still hit its `timeoutMs` while processing the follow-up. The coordinator (you)
+may run these commands too, but [ALWAYS] and [ONLY] when the user explicitly asks for it —
+never steer or follow up a subagent on your own initiative. A settled job can no longer be
+messaged.
+
 ## Errors and how to fix them
 
 - Unknown `agent` name → error lists the available agents.
@@ -101,5 +123,6 @@ as an error (`"timed out after <N>ms"`).
 
 ## Not covered here
 
-Defining new agents, persistent model/tool overrides, and `/subagents` job management
-(listing/cancelling/clearing); see the [README](../../README.md).
+Defining new agents, persistent model/tool overrides, and the rest of `/subagents` job
+management (listing/cancelling/clearing, peek/status, usage reporting); see the
+[README](../../README.md).

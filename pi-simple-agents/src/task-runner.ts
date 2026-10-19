@@ -35,6 +35,12 @@ export interface RunTaskOptions {
       registry feeds these into the run's transcript (see src/transcript.ts).
       Independent of `tracker`: present even when no progress tracking. */
   onSessionEvent?: RunAgentViaSdkOptions["onSessionEvent"];
+  /** Live-session tap passed verbatim to runAgentViaSdk; the job registry
+      feeds these into its per-job live-session sink so /subagents
+      steer|followUp can inject into the running session. */
+  onSessionReady?: RunAgentViaSdkOptions["onSessionReady"];
+  /** Counterpart to onSessionReady (see src/run.ts). */
+  onSessionGone?: RunAgentViaSdkOptions["onSessionGone"];
   /** Test seam: defaults to the real createAgentSession. */
   createSession?: RunAgentViaSdkOptions["createSession"];
   /** Test seam: the home root the nested loader derives agentDir from
@@ -59,7 +65,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: RunTaskOptions,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent, onSessionReady, onSessionGone } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -93,6 +99,8 @@ export async function runSingleTask(
         getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
         onProgressEvent: tracker ? (event) => tracker.onEvent(event) : undefined,
         onSessionEvent,
+        onSessionReady,
+        onSessionGone,
         mode,
       },
     );

@@ -2,7 +2,7 @@ import { buildProgressLine, activityWord, type ProgressTheme } from "./progress.
 import { firstLine, truncate } from "./text-utils.ts";
 import { formatRunUsage, formatTokens } from "./usage.ts";
 import type { AgentRunResult } from "./run.ts";
-import { isActive, type CancelResult, type JobSnapshot } from "./background-jobs.ts";
+import { isActive, type CancelResult, type InjectKind, type InjectResult, type JobSnapshot } from "./background-jobs.ts";
 import { RECONCILED_RUN_STATUSES, type ReconciledRunStatus, type SubagentSessionReport } from "./session-reconcile.ts";
 
 /** "0s", "1m 00s", "1h 00m" — stable-width, no fractional seconds. */
@@ -56,7 +56,7 @@ export function buildJobsWidgetLines(
     .map((job) => unfinishedTaskLine(job, now, theme))
     .filter((line): line is string => line !== undefined);
   if (lines.length === 0) return undefined;
-  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents peek|status|cancel <id> \u00b7 clear")];
+  return [...lines, theme.fg("dim", "  /subagents \u00b7 /subagents peek|status|cancel <id> \u00b7 /subagents steer|followUp <id> <msg> \u00b7 clear")];
 }
 
 // Shared not-found wording for both /subagents cancel and /subagents status.
@@ -110,6 +110,8 @@ export type SubagentsCommand =
   | { readonly kind: "cancel"; readonly id?: string }
   | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
+  | { readonly kind: "steer"; readonly id?: string; readonly message: string }
+  | { readonly kind: "followUp"; readonly id?: string; readonly message: string }
   | { readonly kind: "clear" }
   | { readonly kind: "session" }
   | { readonly kind: "usage-error"; readonly message: string };
@@ -135,13 +137,25 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     return id ? { kind: "peek", id } : { kind: "peek" };
   }
   if (sub === "clear") return { kind: "clear" };
+  if (sub === "steer" || sub === "followUp") {
+    // Deliberately deterministic, no id-guessing: two or more remaining tokens
+    // are id-then-message; a single remaining token is the message itself and
+    // the target auto-resolves (active jobs only, like bare cancel). A
+    // one-token message with an explicit id is therefore NOT expressible.
+    // The split on /\s+/ collapses whitespace runs inside the message.
+    if (rest.length === 0) {
+      return { kind: "usage-error", message: `Usage: /subagents ${sub} <id>? <message>` };
+    }
+    if (rest.length === 1) return { kind: sub, message: rest[0] };
+    return { kind: sub, id: rest[0], message: rest.slice(1).join(" ") };
+  }
   if (sub === "session") {
     // session takes no arguments (v1: no --runs, no filters) — anything extra
     // is a usage error rather than a silently ignored suffix.
     if (rest.length > 0) return { kind: "usage-error", message: "Usage: /subagents session" };
     return { kind: "session" };
   }
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel] [id] [|clear|session]` };
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel|steer|followUp] [id] [|clear|session]` };
 }
 
 // Shared ambiguous-target wording for the bare /subagents peek, status and
@@ -231,6 +245,56 @@ export function describeCancelResult(result: CancelResult): { text: string; leve
       };
     case "not-found":
       return { text: jobNotFoundText(result.id), level: "warning" };
+  }
+}
+
+// Verb phrasing shared by every describeInjectResult arm: what there is
+// nothing of, and what the failed verb is called.
+const INJECT_NOTHING_TO: Record<InjectKind, string> = {
+  steer: "nothing to steer",
+  followUp: "nothing to follow up on",
+};
+
+// Mirrors describeCancelResult for steer/followUp: warnings for every guard
+// the registry's inject() can stop at, info for a successful injection — the
+// SDK's "queued" (the model will receive it) vs "handled" (an extension
+// consumed it) disposition surfaced verbatim.
+export function describeInjectResult(kind: InjectKind, result: InjectResult): { text: string; level: "info" | "warning" } {
+  switch (result.kind) {
+    case "not-found":
+      return { text: jobNotFoundText(result.id), level: "warning" };
+    case "not-running":
+      return {
+        text: `Job ${result.job.id} is already ${result.job.state.status} \u2014 ${INJECT_NOTHING_TO[kind]}.`,
+        level: "warning",
+      };
+    case "cancelling":
+      return { text: `Job ${result.job.id} is cancelling \u2014 ${INJECT_NOTHING_TO[kind]}.`, level: "warning" };
+    case "not-live":
+      return {
+        text: `Job ${result.job.id} is running but has no live session yet (still starting up, or already wrapping up) \u2014 ${INJECT_NOTHING_TO[kind]}.`,
+        level: "warning",
+      };
+    case "failed":
+      return {
+        text: `Failed to ${kind === "steer" ? "steer" : "follow up on"} job ${result.job.id}: ${result.error}`,
+        level: "warning",
+      };
+    case "injected":
+      if (kind === "steer") {
+        return {
+          text: result.disposition === "queued"
+            ? `Steering message queued for job ${result.job.id}.`
+            : `Steering message handled for job ${result.job.id} (an extension consumed it).`,
+          level: "info",
+        };
+      }
+      return {
+        text: result.disposition === "queued"
+          ? `Follow-up queued for job ${result.job.id} \u2014 the job settles only after it is processed.`
+          : `Follow-up handled for job ${result.job.id} (an extension consumed it).`,
+        level: "info",
+      };
   }
 }
 

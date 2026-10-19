@@ -36,7 +36,7 @@ export interface JobSnapshot {
 
 export type SettledJob = JobSnapshot & { readonly state: Extract<JobState, { settledAt: number }> };
 
-export type JobRun = (io: { signal: AbortSignal; tracker: ProgressTracker; transcript: TranscriptSink }) => Promise<AgentRunResult>;
+export type JobRun = (io: { signal: AbortSignal; tracker: ProgressTracker; transcript: TranscriptSink; live: LiveSessionSink }) => Promise<AgentRunResult>;
 
 export interface JobRegistryDeps {
   now: () => number;
@@ -50,6 +50,40 @@ export type CancelResult =
   | { readonly kind: "not-running"; readonly job: JobSnapshot }
   | { readonly kind: "not-found"; readonly id: string };
 
+// The subset of a live SDK session the registry needs to inject a message
+// into a running job (handed over by run.ts's onSessionReady). A structural
+// type on purpose — no SDK import — so unit-test fakes stay trivial. The
+// "queued" (the model will receive it) vs "handled" (an extension consumed
+// it) disposition is the SDK's own return value, surfaced verbatim.
+export interface LiveSessionApi {
+  steer(message: string): Promise<"queued" | "handled">;
+  followUp(message: string): Promise<"queued" | "handled">;
+}
+
+// Per-job live-session sink, built in start() and handed to the run io. `set`
+// is guarded on the job still being active so a callback landing after the
+// job settled can never resurrect a handle against a dead session;
+// finalizeSettle nulls the record's field too (belt-and-braces).
+export interface LiveSessionSink {
+  set(api: LiveSessionApi): void;
+  clear(): void;
+}
+
+// Which message-injection verb the user asked for: "steer" (interrupt the
+// model mid-run; delivered after the current turn's tool calls finish, before
+// the next model call) or "followUp" (queued; processed once the run's own
+// work is done — which also extends the run: the job settles only after the
+// follow-up is processed).
+export type InjectKind = "steer" | "followUp";
+
+export type InjectResult =
+  | { readonly kind: "not-found"; readonly id: string }
+  | { readonly kind: "not-running"; readonly job: JobSnapshot }
+  | { readonly kind: "cancelling"; readonly job: JobSnapshot }
+  | { readonly kind: "not-live"; readonly job: JobSnapshot }
+  | { readonly kind: "failed"; readonly job: JobSnapshot; readonly error: string }
+  | { readonly kind: "injected"; readonly job: JobSnapshot; readonly disposition: "queued" | "handled" };
+
 export interface JobRegistry {
   start(input: { runId: string; task: JobTask; run: JobRun }): JobSnapshot;
   /** Snapshot of the job with the given id, or undefined when unknown (also for ids pruned by maxRecent). */
@@ -57,6 +91,10 @@ export interface JobRegistry {
   /** Transcript snapshot of the job with the given id, or undefined when unknown (also for ids pruned by maxRecent) — same semantics as `get`. */
   getTranscript(id: string): TranscriptState | undefined;
   cancel(id: string): CancelResult;
+  /** Injects a steering message into a running job's live session (see InjectResult for the guard chain). */
+  steer(id: string, message: string): Promise<InjectResult>;
+  /** Queues a follow-up message into a running job's live session — the job settles only after it is processed. */
+  followUp(id: string, message: string): Promise<InjectResult>;
   cancelAll(): void;
   shutdown(): void;
   list(): readonly JobSnapshot[];
@@ -88,6 +126,10 @@ interface JobRecord {
   state: JobState;
   controller: AbortController;
   transcript: TranscriptSink;
+  // Live session handle, non-null exactly between the run's onSessionReady
+  // (right before the prompt) and its onSessionGone (top of the teardown)
+  // callbacks; steer/followUp inject through it (see inject below).
+  live: LiveSessionApi | null;
 }
 
 function toSnapshot(record: JobRecord): JobSnapshot {
@@ -157,6 +199,11 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
 
   function finalizeSettle(record: JobRecord, state: Extract<JobState, { settledAt: number }>): void {
     record.state = state;
+    // Belt-and-braces: the run's own onSessionGone (run.ts's finally) already
+    // clears the sink before this runs, but a stale sink callback must never
+    // resurrect the handle against a settled job either (the sink's `set` is
+    // guarded on isActive for the same reason).
+    record.live = null;
     // `whenIdle()` waiters must be released on every settle, closed or not —
     // only the onSettled/onChange *notifications* are suppressed post-shutdown
     // (emitChange already no-ops internally when closed). A whenIdle() caller
@@ -191,8 +238,20 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
       state: { status: "running" },
       controller,
       transcript: createTranscriptSink(),
+      live: null,
     };
     jobs.set(id, record);
+
+    // Per-job live-session sink: the run's onSessionReady/onSessionGone
+    // callbacks (wired through runSingleTask/runAgentViaSdk in
+    // extensions/index.ts) land here; steer/followUp inject through the
+    // stored handle. `set` is guarded on the job still being active so a
+    // callback racing past a settle can never resurrect a handle against a
+    // dead session.
+    const live: LiveSessionSink = {
+      set: (api) => { if (isActive(record.state)) record.live = api; },
+      clear: () => { record.live = null; },
+    };
 
     const tracker = createProgressTracker(input.task.agent, (progress) => {
       record.progress = progress;
@@ -202,7 +261,7 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     // Scheduled on a later microtask so start() always returns before `run`
     // begins — a synchronous throw inside `run` is caught here too.
     Promise.resolve()
-      .then(() => input.run({ signal: controller.signal, tracker, transcript: record.transcript }))
+      .then(() => input.run({ signal: controller.signal, tracker, transcript: record.transcript, live }))
       .then(
         (result) => {
           if (record.state.status === "cancelling") {
@@ -234,6 +293,38 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
       emitChange();
     }
     return { kind: "cancelling", job: toSnapshot(record) };
+  }
+
+  // Shared body of steer/followUp. Guard order mirrors cancel(): unknown id,
+  // then settled (nothing running to message), then cancelling (the abort is
+  // already in flight), then running-but-no-live-session (the pre-prompt
+  // startup window, or the teardown window after the prompt resolved but
+  // before the run's promise settled — onSessionGone fires before dispose,
+  // so a message racing that window lands here, never on a disposing
+  // session). Only then is the live session's own method called; its
+  // rejection (e.g. steering an already-aborting session) surfaces as
+  // "failed" instead of throwing at the caller.
+  async function inject(id: string, which: InjectKind, message: string): Promise<InjectResult> {
+    const record = jobs.get(id);
+    if (!record) return { kind: "not-found", id };
+    if (!isActive(record.state)) return { kind: "not-running", job: toSnapshot(record) };
+    if (record.state.status === "cancelling") return { kind: "cancelling", job: toSnapshot(record) };
+    const api = record.live;
+    if (!api) return { kind: "not-live", job: toSnapshot(record) };
+    try {
+      const disposition = which === "steer" ? await api.steer(message) : await api.followUp(message);
+      return { kind: "injected", job: toSnapshot(record), disposition };
+    } catch (err) {
+      return { kind: "failed", job: toSnapshot(record), error: toErrorMessage(err) };
+    }
+  }
+
+  function steer(id: string, message: string): Promise<InjectResult> {
+    return inject(id, "steer", message);
+  }
+
+  function followUp(id: string, message: string): Promise<InjectResult> {
+    return inject(id, "followUp", message);
   }
 
   function cancelAll(): void {
@@ -278,7 +369,7 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     return record ? record.transcript.snapshot() : undefined;
   }
 
-  return { start, get, getTranscript, cancel, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
+  return { start, get, getTranscript, cancel, steer, followUp, cancelAll, shutdown, list, hasRunning, whenIdle, clearFinished };
 }
 
 /**

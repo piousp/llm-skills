@@ -1116,12 +1116,15 @@ type SubagentsCommand =
   | { readonly kind: "cancel"; readonly id?: string }
   | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
+  | { readonly kind: "steer"; readonly id?: string; readonly message: string }
+  | { readonly kind: "followUp"; readonly id?: string; readonly message: string }
   | { readonly kind: "clear" }
   | { readonly kind: "session" }
   | { readonly kind: "usage-error"; readonly message: string };
 function parseSubagentsCommand(args: string): SubagentsCommand;
 function buildSubagentSessionText(report: SubagentSessionReport, theme: ProgressTheme): string;
 function describeCancelResult(result: CancelResult): { text: string; level: "info" | "warning" };
+function describeInjectResult(kind: InjectKind, result: InjectResult): { text: string; level: "info" | "warning" };
 function describeClearResult(removed: number): string;
 ```
 
@@ -1139,7 +1142,7 @@ running job gets the live extras: its header, the activity word, the last `histo
 recently *started* call, which may already have ended), the history capped to the last 10 with
 `… (+N earlier)` eliding older entries, and the live usage snapshot when one has arrived. Unknown ids
 report `jobNotFoundText`, the single shared wording that `describeCancelResult`'s `not-found` case also uses.
-Since 1.3.0 bare `status`/`cancel`/`peek` carry `id?: string` and auto-select like `peek` does.
+Since 1.3.0 bare `status`/`cancel`/`peek` carry `id?: string` and auto-select like `peek` does. Since 1.4.0 `steer`/`followUp` carry `id?: string` plus `message: string`, parsed deterministically: two or more remaining tokens are id-then-message (whitespace runs collapse via the `/\s+/` split), a single token is the message and the target auto-resolves (active jobs only, like bare `cancel` — a one-token message with an explicit id is not expressible), and zero tokens is a usage error. `describeInjectResult` mirrors `describeCancelResult` for the injection guard chain (`not-found`/`not-running`/`cancelling`/`not-live` warnings, `failed` on a throwing live session) and reports a successful injection's SDK disposition (`queued`/`handled`) verbatim as an info notify.
 
 `buildSubagentSessionText` backs `/subagents session`: it renders a `SubagentSessionReport`
 (see `src/session-reconcile.ts` below) in the layout of pi's own `/session` command — token totals
@@ -1688,7 +1691,7 @@ never creates a file.
 
 ```typescript
 const SUBAGENT_BASE_DESCRIPTION =
-  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). Use /subagents to list running/recent jobs and /subagents cancel <id> to cancel one.";
+  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). Use /subagents to list running/recent jobs and /subagents cancel <id> to cancel one. You may redirect a running subagent with `/subagents steer <id> <message>` or queue a follow-up with `/subagents followUp <id> <message>` — but only when the user explicitly asks; never steer or follow up a subagent on your own initiative, and a job that has already settled can no longer be messaged.";
 
 function buildSubagentToolDescription(
   agents: ReadonlyArray<Pick<AgentConfig, "name" | "description">>,

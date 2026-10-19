@@ -47,22 +47,31 @@ subagent agent: "scout", task: "List all .ts files in src/"
 subagent agent: "web-scout", task: "Find the latest version of the API docs"
 ```
 
-A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `timeoutMs` for that run only.
+A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `timeoutMs` for that run only:
+
+```
+subagent agent: "scout", task: "Find the latest version of the API docs", model: "anthropic/claude-opus-4-8", thinking: "high", maxTurns: 5
+```
+
+Omit them all by default: the agent's own frontmatter/settings resolution is what runs, and an override belongs in the call only when the user asks for it by name.
 
 ## Background jobs
 
-`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and runs the task in the background. When the run settles, its result arrives as its own message and the model gets a follow-up turn to act on it, unless the job was cancelled.
+`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and runs the task in the background. When the run settles, its result arrives as its own message and the model gets a follow-up turn to act on it, unless the job was cancelled. While it runs, the user can redirect the job with `/subagents steer <id> <message>` or queue a follow-up with `/subagents followUp <id> <message>` (see below).
 
 Jobs live in memory: nothing carries over after a restart. While at least one is running, a panel below the editor shows a line per job with a one-word status. The word is the tool currently executing (`read`, or `playwright` for `mcp__playwright__navigate`), `thinking` or `output` while only the model streams, `waiting` before the first signal. The panel disappears once nothing is running.
 
 ## The /subagents command
 
-With no id, `status` and `peek` pick the single active job on their own (several actives ask for an id); `status` also falls back to the newest finished one when nothing is active.
+With no id, `status` and `peek` pick the single active job on their own (several actives ask for an id); `status` also falls back to the newest finished one when nothing is active. `steer` and `followUp` take a single token as the message and resolve the target the same way `cancel` does: only running jobs are candidates.
 
 - `/subagents` lists running and recently finished jobs, newest first, with a usage footer once a job settles.
 - `/subagents status [id]` details one job: the current activity, the last tool calls of the run, and usage so far.
 - `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results and per-tool durations. `w` alternates between the floating window and fullscreen; Esc or `q` closes it; `Ctrl+O` toggles tool output expansion, following the host keybinding. `Ctrl+T` (thinking visibility) is not supported while the window is open — close it (Esc/q) and press `Ctrl+T` in the main UI. Needs an interactive TUI session; other modes get a warning.
 - `/subagents cancel [id]` stops a running job.
+- `/subagents steer <id> <message>` injects a message into a running job's live session. It lands after the current turn's tool calls finish, before the next model call, so the agent reads it and adjusts the work still pending.
+- `/subagents followUp <id> <message>` queues a message for the end of the run. It enters after the job finishes its pending work and extends the run: the job settles only after the follow-up is processed, and the run can still hit its `timeoutMs` or `maxTurns` along the way.
+- Both resolve the target on their own when given a single token instead of `<id> <message>`: only running jobs are candidates, the way bare `cancel` does it. The model is told it may use them only when you explicitly ask, never on its own initiative, and a settled job can no longer be messaged.
 - `/subagents clear` drops finished jobs from the list.
 - `/subagents session` reports what the session's subagent runs spent, reconstructed from the child sessions persisted on disk: token totals with a cache hit rate, cost per model, and one line per agent, like `scout: 3 runs, 1.2M tokens, $0.980`. The current session must be persisted to disk; otherwise the command warns and exits.
 

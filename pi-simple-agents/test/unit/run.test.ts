@@ -2068,3 +2068,247 @@ test("runAgentViaSdk: a normal agent_settled (aborted: false) leaves the happy p
   assert.equal(result.status, "success");
   assert.equal((result as any).finalText, "done");
 });
+
+// --- onSessionReady / onSessionGone (the live-session tap) ---
+
+// A fake whose steer/followUp record their calls and whose followUp
+// unblocks a pending prompt() — the SDK-level shape a message-injected run
+// relies on: prompt() stays pending while a queued follow-up is still to be
+// processed, so the run (and the job's settle behind it) cannot complete
+// until then. runAgentViaSdk needs zero new delay code for this — the
+// follow-up-extended run keeps its own await chain open.
+function injectableSession(finalText: string) {
+  let unblockPrompt: (() => void) | undefined;
+  const calls: string[] = [];
+  const session = {
+    getAllTools: () => [] as any[],
+    bindExtensions: async () => {},
+    extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+    subscribe: () => () => {},
+    prompt: () => {
+      calls.push("prompt");
+      return new Promise<void>((resolve) => { unblockPrompt = resolve; });
+    },
+    getLastAssistantText: () => finalText,
+    getContextUsage: () => undefined,
+    dispose: () => { calls.push("dispose"); },
+    abort: () => { unblockPrompt?.(); },
+    steer: async (message: string) => { calls.push(`steer:${message}`); return "queued" as const; },
+    followUp: async (message: string) => {
+      calls.push(`followUp:${message}`);
+      unblockPrompt?.(); // the follow-up is processed, which ends the extended run
+      return "queued" as const;
+    },
+  };
+  return { session, calls };
+}
+
+test("runAgentViaSdk: onSessionReady fires with the session itself, immediately before the prompt; onSessionGone fires before dispose", async () => {
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async () => ({ session: fakeSession as any });
+  const taps: string[] = [];
+  let readySession: unknown;
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any,
+      onSessionReady: (session) => { readySession = session; taps.push("ready"); },
+      onSessionGone: () => taps.push("gone"),
+    },
+  );
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+
+  // Identity: the tap receives the run's own session object, not a wrapper.
+  assert.equal(readySession, fakeSession);
+  assert.deepEqual(taps, ["ready", "gone"]);
+  assert.deepEqual(fakeSession.callOrder, ["prompt", "dispose"]);
+});
+
+test("runAgentViaSdk: with an extension bind, onSessionGone fires before the session_shutdown emit and dispose", async () => {
+  const fakeSession = new FakeAgentSession("done", {
+    tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, mode: "tui",
+      // The tap records into the fake's own callOrder stream so the teardown
+      // ordering is assertable in one place.
+      onSessionGone: () => fakeSession.callOrder.push("gone"),
+    },
+  );
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+
+  // gone sits at the top of the teardown, before shutdown and dispose — a
+  // message injected in that window lands on the caller's not-live guard,
+  // never on a session mid-shutdown or mid-dispose.
+  assert.deepEqual(fakeSession.callOrder, ["bind", "prompt", "gone", "shutdown", "dispose"]);
+});
+test("runAgentViaSdk: onSessionGone fires before dispose on the prompt-throws error path", async () => {
+  const fakeSession = new FakeAgentSession("ignored");
+  fakeSession.shouldThrow = true;
+  const createSession = async () => ({ session: fakeSession as any });
+  const order: string[] = [];
+  fakeSession._dispose = () => order.push("dispose");
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onSessionGone: () => order.push("gone") },
+  );
+  await waitFor(() => order.includes("dispose"), 200, "dispose");
+
+  assert.equal(result.status, "error");
+  assert.deepEqual(order, ["gone", "dispose"]);
+});
+
+test("runAgentViaSdk: onSessionGone fires before dispose on the timeout path", async () => {
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  const createSession = async () => ({ session: fakeSession as any });
+  const order: string[] = [];
+  fakeSession._dispose = () => order.push("dispose");
+
+  const result = await runAgentViaSdk(
+    makeAgent({ timeoutMs: 10 }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, onSessionGone: () => order.push("gone") },
+  );
+  await waitFor(() => order.includes("dispose"), 200, "dispose");
+
+  assert.equal(result.status, "error");
+  assert.match((result as any).error, /timed out/);
+  assert.deepEqual(order, ["gone", "dispose"]);
+});
+
+test("runAgentViaSdk: onSessionGone fires before dispose on the signal-abort path", async () => {
+  const fakeSession = new FakeAgentSession("ignored", { hangUntilAbort: true });
+  const createSession = async () => ({ session: fakeSession as any });
+  const order: string[] = [];
+  fakeSession._dispose = () => order.push("dispose");
+  const controller = new AbortController();
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, signal: controller.signal, onSessionGone: () => order.push("gone") },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await promise;
+  await waitFor(() => order.includes("dispose"), 200, "dispose");
+
+  assert.deepEqual(order, ["gone", "dispose"]);
+});
+
+test("runAgentViaSdk: onSessionReady never fires on an early failure path (missing requested tool); onSessionGone still precedes dispose", async () => {
+  const fakeSession = new FakeAgentSession("ignored", {
+    tools: [{ name: "read", sourceInfo: { origin: "top-level", source: "builtin", path: "builtin:read" } }],
+  });
+  const createSession = async () => ({ session: fakeSession as any });
+  const taps: string[] = [];
+
+  const result = await runAgentViaSdk(
+    makeAgent({ tools: ["read", "web_search"] }),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, toolGraceMs: 25,
+      onSessionReady: () => taps.push("ready"),
+      onSessionGone: () => taps.push("gone"),
+    },
+  );
+  await waitFor(() => fakeSession.callOrder.includes("dispose"), 200, "dispose");
+
+  assert.equal(result.status, "error");
+  assert.ok(!fakeSession.callOrder.includes("prompt"), "the run must not prompt when a requested tool is missing");
+  // A consumer must never receive a handle on a session the run will not
+  // use; gone still fires (symmetric teardown) but no ready ever did.
+  assert.deepEqual(taps, ["gone"]);
+});
+
+test("runAgentViaSdk: neither tap fires a ready on a failure before createSession (no session ever existed)", async () => {
+  const createSession = async (): Promise<any> => { throw new Error("boom"); };
+  const taps: string[] = [];
+
+  const result = await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any,
+      onSessionReady: () => taps.push("ready"),
+      onSessionGone: () => taps.push("gone"),
+    },
+  );
+
+  assert.equal(result.status, "error");
+  assert.deepEqual(taps, ["gone"]); // gone is an idempotent clear; no ready to undo
+});
+
+test("runAgentViaSdk: a followUp that keeps prompt() pending holds the run open until it is processed", async () => {
+  const { session, calls } = injectableSession("steered answer");
+  let readySession: any;
+  const createSession = async () => ({ session: session as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any,
+      onSessionReady: (session) => { readySession = session; },
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // ready fired and the prompt is in flight, still pending.
+  assert.ok(readySession);
+  assert.deepEqual(calls, ["prompt"]);
+
+  let resolved = false;
+  promise.then(() => (resolved = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolved, false, "the run cannot settle while prompt() is pending on a queued follow-up");
+
+  // The follow-up is processed: prompt() resolves only now, so the run —
+  // and the job settle behind it in the real wiring — completes only now.
+  const disposition = await readySession.followUp("one more thing");
+  assert.equal(disposition, "queued");
+  assert.deepEqual(calls, ["prompt", "followUp:one more thing"]);
+
+  const result = await promise;
+  assert.equal(result.status, "success");
+  assert.equal((result as any).finalText, "steered answer");
+  await waitFor(() => calls.includes("dispose"), 200, "dispose");
+});
+
+test("runAgentViaSdk: a steer mid-run does not end it by itself (the model receives it, the prompt stays pending)", async () => {
+  const { session, calls } = injectableSession("steered answer");
+  let readySession: any;
+  const createSession = async () => ({ session: session as any });
+
+  const promise = runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any,
+      onSessionReady: (session) => { readySession = session; },
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(readySession);
+
+  await readySession.steer("change course");
+  assert.deepEqual(calls, ["prompt", "steer:change course"]);
+
+  let resolved = false;
+  promise.then(() => (resolved = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(resolved, false, "a steering message alone does not settle the run");
+
+  // Cleanup: unblock via abort (the same path a job cancel would take).
+  (readySession as any).abort();
+  await promise;
+});

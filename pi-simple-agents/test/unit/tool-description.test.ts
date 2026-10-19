@@ -25,6 +25,14 @@ test("SUBAGENT_BASE_DESCRIPTION: tells the model to call once per task for concu
   assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /one or more/i);
 });
 
+test("SUBAGENT_BASE_DESCRIPTION: steer/followUp are documented as user-request-only, with settled jobs unreachable", () => {
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /\/subagents steer <id> <message>/);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /\/subagents followUp <id> <message>/);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /only when the user explicitly asks/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /never steer or follow up a subagent on your own initiative/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /already settled can no longer be messaged/i);
+});
+
 test("buildSubagentToolDescription: single agent appends an available-agents section", () => {
   const result = buildSubagentToolDescription([{ name: "scout", description: "Finds things" }]);
 

@@ -143,6 +143,19 @@ export interface RunAgentViaSdkOptions {
    * (src/transcript.ts) is the intended consumer. */
   onSessionEvent?: (event: AgentSessionEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+  /** Live-session tap for message injection (the job registry's
+   * steer/followUp, see src/background-jobs.ts's LiveSessionApi): fired with
+   * the session handle immediately before the prompt phase starts — after
+   * every fail-loud check that could still settle the run first (model,
+   * abort, requested tools) — so a consumer never gets a handle on a session
+   * the run will not actually use. */
+  onSessionReady?: (session: CreateAgentSessionResult["session"]) => void;
+  /** Counterpart to onSessionReady: the session handle is gone (the run's
+   * prompt phase ended on any path — success, error, timeout, maxTurns, or
+   * abort). Fires at the top of the run's final teardown, before extension
+   * shutdown and dispose, so a message injected in that window lands on the
+   * registry's not-live guard instead of a disposing session. */
+  onSessionGone?: () => void;
   /** Host run mode, used to gate MCP/extension initialization to modes that exit cleanly (see bindExtensionsIfNeeded). */
   mode?: ExtensionMode;
   /** Overrides EXTENSION_BIND_TIMEOUT_MS. Test seam; production callers should leave this unset. */
@@ -482,6 +495,14 @@ export function runAgentViaSdk(
           });
         }
 
+        // The live-session tap fires only here — after every fail-loud check
+        // that could still settle the run before a prompt (model resolution,
+        // an already-aborted signal, missing requested tools) and immediately
+        // before the prompt phase — so a consumer (the job registry's
+        // steer/followUp) never receives a handle on a session the run will
+        // never actually prompt into.
+        options.onSessionReady?.(agentSession);
+
         const timeoutMs = resolveTimeoutMs(agent.timeoutMs);
         await runWithTimeoutAndAbort(
           agentSession,
@@ -533,6 +554,12 @@ export function runAgentViaSdk(
           toErrorMessage(err),
         ));
       } finally {
+        // The handle goes away before any teardown step: a steer/followUp
+        // racing this window must land on the registry's not-live guard
+        // (the job still reads "running" until the run's promise resolves),
+        // never on a session mid-shutdown or mid-dispose. Fires whether or
+        // not onSessionReady ever fired — the sink's clear is idempotent.
+        options.onSessionGone?.();
         if (session) {
           await shutdownExtensionsIfBound(session, boundExtensions);
           try { session.dispose(); } catch { /* ignore */ }

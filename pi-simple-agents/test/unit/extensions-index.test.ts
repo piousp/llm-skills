@@ -507,6 +507,183 @@ test("wiring: bare 'cancel' with no running jobs warns 'No running jobs to cance
   assert.equal(ctx.notifications[0].message, "No running jobs to cancel.");
 });
 
+// --- /subagents steer|followUp wiring ---
+
+test("wiring: /subagents steer <unknown-id> reports not-found as a warning (shared wording)", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("steer S9999 do the thing", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, jobNotFoundText("S9999"));
+});
+
+test("wiring: bare 'steer'/'followUp' with no message is a usage error", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const steerCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("steer", steerCtx);
+  assert.equal(steerCtx.notifications.length, 1);
+  assert.equal(steerCtx.notifications[0].type, "warning");
+  assert.equal(steerCtx.notifications[0].message, "Usage: /subagents steer <id>? <message>");
+
+  const followUpCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("followUp", followUpCtx);
+  assert.equal(followUpCtx.notifications.length, 1);
+  assert.equal(followUpCtx.notifications[0].type, "warning");
+  assert.equal(followUpCtx.notifications[0].message, "Usage: /subagents followUp <id>? <message>");
+});
+
+test("wiring: bare 'steer'/'followUp' with a message but no running jobs warns verb-appropriately", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const steerCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("steer hurry", steerCtx);
+  assert.equal(steerCtx.notifications.length, 1);
+  assert.equal(steerCtx.notifications[0].type, "warning");
+  assert.equal(steerCtx.notifications[0].message, "No running jobs to steer.");
+
+  const followUpCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("followUp again", followUpCtx);
+  assert.equal(followUpCtx.notifications.length, 1);
+  assert.equal(followUpCtx.notifications[0].type, "warning");
+  assert.equal(followUpCtx.notifications[0].message, "No running jobs to follow up on.");
+});
+
+test("wiring: /subagents steer <id> <msg> on a running job injects through the live session", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners, steerCalls, followUpCalls } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-steer", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  // listeners.length > 0 implies onSessionReady fired too: the tap sits
+  // after subscribe, in the same synchronous continuation.
+  await waitUntil(() => listeners.length > 0);
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`steer ${jobId} change course`, ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  assert.equal(ctx.notifications[0].message, `Steering message queued for job ${jobId}.`);
+  assert.deepEqual(steerCalls, ["change course"]);
+  assert.deepEqual(followUpCalls, []); // the verb picks its own method
+
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: /subagents followUp <id> <msg> on a running job queues through the live session", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners, steerCalls, followUpCalls } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-followup", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`followUp ${jobId} one more thing`, ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  assert.equal(ctx.notifications[0].message, `Follow-up queued for job ${jobId} \u2014 the job settles only after it is processed.`);
+  assert.deepEqual(followUpCalls, ["one more thing"]);
+  assert.deepEqual(steerCalls, []);
+
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: bare 'steer <message>' auto-targets the single active job", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners, steerCalls } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-steer-auto", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  // One token after the verb: that token is the message, the target
+  // auto-resolves to the single active job (same rule as bare cancel).
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("steer hurry", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  // Auto-resolved success names the resolved id, so the user sees where the
+  // message went.
+  assert.equal(ctx.notifications[0].message, `Steering message queued for job ${jobId}.`);
+  assert.deepEqual(steerCalls, ["hurry"]);
+
+  await settleRunningJob(pi, jobId);
+});
+
+test("wiring: bare 'steer'/'followUp' with several active jobs ask for an id, newest-first", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  // One fresh hanging session per launch: two independent active jobs.
+  const launched: ReturnType<typeof hangingStreamingSession>[] = [];
+  const createSession = async () => {
+    const hanging = hangingStreamingSession();
+    launched.push(hanging);
+    return { session: hanging.session } as any;
+  };
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const launchCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+  const r1 = await pi.tool.execute("call-inject-multi-a", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  const jobA = (r1.details as { jobId: string }).jobId;
+  await waitUntil(() => launched.length > 0 && launched[0].listeners.length > 0);
+  const r2 = await pi.tool.execute("call-inject-multi-b", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  const jobB = (r2.details as { jobId: string }).jobId;
+  await waitUntil(() => launched.length > 1 && launched[1].listeners.length > 0);
+
+  for (const args of ["steer hurry", "followUp again"]) {
+    const ctx = fakeCommandCtx();
+    await pi.commands.get("subagents")!.handler(args, ctx);
+    assert.equal(ctx.notifications.length, 1);
+    assert.equal(ctx.notifications[0].type, "info");
+    assert.match(ctx.notifications[0].message, /Several jobs running \u2014 specify an id: /);
+    const message = ctx.notifications[0].message;
+    assert.ok(message.includes(jobA) && message.includes(jobB), `ids listed: ${message}`);
+    assert.ok(message.indexOf(jobB) < message.indexOf(jobA)); // list() is newest-first
+  }
+
+  // Settle both jobs so the test process can exit.
+  await pi.commands.get("subagents")!.handler(`cancel ${jobB}`, fakeCommandCtx());
+  await waitUntil(() => pi.sentMessages.length >= 1);
+  await pi.commands.get("subagents")!.handler(`cancel ${jobA}`, fakeCommandCtx());
+  await waitUntil(() => pi.sentMessages.length >= 2);
+});
+
+test("wiring: /subagents steer on a settled job warns 'already completed — nothing to steer'", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const createSession = async () => ({ session: fakeAgentSession("done") as any });
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const result = await pi.tool.execute("call-steer-settled", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (result.details as { jobId: string }).jobId;
+  await waitUntil(() => pi.sentMessages.length > 0); // the run settled and delivered
+
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`steer ${jobId} more`, ctx);
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(ctx.notifications[0].message, `Job ${jobId} is already completed \u2014 nothing to steer.`);
+});
+
 test("wiring: bare 'status' and 'cancel' with several active jobs ask for an id, newest-first", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
@@ -551,9 +728,14 @@ test("wiring: bare 'status' and 'cancel' with several active jobs ask for an id,
 // events the real coding-agent session emits during a run. abort() resolves
 // the prompt like the real session does, so cancelling the job at the end of
 // a test settles the run (eventually releasing the 10-min prompt-timeout
-// timer) instead of leaving the test process hanging until it fires.
+// timer) instead of leaving the test process hanging until it fires. steer()
+// and followUp() record their messages (the surface /subagents steer|followUp
+// injects through) and return the "queued" disposition; neither unblocks the
+// prompt — a steering message redirects the run, it does not end it.
 function hangingStreamingSession() {
   const listeners: Array<(event: any) => void> = [];
+  const steerCalls: string[] = [];
+  const followUpCalls: string[] = [];
   let unblockPrompt: (() => void) | undefined;
   const session = {
     getAllTools: () => [],
@@ -568,9 +750,11 @@ function hangingStreamingSession() {
     getContextUsage: () => ({ tokens: 500, contextWindow: 200000, percent: 0.25 }),
     dispose: () => {},
     abort: () => { unblockPrompt?.(); },
+    steer: async (message: string) => { steerCalls.push(message); return "queued" as const; },
+    followUp: async (message: string) => { followUpCalls.push(message); return "queued" as const; },
   } as any;
   const emit = (events: any[]) => listeners.forEach((listener) => events.forEach((event) => listener(event)));
-  return { session, emit, listeners };
+  return { session, emit, listeners, steerCalls, followUpCalls };
 }
 
 // Settles a still-hanging job created against hangingStreamingSession so the

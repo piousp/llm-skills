@@ -12,6 +12,7 @@ import {
   resolveAutoTarget,
   resolveActiveTarget,
   describeCancelResult,
+  describeInjectResult,
   describeClearResult,
 } from "../../src/job-view.ts";
 import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
@@ -200,6 +201,37 @@ test("parseSubagentsCommand: 'peek S1002 extra' takes the first token as the id 
   assert.deepEqual(parseSubagentsCommand("peek S1002 extra words"), { kind: "peek", id: "S1002" });
 });
 
+// --- parseSubagentsCommand: steer/followUp ---
+
+// Deterministic rule (no id-guessing): two or more tokens after the verb are
+// id-then-message; a single token is the message itself (auto-target).
+test("parseSubagentsCommand: 'steer <id> <message>' carries both", () => {
+  assert.deepEqual(parseSubagentsCommand("steer S1002 turn left"), { kind: "steer", id: "S1002", message: "turn left" });
+});
+test("parseSubagentsCommand: 'followUp <id> <message>' is symmetric", () => {
+  assert.deepEqual(parseSubagentsCommand("followUp S1002 one more thing"), { kind: "followUp", id: "S1002", message: "one more thing" });
+});
+test("parseSubagentsCommand: a single token after the verb is the message, auto-target resolves", () => {
+  assert.deepEqual(parseSubagentsCommand("steer hurry"), { kind: "steer", message: "hurry" });
+  assert.deepEqual(parseSubagentsCommand("followUp again"), { kind: "followUp", message: "again" });
+});
+test("parseSubagentsCommand: bare 'steer'/'followUp' with no message is a usage error", () => {
+  assert.deepEqual(parseSubagentsCommand("steer"), { kind: "usage-error", message: "Usage: /subagents steer <id>? <message>" });
+  assert.deepEqual(parseSubagentsCommand("followUp"), { kind: "usage-error", message: "Usage: /subagents followUp <id>? <message>" });
+});
+test("parseSubagentsCommand: whitespace runs collapse in the steer message", () => {
+  assert.deepEqual(
+    parseSubagentsCommand("  steer   S1001   lots   of   inner   spaces  "),
+    { kind: "steer", id: "S1001", message: "lots of inner spaces" },
+  );
+});
+test("parseSubagentsCommand: unknown subcommand usage hint mentions steer|followUp", () => {
+  const result = parseSubagentsCommand("foo");
+  if (result.kind === "usage-error") {
+    assert.match(result.message, /steer\|followUp/);
+  }
+});
+
 // --- resolveAutoTarget ---
 
 test("resolveAutoTarget: exactly one active job wins", () => {
@@ -279,6 +311,77 @@ test("jobNotFoundText: single shared wording for cancel and status", () => {
   assert.equal(jobNotFoundText("S9999"), cancelView.text);
 });
 
+// --- describeInjectResult ---
+
+test("describeInjectResult: not-found reuses the shared jobNotFoundText as a warning, for both verbs", () => {
+  for (const kind of ["steer", "followUp"] as const) {
+    const { text, level } = describeInjectResult(kind, { kind: "not-found", id: "S9999" });
+    assert.equal(text, jobNotFoundText("S9999"));
+    assert.equal(level, "warning");
+  }
+});
+test("describeInjectResult: not-running names the settled status with verb-appropriate wording", () => {
+  const job: JobSnapshot = { ...runningJob(), state: { status: "completed", settledAt: 2_000, result: sampleResult } };
+  const steerView = describeInjectResult("steer", { kind: "not-running", job });
+  assert.equal(steerView.text, "Job S1003 is already completed \u2014 nothing to steer.");
+  assert.equal(steerView.level, "warning");
+  const followUpView = describeInjectResult("followUp", { kind: "not-running", job });
+  assert.equal(followUpView.text, "Job S1003 is already completed \u2014 nothing to follow up on.");
+  assert.equal(followUpView.level, "warning");
+});
+test("describeInjectResult: cancelling mirrors cancel's wording shape, for both verbs", () => {
+  const job = runningJob({ state: { status: "cancelling", reason: "user" } });
+  const steerView = describeInjectResult("steer", { kind: "cancelling", job });
+  assert.equal(steerView.text, "Job S1003 is cancelling \u2014 nothing to steer.");
+  assert.equal(steerView.level, "warning");
+  const followUpView = describeInjectResult("followUp", { kind: "cancelling", job });
+  assert.equal(followUpView.text, "Job S1003 is cancelling \u2014 nothing to follow up on.");
+  assert.equal(followUpView.level, "warning");
+});
+test("describeInjectResult: not-live explains the liveness window, for both verbs", () => {
+  const job = runningJob();
+  const steerView = describeInjectResult("steer", { kind: "not-live", job });
+  assert.equal(
+    steerView.text,
+    "Job S1003 is running but has no live session yet (still starting up, or already wrapping up) \u2014 nothing to steer.",
+  );
+  assert.equal(steerView.level, "warning");
+  const followUpView = describeInjectResult("followUp", { kind: "not-live", job });
+  assert.equal(
+    followUpView.text,
+    "Job S1003 is running but has no live session yet (still starting up, or already wrapping up) \u2014 nothing to follow up on.",
+  );
+  assert.equal(followUpView.level, "warning");
+});
+test("describeInjectResult: failed names the verb and the error, for both verbs", () => {
+  const job = runningJob();
+  const steerView = describeInjectResult("steer", { kind: "failed", job, error: "boom" });
+  assert.equal(steerView.text, "Failed to steer job S1003: boom");
+  assert.equal(steerView.level, "warning");
+  const followUpView = describeInjectResult("followUp", { kind: "failed", job, error: "boom" });
+  assert.equal(followUpView.text, "Failed to follow up on job S1003: boom");
+  assert.equal(followUpView.level, "warning");
+});
+test("describeInjectResult: injected surfaces the SDK disposition verbatim per verb", () => {
+  const job = runningJob();
+  assert.deepEqual(
+    describeInjectResult("steer", { kind: "injected", job, disposition: "queued" }),
+    { text: "Steering message queued for job S1003.", level: "info" },
+  );
+  assert.deepEqual(
+    describeInjectResult("steer", { kind: "injected", job, disposition: "handled" }),
+    { text: "Steering message handled for job S1003 (an extension consumed it).", level: "info" },
+  );
+  assert.deepEqual(
+    describeInjectResult("followUp", { kind: "injected", job, disposition: "queued" }),
+    { text: "Follow-up queued for job S1003 \u2014 the job settles only after it is processed.", level: "info" },
+  );
+  assert.deepEqual(
+    describeInjectResult("followUp", { kind: "injected", job, disposition: "handled" }),
+    { text: "Follow-up handled for job S1003 (an extension consumed it).", level: "info" },
+  );
+});
+
 // --- widget: activity word in the running line ---
 
 function jobWithProgress(progressOverrides: Record<string, unknown> = {}, overrides: Partial<JobSnapshot> = {}): JobSnapshot {
@@ -317,6 +420,12 @@ test("buildJobsWidgetLines: the hint footer mentions the unified peek|status|can
   const job = runningJob();
   const lines = buildJobsWidgetLines([job], 2_000, theme)!;
   assert.match(lines.at(-1)!, /peek\|status\|cancel <id>/);
+});
+
+test("buildJobsWidgetLines: the hint footer mentions steer|followUp with its message argument", () => {
+  const job = runningJob();
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+  assert.match(lines.at(-1)!, /steer\|followUp <id> <msg>/);
 });
 
 // --- buildJobStatusText ---

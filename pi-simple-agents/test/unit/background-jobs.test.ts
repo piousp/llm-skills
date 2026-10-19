@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   createJobRegistry,
   createSettleBarrier,
+  type InjectResult,
   type JobRegistry,
   type JobSnapshot,
+  type LiveSessionApi,
+  type LiveSessionSink,
   type SettledJob,
 } from "../../src/background-jobs.ts";
 import type { AgentRunResult } from "../../src/run.ts";
@@ -572,6 +575,191 @@ test("hook errors: onChange throwing does not break state and warns once per occ
   await registry.whenIdle();
   assert.equal(registry.list().find((j) => j.id === job.id)?.state.status, "completed");
   assert.ok(warnSpy.mock.calls.some((c) => String(c.arguments[0]).includes("onChange handler threw")));
+});
+
+// --- steer/followUp (message injection) ---
+
+// Fake LiveSessionApi: records every steer/followUp call, returns the
+// configured disposition, and optionally throws (a rejecting live session).
+function fakeLive(opts: { disposition?: "queued" | "handled"; throws?: boolean } = {}) {
+  const calls: Array<{ which: "steer" | "followUp"; message: string }> = [];
+  const api: LiveSessionApi = {
+    steer: async (message) => {
+      calls.push({ which: "steer", message });
+      if (opts.throws) throw new Error("inject boom");
+      return opts.disposition ?? "queued";
+    },
+    followUp: async (message) => {
+      calls.push({ which: "followUp", message });
+      if (opts.throws) throw new Error("inject boom");
+      return opts.disposition ?? "queued";
+    },
+  };
+  return { api, calls };
+}
+
+// Starts one job whose run stays pending on the returned deferred, with the
+// given live api already registered through the run io's sink (mirrors the
+// real wiring: runAgentViaSdk's onSessionReady -> live.set).
+function startLiveJob(registry: JobRegistry, api: LiveSessionApi) {
+  const d = deferred<AgentRunResult>();
+  const job = registry.start({
+    runId: "r1",
+    task: { agent: "scout", task: "x" },
+    run: (io) => {
+      io.live.set(api);
+      return d.promise;
+    },
+  });
+  return { job, d };
+}
+
+// The two microtasks every start()-based test needs before `run` (and its
+// live.set) has actually been invoked.
+async function afterRunStarts() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+test("steer/followUp: unknown id returns not-found", async () => {
+  const { registry } = harness();
+  assert.deepEqual(await registry.steer("S9999", "m"), { kind: "not-found", id: "S9999" });
+  assert.deepEqual(await registry.followUp("S9999", "m"), { kind: "not-found", id: "S9999" });
+});
+
+test("steer/followUp: a settled job is not-running and the live session is never consulted", async () => {
+  const { registry } = harness();
+  const { api, calls } = fakeLive();
+  const { job, d } = startLiveJob(registry, api);
+  await afterRunStarts();
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+
+  const steerView = await registry.steer(job.id, "m");
+  assert.equal(steerView.kind, "not-running");
+  const followUpView = await registry.followUp(job.id, "m");
+  assert.equal(followUpView.kind, "not-running");
+  if (steerView.kind === "not-running") assert.equal(steerView.job.id, job.id);
+  assert.deepEqual(calls, []); // finalizeSettle already nulled the handle
+});
+
+test("steer/followUp: a cancelling job is cancelling and the live session is never called", async () => {
+  const { registry } = harness();
+  const { api, calls } = fakeLive();
+  const { job, d } = startLiveJob(registry, api);
+  await afterRunStarts();
+
+  registry.cancel(job.id);
+  assert.equal((await registry.steer(job.id, "m")).kind, "cancelling");
+  assert.equal((await registry.followUp(job.id, "m")).kind, "cancelling");
+  assert.deepEqual(calls, []); // the abort is already in flight
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("steer: a running job with no live session yet (pre-prompt window) is not-live", async () => {
+  const { registry } = harness();
+  const d = deferred<AgentRunResult>();
+  const job = registry.start({ runId: "r1", task: { agent: "scout", task: "x" }, run: () => d.promise });
+  await afterRunStarts();
+
+  const result = await registry.steer(job.id, "m");
+  assert.equal(result.kind, "not-live");
+  if (result.kind === "not-live") assert.equal(result.job.id, job.id);
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("steer: live cleared while the job still reads running (the teardown window) is not-live", async () => {
+  const { registry } = harness();
+  const { api } = fakeLive();
+  let sink!: LiveSessionSink;
+  const d = deferred<AgentRunResult>();
+  const job = registry.start({
+    runId: "r1",
+    task: { agent: "scout", task: "x" },
+    run: (io) => {
+      sink = io.live;
+      io.live.set(api);
+      return d.promise;
+    },
+  });
+  await afterRunStarts();
+
+  // Simulates onSessionGone firing (top of the run's teardown) while the
+  // run's promise — and so the job's state — has not settled yet.
+  sink.clear();
+  assert.equal((await registry.steer(job.id, "m")).kind, "not-live");
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("steer: a live session injects the message and surfaces the disposition verbatim", async () => {
+  const { registry } = harness();
+  const { api, calls } = fakeLive();
+  const { job, d } = startLiveJob(registry, api);
+  await afterRunStarts();
+
+  const result = await registry.steer(job.id, "turn left");
+  assert.deepEqual(result, { kind: "injected", job: registry.get(job.id), disposition: "queued" });
+  assert.deepEqual(calls, [{ which: "steer", message: "turn left" }]);
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("followUp: a live session queues the message and surfaces the disposition verbatim", async () => {
+  const { registry } = harness();
+  const { api, calls } = fakeLive({ disposition: "handled" });
+  const { job, d } = startLiveJob(registry, api);
+  await afterRunStarts();
+
+  const result = await registry.followUp(job.id, "one more thing");
+  assert.deepEqual(result, { kind: "injected", job: registry.get(job.id), disposition: "handled" });
+  assert.deepEqual(calls, [{ which: "followUp", message: "one more thing" }]);
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("steer: a live session that throws surfaces as failed with the error, never a rejection", async () => {
+  const { registry } = harness();
+  const { api } = fakeLive({ throws: true });
+  const { job, d } = startLiveJob(registry, api);
+  await afterRunStarts();
+
+  const result: InjectResult = await registry.steer(job.id, "m");
+  assert.deepEqual(result, { kind: "failed", job: registry.get(job.id), error: "inject boom" });
+
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+});
+
+test("steer: finalizeSettle nulls live — a stale sink set after the settle cannot resurrect the handle", async () => {
+  const { registry } = harness();
+  const { api } = fakeLive();
+  let sink!: LiveSessionSink;
+  const d = deferred<AgentRunResult>();
+  const job = registry.start({
+    runId: "r1",
+    task: { agent: "scout", task: "x" },
+    run: (io) => {
+      sink = io.live;
+      io.live.set(api);
+      return d.promise;
+    },
+  });
+  await afterRunStarts();
+  d.resolve(sampleRunResult("scout", "x"));
+  await registry.whenIdle();
+
+  // A late onSessionReady racing past the settle: the guarded sink must
+  // refuse, and the guard chain reports the settled job as not-running.
+  sink.set(api);
+  assert.equal((await registry.steer(job.id, "m")).kind, "not-running");
 });
 
 // --- settle barrier ---

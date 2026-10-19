@@ -14,7 +14,7 @@ import type { ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, buildSubagentSessionText, parseSubagentsCommand, describeCancelResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, buildSubagentSessionText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
 import { buildSubagentSessionReport, type ReconcileFs } from "../src/session-reconcile.ts";
 import { createPeekManager } from "../src/peek-window.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
@@ -237,7 +237,7 @@ export default async function (
         // Deliberately NOT the tool call's own `signal`: coupling them would
         // abort the job the instant this launching turn ends. Only
         // /subagents cancel and shutdown should abort a background job.
-        run: ({ signal: jobSignal, tracker, transcript }) =>
+        run: ({ signal: jobSignal, tracker, transcript, live }) =>
           runSingleTask(params, resolved.value, tracker, {
             cwd: ctx.cwd,
             signal: jobSignal,
@@ -251,6 +251,12 @@ export default async function (
             // Feed the run's raw session events into the job's transcript
             // for /subagents peek (Wave 2 renders it; append-only).
             onSessionEvent: (e) => transcript.onSessionEvent(e),
+            // The job's live-session handle: runAgentViaSdk reports the
+            // session's liveness window (ready right before the prompt, gone
+            // before teardown) into the registry's per-job sink, so
+            // /subagents steer|followUp can inject into the running session.
+            onSessionReady: (session) => live.set(session),
+            onSessionGone: () => live.clear(),
             createSession: createSessionOverride,
           }),
       });
@@ -262,7 +268,7 @@ export default async function (
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents clear, or /subagents session",
+    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents steer|followUp <id> <message>, /subagents clear, or /subagents session",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
@@ -313,6 +319,35 @@ export default async function (
           cancelId = target.job.id;
         }
         const { text, level } = describeCancelResult(jobs.cancel(cancelId));
+        ctx.ui.notify(text, level);
+        return;
+      }
+      if (command.kind === "steer" || command.kind === "followUp") {
+        let injectId = command.id;
+        if (!injectId) {
+          // Bare steer/followUp only targets active jobs, like bare cancel (a
+          // settled job can no longer be messaged); several actives are
+          // ambiguous and ask for an id.
+          const target = resolveActiveTarget(jobs.list());
+          if (target.kind === "ambiguous") {
+            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
+            return;
+          }
+          if (target.kind === "none") {
+            ctx.ui.notify(
+              command.kind === "steer" ? "No running jobs to steer." : "No running jobs to follow up on.",
+              "warning",
+            );
+            return;
+          }
+          injectId = target.job.id;
+        }
+        // Awaiting the inject keeps the guard chain's result (not-live, a
+        // throwing live session) observable through the same notify as cancel.
+        const result = command.kind === "steer"
+          ? await jobs.steer(injectId, command.message)
+          : await jobs.followUp(injectId, command.message);
+        const { text, level } = describeInjectResult(command.kind, result);
         ctx.ui.notify(text, level);
         return;
       }
