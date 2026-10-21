@@ -1,9 +1,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validateAgentOverridesEntry } from "../../src/overrides.ts";
+import { OVERRIDE_KEYS, OVERRIDE_TYPE_SPEC, validateAgentOverridesEntry } from "../../src/overrides.ts";
 
 const SETTINGS_PATH = "/home/user/.pi/agent/settings.json";
 const VALID_MODEL = "anthropic/claude-opus-4-8";
+
+// Drift guard: the Record over OVERRIDE_KEYS makes a missing entry a compile
+// error; this pins the runtime pairing too, so a change to either half fails
+// one of the two sides of the assertion.
+test("OVERRIDE_TYPE_SPEC covers exactly OVERRIDE_KEYS, one entry each", () => {
+  assert.deepEqual([...Object.keys(OVERRIDE_TYPE_SPEC)], [...OVERRIDE_KEYS]);
+  for (const key of Object.keys(OVERRIDE_TYPE_SPEC)) {
+    assert.ok(
+      ["string", "string[]", "number"].includes(OVERRIDE_TYPE_SPEC[key as keyof typeof OVERRIDE_TYPE_SPEC]),
+      `unexpected type spec for ${key}`,
+    );
+  }
+});
 
 test("validateAgentOverridesEntry: valid entry with all 13 overridable fields passes through verbatim with no warnings", async (t) => {
   const warnSpy = t.mock.method(console, "warn");

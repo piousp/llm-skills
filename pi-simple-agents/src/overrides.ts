@@ -55,6 +55,37 @@ export interface InvocationOverride {
 // src/validate.ts, extensions/index.ts's SubagentParams schema).
 export const OVERRIDE_KEYS = ["model", "tools", "skills", "thinking", "maxTurns", "timeoutMs"] as const;
 
+// Type shape of each override field, keyed like OVERRIDE_KEYS. The Record
+// over the key union makes a future 7th key a COMPILE ERROR before it can
+// ship half-specified (values.ts / validate.ts / session-reconcile.ts all
+// iterate this one table instead of restating the per-key types).
+export type OverrideFieldType = "string" | "string[]" | "number";
+export const OVERRIDE_TYPE_SPEC: Readonly<Record<(typeof OVERRIDE_KEYS)[number], OverrideFieldType>> = {
+  model: "string",
+  tools: "string[]",
+  skills: "string[]",
+  thinking: "string",
+  maxTurns: "number",
+  timeoutMs: "number",
+};
+
+// The one shared array-of-strings guard (validate.ts's hard-error check and
+// session-reconcile.ts's silent-drop ack extraction both use it).
+export function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+// Whether `value` has the type the spec names for an override field — the
+// sole structural judgment the two consumers share (range and value-form
+// checks stay at each field's own use-site chokepoint).
+export function overrideValueMatches(value: unknown, expected: OverrideFieldType): boolean {
+  switch (expected) {
+    case "string": return typeof value === "string";
+    case "string[]": return isStringArray(value);
+    case "number": return typeof value === "number";
+  }
+}
+
 function copyOverrideKey<K extends (typeof OVERRIDE_KEYS)[number]>(
   target: AgentConfig,
   source: InvocationOverride,
@@ -127,10 +158,6 @@ export const SETTINGS_OVERRIDABLE_FIELDS = [
 
 function isPlainObject(raw: unknown): raw is Record<string, unknown> {
   return typeof raw === "object" && raw !== null && !Array.isArray(raw);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
 function isExcludedField(field: string): boolean {

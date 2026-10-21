@@ -114,6 +114,39 @@ may run these commands too, but [ALWAYS] and [ONLY] when the user explicitly ask
 never steer or follow up a subagent on your own initiative. A settled job can no longer be
 messaged.
 
+## Retrying or continuing a settled run
+
+A job that settled as failed or errored, and one interrupted mid-run (its process
+died or was killed while working, showing up as `interrupted`), can be brought
+back in two ways, both told to you by the user:
+
+- `/subagents retry [id]` re-dispatches the SAME agent and task as a NEW job
+  (new run id, no memory of the old conversation).
+- `/subagents continue [id]` starts a job whose session branches from the
+  interrupted run's persisted child session, then sends a fixed continuation
+  prompt: the agent first re-verifies the state of files or operations the
+  previous attempt may have left half-done, then completes the task.
+
+Both relaunch with the original call's recorded per-call overrides
+(`model`, `tools`, `skills`, `thinking`, `maxTurns`, `timeoutMs`) when the
+launch acknowledgment of the original call persisted them, and with the
+agent's own resolved defaults otherwise (older sessions, a crash before the
+ack was flushed, and runs whose launch was itself a retry or a continue
+leave nothing recorded). A run can be continued only when it left a
+persisted child session; retry works for every settled
+failed/errored/cancelled/interrupted run that names an agent and a task on
+disk. A settled run cannot be messaged (see above), but it can still be
+retried or continued. Bare `continue` (no id) also skips runs settled as
+cancelled, like bare `retry` does; an explicit id still targets one.
+
+A run that failed by hitting `maxTurns` or `timeoutMs` usually deserves
+`continue` over `retry`: the forked history keeps the partial work, while a
+retry re-does it from zero.
+
+The coordinator (you) may run these commands too, but [ALWAYS] and [ONLY] when
+the user explicitly asks: never retry or continue a subagent on your own
+initiative, and never pick which of the two to use without the user's word.
+
 ## Errors and how to fix them
 
 - Unknown `agent` name → error lists the available agents.

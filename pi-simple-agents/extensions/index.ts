@@ -9,16 +9,22 @@ import { MAX_TIMEOUT_MS, type RunAgentViaSdkOptions } from "../src/run.ts";
 import { SUBAGENT_TOOL_NAME } from "../src/extension-binding.ts";
 import { createRenderSubagentCall, renderSubagentResult, renderSubagentResultMessage, type GetAgents } from "../src/render-extensions.ts";
 import { runSingleTask } from "../src/task-runner.ts";
-import { validateSubagentParams, resolveAgent } from "../src/validate.ts";
-import type { ValidationResult } from "../src/validate.ts";
+import { validateSubagentParams, resolveAgent, invocationOverrideOf } from "../src/validate.ts";
+import type { SubagentParams as ValidatedSubagentParams, ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
-import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type JobTask, type SettledJob } from "../src/background-jobs.ts";
+import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, buildSubagentSessionText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText } from "../src/job-view.ts";
-import { buildSubagentSessionReport, type ReconcileFs } from "../src/session-reconcile.ts";
+import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
+import { addUsageToTotals, buildSubagentSessionReport, buildRelaunchCandidates, type ReconcileFs, type SessionEntry, type SubagentRelaunchCandidate } from "../src/session-reconcile.ts";
+import { runIdDirName } from "../src/subagent-session.ts";
+import type { AgentConfig } from "../src/agents.ts";
 import { createPeekManager } from "../src/peek-window.ts";
 import { buildSubagentToolDescription } from "../src/tool-description.ts";
 import { toErrorMessage } from "../src/warn.ts";
+
+// Footer status-line key for the running subagent-spend total, set through
+// ctx.ui.setStatus (namespaced like the jobs widget key, src/job-widget.ts).
+const STATUS_KEY = "pi-simple-agents:subagents";
 
 // Production defaults for the agent registry; both derived from the real
 // home. Tests pass per-instance fixture paths via the factory's pathsOverride
@@ -56,6 +62,20 @@ function nodeReconcileFs(): ReconcileFs {
       }
     },
   };
+}
+
+// pi's exported `SessionEntry` union is not directly assignable to the
+// permissive `GenericSessionEntry` union (index signature) the reconciliation
+// works over, and nothing here can strengthen a host-owned type into the
+// structural shapes directly. Entries come from the host's live session
+// manager (already validated by the host), so one documented cast is the
+// correct adapter — not a loose `any`.
+function toReconcileEntries(entries: readonly unknown[]): SessionEntry[] {
+  const typed = entries.filter(
+    (entry): entry is { type: string } =>
+      entry !== null && typeof entry === "object" && typeof (entry as { type?: unknown }).type === "string",
+  );
+  return typed as SessionEntry[];
 }
 
 export type { SubagentToolDetails } from "../src/render-extensions.ts";
@@ -116,6 +136,68 @@ export function deliverJobResult(pi: Pick<ExtensionAPI, "sendMessage">, job: Set
   const { message, options } = buildJobCompletionMessage(job);
   pi.sendMessage(message, options);
 }
+
+// The new runId a retry/continue relaunch gets: kind-namespaced per source
+// run, one attempt counter per source run (the wiring tracks it, so two
+// relaunches of the same candidate never collide), compacted to a ≤64-char
+// directory segment through runIdDirName exactly like every other runId
+// (src/subagent-session.ts).
+export function relaunchRunId(kind: RelaunchKind, sourceRunId: string, attempt: number): string {
+  return `${kind}-${sourceRunId}-${attempt}`;
+}
+
+// A relaunch's params minus the out-of-range recorded fields the wiring
+// dropped (see outOfRangeRelaunchFields in src/job-view.ts): an absent key
+// means the agent's own value applies, exactly like a first call that did
+// not override the field.
+function stripRelaunchFields(
+  params: ValidatedSubagentParams,
+  dropped: readonly ("maxTurns" | "timeoutMs")[],
+): ValidatedSubagentParams {
+  if (dropped.length === 0) return params;
+  const stripped = { agent: params.agent, task: params.task, ...invocationOverrideOf(params) };
+  for (const field of dropped) delete (stripped as Record<string, unknown>)[field];
+  return stripped;
+}
+
+// Per-verb choice table for the shared relaunch guard chain (handleRelaunch
+// below): everything retry and continue read differently from a candidate
+// lives here, so the two commands cannot drift apart. Retry re-dispatches
+// the original task verbatim with no seed; continue sends the fixed
+// continuation prompt and branches from the candidate's persisted child.
+interface RelaunchSpec {
+  kind: RelaunchKind;
+  noneText: string;
+  verb: "retryable" | "continuable";
+  taskOf(candidate: SubagentRelaunchCandidate): string | undefined;
+  seedSessionFileOf(candidate: SubagentRelaunchCandidate): string | undefined;
+}
+
+const RETRY_SPEC: RelaunchSpec = {
+  kind: "retry",
+  noneText: NO_RETRYABLE_RUNS_TEXT,
+  verb: "retryable",
+  taskOf: (candidate) => candidate.task,
+  seedSessionFileOf: () => undefined,
+};
+
+const CONTINUE_SPEC: RelaunchSpec = {
+  kind: "continue",
+  noneText: NO_CONTINUABLE_RUNS_TEXT,
+  verb: "continuable",
+  taskOf: () => CONTINUATION_PROMPT,
+  seedSessionFileOf: (candidate) => candidate.sessionFile,
+};
+
+const RELAUNCH_SPECS: Record<RelaunchKind, RelaunchSpec> = { retry: RETRY_SPEC, continue: CONTINUE_SPEC };
+
+// The one task /subagents continue sends: the agent re-verifies what the
+// interrupted attempt may have left half-done before finishing the job —
+// the seed carries the old conversation, so there is nothing else to tell it.
+export const CONTINUATION_PROMPT =
+  "Continue the interrupted task from the conversation history above. First " +
+  "re-verify the state of any files or operations the previous attempt may " +
+  "have left half-done, then proceed to complete the task.";
 
 export default async function (
   pi: ExtensionAPI,
@@ -195,11 +277,234 @@ export default async function (
     cancel: (handle) => clearTimeout(handle as NodeJS.Timeout),
   });
 
+  // Running total of the session's subagent spend for the footer status
+  // line — scoped to the factory closure like `jobs`/`uiRef`, never
+  // module-level. Every settle counts one run (errored ones settle at zero
+  // tokens); the registry fires onSettled exactly once per settle, so
+  // accumulation is idempotent by design. `/subagents clear` does NOT reset
+  // it (this is effective session spend, the same scope /subagents session
+  // reports); only session_shutdown clears the status line.
+  const statusAcc: SubagentStatusAccumulator = { runs: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+
   const jobs = createJobRegistry({
     now: Date.now,
-    onSettled: (job) => deliverJobResult(pi, job),
+    onSettled: (job) => {
+      deliverJobResult(pi, job);
+      // setStatus is a no-op outside the TUI (the host's non-interactive UI
+      // context is a no-op), so no mode guard is needed — and before the
+      // first settle the accumulator stays untouched, so the line only
+      // appears once a run actually settled.
+      statusAcc.runs += 1;
+      const usage = "result" in job.state ? job.state.result.usage : undefined;
+      addUsageToTotals(statusAcc, usage);
+      uiRef?.ui?.setStatus(STATUS_KEY, buildSubagentStatusText(statusAcc));
+    },
     onChange: (list) => widget.refresh(list),
   });
+
+  // In-memory per-session bookkeeping for /subagents retry|continue:
+  // - consumedOrphanSegments: dir segments of orphaned children already
+  //   re-launched once in this session (each orphan is only continuable once
+  //   per session; message-driven runs are never consumed — they stay
+  //   retryable until jobs/entries say otherwise).
+  // - relaunchAttempts: one attempt counter per source runId, feeding
+  //   relaunchRunId so each relaunch gets a fresh, unique runId.
+  // Nothing persists across a restart, exactly like the job registry.
+  const consumedOrphanSegments = new Set<string>();
+  const relaunchAttempts = new Map<string, number>();
+
+  // One closure for everything that starts a run of one task: the subagent
+  // tool's execute() and the /subagents retry|continue commands launch
+  // through the same path, so a relaunch carries exactly the same job
+  // plumbing (tracker/transcript/live-session taps, delivery, the footer
+  // accumulator) a tool-launched job does. What varies per call site: the
+  // params (agent/task, plus the ack-recorded per-call overrides the
+  // relaunch wiring re-validated), the raw runId, the caller session file
+  // (whose child dir the new session nests under), the caller's UI mode,
+  // and continue's seed file.
+  function launchSubagentJob(input: {
+    params: ValidatedSubagentParams;
+    agent: AgentConfig;
+    runId: string;
+    cwd: string;
+    mode: RunAgentViaSdkOptions["mode"];
+    callerSessionFile: string | undefined;
+    seedSessionFile?: string;
+  }): JobSnapshot {
+    // The tool path checks `modelRuntimeResult.ok` in execute() before
+    // reaching here, and the retry/continue branches check it right below;
+    // the throw is unreachable in both flows and exists so the compiler can
+    // narrow `.value` at the single launch chokepoint.
+    if (!modelRuntimeResult.ok) {
+      throw new Error(`failed to initialize model runtime: ${modelRuntimeResult.error}`);
+    }
+    return jobs.start({
+      runId: input.runId,
+      task: { agent: input.agent.name, task: input.params.task },
+      // Deliberately NOT the tool call's own `signal`: coupling them would
+      // abort the job the instant this launching turn ends. Only
+      // /subagents cancel and shutdown should abort a background job.
+      run: ({ signal: jobSignal, tracker, transcript, live }) =>
+        runSingleTask(input.params, input.agent, tracker, {
+          cwd: input.cwd,
+          signal: jobSignal,
+          modelRuntime: modelRuntimeResult.value,
+          runId: input.runId,
+          callerSessionFile: input.callerSessionFile,
+          // Threads the caller's real run mode into this subagent's nested
+          // bindExtensions() call (see runSingleTask, src/run.ts).
+          mode: input.mode,
+          homeDir,
+          // /subagents continue only: seed the new session from the
+          // interrupted run's own child file (src/task-runner.ts repairs
+          // the seed's dangling tool calls in the forked copy).
+          seedSessionFile: input.seedSessionFile,
+          // Feed the run's raw session events into the job's transcript
+          // for /subagents peek (Wave 2 renders it; append-only).
+          onSessionEvent: (e) => transcript.onSessionEvent(e),
+          // The job's live-session handle: runAgentViaSdk reports the
+          // session's liveness window (ready right before the prompt, gone
+          // before teardown) into the registry's per-job sink, so
+          // /subagents steer|followUp can inject into the running session.
+          onSessionReady: (session) => live.set(session),
+          onSessionGone: () => live.clear(),
+          createSession: createSessionOverride,
+        }),
+    });
+  }
+
+  // The shared guard chain behind both relaunch verbs: runtime + persisted-
+  // session guards, disk-first candidate resolution, the per-candidate
+  // preconditions, agent resolution, re-validation, and the launch itself.
+  // Every per-verb choice (none-text, ambiguity header verb, task text, seed
+  // file) comes from the spec table above, so retry and continue cannot
+  // drift apart; the command handler is a thin dispatch.
+  async function handleRelaunch(
+    spec: RelaunchSpec,
+    command: { readonly kind: RelaunchKind; readonly id?: string },
+    ctx: {
+      cwd: string;
+      mode: RunAgentViaSdkOptions["mode"];
+      sessionManager: { getSessionFile(): string | undefined };
+      ui: ExtensionUIContext;
+    },
+  ): Promise<void> {
+    if (!modelRuntimeResult.ok) {
+      ctx.ui.notify(`failed to initialize model runtime: ${modelRuntimeResult.error}`, "warning");
+      return;
+    }
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    if (!sessionFile) {
+      ctx.ui.notify("No session file on disk yet — /subagents retry|continue needs a persisted session.", "warning");
+      return;
+    }
+    // Same resolution inputs as /subagents session: the disk-first walk
+    // (orphans labeled "running" when a live registry job owns the
+    // runId — those are live work, not relaunch candidates). A relaunch
+    // goes through the SAME registry-load path the tool call itself
+    // does, so the agent config resolves identically.
+    const { agents: availableAgents } = await registry.load(ctx.cwd);
+    const activeRunIds = new Set(jobs.list().filter((j) => isActive(j.state)).map((j) => j.runId));
+    const candidates = buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunIds);
+    // Consumed orphans vanish from the auto/bare pools (they are done
+    // — each interrupted child can be branch-continued or re-dispatched
+    // once per session); an explicit id still resolves against the
+    // whole list, so the consumed case can be named precisely.
+    const pool = command.id
+      ? candidates
+      : candidates.filter((c) => !isConsumedOrphan(c, consumedOrphanSegments));
+    const target = resolveRelaunchTarget(spec.kind, command.id, pool);
+
+    if (target.kind === "ambiguous") {
+      ctx.ui.notify(buildRelaunchCandidatesText(target.candidates, ctx.ui.theme, spec.verb), "info");
+      return;
+    }
+    if (target.kind === "not-found") {
+      ctx.ui.notify(relaunchNotFoundText(target.token), "warning");
+      return;
+    }
+    if (target.kind === "none") {
+      ctx.ui.notify(spec.noneText, "info");
+      return;
+    }
+    const candidate = target.candidate;
+
+    // An orphan already re-dispatched once in this session: interrupted
+    // candidates are the only consumed entries (marked at the launch
+    // below); message-driven settled runs are never consumed.
+    if (isConsumedOrphan(candidate, consumedOrphanSegments)) {
+      ctx.ui.notify(consumedOrphanText(candidate.runId), "warning");
+      return;
+    }
+    const seedSessionFile = spec.seedSessionFileOf(candidate);
+    // continue needs a persisted child session to branch from; a run
+    // that settled without one (no child dir on disk) is re-dispatched
+    // by retry instead. Bare continue never resolves here (the pool is
+    // pre-filtered to sessionFile-bearing candidates).
+    if (spec.kind === "continue" && !seedSessionFile) {
+      ctx.ui.notify(notContinuableText(candidate), "warning");
+      return;
+    }
+    // An interrupted run whose launch ack was also lost carries no
+    // agent name anywhere on disk; nothing to resolve or run.
+    if (spec.kind === "continue" && candidate.agent === "unknown") {
+      ctx.ui.notify(agentNameNotOnDiskText(candidate), "warning");
+      return;
+    }
+    // Same resolution as the subagent tool's own call — the error text
+    // is verbatim ("Unknown agent: X. Available agents: …"); a retry
+    // of an interrupted run whose resolved agent name is no longer on
+    // disk stops here with no launch.
+    const resolved = resolveAgent(candidate.agent, availableAgents);
+    if (!resolved.ok) {
+      ctx.ui.notify(resolved.error, "warning");
+      return;
+    }
+
+    // Faithful relaunch: the launch ack records the original call's
+    // REQUESTED overrides (details.params) and they are reconstructed
+    // here, then re-validated through the SAME validateSubagentParams
+    // path the tool runs, so the relaunch enters the identical
+    // runSingleTask → applyInvocationOverride pipeline a first launch
+    // does. The EFFECTIVE resolution is unrecoverable (it materializes
+    // inside the run, after the ack was returned), but the requested
+    // overrides are what a first launch would have applied — legacy
+    // acks (no recorded params) run the agent's own defaults, and the
+    // success output says which of the two happened.
+    const task = spec.taskOf(candidate);
+    if (task === undefined) {
+      ctx.ui.notify(noTaskText(candidate), "warning");
+      return;
+    }
+    const revalidated = validateSubagentParams({ agent: resolved.value.name, task, ...candidate.params });
+    if (!revalidated.ok) {
+      ctx.ui.notify(`Run ${candidate.runId}'s recorded parameters failed validation (${revalidated.error}) — nothing was launched.`, "warning");
+      return;
+    }
+    // A well-typed but OUT-OF-RANGE recorded value would otherwise degrade
+    // silently at run time (resolveMaxTurns/resolveTimeoutMs warn and fall
+    // back or clamp). Reported visibly instead: the relaunch drops the key
+    // — the agent's own value applies — and the output says so.
+    const dropped = outOfRangeRelaunchFields(revalidated.value);
+    const attempt = (relaunchAttempts.get(candidate.runId) ?? 0) + 1;
+    relaunchAttempts.set(candidate.runId, attempt);
+    const newRunId = relaunchRunId(spec.kind, candidate.runId, attempt);
+    const job = launchSubagentJob({
+      params: stripRelaunchFields(revalidated.value, dropped),
+      agent: resolved.value,
+      runId: newRunId,
+      cwd: ctx.cwd,
+      mode: ctx.mode,
+      callerSessionFile: sessionFile,
+      seedSessionFile,
+    });
+    if (candidate.status === "interrupted") {
+      // The orphan's child dir is consumed by this launch: one branch
+      // per orphan per session.
+      consumedOrphanSegments.add(runIdDirName(candidate.runId));
+    }
+    ctx.ui.notify(buildRelaunchResultText(spec.kind, candidate, job.id, newRunId, dropped), "info");
+  }
 
   const { agents } = await registry.load(process.cwd());
   const description = buildSubagentToolDescription(agents);
@@ -229,46 +534,26 @@ export default async function (
       }
 
       const callerSessionFile = ctx.sessionManager.getSessionFile();
-      const jobTask: JobTask = { agent: resolved.value.name, task: params.task };
-
-      const job = jobs.start({
+      const job = launchSubagentJob({
+        params,
+        agent: resolved.value,
         runId: toolCallId,
-        task: jobTask,
-        // Deliberately NOT the tool call's own `signal`: coupling them would
-        // abort the job the instant this launching turn ends. Only
-        // /subagents cancel and shutdown should abort a background job.
-        run: ({ signal: jobSignal, tracker, transcript, live }) =>
-          runSingleTask(params, resolved.value, tracker, {
-            cwd: ctx.cwd,
-            signal: jobSignal,
-            modelRuntime: modelRuntimeResult.value,
-            runId: toolCallId,
-            callerSessionFile,
-            // Threads the host's real run mode into this subagent's nested
-            // bindExtensions() call (see runSingleTask, src/run.ts).
-            mode: ctx.mode,
-            homeDir,
-            // Feed the run's raw session events into the job's transcript
-            // for /subagents peek (Wave 2 renders it; append-only).
-            onSessionEvent: (e) => transcript.onSessionEvent(e),
-            // The job's live-session handle: runAgentViaSdk reports the
-            // session's liveness window (ready right before the prompt, gone
-            // before teardown) into the registry's per-job sink, so
-            // /subagents steer|followUp can inject into the running session.
-            onSessionReady: (session) => live.set(session),
-            onSessionGone: () => live.clear(),
-            createSession: createSessionOverride,
-          }),
+        cwd: ctx.cwd,
+        mode: ctx.mode,
+        callerSessionFile,
       });
 
-      return buildSubagentAckResult(job);
+      // The ack records the call's REQUESTED overrides (details.params) so
+      // /subagents retry|continue can relaunch faithfully; the key is
+      // omitted when the call carried no overrides.
+      return buildSubagentAckResult(job, invocationOverrideOf(params));
     },
   });
 
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents steer|followUp <id> <message>, /subagents clear, or /subagents session",
+    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents steer|followUp <id> <message>, /subagents retry|continue [id], /subagents clear, or /subagents session",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
@@ -395,10 +680,25 @@ export default async function (
           return;
         }
         // Registry used ONLY to label in-flight orphans as "running", never
-        // as a usage source (usage is always read from disk).
+        // as a usage source (usage is always read from disk). MAIN (the
+        // parent's own spend) comes from the in-memory session — getEntries()
+        // is enough, the session lives fully in memory and re-parsing the
+        // parent .jsonl would duplicate the same work with no gain. The
+        // persisted-session guard above stays first: a session that never
+        // hit disk gets no report at all, and its MAIN is never computed.
         const activeRunIds = new Set(jobs.list().filter((j) => isActive(j.state)).map((j) => j.runId));
-        const report = buildSubagentSessionReport(sessionFile, nodeReconcileFs(), activeRunIds);
+        const report = buildSubagentSessionReport(
+          sessionFile,
+          nodeReconcileFs(),
+          activeRunIds,
+          undefined,
+          toReconcileEntries(ctx.sessionManager.getEntries()),
+        );
         ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
+        return;
+      }
+      if (command.kind === "retry" || command.kind === "continue") {
+        await handleRelaunch(RELAUNCH_SPECS[command.kind], command, ctx);
         return;
       }
       ctx.ui.notify(command.message, "warning");
@@ -417,6 +717,9 @@ export default async function (
   });
   pi.on("session_shutdown", (_event, ctx) => {
     captureUi(ctx);
+    // Clear the footer status line first — the accumulated spend is this
+    // session's, it means nothing the moment the session dies.
+    uiRef?.ui?.setStatus(STATUS_KEY, undefined);
     jobs.shutdown();
     widget.dispose();
     peekManager.close();

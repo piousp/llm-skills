@@ -1063,7 +1063,12 @@ entirely (`cancelAll()` is already a no-op when nothing is running, so there's n
 ```typescript
 function buildSubagentToolResult(result: AgentRunResult, runId: string): AgentToolResult<...>;
 
-function buildSubagentAckResult(job: JobSnapshot): AgentToolResult<...>;
+function buildSubagentAckResult(job: JobSnapshot, params?: InvocationOverride): AgentToolResult<...>;
+// `params` (the launch call's requested override, passed as
+// invocationOverrideOf(params) by the tool's execute()) rides in details so
+// retry/continue can relaunch faithfully. Omitted from the details object
+// (the key is ABSENT, not undefined-valued) when the call carried no
+// overrides, so legacy consumers see the pre-params shape exactly.
 
 const SUBAGENT_RESULT_MESSAGE_TYPE = "subagent-result";
 type SubagentJobMessageDetails =
@@ -1092,6 +1097,15 @@ entry point is for). `buildSubagentAckResult` is the *other* tail: the launch to
 from a `JobSnapshot` alone (no run result exists yet), explicitly telling the model not to poll
 and naming the `/subagents cancel <id>` escape hatch; its text and `details` (`{jobId, runId,
 task}`) no longer carry a `(N task/tasks)` count suffix — there's always exactly one task now.
+The details also carry `params?: InvocationOverride` (the launch call's REQUESTED per-call
+override, like `model` or `maxTurns`; `execute()` passes `invocationOverrideOf(params)`, so only
+actually-overridden keys are present) when the call overrode anything, with the key omitted
+entirely otherwise (request the ABSENT key, never a present-but-undefined one: persisted
+diff-shapes and exact-shape pinning depend on it). What is recorded is deliberately the
+REQUESTED values, not the effective resolution: the effective agent config materializes inside
+the run, after the ack is returned, so it can never ride on the ack — fidelity is instead
+preserved because a relaunch re-enters the exact same `runSingleTask → applyInvocationOverride`
+pipeline a first launch does, so the requested overrides resolve the same way twice.
 
 `buildJobCompletionMessage` picks the header text from `job.state.status` (also without a
 `(N task/tasks)` suffix now), and the delivery `options` from a `DELIVERY_OPTIONS_BY_STATUS` table
@@ -1118,11 +1132,38 @@ type SubagentsCommand =
   | { readonly kind: "peek"; readonly id?: string }
   | { readonly kind: "steer"; readonly id?: string; readonly message: string }
   | { readonly kind: "followUp"; readonly id?: string; readonly message: string }
+  | { readonly kind: "retry"; readonly id?: string }
+  | { readonly kind: "continue"; readonly id?: string }
   | { readonly kind: "clear" }
   | { readonly kind: "session" }
   | { readonly kind: "usage-error"; readonly message: string };
 function parseSubagentsCommand(args: string): SubagentsCommand;
 function buildSubagentSessionText(report: SubagentSessionReport, theme: ProgressTheme): string;
+function buildSubagentStatusText(acc: SubagentStatusAccumulator): string;
+
+// --- /subagents retry | continue ---
+const NO_RETRYABLE_RUNS_TEXT = "No retryable runs found in this session.";
+const NO_CONTINUABLE_RUNS_TEXT = "No continuable runs found in this session.";
+function relaunchNotFoundText(token: string): string;
+function notContinuableText(candidate: SubagentRelaunchCandidate): string;
+function consumedOrphanText(runId: string): string;
+function noTaskText(candidate: SubagentRelaunchCandidate): string;
+function agentNameNotOnDiskText(candidate: SubagentRelaunchCandidate): string;
+function buildRelaunchCandidatesText(candidates: readonly SubagentRelaunchCandidate[], theme: ProgressTheme, verb: "retryable" | "continuable"): string;
+function buildRelaunchResultText(kind: RelaunchKind, candidate: SubagentRelaunchCandidate, jobId: string, newRunId: string, droppedFields: readonly ("maxTurns" | "timeoutMs")[]): string;
+function isContinuable(candidate: SubagentRelaunchCandidate): boolean;
+function isConsumedOrphan(candidate: SubagentRelaunchCandidate, consumedSegments: ReadonlySet<string>): boolean;
+function outOfRangeRelaunchFields(params: { maxTurns?: number; timeoutMs?: number } | undefined): ("maxTurns" | "timeoutMs")[];
+type RelaunchKind = "retry" | "continue";
+type RelaunchTargetResolution =
+  | { kind: "candidate"; candidate: SubagentRelaunchCandidate }
+  | { kind: "ambiguous"; candidates: readonly SubagentRelaunchCandidate[] }
+  | { kind: "not-found"; token: string }
+  | { kind: "none" };
+function resolveRelaunchTarget(kind: RelaunchKind, id: string | undefined, candidates: readonly SubagentRelaunchCandidate[]): RelaunchTargetResolution;
+
+type SubagentStatusAccumulator = { runs: number } & UsageTotals;
+
 function describeCancelResult(result: CancelResult): { text: string; level: "info" | "warning" };
 function describeInjectResult(kind: InjectKind, result: InjectResult): { text: string; level: "info" | "warning" };
 function describeClearResult(removed: number): string;
@@ -1142,26 +1183,45 @@ running job gets the live extras: its header, the activity word, the last `histo
 recently *started* call, which may already have ended), the history capped to the last 10 with
 `… (+N earlier)` eliding older entries, and the live usage snapshot when one has arrived. Unknown ids
 report `jobNotFoundText`, the single shared wording that `describeCancelResult`'s `not-found` case also uses.
-Since 1.3.0 bare `status`/`cancel`/`peek` carry `id?: string` and auto-select like `peek` does. Since 1.4.0 `steer`/`followUp` carry `id?: string` plus `message: string`, parsed deterministically: two or more remaining tokens are id-then-message (whitespace runs collapse via the `/\s+/` split), a single token is the message and the target auto-resolves (active jobs only, like bare `cancel` — a one-token message with an explicit id is not expressible), and zero tokens is a usage error. `describeInjectResult` mirrors `describeCancelResult` for the injection guard chain (`not-found`/`not-running`/`cancelling`/`not-live` warnings, `failed` on a throwing live session) and reports a successful injection's SDK disposition (`queued`/`handled`) verbatim as an info notify.
+Since 1.3.0 bare `status`/`cancel`/`peek` carry `id?: string` and auto-select like `peek` does. Since 1.4.0 `steer`/`followUp` carry `id?: string` plus `message: string`, parsed deterministically: two or more remaining tokens are id-then-message (whitespace runs collapse via the `/\s+/` split), a single token is the message and the target auto-resolves (active jobs only, like bare `cancel` — a one-token message with an explicit id is not expressible), and zero tokens is a usage error. Since 1.5.0 `retry`/`continue` carry `id?: string` with the first-token-is-the-id rule of `cancel` (extra tokens ignored; bare auto-resolves from the relaunch candidates on disk). `describeInjectResult` mirrors `describeCancelResult` for the injection guard chain (`not-found`/`not-running`/`cancelling`/`not-live` warnings, `failed` on a throwing live session) and reports a successful injection's SDK disposition (`queued`/`handled`) verbatim as an info notify.
+
+The relaunch helpers are pure text, like everything else in the module. `resolveRelaunchTarget` resolves retry/continue targets from the `SubagentRelaunchCandidate[]` built by `buildRelaunchCandidates` (`src/session-reconcile.ts`) with one precedence — explicit token (runId or jobId, matched against the whole candidate list) > exactly one candidate > several (ambiguous: an id must be picked) > none — while `buildRelaunchCandidatesText` renders the one-line-per-candidate ambiguity listing (`runId (jobId) · agent · status · task preview`, the status words being `failed`/`errored`/`cancelled`/`interrupted`) under a verb-shaped header (`Several retryable|continuable runs — specify an id:`). The text helpers (`relaunchNotFoundText`, `notContinuableText`, `consumedOrphanText`, `noTaskText`, `agentNameNotOnDiskText`) cover each explicit-id precondition. The bare/auto candidate sets differ by verb: bare retry excludes candidates settled as `cancelled` (user intent), bare continue excludes candidates with no `sessionFile` — and, in symmetry with retry, also runs settled as `cancelled`; `notContinuableText` can therefore only fire on an explicit continue id. `isContinuable`/`isConsumedOrphan` are the shared pool predicates (continue-worthiness; consumed-once-in-this-session, matching the wiring's consumed segments by `runIdDirName`), and `buildRelaunchResultText` renders the completed-relaunch success text for either verb, including the cancelled note both verbs show for an explicit id on a cancelled run and the out-of-range degrade note naming the recorded fields the wiring dropped (`droppedFields`, from `outOfRangeRelaunchFields`: maxTurns outside 1..100, timeoutMs non-positive/above the 2h ceiling — the launch then runs without them and the agent's own value applies).
 
 `buildSubagentSessionText` backs `/subagents session`: it renders a `SubagentSessionReport`
 (see `src/session-reconcile.ts` below) in the layout of pi's own `/session` command — token totals
 with the cached/uncached split and hit rate, the per-model cost breakdown only when there is more
 than one bucket, `Cache Re-billed` with pi's $0.0001 threshold, and the per-agent rows. Locale for
 the counters is pinned to `en-US` so the rendered text is byte-identical across machines. With no
-runs it renders a single short message instead of the layout.
+runs and no Main it renders a single short message instead of the layout. Since 1.5.0 the layout
+is three blocks built by one shared tokens/cost renderer (`renderUsageBlock`, local to the
+module): **Main Session** (the parent's own stats, present only when the wiring supplied the
+session's in-memory entries), **Subagents** (the reconciled child runs, its header renamed from
+"Subagent Totals"), and **Total (Main + Subagents)** at the end — MAIN is rendered first and
+TOTAL last, and a session that launched zero subagents still shows Main and Total while the
+all-zero Subagents block is omitted. TOTAL's cache waste is summed at render time from
+`main.cacheWaste + report.cacheWaste` (plain additive counters, no combined field needed).
+
+`buildSubagentStatusText` renders the footer status line the wiring updates on every job settle:
+`sub: 3 runs, 1.2M tok, $0.980` (singular/plural; the cost segment drops at zero, e.g.
+subscription-accounted sessions). Tokens are the full volume across all four buckets, formatted
+with the same `formatTokens` (`src/usage.ts`) the report uses.
 
 ### src/session-reconcile.ts
 
 ```typescript
 export function parseSessionEntries(text: string): SessionEntry[];
 export function sumUsageTotals(entries: readonly SessionEntry[]): UsageTotals;
+export function addUsageToTotals(totals: UsageTotals,
+  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number } | undefined): void;
+export function danglingToolCalls(entries: readonly SessionEntry[]): DanglingToolCall[];
+// DanglingToolCall { toolCallId: string; toolName: string }
 export function usageCostBreakdown(entries: readonly SessionEntry[]): UsageBreakdownRow[];
 export function computeCacheWaste(entries: readonly SessionEntry[],
   readPerTokenFallback?: (provider: string, model: string) => number | undefined): CacheWaste;
 export function assistantTurnCount(entries: readonly SessionEntry[]): number;
 export function buildSubagentSessionReport(rootSessionFile: string, fs: ReconcileFs,
-  activeRunIds?: ReadonlySet<string>): SubagentSessionReport;
+  activeRunIds?: ReadonlySet<string>, readPerTokenFallback?: ReadPerTokenResolver,
+  mainEntries?: readonly SessionEntry[]): SubagentSessionReport;
 
 export interface ReconcileFs {
   readTextFile(path: string): string | undefined; // undefined = missing/unreadable
@@ -1207,6 +1267,53 @@ The report shape is `SubagentSessionReport { runs, totals, breakdown, cacheWaste
 `buildSubagentSessionText` (`src/job-view.ts`) renders it. The wiring passes
 `ReconcileFs` built from `node:fs` with per-call try/catch (throwing never crashes the command;
 an unreadable child is just skipped).
+
+A fifth optional parameter, `mainEntries`, adds the Main/Combined fields (1.5.0): when supplied,
+the report gains `main` (the parent session's own stats — the same `buildSessionUsageStats` port
+of pi's `getSessionStats` used for every child file, called on the parent's entries), `combined`
+(`main.totals + totals`, folded field by field through the shared `addUsageToTotals` export), and `combinedBreakdown` (main's rows merged with the
+subagent rows by key, sorted by cost desc). There is no dedupe guard, deliberately: nothing
+injects subagent usage into the parent's countable entries (the settled run's completion message
+is a `custom_message`, which `usageSourceOf` ignores, and the launch ack's toolResult carries no
+usage), so MAIN and the subagent totals never overlap and a guard would be dead code. Without
+`mainEntries` the report keeps exactly its old shape. TOTAL's cache waste is not stored: the
+fields are additive, so the renderer sums `main.cacheWaste + report.cacheWaste` itself.
+The wiring (extensions/index.ts) adapts the host's `SessionEntry` union through
+`toReconcileEntries` — a documented cast, since the host-validated entries are not directly
+assignable to this module's permissive `GenericSessionEntry` union — and reads the parent's
+entries in memory via `sessionManager.getEntries()`; the persisted-session guard runs first, so
+a session that never reached disk gets no report (and no MAIN) at all.
+
+`buildRelaunchCandidates` (1.5.0) is the disk-side provider for `/subagents retry|continue`:
+`SubagentRelaunchCandidate { runId, jobId?, agent, task?, status, sessionFile?, usage?, params? }`,
+one entry per settled/orphaned run (`params` is the ack's recorded copy of the original call's
+invocation override, present only when the candidate's launch ack recorded one — the key is
+omitted, never undefined-valued, because candidates are pinned by full deepEqual). It reuses the SAME `buildSubagentSessionReport` walk (one
+descent over the child tree, statuses from the completion messages) and keeps depth-1 runs
+that settled `failed`/`errored`/`cancelled` or orphaned with status `unknown` — the `running`
+orphan (a live job in THIS session, via the same `activeRunIds` argument) is never a
+candidate, and deeper descendants/completed runs never qualify. Orphans display as
+`interrupted`: crash, kill, and disconnect are indistinguishable from disk. Orphan
+enrichment reads the parent file a SECOND time (tiny files, accepted cost) for the launch
+acks — `subagentAckEntryOf` reads the persisted `toolResult` of the `subagent` launch (the
+`details: { jobId, runId, task: { agent, task }, params? }` shape `buildSubagentAckResult`
+writes; old pre-1.2.0 acks with their `details.runs` array are tolerated and ignored), giving the
+resume candidate its real `jobId`, agent, and task where `makeRun`'s orphan branch only knew
+`unknown`. The `params` extraction is structural only — it iterates the shared per-key type table
+(`OVERRIDE_TYPE_SPEC`/`overrideValueMatches`, src/overrides.ts: model/thinking:
+string, tools/skills: string[], maxTurns/timeoutMs: number) and drops ill-typed keys of a
+corrupted ack silently, and a blob whose every key is ill-typed counts as nothing-recorded — while the
+semantic checks (model ref form, maxTurns range) stay at the relaunch-time
+`validateSubagentParams` chokepoint, the layering this module shares with validate.ts. Message-driven candidates get their `jobId` from the completion messages the same
+way. `sessionFile` rides on `ReconciledRun.sessionFile` (set only when the child yielded
+entries), so an errored run that never persisted a child is a candidate with none —
+continueable-by-id but flagged, retryable always. `danglingToolCalls` (pure, same module)
+reports the assistant toolCall pairs with no toolResult anywhere in the entries —
+`{ toolCallId, toolName }`, the name read from the same assistant block that opened the pair
+(an "unknown" fallback keeps every dangling pair closable when that block is malformed): the
+open pairs a continue-seeded fork must close before its first prompt (see `src/task-runner.ts`).
+Consumed-orphan bookkeeping lives in the command wiring, never here — this module is pure
+and stateless over `ReconcileFs`.
 
 ### src/progress.ts
 
@@ -1304,18 +1411,68 @@ new registrations, and three event handlers — all scoped inside the factory fu
   value every time the host rebuilds this component (on the global toggle itself, a resize, or a
   theme change) — a click only persists until the next such rebuild.
 - `pi.registerCommand("subagents", ...)`: `/subagents` (list), `/subagents status <id>`,
-  `/subagents cancel <id>`, `/subagents clear`, dispatched through `parseSubagentsCommand`; the
-  `status` case looks the snapshot up with `jobs.get(id)` and renders it with `buildJobStatusText`.
+  `/subagents cancel <id>`, `/subagents retry|continue [id]`, `/subagents clear`, dispatched
+  through `parseSubagentsCommand`; the `status` case looks the snapshot up with `jobs.get(id)`
+  and renders it with `buildJobStatusText`. The `retry`/`continue` cases (1.5.0) are a thin
+  dispatch into ONE shared factory closure, `handleRelaunch(spec, command, ctx)`, where each
+  verb's per-candidate choices come from a module-scope spec table:
+  `RELAUNCH_SPECS = { retry: RETRY_SPEC, continue: CONTINUE_SPEC }` — `RelaunchSpec`
+  `{ kind, noneText, verb ("retryable"|"continuable"), taskOf(candidate), seedSessionFileOf(candidate) }`,
+  with retry's `taskOf` returning the candidate's original task and continue's returning
+  `CONTINUATION_PROMPT`, retry's `seedSessionFileOf` always `undefined` and continue's the
+  candidate's `sessionFile`. Inside the closure, the chain is guarded by
+  the same persisted-session precondition `session` uses, resolved from
+  `buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunIds-from-jobs)`
+  (`src/session-reconcile.ts`) via `resolveRelaunchTarget` (`src/job-view.ts`), through the
+  SAME `registry.load(ctx.cwd)` + `resolveAgent` path a tool call resolves its agent with
+  (verbatim error text, warning, no launch). Closure-scoped state mirrors the registry:
+  `consumedOrphanSegments` (each orphaned child is consumed once per session — only
+  interrupted candidates are ever added, via `isConsumedOrphan`) and `relaunchAttempts` (one
+  counter per source runId, feeding `relaunchRunId`). A relaunch reconstructs the original
+  call's REQUESTED overrides from the launch ack's recorded `details.params`, re-validates the
+  assembled `{agent, task, ...params}` through `validateSubagentParams` (a failure is a warning
+  naming the run and nothing is launched), drops recorded fields `outOfRangeRelaunchFields`
+  reports as out of their allowed range (the launch runs without them, the agent's own value
+  applies, and the success output says so), and passes the validated params to the SAME launch
+  closure — so the relaunch flows through `runSingleTask → applyInvocationOverride` exactly like
+  a tool call, only with a fresh runId. Legacy acks (no recorded params: pre-persistence
+  sessions, a crash before the ack flush, or a launch that was itself a retry/continue) run the
+  agent's own defaults, and both commands' success outputs (one shared renderer per verb,
+  `buildRelaunchResultText`) say which of the two happened.
 - `pi.on("agent_before_settle", ...)`: the settle barrier (see `createSettleBarrier` above).
 - `pi.on("agent_settled", ...)`: the `!ctx.hasUI` safety-net cleanup, see above.
-- `pi.on("session_shutdown", ...)`: `jobs.shutdown()` plus `widget.dispose()`, on every shutdown
-  reason.
+- `pi.on("session_shutdown", ...)`: `uiRef?.ui?.setStatus(STATUS_KEY, undefined)` (the accumulated
+  spend is per-session, so the footer line resets on every shutdown reason), then `jobs.shutdown()`
+  plus `widget.dispose()`.
+
+Launching a run of one task lives in ONE closure, `launchSubagentJob(input: { params; agent;
+runId; cwd; mode; callerSessionFile; seedSessionFile? }): JobSnapshot` — the subagent tool's
+`execute()` and the `/subagents retry|continue` commands are the two call sites. A relaunch
+there carries exactly the same job plumbing a tool-launched one does (the tracker/transcript/live-
+session taps, the delivery hook, the footer accumulator): `execute()` resolves its agent through
+the registry and returns `buildSubagentAckResult(job, invocationOverrideOf(params))` — the ack
+records the call's requested overrides in `details.params`; the relaunch commands resolve theirs
+through the shared `handleRelaunch` closure (spec table, precondition texts in `src/job-view.ts`,
+consumed-orphan bookkeeping) — `CONTINUATION_PROMPT` (the fixed continuation prompt, the
+`relaunchRunId` namespace) exported at module scope next to `deliverJobResult`.
 
 A `uiRef`/`captureUi(ctx)` pair — scoped inside the factory closure, like everything else above,
 never module-level — updated at the top of `execute()`, the `/subagents`
 handler, and every one of the three event handlers above, is what lets the job registry's
 `onChange`/`onSettled` callbacks (which can fire well after any single handler call returns) reach
 `ctx.ui` at all — there is no "current context" otherwise available to them.
+
+The `onSettled` hook also drives the footer status line (`ctx.ui.setStatus`, always on, key
+`pi-simple-agents:subagents`): after `deliverJobResult`, it increments the closure-local
+`SubagentStatusAccumulator` (`{ runs } & UsageTotals`, folded by the shared `addUsageToTotals`
+export of `src/session-reconcile.ts`) by one run (errored settles count a run at zero tokens; a settle with
+a result adds its `result.usage`, and the registry fires onSettled exactly once per settle, so
+accumulation is idempotent) and re-renders the line with `buildSubagentStatusText`
+(`sub: 3 runs, 1.2M tok, $0.980`). `setStatus` is a no-op outside the TUI (the host's non-
+interactive UI context is a no-op), so no mode guard is needed; before the first settle the
+accumulator stays untouched, so the line appears only once a run actually settled.
+`/subagents clear` does not reset the accumulator — it is effective session spend, the same scope
+`/subagents session` reports; only shutdown clears the line.
 
 ### src/default-reads.ts
 
@@ -1618,6 +1775,7 @@ function createSubagentSessionManager<S>(
   cwd: string,
   childDir: string | undefined,
   factory: SessionManagerFactory<S>,
+  seedFile?: string,
 ): SubagentSessionResult<S>;
 
 interface SessionManagerFactory<S> {
@@ -1665,7 +1823,14 @@ attribute the run's cost to its real model instead of a generic bucket. `runId` 
 tool call's own `toolCallId`; `resultIndex` is always `0` now (the module constant `RUN_INDEX =
 0`, see `runSingleTask` below), since a job runs exactly one task.
 
-`createSubagentSessionManager` decides which manager backs a subagent's session.
+`createSubagentSessionManager` decides which manager backs a subagent's session. When a
+`seedFile` is set (ONLY the `/subagents continue` path, `src/task-runner.ts`), it takes
+precedence over `defaultContext` entirely: the new session is `factory.forkFrom(seedFile,
+cwd, childDir)` — branching from the interrupted run's own child session rather than the
+caller's — with the same catch-and-fall-back-to-`inMemory(cwd)` shape as the forked branch
+(a warning naming the agent plus the seed error; `seedFile` without a `childDir`, an
+unpersisted caller, falls straight to in-memory with a warning too). Every
+`defaultContext` branch, unchanged since 1.1.0, applies when no seed is given:
 `defaultContext === "forked"`: without a `callerSessionFile` (the caller session isn't
 persisted), falls back to `inMemory(cwd)` with a warning naming the agent; with one, calls
 `factory.forkFrom(callerSessionFile, cwd, childDir ?? "")` (catching and falling back to
@@ -1685,7 +1850,16 @@ caller or task. The real factory's `atPath` is `SessionManager.open(sessionFile,
 dirname(sessionFile), cwd)`; opening a not-yet-existing path starts a fresh, empty session
 (`SessionManager.open` never loads content from a path that doesn't exist yet) and persists it
 lazily, on the first assistant message — so a run that errors or aborts before producing one
-never creates a file.
+never creates a file. Since 1.5.0, `RunTaskOptions.seedSessionFile` (set only by the
+`/subagents continue` wiring) threads into `createSubagentSessionManager`'s `seedFile`
+argument, and after seeding `runSingleTask` closes the forked copy's dangling tool-call pairs:
+`danglingToolCalls(manager.getEntries())` (`src/session-reconcile.ts`) reports the assistant
+toolCall pairs without a matching toolResult in one pass, each as `{ toolCallId, toolName }`
+(named from the block that opened the pair), and one synthetic toolResult per pair is appended
+(`content: [{ type: "text", text: "[interrupted: the previous attempt ended before this tool
+call returned a result]" }]`), all via the SDK's `SessionManager.appendMessage`. Only the
+forked copy is repaired; the old file on disk is never touched, and the repair runs nothing
+when no seed was given.
 
 ### src/tool-description.ts
 

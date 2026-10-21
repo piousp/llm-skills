@@ -3,6 +3,7 @@ import { firstLine, truncate } from "./text-utils.ts";
 import { toAggregatedUsage, type AggregatedUsage } from "./usage.ts";
 import type { AgentRunResult } from "./run.ts";
 import type { JobSnapshot, JobTask, SettledJob } from "./background-jobs.ts";
+import type { InvocationOverride } from "./overrides.ts";
 
 // Pure assembly of a settled job's result shape — runId/run/usage,
 // unit-testable without a real model session. The package's published entry
@@ -26,15 +27,29 @@ function describeTaskLine(t: { agent: string; task: string }): string {
 // Immediate tool result: a launch acknowledgment, not the subagent's own
 // output. The model is told explicitly not to poll — the real result
 // arrives later as a `subagent-result` message (see buildJobCompletionMessage).
-export function buildSubagentAckResult(job: JobSnapshot) {
+//
+// `params` (the tool call's REQUESTED invocation override, passed as
+// invocationOverrideOf(params) by the caller — {} when nothing was
+// overridden) rides in details so /subagents retry|continue can relaunch
+// faithfully. Only the requested values are persisted, deliberately: the
+// effective resolution materializes inside the run (after this ack is
+// returned), so it can never reach here — fidelity is preserved because a
+// relaunch re-enters the same runSingleTask → applyInvocationOverride
+// pipeline a first launch does. The key is omitted entirely when nothing
+// was overridden (JSON.stringify elision is the existing precedent), so
+// legacy consumers see exactly the pre-params shape.
+export function buildSubagentAckResult(job: JobSnapshot, params?: InvocationOverride) {
   const lines = [
     `Started background subagent job ${job.id}:`,
     describeTaskLine(job.task),
     `The result will be delivered automatically to this conversation as a message when the job finishes. Do not call subagent again to poll or wait for it. The user can cancel it with /subagents cancel ${job.id}.`,
   ];
+  const hasParams = params !== undefined && Object.keys(params).length > 0;
   return {
     content: [{ type: "text" as const, text: lines.join("\n") }],
-    details: { jobId: job.id, runId: job.runId, task: job.task },
+    details: hasParams
+      ? { jobId: job.id, runId: job.runId, task: job.task, params }
+      : { jobId: job.id, runId: job.runId, task: job.task },
     isError: false,
   };
 }

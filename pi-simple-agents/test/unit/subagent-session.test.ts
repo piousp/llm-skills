@@ -282,6 +282,94 @@ test("createSubagentSessionManager: forkFrom throwing falls back to in-memory wi
   assert.match(result.warnings[0], /Cannot fork: source session file is empty or invalid/);
 });
 
+// --- seedFile (the /subagents continue path) ---
+
+test("createSubagentSessionManager: seedFile forks FROM the seed file, not the caller session, regardless of defaultContext", () => {
+  const forkedResult: FakeSession = { id: "seeded" };
+  const factory = createFakeFactory({ forkFromResult: forkedResult });
+
+  // seedFile wins even for a fresh (non-forked) agent: continuation IS
+  // branching from the old conversation.
+  const result = createSubagentSessionManager(
+    { name: "scout", defaultContext: undefined },
+    "/caller/session.jsonl",
+    cwd,
+    childDir,
+    factory,
+    "/seed/child/run-0/session.jsonl",
+  );
+
+  assert.equal(result.manager, forkedResult);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(factory.calls, [
+    `forkFrom:/seed/child/run-0/session.jsonl:${cwd}:${childDir}`,
+  ]);
+});
+
+test("createSubagentSessionManager: seedFile forking throwing falls back to in-memory with a warning naming the agent and the error", () => {
+  const factory = createFakeFactory({
+    forkFromResult: new Error("Cannot fork: source session file is empty or invalid"),
+  });
+
+  const result = createSubagentSessionManager(
+    { name: "scout", defaultContext: "forked" },
+    "/caller/session.jsonl",
+    cwd,
+    childDir,
+    factory,
+    "/seed/child/run-0/session.jsonl",
+  );
+
+  assert.equal(result.manager, factory.inMemoryResult);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /scout/);
+  assert.match(result.warnings[0], /seed/);
+  assert.match(result.warnings[0], /Cannot fork: source session file is empty or invalid/);
+});
+
+test("createSubagentSessionManager: seedFile without a childDir (caller not persisted) goes straight to in-memory with a warning", () => {
+  const factory = createFakeFactory();
+
+  const result = createSubagentSessionManager(
+    { name: "scout", defaultContext: "forked" },
+    undefined,
+    cwd,
+    undefined,
+    factory,
+    "/seed/child/run-0/session.jsonl",
+  );
+
+  assert.equal(result.manager, factory.inMemoryResult);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /scout/);
+  assert.deepEqual(factory.calls, [`inMemory:${cwd}`]);
+});
+
+test("createSubagentSessionManager: no seedFile keeps every existing defaultContext branch untouched", () => {
+  // undefined seed == the pre-1.5.0 behavior, branch by branch.
+  const forkedFactory = createFakeFactory({ forkFromResult: { id: "forked" } });
+  const forked = createSubagentSessionManager(
+    { name: "scout", defaultContext: "forked" },
+    "/path/session.jsonl",
+    cwd,
+    childDir,
+    forkedFactory,
+  );
+  assert.equal(forked.manager.id, "forked");
+  assert.deepEqual(forkedFactory.calls, [`forkFrom:/path/session.jsonl:${cwd}:${childDir}`]);
+
+  const freshFactory = createFakeFactory({ atPathResult: { id: "persisted" } });
+  const fresh = createSubagentSessionManager(
+    { name: "scout", defaultContext: undefined },
+    "/caller/session.jsonl",
+    cwd,
+    childDir,
+    freshFactory,
+  );
+  assert.equal(fresh.manager.id, "persisted");
+  assert.deepEqual(freshFactory.calls, [`atPath:${childDir}/session.jsonl:${cwd}`]);
+});
+
 // --- runIdDirName (the exported single source of truth for the segment) ---
 
 test("runIdDirName: a normal runId passes through unchanged", () => {

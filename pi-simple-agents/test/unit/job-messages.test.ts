@@ -8,6 +8,7 @@ import {
 } from "../../src/job-messages.ts";
 import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import type { AgentRunResult } from "../../src/run.ts";
+import type { InvocationOverride } from "../../src/overrides.ts";
 
 function runningSnapshot(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
   return {
@@ -81,6 +82,35 @@ test("buildSubagentAckResult: details is exactly {jobId, runId, task}, isError f
   assert.deepEqual(result.details, { jobId: "S1003", runId: "call-1", task: job.task });
   assert.equal(result.isError, false);
   assert.equal("usage" in result, false);
+});
+
+test("buildSubagentAckResult: a partial override rides in details.params with only the overridden keys; the ack text is unchanged", () => {
+  const job = runningSnapshot();
+  const result = buildSubagentAckResult(job, { model: "anthropic/claude-opus-4-8", maxTurns: 5 });
+
+  // The ternary in the builder gives details a two-member union type, so the
+  // test reads it through the documented disk shape (the type the
+  // host/persisted session sees).
+  const details = result.details as { jobId: string; runId: string; task: JobSnapshot["task"]; params?: InvocationOverride };
+
+  // Key present (not undefined), carrying ONLY the overridden fields — the
+  // caller passes invocationOverrideOf(params), which drops absent keys.
+  assert.deepEqual(details.params, { model: "anthropic/claude-opus-4-8", maxTurns: 5 });
+  assert.equal(details.params && "tools" in details.params, false);
+
+  // The params ride in details only: the ack TEXT stays byte-identical.
+  const bare = buildSubagentAckResult(job);
+  assert.deepEqual(result.content, bare.content);
+});
+
+test("buildSubagentAckResult: no overrides means the params key is ABSENT, not undefined-valued", () => {
+  const job = runningSnapshot();
+  const result = buildSubagentAckResult(job, {}); // invocationOverrideOf of a call with no overrides
+
+  // Exact-shape pin: a present-but-undefined key would surprise consumers
+  // that deepEqual the details (the persisted JSON would also differ).
+  assert.equal("params" in (result.details as { params?: unknown }), false);
+  assert.deepEqual(result.details, { jobId: "S1003", runId: "call-1", task: job.task });
 });
 
 // --- completion message ---

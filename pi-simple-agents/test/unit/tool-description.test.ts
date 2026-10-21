@@ -33,6 +33,20 @@ test("SUBAGENT_BASE_DESCRIPTION: steer/followUp are documented as user-request-o
   assert.match(SUBAGENT_BASE_DESCRIPTION, /already settled can no longer be messaged/i);
 });
 
+// Pins the retry/continue nuance to its current wording: recorded params
+// when the launch acknowledgment persisted them, agent defaults otherwise —
+// and the explicit-request rule stays intact.
+test("SUBAGENT_BASE_DESCRIPTION: retry/continue relaunch recorded params when persisted, agent defaults otherwise, and stay user-request-only", () => {
+  assert.match(
+    SUBAGENT_BASE_DESCRIPTION,
+    /both relaunch with the original call's recorded parameters when the launch acknowledgment persisted them, and with the agent's own defaults otherwise/,
+  );
+  // The replaced sentence must stay gone.
+  assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /overrides are not carried over/);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /both are allowed only when the user explicitly asks/);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /never retry or continue a subagent on your own initiative/);
+});
+
 test("buildSubagentToolDescription: single agent appends an available-agents section", () => {
   const result = buildSubagentToolDescription([{ name: "scout", description: "Finds things" }]);
 

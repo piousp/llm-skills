@@ -3,12 +3,16 @@ import assert from "node:assert/strict";
 import {
   parseSessionEntries,
   sumUsageTotals,
+  addUsageToTotals,
   usageCostBreakdown,
   computeCacheWaste,
   assistantTurnCount,
   firstUserMessage,
   buildSubagentSessionReport,
+  buildRelaunchCandidates,
+  danglingToolCalls,
   type ReconcileFs,
+  type UsageTotals,
 } from "../../src/session-reconcile.ts";
 
 // --- fixtures ----------------------------------------------------------------
@@ -576,4 +580,488 @@ test("round-number regression: exact totals, breakdown rows, and cache waste", (
   assert.deepEqual(report.cacheWaste, { missedTokens: 0, missedCost: 0, missCount: 0 });
   assert.deepEqual(report.byAgent, [{ agent: "scout", runs: 1, tokens: 6500, cost: 0.53125, orphaned: false }]);
   assert.deepEqual(report.counts, { completed: 1, failed: 0, cancelled: 0, errored: 0, running: 0, unknown: 0 });
+});
+
+// --- main + combined (M1: the parent session's own stats) ---
+
+// MAIN is exactly buildSessionUsageStats over synthetic parent entries; the
+// round-number fixture supplies dyadic subagent costs so the combined fields
+// can be asserted byte-for-byte (the non-dyadic ones go through approx).
+const mainFixtureEntries = (): ReturnType<typeof parseSessionEntries> =>
+  parseSessionEntries(jsonl(
+    HEADER,
+    assistantMessage({
+      provider: "anthropic", model: "m", timestamp: 100,
+      usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: { input: 0.5, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.5 } },
+    }),
+    assistantMessage({
+      provider: "openai", model: "g", timestamp: 200,
+      usage: { input: 10, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.25 } },
+    }),
+  ));
+
+test("buildSubagentSessionReport: mainEntries yield exact main/combined/combinedBreakdown fields", () => {
+  const report = buildSubagentSessionReport("/r/session.jsonl", memFs(filesOfRoundFixture()), undefined, undefined, mainFixtureEntries());
+
+  // MAIN mirrors getSessionStats on the parent entries alone.
+  assert.deepEqual(report.main!.totals, { input: 110, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.75 });
+  assert.deepEqual(report.main!.breakdown, [
+    { key: "anthropic/m", cost: 0.5, tokens: 100 },
+    { key: "openai/g", cost: 0.25, tokens: 10 },
+  ]);
+
+  // COMBINED is main.totals + subagent totals, field by field.
+  assert.deepEqual(report.combined, {
+    input: 110 + 1500,
+    output: 0,
+    cacheRead: 3000,
+    cacheWrite: 2000,
+    cost: 0.75 + 0.53125,
+  });
+
+  // Main first, then the subagent's rows, merged by key, sorted cost desc.
+  assert.deepEqual(report.combinedBreakdown!.map((row) => row.key), [
+    "anthropic/m",       // 0.5 + 0.46875 = 0.96875
+    "openai/g",          // 0.25
+    "Tools/summaries",   // 0.0625
+  ]);
+  approx(report.combinedBreakdown![0].cost, 0.96875, "combined anthropic/m cost");
+  assert.equal(report.combinedBreakdown![0].tokens, 6600);
+});
+
+// Without mainEntries the report keeps exactly its old shape: the derived
+// main/combined fields are absent, not zero-filled.
+test("buildSubagentSessionReport: without mainEntries the derived fields are absent", () => {
+  const report = buildSubagentSessionReport("/r/session.jsonl", memFs(filesOfRoundFixture()));
+  assert.equal("main" in report, false);
+  assert.equal("combined" in report, false);
+  assert.equal("combinedBreakdown" in report, false);
+});
+
+function filesOfRoundFixture(): Record<string, string> {
+  return {
+    "/r/session.jsonl": jsonl(
+      HEADER,
+      subagentResult({
+        jobId: "S1", runId: "call-r", status: "completed",
+        task: { agent: "scout", task: "regression" },
+        usage: aggregatedUsage(999999, 0, 9.99),
+        isError: false,
+      }),
+    ),
+    "/r/session/call-r/run-0/session.jsonl": jsonl(
+      HEADER,
+      assistantMessage({
+        provider: "anthropic", model: "m", timestamp: 1_000,
+        usage: { input: 1000, output: 0, cacheRead: 0, cacheWrite: 2000, cost: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0.125, total: 0.375 } },
+      }),
+      assistantMessage({
+        provider: "anthropic", model: "m", timestamp: 2_000,
+        usage: { input: 500, output: 0, cacheRead: 3000, cacheWrite: 0, cost: { input: 0.0625, output: 0, cacheRead: 0.03125, cacheWrite: 0, total: 0.09375 } },
+      }),
+      toolResultMessage({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.0625 } }),
+    ),
+  };
+}
+
+// MAIN stays exact with zero subagent runs: the main/combined fields exist
+// regardless of what the session has launched.
+test("buildSubagentSessionReport: mainEntries with no child runs still expose main and combined", () => {
+  const files = { "/empty/session.jsonl": jsonl(HEADER) };
+  const report = buildSubagentSessionReport("/empty/session.jsonl", memFs(files), undefined, undefined, mainFixtureEntries());
+  assert.deepEqual(report.runs, []);
+  assert.deepEqual(report.main!.totals, { input: 110, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.75 });
+  assert.deepEqual(report.combined, report.main!.totals);
+});
+
+// --- buildRelaunchCandidates (the /subagents retry|continue candidate set) ---
+
+// A persisted launch acknowledgment (the tool result buildSubagentAckResult
+// writes): a toolResult message named "subagent" carrying the job identity.
+// `params` is the call's requested invocation override, written by
+// buildSubagentAckResult since faithful relaunches landed; omit it to build
+// a legacy (pre-params) ack.
+function subagentAck(jobId: string, runId: string, agent: string, task: string, params?: unknown): unknown {
+  return {
+    type: "message",
+    id: "ack",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: {
+      role: "toolResult",
+      toolCallId: "tc-1",
+      toolName: "subagent",
+      content: [{ type: "text", text: `Started background subagent job ${jobId}` }],
+      isError: false,
+      details: params !== undefined
+        ? { jobId, runId, task: { agent, task }, params }
+        : { jobId, runId, task: { agent, task } },
+    },
+  };
+}
+
+const RELAUNCH_ROOT = "/rl/session.jsonl";
+const childFileFor = (runId: string) => `/rl/session/${runId}/run-0/session.jsonl`;
+
+function relaunchFixture(files: Record<string, string>) {
+  return buildRelaunchCandidates(RELAUNCH_ROOT, memFs(files));
+}
+
+const messageUserMessage = userMessage("mid-flight work, recover me");
+
+// A failed completion message with its child dir on disk: the depth-1
+// message-driven candidate, everything known straight from the parent file.
+test("buildRelaunchCandidates: a depth-1 failed run from its completion message, with the child file it produced", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentAck("S1001", "call-a", "scout", "do the thing"), subagentResult({
+      jobId: "S1001", runId: "call-a", status: "failed",
+      task: { agent: "scout", task: "do the thing" },
+      isError: true,
+    })),
+    [childFileFor("call-a")]: jsonl(HEADER, messageUserMessage, assistantMessage({
+      provider: "anthropic", model: "m", timestamp: 1_000,
+      usage: { input: 700, output: 80, cacheRead: 0, cacheWrite: 0, cost: { total: 0.0041 } },
+    })),
+  });
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0], {
+    runId: "call-a",
+    jobId: "S1001",
+    agent: "scout",
+    task: "do the thing",
+    status: "failed",
+    sessionFile: childFileFor("call-a"),
+    usage: {
+      input: 700, output: 80, cacheRead: 0, cacheWrite: 0,
+      totalTokens: 780,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0041 },
+    },
+  });
+});
+
+// An errored completion message with no child dir at all: retryable, but
+// with no sessionFile (continue has nothing to branch from).
+test("buildRelaunchCandidates: an errored dirless run is a candidate with no sessionFile", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentResult({
+      jobId: "S1002", runId: "call-b", status: "errored",
+      task: { agent: "scout", task: "x" }, isError: true,
+    })),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].status, "errored");
+  assert.equal(candidates[0].sessionFile, undefined);
+  assert.equal(candidates[0].jobId, "S1002");
+  assert.equal(candidates[0].agent, "scout");
+});
+
+// Orphan + ack: the completion message was lost to the crash, but the launch
+// ack still lives in the parent — jobId/agent/task all recover from it, and
+// the runId is the RAW runId again, not the dir segment.
+test("buildRelaunchCandidates: an orphan enriches from its launch ack (raw runId, jobId, agent, task)", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentAck("S1003", "raw-orph", "scout", "interrupted task")),
+    [childFileFor("raw-orph")]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].runId, "raw-orph");
+  assert.equal(candidates[0].jobId, "S1003");
+  assert.equal(candidates[0].agent, "scout");
+  assert.equal(candidates[0].task, "interrupted task");
+  assert.equal(candidates[0].status, "interrupted");
+  assert.equal(candidates[0].sessionFile, childFileFor("raw-orph"));
+});
+
+// Orphan without ack: only the child dir speaks — agent "unknown", task
+// recovered from the child's first user message, runId falls back to the
+// dir segment, status is the interrupted display label.
+test("buildRelaunchCandidates: an orphan without an ack is interrupted/unknown, task from the child's first user message", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER),
+    [childFileFor("call-orph")]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].runId, "call-orph");
+  assert.equal(candidates[0].jobId, undefined);
+  assert.equal(candidates[0].agent, "unknown");
+  assert.equal(candidates[0].task, "mid-flight work, recover me");
+  assert.equal(candidates[0].status, "interrupted");
+});
+
+// The "running" orphan: the dir segment maps to an active registry runId —
+// a live job in THIS session is not a relaunch candidate.
+test("buildRelaunchCandidates: the running orphan of an active job is excluded", () => {
+  const candidates = buildRelaunchCandidates(
+    RELAUNCH_ROOT,
+    memFs({
+      [RELAUNCH_ROOT]: jsonl(HEADER),
+      [childFileFor("call-live")]: jsonl(HEADER, messageUserMessage),
+    }),
+    new Set(["call-live"]),
+  );
+  assert.deepEqual(candidates, []);
+});
+
+// Grandchildren live at depth 2 and carry their own nesting; they inherit
+// from their parent child file, never from THIS session's parent, so they
+// are never relaunch candidates here.
+test("buildRelaunchCandidates: a grandchild (depth 2) is excluded", () => {
+  const grandSeg = "call-grand";
+  const grandFile = `/rl/session/call-gc/run-0/session/${grandSeg}/run-0/session.jsonl`;
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentResult({
+      jobId: "S1004", runId: "call-gc", status: "completed",
+      task: { agent: "scout", task: "outer" }, isError: false,
+    })),
+    [childFileFor("call-gc")]: jsonl(
+      HEADER,
+      subagentResult({
+        jobId: "S1005", runId: grandSeg, status: "failed",
+        task: { agent: "scout", task: "inner" }, isError: true,
+      }),
+    ),
+    [grandFile]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.deepEqual(candidates, []); // depth-1 run completed; the depth-2 failed run is not this session's
+});
+
+// Recorded params ride from the ack through to the candidate, so the
+// relaunch wiring can reconstruct the original call's requested overrides.
+test("buildRelaunchCandidates: a settled failed run's candidate carries the ack's recorded params", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER,
+      subagentAck("S2010", "call-p", "scout", "do the thing", { model: "anthropic/claude-opus-4-8", thinking: "high" }),
+      subagentResult({
+        jobId: "S2010", runId: "call-p", status: "failed",
+        task: { agent: "scout", task: "do the thing" },
+        isError: true,
+      })),
+  });
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0].params, { model: "anthropic/claude-opus-4-8", thinking: "high" });
+});
+
+test("buildRelaunchCandidates: an orphan's candidate enriches with the ack's recorded params too", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER,
+      subagentAck("S2011", "raw-orphp", "scout", "interrupted task", { tools: ["read", "grep"], maxTurns: 7, timeoutMs: 60000 })),
+    [childFileFor("raw-orphp")]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].status, "interrupted");
+  assert.equal(candidates[0].runId, "raw-orphp");
+  assert.deepEqual(candidates[0].params, { tools: ["read", "grep"], maxTurns: 7, timeoutMs: 60000 });
+});
+
+// Structural layer only: ill-typed params values are dropped per key, and a
+// params blob whose every key is ill-typed is treated as "nothing recorded"
+// (no params key, so the candidate lands in the legacy arm of the relaunch
+// wiring). Semantic checks (model ref form, maxTurns range) stay at the
+// relaunch-time validateSubagentParams chokepoint.
+test("buildRelaunchCandidates: ill-typed keys of a corrupted ack's params are dropped, partially and entirely", () => {
+  const partiallyCorrupt = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER,
+      subagentAck("S2012", "call-bad", "scout", "x", { model: 3, thinking: "high" }),
+      subagentResult({
+        jobId: "S2012", runId: "call-bad", status: "failed",
+        task: { agent: "scout", task: "x" },
+        isError: true,
+      })),
+  });
+  assert.deepEqual(partiallyCorrupt[0].params, { thinking: "high" });
+
+  const fullyCorrupt = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER,
+      subagentAck("S2013", "call-worse", "scout", "x", {
+        model: 3, tools: "read", skills: true, thinking: 9, maxTurns: "seven", timeoutMs: null,
+      }),
+      subagentResult({
+        jobId: "S2013", runId: "call-worse", status: "failed",
+        task: { agent: "scout", task: "x" },
+        isError: true,
+      })),
+  });
+  assert.equal("params" in fullyCorrupt[0], false);
+});
+
+// Old-format acks (details.runs array, pre-1.2.0) carry no runId: they are
+// tolerated and simply enrich nothing.
+test("buildRelaunchCandidates: an old-format ack without a runId is ignored for enrichment", () => {
+  const oldAck = {
+    type: "message",
+    id: "ack-old",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: {
+      role: "toolResult",
+      toolCallId: "tc-0",
+      toolName: "subagent",
+      content: [{ type: "text", text: "old ack" }],
+      isError: false,
+      details: { runs: [{ jobId: "S0", task: { agent: "scout", task: "old" } }] },
+    },
+  };
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, oldAck),
+    [childFileFor("call-old")]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].agent, "unknown");
+  assert.equal(candidates[0].jobId, undefined);
+});
+
+// --- danglingToolCalls ---
+
+function assistantToolCall(toolCallId: string, name = "read"): unknown {
+  return {
+    type: "message",
+    id: "a",
+    timestamp: "2026-01-01T00:00:02.000Z",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: toolCallId, name, arguments: {} }],
+    },
+  };
+}
+
+function toolResult(toolCallId: string): unknown {
+  return {
+    type: "message",
+    id: "t",
+    timestamp: "2026-01-01T00:00:03.000Z",
+    message: {
+      role: "toolResult",
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+    },
+  };
+}
+
+test("danglingToolCalls: a trailing assistant toolCall with no result is dangling, named by its opening block", () => {
+  const entries = parseSessionEntries(
+    jsonl(HEADER, assistantToolCall("toolu_1"), assistantMessage({})),
+  );
+  assert.deepEqual(danglingToolCalls(entries), [{ toolCallId: "toolu_1", toolName: "read" }]);
+});
+
+test("danglingToolCalls: a toolResult anywhere in the entries closes the pair", () => {
+  const entries = parseSessionEntries(
+    jsonl(HEADER, assistantToolCall("toolu_1"), toolResult("toolu_1")),
+  );
+  assert.deepEqual(danglingToolCalls(entries), []);
+});
+
+test("danglingToolCalls: several danglers come back in file order, deduped, each with its own tool name", () => {
+  const entries = parseSessionEntries(
+    jsonl(
+      HEADER,
+      assistantToolCall("toolu_2", "grep"),
+      assistantToolCall("toolu_1", "read"),
+      assistantToolCall("toolu_2", "grep") as unknown,
+      toolResult("toolu_3"),
+    ),
+  );
+  // toolu_3 was answered but never called: nothing to close, ignored.
+  assert.deepEqual(danglingToolCalls(entries), [
+    { toolCallId: "toolu_2", toolName: "grep" },
+    { toolCallId: "toolu_1", toolName: "read" },
+  ]);
+});
+
+test("danglingToolCalls: a malformed opening block still yields a closable pair named unknown", () => {
+  const malformedName = {
+    type: "message",
+    id: "a",
+    timestamp: "2026-01-01T00:00:02.000Z",
+    message: {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "toolu_x", name: 42, arguments: {} }],
+    },
+  };
+  const entries = parseSessionEntries(jsonl(HEADER, malformedName));
+  assert.deepEqual(danglingToolCalls(entries), [{ toolCallId: "toolu_x", toolName: "unknown" }]);
+});
+
+test("danglingToolCalls: entries without assistant messages contribute nothing", () => {
+  const entries = parseSessionEntries(jsonl(HEADER, toolResult("toolu_9")));
+  assert.deepEqual(danglingToolCalls(entries), []);
+});
+
+// --- addUsageToTotals (the one exported fold) ---
+
+test("addUsageToTotals: folds a flat blob; absent fields and undefined usage contribute zero", () => {
+  const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  addUsageToTotals(totals, undefined);
+  assert.deepEqual(totals, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+  addUsageToTotals(totals, { input: 3 });
+  assert.deepEqual(totals, { input: 3, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+  addUsageToTotals(totals, { input: 1, output: 2, cacheRead: 4, cacheWrite: 8, cost: 0.5 });
+  assert.deepEqual(totals, { input: 4, output: 2, cacheRead: 4, cacheWrite: 8, cost: 0.5 });
+});
+
+// --- the no-double-count lock: the walk reads a run's session.jsonl, never a fork file ---
+
+// The persisted trace of a /subagents continue relaunch: the interrupted
+// seed's child session.jsonl (its own usage entries) and the continued run's
+// timestamped fork file — a byte- COPY of the seed's usage entries — sitting
+// next to the continuation-only completion message's details.usage. The
+// report walk (buildSubagentSessionReport) reads ONLY
+// <runId>/run-N/session.jsonl, so the fork file is never re-read and the
+// seed spend is counted exactly once; the copied entries here are the
+// canary — any walker that ever reads a *.jsonl beyond that convention
+// doubles the seed spend and fails the exact totals assertion below.
+test("buildSubagentSessionReport: a continued run's timestamped fork file is never read; usage is seed session.jsonl + completion details.usage, counted once each", () => {
+  const root = "/lock/session.jsonl";
+  const seedFile = "/lock/session/call-x/run-0/session.jsonl";
+  const forkFile = "/lock/session/continue-call-x-1/run-0/20260101_000000_S1002.jsonl";
+  const seedUsageEntry = assistantMessage({
+    provider: "anthropic",
+    model: "claude-sonnet-4",
+    timestamp: 1_000,
+    usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } },
+  });
+  const report = buildSubagentSessionReport(
+    root,
+    memFs({
+      [root]: jsonl(
+        HEADER,
+        subagentResult({
+          jobId: "S1001", runId: "call-x", status: "failed",
+          task: { agent: "scout", task: "do the thing" }, isError: true,
+        }),
+        subagentResult({
+          jobId: "S1002", runId: "continue-call-x-1", status: "failed",
+          task: { agent: "scout", task: "finish it" }, isError: true,
+          // The fork replays the seed's history without re-calling the LLM,
+          // so the continuation's own spend rides ONLY on this message.
+          usage: aggregatedUsage(10, 5, 0.02),
+        }),
+      ),
+      [seedFile]: jsonl(HEADER, messageUserMessage, seedUsageEntry),
+      [forkFile]: jsonl(HEADER, messageUserMessage, seedUsageEntry),
+    }),
+  );
+
+  assert.equal(report.runs.length, 2);
+  const [seed, continuation] = report.runs;
+  assert.equal(seed.runId, "call-x");
+  assert.equal(continuation.runId, "continue-call-x-1");
+  // Seed attributed exactly once from its own session.jsonl; the
+  // continuation has no session.jsonl on disk to read — its spend comes
+  // from its completion message's details.usage.
+  assert.equal(seed.stats?.totals.input, 100);
+  assert.equal(continuation.stats, undefined);
+  assert.equal(continuation.messageUsage && continuation.messageUsage.input, 10);
+  // EXACT totals = seed + continuation: any re-read of the fork file
+  // (input 100/50, cost 0.1) makes these fail.
+  assert.deepEqual(
+    {
+      input: report.totals.input,
+      output: report.totals.output,
+      cacheRead: report.totals.cacheRead,
+      cacheWrite: report.totals.cacheWrite,
+    },
+    { input: 110, output: 55, cacheRead: 0, cacheWrite: 0 },
+  );
+  approx(report.totals.cost, 0.12, "totals.cost");
 });

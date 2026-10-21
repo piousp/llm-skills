@@ -1,5 +1,13 @@
 import type { AgentConfig } from "./agents.ts";
-import { invocationOverrideOf, isValidModelRef, type InvocationOverride } from "./overrides.ts";
+import {
+  invocationOverrideOf,
+  isValidModelRef,
+  isStringArray,
+  overrideValueMatches,
+  OVERRIDE_KEYS,
+  OVERRIDE_TYPE_SPEC,
+  type InvocationOverride,
+} from "./overrides.ts";
 import { WARN_PREFIX } from "./warn.ts";
 
 // Re-exports: override semantics moved to src/overrides.ts (single home);
@@ -21,14 +29,10 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-// isValidModelRef comes from src/overrides.ts — its single home.
+// isStringArray/isValidModelRef come from src/overrides.ts — their single home.
 function validateModelRef(value: unknown, label: string): string | undefined {
   if (value === undefined || isValidModelRef(value)) return undefined;
   return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
 function validateStringArrayRef(value: unknown, label: string): string | undefined {
@@ -36,25 +40,23 @@ function validateStringArrayRef(value: unknown, label: string): string | undefin
   return `${label} must be an array of strings.`;
 }
 
-// Shared type-guard for the scalar invocation-override fields (maxTurns,
-// timeoutMs, thinking): same condition (present and wrong type), same warn
-// text format with a location suffix, and a single drop mechanism
-// (destructure-rest) so the produced value never carries an ill-typed field.
-// Range/integer/level-validity checks intentionally live at each field's own
-// use site (resolveMaxTurns, resolveTimeoutMs, clampThinkingLevel), not here.
-const OVERRIDE_TYPE_SPEC: ReadonlyArray<readonly [field: "maxTurns" | "timeoutMs" | "thinking", expected: "number" | "string"]> = [
-  ["maxTurns", "number"],
-  ["timeoutMs", "number"],
-  ["thinking", "string"],
-];
-
+// Drops the scalar invocation-override fields whose type does not match the
+// shared type spec (src/overrides.ts's OVERRIDE_TYPE_SPEC — the same table
+// the settings/ack layers read), warning each drop with a location suffix
+// and building the result by destructure-rest, so an ill-typed field is
+// never carried on the produced value. Only the scalar trio runs here:
+// model/tools/skills keep their own hard-error checks above (an ill-typed
+// one is a validation error, not a silent drop). Range/integer/level-validity checks
+// intentionally live at each field's own use site (resolveMaxTurns,
+// resolveTimeoutMs, clampThinkingLevel), not here.
 function warnAndDropIllTypedOverrides(
   record: Record<string, unknown>,
   label: string,
 ): Record<string, unknown> {
   let result = record;
-  for (const [field, expected] of OVERRIDE_TYPE_SPEC) {
-    if (result[field] !== undefined && typeof result[field] !== expected) {
+  for (const field of OVERRIDE_KEYS) {
+    if (field === "model" || field === "tools" || field === "skills") continue;
+    if (result[field] !== undefined && !overrideValueMatches(result[field], OVERRIDE_TYPE_SPEC[field])) {
       console.warn(
         `${WARN_PREFIX}invalid ${field} ${JSON.stringify(result[field])} ${label}, ignoring`,
       );

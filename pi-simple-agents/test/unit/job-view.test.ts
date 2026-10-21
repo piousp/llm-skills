@@ -7,6 +7,8 @@ import {
   buildJobListText,
   buildJobStatusText,
   buildSubagentSessionText,
+  buildSubagentStatusText,
+  type SubagentStatusAccumulator,
   jobNotFoundText,
   parseSubagentsCommand,
   resolveAutoTarget,
@@ -14,11 +16,25 @@ import {
   describeCancelResult,
   describeInjectResult,
   describeClearResult,
+  buildRelaunchCandidatesText,
+  buildRelaunchResultText,
+  resolveRelaunchTarget,
+  relaunchNotFoundText,
+  notContinuableText,
+  consumedOrphanText,
+  noTaskText,
+  agentNameNotOnDiskText,
+  isConsumedOrphan,
+  isContinuable,
+  outOfRangeRelaunchFields,
+  NO_RETRYABLE_RUNS_TEXT,
+  NO_CONTINUABLE_RUNS_TEXT,
 } from "../../src/job-view.ts";
 import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import type { ProgressTheme } from "../../src/progress.ts";
 import type { AgentRunResult } from "../../src/run.ts";
-import type { ReconciledRun, SubagentSessionReport } from "../../src/session-reconcile.ts";
+import { MAX_TIMEOUT_MS } from "../../src/run.ts";
+import type { ReconciledRun, SubagentRelaunchCandidate, SubagentSessionReport } from "../../src/session-reconcile.ts";
 
 const theme: ProgressTheme = { fg: (c, t) => `<${c}>${t}</${c}>` };
 
@@ -560,7 +576,7 @@ test("buildSubagentSessionText: full report renders the /session layout, byAgent
     "Runs: 2 (completed 1, failed 1, cancelled 0, errored 0, running 0, unknown 0)",
     "Turns: 10",
     "",
-    "Subagent Totals",
+    "Subagents",
     "Tokens:",
     "  Input: 112,900",
     "    Cached: 110,000 (97.4%)",
@@ -631,4 +647,436 @@ test("buildSubagentSessionText: cache re-billed below the $0.0001 cost threshold
   }), plainTheme);
   assert.match(text, /Cache Re-billed: 2,000 tokens, 1 miss/);
   assert.doesNotMatch(text, /Cache Re-billed: \$/);
+});
+
+// --- buildSubagentSessionText: the Main + Total blocks ---
+
+// A synthetic main/combined/combinedBreakdown on top of the shared fixture:
+// round numbers so the pinned snapshot is exact.
+const mainStats = {
+  turns: 4,
+  userMessages: 1,
+  toolResults: 3,
+  totals: { input: 500, output: 100, cacheRead: 4_000, cacheWrite: 500, cost: 0.2 },
+  breakdown: [
+    { key: "anthropic/main-model", cost: 0.15, tokens: 3_500 },
+    { key: "Tools/summaries", cost: 0.05, tokens: 1_000 },
+  ],
+  cacheWaste: { missedTokens: 1_000, missedCost: 0.005, missCount: 1 },
+};
+
+function reportWithMain(): SubagentSessionReport {
+  return sessionReport({
+    main: mainStats,
+    combined: {
+      input: 500 + 900,
+      output: 100 + 300,
+      cacheRead: 4_000 + 110_000,
+      cacheWrite: 500 + 2_000,
+      cost: 0.2 + 1.234,
+    },
+    combinedBreakdown: [
+      { key: "anthropic/claude-sonnet-4", cost: 1.1, tokens: 1_200_000 },
+      { key: "anthropic/main-model", cost: 0.15, tokens: 3_500 },
+      { key: "unattributed", cost: 0.124, tokens: 120_000 },
+      { key: "Tools/summaries", cost: 0.06, tokens: 55_000 },
+    ],
+  });
+}
+
+test("buildSubagentSessionText: with main entries the report renders Main, Subagents, and Total blocks", () => {
+  // Main hit rate: 4,000 / 5,000 = 80.0%. Combined: 114,000 / 117,900 = 96.7%,
+  // cache waste = main (1,000/3 misses) + subagents (12,345/1) summed — 13,345 tokens.
+  const expected = [
+    "Subagent Session Report",
+    "",
+    "Runs: 2 (completed 1, failed 1, cancelled 0, errored 0, running 0, unknown 0)",
+    "Turns: 10",
+    "",
+    "Main Session",
+    "Tokens:",
+    "  Input: 5,000",
+    "    Cached: 4,000 (80.0%)",
+    "    Uncached: 1,000 (500 written to cache)",
+    "  Output: 100",
+    "  Total: 5,100",
+    "Cost:",
+    "  Total: $0.200",
+    "  anthropic/main-model: $0.150 (3.5k tokens)",
+    "  Tools/summaries: $0.050 (1.0k tokens)",
+    "Cache Re-billed: $0.005 (1,000 tokens, 1 miss)",
+    "",
+    "Subagents",
+    "Tokens:",
+    "  Input: 112,900",
+    "    Cached: 110,000 (97.4%)",
+    "    Uncached: 2,900 (2,000 written to cache)",
+    "  Output: 300",
+    "  Total: 113,200",
+    "Cost:",
+    "  Total: $1.234",
+    "  anthropic/claude-sonnet-4: $1.100 (1.2M tokens)",
+    "  Tools/summaries: $0.010 (45k tokens)",
+    "  unattributed: $0.124 (120k tokens)",
+    "Cache Re-billed: $0.016 (12,345 tokens, 3 misses)",
+    "",
+    "By Agent",
+    "  scout: 3 runs, 1.2M tokens, $0.980",
+    "  planner: 2 runs, 80k tokens, $0.254",
+    "  unknown: 1 run, 2.0k tokens, $0.000 (orphaned)",
+    "",
+    "Total (Main + Subagents)",
+    "Tokens:",
+    "  Input: 117,900",
+    "    Cached: 114,000 (96.7%)",
+    "    Uncached: 3,900 (2,500 written to cache)",
+    "  Output: 400",
+    "  Total: 118,300",
+    "Cost:",
+    "  Total: $1.434",
+    "  anthropic/claude-sonnet-4: $1.100 (1.2M tokens)",
+    "  anthropic/main-model: $0.150 (3.5k tokens)",
+    "  unattributed: $0.124 (120k tokens)",
+    "  Tools/summaries: $0.060 (55k tokens)",
+    "Cache Re-billed: $0.021 (13,345 tokens, 4 misses)",
+  ].join("\n");
+  assert.equal(buildSubagentSessionText(reportWithMain(), plainTheme), expected);
+});
+
+test("buildSubagentSessionText: zero subagent runs with main entries still render Main and Total", () => {
+  const text = buildSubagentSessionText(sessionReport({
+    runs: [],
+    totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    breakdown: [],
+    cacheWaste: noWaste(),
+    byAgent: [],
+    main: noMainStats(),
+    combined: noMainStats().totals,
+    combinedBreakdown: [],
+  }), plainTheme);
+  assert.match(text, /Main Session/);
+  assert.match(text, /Total \(Main \+ Subagents\)/);
+  // Zero subagent spend: the Subagents usage block and By Agent are omitted
+  // (the Total header contains the word, so the bare line is what's pinned).
+  assert.doesNotMatch(text, /\nSubagents\n/);
+  assert.doesNotMatch(text, /By Agent/);
+  // Everything is zero: no Cost section anywhere (pi's visibility rule).
+  assert.doesNotMatch(text, /Cost:/);
+});
+
+// MAIN with zero tokens and zero cost omits the Cost section — the same
+// visibility rule pi's own /session applies.
+test("buildSubagentSessionText: MAIN with zero cost shows no cost inside its block", () => {
+  const report = reportWithMain();
+  report.main = {
+    ...mainStats,
+    totals: { input: 500, output: 100, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    breakdown: [],
+    cacheWaste: noWaste(),
+  };
+  const text = buildSubagentSessionText(report, plainTheme);
+  const mainBlock = text.slice(text.indexOf("Main Session"), text.indexOf("Subagents"));
+  assert.doesNotMatch(mainBlock, /Cost:/);
+  assert.doesNotMatch(mainBlock, /Cache Re-billed/);
+  assert.match(mainBlock, /Input: 500/);
+});
+
+function noMainStats() {
+  return {
+    turns: 0,
+    userMessages: 0,
+    toolResults: 0,
+    totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    breakdown: [],
+    cacheWaste: noWaste(),
+  };
+}
+
+// --- buildSubagentStatusText ---
+
+const statusAcc = (overrides: Partial<SubagentStatusAccumulator> = {}): SubagentStatusAccumulator => ({
+  runs: 0,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  cost: 0,
+  ...overrides,
+});
+
+test("buildSubagentStatusText: plural runs with millions and a cost", () => {
+  assert.equal(
+    buildSubagentStatusText(statusAcc({ runs: 3, input: 1_150_000, output: 50_000, cost: 0.98 })),
+    "sub: 3 runs, 1.2M tok, $0.980",
+  );
+});
+
+test("buildSubagentStatusText: singular run drops the cost segment at zero cost", () => {
+  // formatTokens(12000) = "12k"; 0 cost (e.g. subscription) omits the $ part.
+  assert.equal(buildSubagentStatusText(statusAcc({ runs: 1, input: 12_000 })), "sub: 1 run, 12k tok");
+});
+
+test("buildSubagentStatusText: tokens sum all four buckets", () => {
+  // 1,000,000 input + 150,000 cacheRead + 50,000 output + 0 cacheWrite = 1.2M.
+  assert.equal(
+    buildSubagentStatusText(statusAcc({ runs: 2, input: 1_000_000, output: 50_000, cacheRead: 150_000, cacheWrite: 0, cost: 2.0 })),
+    "sub: 2 runs, 1.2M tok, $2.000",
+  );
+});
+
+// --- /subagents retry | continue: parse ---
+
+test("parseSubagentsCommand: bare 'retry'/'continue' auto-resolve their target", () => {
+  assert.deepEqual(parseSubagentsCommand("retry"), { kind: "retry" });
+  assert.deepEqual(parseSubagentsCommand("continue"), { kind: "continue" });
+});
+
+test("parseSubagentsCommand: 'retry <id>'/'continue <id>' carry the id (first token)", () => {
+  assert.deepEqual(parseSubagentsCommand("retry S1002"), { kind: "retry", id: "S1002" });
+  assert.deepEqual(parseSubagentsCommand("continue call-abc-1"), { kind: "continue", id: "call-abc-1" });
+  assert.deepEqual(parseSubagentsCommand("retry S1002 extra tokens"), { kind: "retry", id: "S1002" });
+});
+
+test("parseSubagentsCommand: unknown subcommand footer mentions retry and continue", () => {
+  const result = parseSubagentsCommand("foo");
+  if (result.kind === "usage-error") {
+    assert.match(result.message, /status\\|peek\\|cancel/);
+    assert.match(result.message, /steer\\|followUp/);
+    assert.match(result.message, /retry\\|continue/);
+    assert.match(result.message, /\\|clear/);
+  }
+});
+
+// --- /subagents retry | continue: target resolution ---
+
+const relaunchCandidate = (overrides: Partial<SubagentRelaunchCandidate> = {}): SubagentRelaunchCandidate => ({
+  runId: "call-a",
+  jobId: "S1001",
+  agent: "scout",
+  task: "do the thing",
+  status: "failed",
+  sessionFile: "/p/session/call-a/run-0/session.jsonl",
+  ...overrides,
+});
+
+test("resolveRelaunchTarget: explicit token matches runId against the WHOLE candidate list", () => {
+  const cancelled = relaunchCandidate({ runId: "call-c", status: "cancelled" });
+  const resolved = resolveRelaunchTarget("retry", "call-c", [relaunchCandidate(), cancelled]);
+  assert.deepEqual(resolved, { kind: "candidate", candidate: cancelled });
+});
+
+test("resolveRelaunchTarget: explicit token matches a jobId too", () => {
+  const resolved = resolveRelaunchTarget("continue", "S1001", [relaunchCandidate()]);
+  assert.deepEqual(resolved, { kind: "candidate", candidate: relaunchCandidate() });
+});
+
+test("resolveRelaunchTarget: unknown token is not-found, naming the token", () => {
+  const resolved = resolveRelaunchTarget("retry", "nope", [relaunchCandidate()]);
+  assert.deepEqual(resolved, { kind: "not-found", token: "nope" });
+  assert.match(relaunchNotFoundText("nope"), /nope/);
+});
+
+test("resolveRelaunchTarget: bare retry excludes cancelled candidates; a single survivor wins", () => {
+  const cancelled = relaunchCandidate({ runId: "call-c", status: "cancelled" });
+  const failed = relaunchCandidate({ runId: "call-a", status: "failed" });
+  assert.deepEqual(resolveRelaunchTarget("retry", undefined, [failed, cancelled]).kind, "candidate");
+  assert.deepEqual(resolveRelaunchTarget("retry", undefined, [cancelled]), { kind: "none" });
+});
+
+test("resolveRelaunchTarget: bare continue pre-filters to sessionFile-bearing candidates only", () => {
+  const dirless = relaunchCandidate({ runId: "call-d", status: "errored", sessionFile: undefined });
+  const continuable = relaunchCandidate({ runId: "call-o", status: "interrupted", sessionFile: "/x/child.jsonl" });
+  assert.deepEqual(resolveRelaunchTarget("continue", undefined, [dirless, continuable]).kind, "candidate");
+  // explicit continue id on the dirless run RESOLVES (the wiring then warns):
+  const explicit = resolveRelaunchTarget("continue", "call-d", [dirless, continuable]);
+  assert.equal(explicit.kind === "candidate", true);
+  if (explicit.kind === "candidate") assert.equal(explicit.candidate.runId, "call-d");
+  // nothing continuable at all -> resolution none
+  assert.deepEqual(resolveRelaunchTarget("continue", undefined, [dirless]), { kind: "none" });
+});
+
+test("resolveRelaunchTarget: bare continue also excludes runs settled as cancelled; an explicit id still resolves one", () => {
+  // A cancelled run WITH a persisted child session: user intent, never a
+  // bare-continue candidate — same rule bare retry already applies.
+  const cancelledWithChild = relaunchCandidate({ runId: "call-cc", status: "cancelled" });
+  assert.deepEqual(resolveRelaunchTarget("continue", undefined, [cancelledWithChild]), { kind: "none" });
+  // Explicit id still resolves against the whole list; the wiring applies
+  // its precondition guards on top.
+  const explicit = resolveRelaunchTarget("continue", "call-cc", [cancelledWithChild]);
+  if (explicit.kind === "candidate") assert.equal(explicit.candidate.runId, "call-cc");
+  else throw new Error("expected candidate");
+});
+
+test("isContinuable / isConsumedOrphan: the shared relaunch candidate predicates", () => {
+  const interrupted = relaunchCandidate({ runId: "call-o", status: "interrupted" });
+  assert.equal(isContinuable(interrupted), true);
+  const dirless = relaunchCandidate({ runId: "call-d", status: "errored", sessionFile: undefined });
+  assert.equal(isContinuable(dirless), false);
+  // Only interrupted candidates are ever consumed (marked by the wiring's
+  // launch), and consumption matches on the candidate's parent dir segment.
+  assert.equal(isConsumedOrphan(interrupted, new Set(["call-o"])), true);
+  assert.equal(isConsumedOrphan(interrupted, new Set(["other"])), false);
+  const failed = relaunchCandidate({ runId: "call-a", status: "failed" });
+  assert.equal(isConsumedOrphan(failed, new Set(["call-a"])), false);
+});
+
+test("resolveRelaunchTarget: several bare candidates are ambiguous", () => {
+  const resolved = resolveRelaunchTarget("retry", undefined, [relaunchCandidate(), relaunchCandidate({ runId: "call-b" })]);
+  if (resolved.kind === "ambiguous") assert.equal(resolved.candidates.length, 2);
+  else throw new Error("expected ambiguous");
+  assert.deepEqual(NO_RETRYABLE_RUNS_TEXT, "No retryable runs found in this session.");
+  assert.deepEqual(NO_CONTINUABLE_RUNS_TEXT, "No continuable runs found in this session.");
+});
+
+// --- /subagents retry | continue: candidate text ---
+
+test("buildRelaunchCandidatesText: one line per candidate, the verb header, labels and the jobId parenthetical", () => {
+  const text = buildRelaunchCandidatesText(
+    [
+      relaunchCandidate({ runId: "call-a", status: "failed" }),
+      relaunchCandidate({ runId: "call-o", status: "interrupted", jobId: undefined, task: "recover me" }),
+    ],
+    theme,
+    "retryable",
+  );
+  assert.match(text, /^Several retryable runs — specify an id:/);
+  assert.match(text, /call-a.*S1001/);
+  assert.match(text, /failed/);
+  assert.match(text, /call-o(?!\()/);
+  assert.match(text, /interrupted/);
+  assert.match(text, /recover me/);
+});
+
+test("buildRelaunchCandidatesText: the continuable verb names its own header", () => {
+  const text = buildRelaunchCandidatesText([relaunchCandidate()], theme, "continuable");
+  assert.match(text, /^Several continuable runs — specify an id:/);
+});
+
+test("buildRelaunchCandidatesText: an empty list names the verb's none wording", () => {
+  assert.equal(buildRelaunchCandidatesText([], theme, "retryable"), NO_RETRYABLE_RUNS_TEXT);
+  assert.equal(buildRelaunchCandidatesText([], theme, "continuable"), NO_CONTINUABLE_RUNS_TEXT);
+});
+
+// --- /subagents retry | continue: relaunch success texts ---
+
+// Byte-exact anchors: these are the notify texts the wiring sends on a
+// completed relaunch (also pinned through the e2e wiring tests). Each of the
+// 2 verbs × 2 params arms, plus the dropped-out-of-range renderings.
+
+const relaunchWithParams = relaunchCandidate({ params: { model: "zprov/zmodel-rec" } });
+
+test("buildRelaunchResultText: retry with recorded params (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText("retry", relaunchWithParams, "S1002", "retry-call-a-1"),
+    "Retrying scout as job S1002 (runId retry-call-a-1) — re-dispatched with the original call's parameters.",
+  );
+});
+
+test("buildRelaunchResultText: retry legacy ack names the not-recorded fallback (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText("retry", relaunchCandidate(), "S1002", "retry-call-a-1"),
+    "Retrying scout as job S1002 (runId retry-call-a-1) — the original call's parameters were not recorded; running the agent's defaults.",
+  );
+});
+
+test("buildRelaunchResultText: retry of a cancelled run carries the explicit-request note (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText(
+      "retry",
+      relaunchCandidate({ status: "cancelled", params: undefined }),
+      "S1002",
+      "retry-call-a-1",
+    ),
+    "Retrying scout as job S1002 (runId retry-call-a-1) — the original call's parameters were not recorded; running the agent's defaults. Note: this run settled as cancelled, and it is being re-dispatched at your explicit request.",
+  );
+});
+
+test("buildRelaunchResultText: continue with recorded params (exact; newRunId is not rendered)", () => {
+  assert.equal(
+    buildRelaunchResultText("continue", relaunchWithParams, "S1002", "continue-call-a-1"),
+    "Continuing scout as job S1002 from /p/session/call-a/run-0/session.jsonl — the new session branches from the interrupted one; the agent re-verifies half-done work first, then continues with the original call's parameters (same maxTurns budget: the fork restarts the turn counter at zero).",
+  );
+});
+
+test("buildRelaunchResultText: continue legacy ack names the not-recorded fallback (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText("continue", relaunchCandidate(), "S1002", "continue-call-a-1"),
+    "Continuing scout as job S1002 from /p/session/call-a/run-0/session.jsonl — the new session branches from the interrupted one; the agent re-verifies half-done work first; the original call's parameters were not recorded, so the agent's defaults apply.",
+  );
+});
+
+test("buildRelaunchResultText: continue of a cancelled run carries the same explicit-request note (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText(
+      "continue",
+      relaunchCandidate({ status: "cancelled", params: undefined }),
+      "S1002",
+      "continue-call-a-1",
+    ),
+    "Continuing scout as job S1002 from /p/session/call-a/run-0/session.jsonl — the new session branches from the interrupted one; the agent re-verifies half-done work first; the original call's parameters were not recorded, so the agent's defaults apply. Note: this run settled as cancelled, and it is being re-dispatched at your explicit request.",
+  );
+});
+
+test("buildRelaunchResultText: a dropped maxTurns renders the degrade note (exact)", () => {
+  const dropped = buildRelaunchResultText(
+    "retry",
+    relaunchCandidate({ params: { model: "zprov/zmodel-rec", maxTurns: 200, timeoutMs: 999999999 } }),
+    "S1002",
+    "retry-call-a-1",
+    ["maxTurns"],
+  );
+  assert.equal(
+    dropped,
+    "Retrying scout as job S1002 (runId retry-call-a-1) — re-dispatched with the original call's parameters (the recorded maxTurns 200 is out of range; the agent's own value applies).",
+  );
+  // Both dropped fields render one clause each, in the given order.
+  assert.equal(
+    buildRelaunchResultText(
+      "retry",
+      relaunchCandidate({ params: { model: "zprov/zmodel-rec", maxTurns: 200 }, status: "failed" }),
+      "S1002",
+      "retry-call-a-1",
+      ["maxTurns", "timeoutMs"],
+    ),
+    "Retrying scout as job S1002 (runId retry-call-a-1) — re-dispatched with the original call's parameters (the recorded maxTurns 200 is out of range; the recorded timeoutMs is out of range; the agent's own value applies).",
+  );
+});
+
+test("buildRelaunchResultText: a dropped field lands inside the continue parens (exact)", () => {
+  assert.equal(
+    buildRelaunchResultText(
+      "continue",
+      relaunchWithParams,
+      "S1002",
+      "continue-call-a-1",
+      ["maxTurns"],
+    ),
+    "Continuing scout as job S1002 from /p/session/call-a/run-0/session.jsonl — the new session branches from the interrupted one; the agent re-verifies half-done work first, then continues with the original call's parameters (same maxTurns budget: the fork restarts the turn counter at zero; the recorded maxTurns is out of range; the agent's own value applies).",
+  );
+});
+
+// --- /subagents retry | continue: relaunch range degrade (the wiring's
+// out-of-range drop detection, pure) ---
+
+test("outOfRangeRelaunchFields: only maxTurns/timeoutMs outside their allowed range are named", () => {
+  assert.deepEqual(outOfRangeRelaunchFields(undefined), []);
+  assert.deepEqual(outOfRangeRelaunchFields({}), []);
+  assert.deepEqual(outOfRangeRelaunchFields({ maxTurns: 100, timeoutMs: 600_000 }), []);
+  assert.deepEqual(outOfRangeRelaunchFields({ maxTurns: 200 }), ["maxTurns"]);
+  assert.deepEqual(outOfRangeRelaunchFields({ maxTurns: 0 }), ["maxTurns"]);
+  assert.deepEqual(outOfRangeRelaunchFields({ maxTurns: 2.5 }), ["maxTurns"]);
+  assert.deepEqual(outOfRangeRelaunchFields({ timeoutMs: 999999999 }), ["timeoutMs"]);
+  assert.deepEqual(outOfRangeRelaunchFields({ timeoutMs: 0 }), ["timeoutMs"]);
+  assert.deepEqual(outOfRangeRelaunchFields({ timeoutMs: MAX_TIMEOUT_MS }), []);
+  assert.deepEqual(outOfRangeRelaunchFields({ maxTurns: 200, timeoutMs: 999999999 }), ["maxTurns", "timeoutMs"]);
+});
+
+test("relaunch precondition texts name their run", () => {
+  const dirless = relaunchCandidate({ runId: "call-d", status: "errored", sessionFile: undefined });
+  assert.match(notContinuableText(dirless), /call-d/);
+  assert.match(notContinuableText(dirless), /no persisted child session/);
+  assert.match(consumedOrphanText("call-o"), /call-o/);
+  assert.match(consumedOrphanText("call-o"), /already retried or continued/);
+  assert.match(noTaskText(dirless), /call-d/);
+  assert.match(agentNameNotOnDiskText(dirless), /"unknown"/);
 });

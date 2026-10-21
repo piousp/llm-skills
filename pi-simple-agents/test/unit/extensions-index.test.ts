@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DefaultResourceLoader, type ExtensionAPI, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import extensionFactory, { runSingleTask, SubagentParams, deliverJobResult } from "../../extensions/index.ts";
+import extensionFactory, { runSingleTask, SubagentParams, deliverJobResult, relaunchRunId, CONTINUATION_PROMPT } from "../../extensions/index.ts";
+import { runIdDirName } from "../../src/subagent-session.ts";
 import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
@@ -105,36 +106,44 @@ function fakeAgentSession(finalText: string) {
 
 function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?: string } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
+  const setStatusCalls: Array<{ key: string; text: string | undefined }> = [];
   return {
     cwd: overrides.cwd ?? process.cwd(),
     mode: "tui" as const,
     hasUI: overrides.hasUI ?? true,
     signal: overrides.signal,
-    sessionManager: { getSessionFile: () => undefined },
+    sessionManager: { getSessionFile: () => undefined, getEntries: () => [] },
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
+      setStatus: (key: string, text: string | undefined) => setStatusCalls.push({ key, text }),
       theme: fakeTheme,
     },
     notifications,
+    setStatusCalls,
   };
 }
 
-function fakeCommandCtx(overrides: { hasUI?: boolean; sessionFile?: string } = {}) {
+function fakeCommandCtx(overrides: { hasUI?: boolean; sessionFile?: string; entries?: unknown[] } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
+  const setStatusCalls: Array<{ key: string; text: string | undefined }> = [];
   return {
     hasUI: overrides.hasUI ?? true,
     signal: undefined,
     cwd: process.cwd(),
     // /subagents session reads the session through the same interface the
-    // real host ctx exposes; undefined = not persisted yet.
-    sessionManager: { getSessionFile: () => overrides.sessionFile },
+    // real host ctx exposes; undefined = not persisted yet. getEntries
+    // feeds the Main Session block; default empty (host sessions start
+    // with at least a header, but the zero-Main layout is what renders).
+    sessionManager: { getSessionFile: () => overrides.sessionFile, getEntries: () => overrides.entries ?? [] },
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
+      setStatus: (key: string, text: string | undefined) => setStatusCalls.push({ key, text }),
       theme: fakeTheme,
     },
     notifications,
+    setStatusCalls,
   };
 }
 
@@ -1181,6 +1190,7 @@ function fakePeekCommandCtx(overrides: { mode?: string; hasUI?: boolean } = {}) 
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
+      setStatus: (_key: string, _text: string | undefined) => {},
       theme: fakeTheme,
       custom: (factory: Function, options: any) => {
         customCalls.push({ factory, options });
@@ -1717,4 +1727,755 @@ test("wiring: an active registry job labels its orphaned child directory as runn
   assert.match(ctx.notifications[0].message, /unknown: 1 run/);
 
   await settleRunningJob(pi, jobId);
+});
+
+test("wiring: /subagents session combines the in-memory Main Session entries with the reconciled child runs", async (t) => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  // Persisted parent with one settled child run on disk (childSessionDir
+  // convention), plus in-memory parent entries carrying their own usage:
+  // the report should show Main, Subagents, and the combined Total.
+  const dir = makeSessionDir(t);
+  const parentFile = path.join(dir, "session.jsonl");
+  const childFile = path.join(dir, "session", "call-main-test", "run-0", "session.jsonl");
+  fs.mkdirSync(path.dirname(childFile), { recursive: true });
+  fs.writeFileSync(parentFile, [
+    sessionJsonLine(sessionHeaderEntry),
+    sessionJsonLine(completedSubagentResult("call-main-test", "scout")),
+  ].join("\n"), "utf8");
+  fs.writeFileSync(childFile, [
+    sessionJsonLine({ ...sessionHeaderEntry, id: "c" }),
+    sessionJsonLine({
+      type: "message",
+      message: {
+        role: "assistant", provider: "anthropic", model: "claude-sonnet-4", timestamp: 1_700_000_000_000,
+        usage: { input: 700, output: 80, cacheRead: 0, cacheWrite: 0, cost: { total: 0.0041 } },
+      },
+    }),
+  ].join("\n"), "utf8");
+
+  const ctx = fakeCommandCtx({
+    sessionFile: parentFile,
+    entries: [
+      sessionHeaderEntry,
+      {
+        type: "message",
+        message: {
+          role: "assistant", provider: "anthropic", model: "claude-main", timestamp: 1_700_000_000_000,
+          usage: { input: 500, output: 40, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+        },
+      },
+      { type: "message", message: { role: "toolResult", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.002 } } } },
+    ],
+  });
+  await pi.commands.get("subagents")!.handler("session", ctx);
+
+  const text = ctx.notifications.at(-1)!.message;
+  // MAIN is computed from getEntries(): its key (claude-main) cannot appear
+  // without the parent entries reaching the report.
+  assert.match(text, /Main Session/);
+  assert.match(text, /claude-main/);
+  assert.match(text, /Subagents/);
+  assert.match(text, /Total \(Main \+ Subagents\)/);
+});
+
+// --- subagent footer status line wiring ---
+
+test("wiring: no status line before the first settle, one per settle afterwards, tokens summed across runs", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  // One fresh hanging session per launch, usage riding on the emitted
+  // assistant message_end (the settle snapshot comes from the same events).
+  const launched: ReturnType<typeof hangingStreamingSession>[] = [];
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => ({ fake: true }) } as unknown as ModelRuntime;
+  const createSession = async () => {
+    const hanging = hangingStreamingSession();
+    launched.push(hanging);
+    return { session: hanging.session } as any;
+  };
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
+
+  const launchCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+  const r1 = await pi.tool.execute("call-status-a", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  await waitUntil(() => launched.length > 0 && launched[0].listeners.length > 0);
+  launched[0].emit([
+    { type: "message_end", message: { role: "assistant", provider: "anthropic", usage: { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.005 } } } },
+  ]);
+
+  // Nothing settled yet: the status line must not exist.
+  assert.deepEqual(launchCtx.setStatusCalls, []);
+
+  const cancelCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("cancel", cancelCtx);
+  await waitUntil(() => pi.sentMessages.length > 0);
+  // The registry hands each settle to onSettled exactly once: one call,
+  // with the run's own cost (cancelled runs still carry spent usage).
+  assert.deepEqual(cancelCtx.setStatusCalls, [
+    { key: "pi-simple-agents:subagents", text: "sub: 1 run, 10 tok, $0.005" },
+  ]);
+
+  // Second job: the accumulator sums both settles.
+  const r2 = await pi.tool.execute("call-status-b", { agent: "scout", task: "y" }, undefined, undefined, launchCtx);
+  await waitUntil(() => launched.length > 1 && launched[1].listeners.length > 0);
+  launched[1].emit([
+    { type: "message_end", message: { role: "assistant", provider: "anthropic", usage: { input: 12, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.004 } } } },
+  ]);
+  const settleCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler(`cancel ${r2.details.jobId}`, settleCtx);
+  await waitUntil(() => pi.sentMessages.length > 1);
+  assert.deepEqual(settleCtx.setStatusCalls, [
+    { key: "pi-simple-agents:subagents", text: "sub: 2 runs, 22 tok, $0.009" },
+  ]);
+});
+
+test("wiring: session_shutdown clears the footer status line", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const modelRuntime = { isUsingSubscription: () => false, getModel: () => ({ fake: true }) } as unknown as ModelRuntime;
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
+
+  const launchCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+  await pi.tool.execute("call-status-shutdown", { agent: "scout", task: "x" }, undefined, undefined, launchCtx);
+  await waitUntil(() => listeners.length > 0);
+  const settleCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("cancel", settleCtx);
+  await waitUntil(() => pi.sentMessages.length > 0);
+  assert.equal(settleCtx.setStatusCalls.length, 1);
+
+  const shutdownCtx = fakeCommandCtx();
+  await pi.handlers.get("session_shutdown")!({ type: "session_shutdown" }, shutdownCtx);
+  assert.deepEqual(shutdownCtx.setStatusCalls, [
+    { key: "pi-simple-agents:subagents", text: undefined },
+  ]);
+});
+
+test("wiring: /subagents clear does not touch the footer status line", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  // The accumulator is effective session spend: clear() drops finished jobs
+  // from the list, not from the footer (only shutdown clears the line).
+  const ctx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("clear", ctx);
+  assert.deepEqual(ctx.setStatusCalls, []);
+});
+
+// --- /subagents retry | continue ---
+
+// relaunchRunId: kind-namespaced, per-attempt unique, and never longer than
+// the 64-char directory segment runIdDirName allows.
+test("relaunchRunId: kind-namespaced and per-attempt unique", () => {
+  assert.equal(relaunchRunId("retry", "call-1", 2), "retry-call-1-2");
+  assert.equal(relaunchRunId("continue", "call-1", 1), "continue-call-1-1");
+  assert.notEqual(relaunchRunId("retry", "call-1", 1), relaunchRunId("retry", "call-1", 2));
+  assert.notEqual(relaunchRunId("retry", "call-1", 1), relaunchRunId("continue", "call-1", 1));
+  const long = "toolu_" + "x".repeat(300);
+  for (const kind of ["retry", "continue"] as const) {
+    const segment = runIdDirName(relaunchRunId(kind, long, 1));
+    assert.ok(segment.length <= 64, `expected segment length <= 64, got ${segment.length}`);
+    assert.notEqual(segment, runIdDirName(relaunchRunId("retry", long, 2)));
+  }
+});
+
+// Disk fixtures for the command wiring: entries and child files at exactly
+// the paths buildRelaunchCandidates reads (nodeReconcileFs walks real disk).
+const rlJsonl = (entry: unknown): string => JSON.stringify(entry);
+
+const rlAckEntry = (jobId: string, runId: string, agent: string, task: string, params?: unknown): unknown => ({
+  type: "message",
+  message: {
+    role: "toolResult",
+    toolCallId: "tc-1",
+    toolName: "subagent",
+    content: [{ type: "text", text: `Started background subagent job ${jobId}` }],
+    isError: false,
+    details: params !== undefined
+      ? { jobId, runId, task: { agent, task }, params }
+      : { jobId, runId, task: { agent, task } },
+  },
+});
+
+const rlCompletionEntry = (jobId: string, runId: string, status: string, agent: string, task: string): unknown => ({
+  type: "custom_message",
+  customType: "subagent-result",
+  timestamp: "2026-01-01T00:00:05.000Z",
+  details: { jobId, runId, status, isError: status !== "completed", task: { agent, task } },
+});
+
+function rlChildFile(dir: string, runId: string, firstUserText = "mid-flight work"): string {
+  const childFile = path.join(dir, "session", runId, "run-0", "session.jsonl");
+  fs.mkdirSync(path.dirname(childFile), { recursive: true });
+  fs.writeFileSync(
+    childFile,
+    [rlJsonl({ ...sessionHeaderEntry, id: "child" }), rlJsonl({ type: "message", message: { role: "user", content: firstUserText } })].join("\n"),
+    "utf8",
+  );
+  return childFile;
+}
+
+function rlParentFile(dir: string, entries: unknown[]): string {
+  const parentFile = path.join(dir, "session.jsonl");
+  fs.writeFileSync(
+    parentFile,
+    [rlJsonl(sessionHeaderEntry), ...entries.map(rlJsonl)].join("\n"),
+    "utf8",
+  );
+  return parentFile;
+}
+
+// Each relaunch that goes through the command ends up in a REAL
+// runSingleTask (real child-session creation under the fixture paths); this
+// capture records the session manager handed to createSession, the task
+// text actually prompted, and the full createSession options (model,
+// thinkingLevel, tools — the seam run.ts exposes) so the recorded-params
+// tests can pin what a faithful relaunch actually runs with, without a
+// fake session manager.
+function relaunchLaunchCapture() {
+  const launches: { sessionManager?: unknown; promptArgs: string[]; sessionOptions: Record<string, unknown>; subscriptions: number }[] = [];
+  const createSession = async (options: Record<string, unknown>) => {
+    const promptArgs: string[] = [];
+    // The session's subscribe() is counted, not stored: runAgentViaSdk always
+    // subscribes its usage/event collector once, and adds exactly one more
+    // subscription (the turn counter) when the agent carries a maxTurns —
+    // a recorded-params relaunch proves its recorded maxTurns reached the
+    // run when the count is 2.
+    let subscriptions = 0;
+    const session = {
+      getAllTools: () => [],
+      bindExtensions: async () => {},
+      extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+      subscribe: () => { subscriptions += 1; return () => {}; },
+      prompt: async (task: string) => { promptArgs.push(task); },
+      getLastAssistantText: () => "done",
+      getContextUsage: () => undefined,
+      dispose: () => {},
+      abort: () => {},
+    };
+    launches.push({
+      sessionManager: options.sessionManager,
+      promptArgs,
+      sessionOptions: options,
+      // Getter, not a snapshot: `subscriptions` is a primitive the run only
+      // increments AFTER createSession returns; a plain property would freeze
+      // the pre-run zero into the record (promptArgs only worked because it
+      // is a mutable array reference).
+      get subscriptions() {
+        return subscriptions;
+      },
+    });
+    const dbg = new Proxy(session, {
+      get(target, prop) {
+        const v = (target as Record<string | symbol, unknown>)[prop];
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    return { session: dbg } as any;
+  };
+  return { launches, createSession };
+}
+
+// A fake ModelRuntime that resolves ANY "provider/modelId" ref (a first
+// launch of the recorded ref would resolve the same way) and records each
+// getModel call, so a recorded-params relaunch asserts both that the
+// recorded ref was requested and that createSession received the
+// corresponding resolved model object.
+function recordingModelRuntime() {
+  const requested: Array<{ provider: string; modelId: string }> = [];
+  const runtime = {
+    isUsingSubscription: () => false,
+    getModel: (provider: string, modelId: string) => {
+      requested.push({ provider, modelId });
+      return { resolvedRef: `${provider}/${modelId}` };
+    },
+  };
+  return { requested, runtime: runtime as unknown as ModelRuntime };
+}
+
+test("wiring: /subagents retry (bare, single candidate) launches a new job with the original task and the agent defaults, no overrides", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2001", "call-a", "scout", "do the thing"),
+    rlCompletionEntry("S2001", "call-a", "failed", "scout", "do the thing"),
+  ]);
+  rlChildFile(dir, "call-a");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  // Legacy ack (no recorded params): anchored to the exact legacy sentence.
+  assert.match(
+    notification.message,
+    /^Retrying scout as job S\d+ \(runId retry-call-a-1\) — the original call's parameters were not recorded; running the agent's defaults\.$/,
+  );
+  assert.match(notification.message, /were not recorded/);
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0].promptArgs.at(-1), "do the thing");
+  const sessionManager = launches[0].sessionManager as { getSessionFile?: () => string | undefined };
+  const newFile = sessionManager.getSessionFile?.() ?? "";
+  assert.ok(newFile.includes("retry-call-a-1"), `expected the new job under the relaunch runId dir, got ${newFile}`);
+  assert.equal(newFile, path.join(childSessionDir(parentFile, "retry-call-a-1", 0)!, "session.jsonl"));
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+test("wiring: /subagents retry naming an agent no longer on disk resolves verbatim and launches nothing", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2002", "call-gone", "failed", "gone-agent", "x"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry call-gone", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.equal(
+    ctx.notifications[0].message,
+    "Unknown agent: gone-agent. Available agents: scout",
+  );
+  // No launch ever happened (deterministic: the capture's createSession
+  // never ran, the registry never started a job).
+  assert.equal(launches.length, 0);
+});
+
+test("wiring: bare /subagents retry with two failed runs lists them and launches nothing", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2003", "call-a", "failed", "scout", "first"),
+    rlCompletionEntry("S2004", "call-b", "failed", "scout", "second"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "info");
+  const message = ctx.notifications[0].message;
+  assert.match(message, /specify an id:/);
+  assert.ok(message.includes("call-a") && message.includes("call-b"));
+  assert.ok(message.includes("failed"));
+  assert.equal(launches.length, 0);
+});
+
+test("wiring: bare retry skips cancelled runs; an explicit id re-dispatches one with the cancelled note", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2005", "call-c", "cancelled", "scout", "cancelled task"),
+  ]);
+
+  // Bare: cancelled is user intent, never a bare/retry candidate.
+  const bareCtx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", bareCtx);
+  assert.equal(bareCtx.notifications.length, 1);
+  assert.equal(bareCtx.notifications[0].type, "info");
+  assert.equal(bareCtx.notifications[0].message, "No retryable runs found in this session.");
+  assert.equal(launches.length, 0);
+
+  // Explicit: allowed, with the note.
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry call-c", ctx);
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(notification.message, /Retrying scout as job S\d+/);
+  assert.match(notification.message, /settled as cancelled/);
+  assert.match(notification.message, /explicit request/);
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches[0].promptArgs.at(-1), "cancelled task");
+  await waitUntil(() => pi.sentMessages.length > 0);
+});
+
+test("wiring: bare continue skips runs settled as cancelled; an explicit id continues one with the cancelled note", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2010a", "call-cc", "cancelled", "scout", "cancelled task"),
+  ]);
+  rlChildFile(dir, "call-cc");
+
+  // Bare: a cancelled run is user intent even WITH a persisted child —
+  // bare continue must not auto-pick it (same rule bare retry applies).
+  const bareCtx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue", bareCtx);
+  assert.equal(bareCtx.notifications.length, 1);
+  assert.equal(bareCtx.notifications[0].type, "info");
+  assert.equal(bareCtx.notifications[0].message, "No continuable runs found in this session.");
+  assert.equal(launches.length, 0);
+
+  // Explicit: allowed, and the output carries the cancelled note (the same
+  // wording an explicit retry of a cancelled run shows).
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue call-cc", ctx);
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(notification.message, /^Continuing scout as job S\d+ from .*call-cc.*run-0.*session\.jsonl/);
+  assert.match(notification.message, /settled as cancelled/);
+  assert.match(notification.message, /explicit request/);
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches[0].promptArgs.at(-1), CONTINUATION_PROMPT);
+  await waitUntil(() => pi.sentMessages.length > 0);
+});
+
+test("wiring: /subagents retry with recorded params reconstructs them, re-validates, and launches with the original call's parameters", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  const { requested, runtime } = recordingModelRuntime();
+  await extensionFactory(pi as unknown as ExtensionAPI, async () => runtime, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    // The ack records the call's requested overrides (details.params);
+    // "subagent" is a tool name the fake session trivially satisfies, so
+    // the run neither waits the MCP grace nor fails the missing-tools check.
+    rlAckEntry("S2101", "call-p", "scout", "do the thing", {
+      model: "zprov/zmodel-rec", thinking: "high", tools: ["subagent"], maxTurns: 3,
+    }),
+    rlCompletionEntry("S2101", "call-p", "failed", "scout", "do the thing"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(
+    notification.message,
+    /^Retrying scout as job S\d+ \(runId retry-call-p-1\) — re-dispatched with the original call's parameters\.$/,
+  );
+
+  // The relaunch goes through the same runSingleTask → applyInvocationOverride
+  // pipeline a first launch does: createSession receives the recorded model
+  // (resolved through getModel from the recorded ref), thinking level, tool
+  // whitelist, and the task is re-prompted verbatim.
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches.length, 1);
+  assert.deepEqual(requested, [{ provider: "zprov", modelId: "zmodel-rec" }]);
+  assert.deepEqual(launches[0].sessionOptions.model, { resolvedRef: "zprov/zmodel-rec" });
+  assert.equal(launches[0].sessionOptions.thinkingLevel, "high");
+  assert.deepEqual(launches[0].sessionOptions.tools, ["subagent"]);
+  // Recorded maxTurns smoke: the extra session subscription is the turn
+  // counter, which resolveMaxTurns only installs for a resolved maxTurns —
+  // its counter starts at zero in the fresh (forked or new) session, so the
+  // recorded budget is a full budget for the relaunch, never a remainder.
+  // The subscriptions happen after createSession returns, so wait for the
+  // count instead of asserting it synchronously.
+  await waitUntil(() => launches[0].subscriptions >= 2);
+  assert.equal(launches[0].subscriptions, 2);
+  assert.equal(launches[0].promptArgs.at(-1), "do the thing");
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+test("wiring: /subagents retry with an out-of-range recorded maxTurns launches and degrades visibly to the agent's own value", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    // 200 is a well-typed maxTurns whose range no layer validated at
+    // record time; the relaunch-revalidation chokepoint judges it now.
+    rlAckEntry("S2104", "call-mt", "scout", "do the thing", { tools: ["subagent"], maxTurns: 200 }),
+    rlCompletionEntry("S2104", "call-mt", "failed", "scout", "do the thing"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  // The relaunch is NOT clamped and NOT failed: it launches, and the output
+  // says the recorded value was dropped — the agent's own value applies.
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(
+    notification.message,
+    /^Retrying scout as job S\d+ \(runId retry-call-mt-1\) — re-dispatched with the original call's parameters \(the recorded maxTurns 200 is out of range; the agent's own value applies\)\.$/,
+  );
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches.length, 1);
+  assert.equal(launches[0].promptArgs.at(-1), "do the thing");
+  // resolveMaxTurns installs its turn-counter subscription only for an
+  // in-range maxTurns, so the dropped budget leaves exactly one
+  // subscription (the usage collector) where an in-range one would give 2.
+  await waitUntil(() => launches[0].subscriptions >= 1);
+  assert.equal(launches[0].subscriptions, 1);
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+test("wiring: /subagents retry with an out-of-range recorded timeoutMs launches with the same visible degrade", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    // Above the 2h ceiling, still a well-typed number.
+    rlAckEntry("S2105", "call-to", "scout", "do the thing", { tools: ["subagent"], timeoutMs: 999999999 }),
+    rlCompletionEntry("S2105", "call-to", "failed", "scout", "do the thing"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(
+    notification.message,
+    /^Retrying scout as job S\d+ \(runId retry-call-to-1\) — re-dispatched with the original call's parameters \(the recorded timeoutMs 999999999 is out of range; the agent's own value applies\)\.$/,
+  );
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches.length, 1);
+  // No maxTurns was recorded either, so again only the usage collector.
+  await waitUntil(() => launches[0].subscriptions >= 1);
+  assert.equal(launches[0].subscriptions, 1);
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+test("wiring: /subagents retry with a well-typed but malformed recorded model warns that validation failed and launches nothing", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2102", "call-bad", "scout", "x", { model: "no-slash" }),
+    rlCompletionEntry("S2102", "call-bad", "failed", "scout", "x"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry", ctx);
+
+  // The recorded model ref is re-validated through the same
+  // validateSubagentParams path the tool uses; a malformed ref stops before
+  // any launch.
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.match(
+    ctx.notifications[0].message,
+    /^Run call-bad's recorded parameters failed validation \(/,
+  );
+  assert.match(ctx.notifications[0].message, /"model" must be a string in "provider\/modelId" form/);
+  assert.match(ctx.notifications[0].message, /— nothing was launched\.$/);
+  assert.equal(launches.length, 0);
+});
+
+test("wiring: /subagents retry of an orphan with no ack reports the unknown-agent resolution error", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, []); // no ack, no completion
+  rlChildFile(dir, "call-orph");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry call-orph", ctx);
+
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.match(ctx.notifications[0].message, /Unknown agent: unknown\. Available agents: scout/);
+  assert.equal(launches.length, 0);
+});
+
+test("wiring: /subagents continue on a run with no persisted child reports not-continuable; bare continue with none reports the none text", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2006", "call-e", "errored", "scout", "x"),
+  ]); // errored with NO child dir on disk
+
+  const bareCtx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue", bareCtx);
+  assert.equal(bareCtx.notifications.length, 1);
+  assert.equal(bareCtx.notifications[0].type, "info");
+  assert.equal(bareCtx.notifications[0].message, "No continuable runs found in this session.");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue call-e", ctx);
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.match(ctx.notifications[0].message, /call-e/);
+  assert.match(ctx.notifications[0].message, /no persisted child session/);
+  assert.match(ctx.notifications[0].message, /\/subagents retry re-dispatches it instead\./);
+  assert.equal(launches.length, 0);
+});
+
+test("wiring: /subagents continue on a run with a persisted child seeds a session from it and prompts CONTINUATION_PROMPT, with the recorded params", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  const { requested, runtime } = recordingModelRuntime();
+  await extensionFactory(pi as unknown as ExtensionAPI, async () => runtime, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2007", "call-t", "scout", "the interrupted task", { model: "zprov/zmodel-cont", thinking: "high" }),
+  ]);
+  const childFile = rlChildFile(dir, "call-t", "the interrupted first message");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue call-t", ctx);
+
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  assert.match(
+    notification.message,
+    /^Continuing scout as job S\d+ from .*call-t.*run-0.*session\.jsonl — the new session branches from the interrupted one/,
+  );
+  assert.match(
+    notification.message,
+    /the agent re-verifies half-done work first, then continues with the original call's parameters \(same maxTurns budget: the fork restarts the turn counter at zero\)\.$/,
+  );
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches[0].promptArgs.at(-1), CONTINUATION_PROMPT);
+  // The continuation re-enters the same pipeline a first launch does, so
+  // the recorded model/thinking reach createSession like any per-call override.
+  assert.deepEqual(requested, [{ provider: "zprov", modelId: "zmodel-cont" }]);
+  assert.deepEqual(launches[0].sessionOptions.model, { resolvedRef: "zprov/zmodel-cont" });
+  assert.equal(launches[0].sessionOptions.thinkingLevel, "high");
+  const manager = launches[0].sessionManager as { getSessionFile?: () => string | undefined; getEntries?: () => Array<{ type: string; message?: { role?: string; content?: unknown } }> };
+  assert.notEqual(manager.getSessionFile?.(), childFile, "the fork is a NEW file, never the seed");
+  assert.ok(manager.getEntries?.().some((e) => e.type === "message" && JSON.stringify(e.message).includes("the interrupted first message")));
+  await waitUntil(() => pi.sentMessages.length > 0);
+});
+
+test("wiring: /subagents continue with a legacy ack (no recorded params) runs the agent defaults and says so", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2103", "call-leg", "scout", "legacy recorded nothing"),
+  ]);
+  rlChildFile(dir, "call-leg");
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue call-leg", ctx);
+
+  const notification = ctx.notifications.at(-1)!;
+  assert.equal(notification.type, "info");
+  // Anchored legacy sentence: the fork/continuation prefix is unchanged,
+  // the tail reports the not-recorded fallback.
+  assert.match(
+    notification.message,
+    /^Continuing scout as job S\d+ from .*call-leg.*run-0.*session\.jsonl — the new session branches from the interrupted one; the agent re-verifies half-done work first; the original call's parameters were not recorded, so the agent's defaults apply\.$/,
+  );
+
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches[0].promptArgs.at(-1), CONTINUATION_PROMPT);
+  // The agent's own defaults: frontmatter carried neither a model nor a
+  // thinking level, so createSession is handed nothing to override with.
+  assert.equal(launches[0].sessionOptions.model, undefined);
+  assert.equal(launches[0].sessionOptions.thinkingLevel, undefined);
+  await waitUntil(() => pi.sentMessages.length > 0);
+});
+
+test("wiring: an orphan can only be continued once per session (second attempt reports consumed)", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2008", "raw-orph", "scout", "aknowledged but crashed"),
+  ]);
+  rlChildFile(dir, "raw-orph");
+
+  const first = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue raw-orph", first);
+  await waitUntil(() => launches.length > 0);
+  assert.match(first.notifications.at(-1)!.message, /^Continuing scout as job S\d+/);
+  await waitUntil(() => pi.sentMessages.length > 0);
+
+  const second = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("continue raw-orph", second);
+  assert.equal(second.notifications.length, 1);
+  assert.equal(second.notifications[0].type, "warning");
+  assert.match(second.notifications[0].message, /already retried or continued in this session/);
+});
+
+test("wiring: /subagents retry with an explicit token matching nothing reports not-found", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlCompletionEntry("S2009", "call-a", "failed", "scout", "x"),
+  ]);
+
+  const ctx = fakeCommandCtx({ sessionFile: parentFile });
+  await pi.commands.get("subagents")!.handler("retry nonsuch", ctx);
+  assert.equal(ctx.notifications.length, 1);
+  assert.equal(ctx.notifications[0].type, "warning");
+  assert.match(ctx.notifications[0].message, /nonsuch/);
+  assert.match(ctx.notifications[0].message, /No settled subagent run matching/);
+});
+
+test("wiring: /subagents retry|continue without a persisted session warns exactly once", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  for (const args of ["retry", "continue"]) {
+    const ctx = fakeCommandCtx();
+    await pi.commands.get("subagents")!.handler(args, ctx);
+    assert.equal(ctx.notifications.length, 1);
+    assert.equal(ctx.notifications[0].type, "warning");
+    assert.match(ctx.notifications[0].message, /No session file on disk yet/);
+  }
+});
+
+test("wiring: the subagents command description names retry and continue", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+  assert.match(pi.commands.get("subagents")!.description ?? "", /retry\|continue/);
 });

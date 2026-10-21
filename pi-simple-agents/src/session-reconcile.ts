@@ -16,6 +16,12 @@
 import { basename, dirname, join, resolve } from "node:path";
 import { runIdDirName } from "./subagent-session.ts";
 import type { AggregatedUsage } from "./usage.ts";
+import {
+  overrideValueMatches,
+  OVERRIDE_KEYS,
+  OVERRIDE_TYPE_SPEC,
+  type InvocationOverride,
+} from "./overrides.ts";
 
 // --- usage shapes -----------------------------------------------------------
 
@@ -73,7 +79,13 @@ export interface SessionMessageShape {
   model?: string;
   responseModel?: string;
   timestamp?: number;
-  content?: string | Array<{ type?: string; text?: string }>;
+  // Assistant toolCall blocks carry `id` (the host's toolCallId); toolResult
+  // blocks and toolResult messages carry `toolCallId` naming the call they
+  // answer. Only the fields the algorithms read are typed.
+  content?: string | Array<{ type?: string; text?: string; id?: string; toolCallId?: string }>;
+  toolCallId?: string;
+  toolName?: string;
+  details?: unknown;
   usage?: SessionUsageShape;
 }
 
@@ -130,6 +142,111 @@ export type SessionEntry =
   | CompactionLikeEntry
   | SubagentResultEntry
   | GenericSessionEntry;
+
+// A persisted subagent launch acknowledgment (the tool result built by
+// buildSubagentAckResult, read back from disk): a toolResult message named
+// "subagent" whose details carry the job identity. Old-format acks (the
+// pre-1.2.0 `details.runs` array shape) are tolerated and ignored: they have
+// no runId, so no relaunch candidate can be enriched from them.
+export interface SubagentAckDetails {
+  jobId?: string;
+  runId?: string;
+  task?: { agent?: string; task?: string };
+  // The launch call's REQUESTED invocation override, when the call carried
+  // one. Extracted structurally only (per-key typeof guards below); the
+  // semantic checks (model ref form, maxTurns range) stay at the relaunch-
+  // time validateSubagentParams chokepoint.
+  params?: InvocationOverride;
+}
+
+// Structural per-key extraction of details.params: expected types come
+// from the shared type spec (src/overrides.ts's OVERRIDE_TYPE_SPEC —
+// model/thinking: string, tools/skills: string[], maxTurns/timeoutMs:
+// number). Ill-typed keys are dropped silently — this layer knows nothing
+// about value ranges or name forms (layering precedent: validate.ts
+// warn-and-drops structurally, the use-site chokepoints judge ranges). A
+// params blob whose every key is ill-typed yields undefined: nothing was
+// recorded that a relaunch could use, so the candidate falls into the
+// legacy (no-params) arm exactly like a pre-params ack.
+function ackParamsOf(record: Record<string, unknown>): InvocationOverride | undefined {
+  const raw = record.params;
+  if (raw === null || typeof raw !== "object") return undefined;
+  const source = raw as Record<string, unknown>;
+  const override: InvocationOverride = {};
+  for (const key of OVERRIDE_KEYS) {
+    if (overrideValueMatches(source[key], OVERRIDE_TYPE_SPEC[key])) {
+      (override as Record<string, unknown>)[key] = source[key];
+    }
+  }
+  if (Object.keys(override).length === 0) return undefined;
+  return override;
+}
+
+export function subagentAckEntryOf(entry: SessionEntry): SubagentAckDetails | undefined {
+  const message = messageOf(entry);
+  if (!message || message.role !== "toolResult" || message.toolName !== "subagent") return undefined;
+  const details = message.details;
+  if (details === null || typeof details !== "object") return undefined;
+  const record = details as Record<string, unknown>;
+  const task = record.task;
+  const params = ackParamsOf(record);
+  return {
+    jobId: typeof record.jobId === "string" && record.jobId ? record.jobId : undefined,
+    runId: typeof record.runId === "string" && record.runId ? record.runId : undefined,
+    task:
+      task !== null && typeof task === "object"
+        ? {
+            agent: typeof (task as Record<string, unknown>).agent === "string" ? (task as Record<string, unknown>).agent as string : undefined,
+            task: typeof (task as Record<string, unknown>).task === "string" ? (task as Record<string, unknown>).task as string : undefined,
+          }
+        : undefined,
+    ...(params !== undefined ? { params } : {}),
+  };
+}
+
+/**
+ * Assistant toolCalls with no matching toolResult anywhere in the entries:
+ * the open tool-call pairs a session fork carries over when it is created
+ * from an interrupted run's child file. Each returned pair needs one
+ * synthetic toolResult appended to the forked copy (see src/task-runner.ts)
+ * before the next model call, or the model sees a call it never got an
+ * answer for. `toolName` comes from the same assistant block that yielded
+ * the id — the only way to name the synthetic result honestly — with an
+ * "unknown" fallback for a malformed opening block (a dangling pair must
+ * still be closable). One pass; entries in file order, deduped by id.
+ */
+export interface DanglingToolCall {
+  toolCallId: string;
+  toolName: string;
+}
+
+export function danglingToolCalls(entries: readonly SessionEntry[]): DanglingToolCall[] {
+  // First occurrence of an id names its tool: a duplicated toolCall block
+  // would only re-encode the same open pair.
+  const called = new Map<string, string>();
+  const answered = new Set<string>();
+  for (const entry of entries) {
+    const message = messageOf(entry);
+    if (!message) continue;
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block?.type === "toolCall" && typeof block.id === "string" && block.id && !called.has(block.id)) {
+          const name = (block as { name?: unknown }).name;
+          called.set(block.id, typeof name === "string" && name ? name : "unknown");
+        }
+      }
+    }
+    if (typeof message.toolCallId === "string" && message.toolCallId) {
+      answered.add(message.toolCallId);
+    }
+  }
+  // A toolCall answered later in the file is not dangling (the answer arrives
+  // in the toolResult message); a duplicate answer for a call never made is
+  // ignored (nothing to close).
+  return [...called.entries()]
+    .filter(([id]) => !answered.has(id))
+    .map(([toolCallId, toolName]) => ({ toolCallId, toolName }));
+}
 
 // Injected FS seam: `undefined` means missing/unreadable (never thrown).
 export interface ReconcileFs {
@@ -188,24 +305,45 @@ function usageSourceOf(entry: SessionEntry): SessionUsageShape | undefined {
   return undefined;
 }
 
-function addUsageToTotals(totals: UsageTotals, usage: SessionUsageShape): void {
-  totals.input += num(usage.input);
-  totals.output += num(usage.output);
-  totals.cacheRead += num(usage.cacheRead);
-  totals.cacheWrite += num(usage.cacheWrite);
-  totals.cost += num(usage.cost?.total);
+/**
+ * The one usage-totals fold (session-reconcile's totals, the footer status
+ * accumulator, the Main+Subagents combined total): adds one FLAT usage blob
+ * — token buckets plus cost as a plain number — into `totals`. Fields that
+ * are absent or non-numeric contribute zero; `undefined` usage contributes
+ * nothing at all. Nested cost shapes ({ total }) are flattened by the
+ * entry-level callers before reaching this fold.
+ */
+export function addUsageToTotals(
+  totals: UsageTotals,
+  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: number } | undefined,
+): void {
+  totals.input += num(usage?.input);
+  totals.output += num(usage?.output);
+  totals.cacheRead += num(usage?.cacheRead);
+  totals.cacheWrite += num(usage?.cacheWrite);
+  totals.cost += num(usage?.cost);
 }
 
 /**
  * Sums every entry's usage into one total, mirroring pi's getSessionStats
  * accumulation (assistant + toolResult + compaction/branch_summary +
- * type:"usage"). Entries without usage contribute nothing.
+ * type:"usage"). Entries without usage contribute nothing. The nested→flat
+ * adaptation (entry usage carries cost as a { total } object) happens here,
+ * at the entry level.
  */
 export function sumUsageTotals(entries: readonly SessionEntry[]): UsageTotals {
   const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
   for (const entry of entries) {
     const usage = usageSourceOf(entry);
-    if (usage) addUsageToTotals(totals, usage);
+    if (usage) {
+      addUsageToTotals(totals, {
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        cost: usage.cost?.total,
+      });
+    }
   }
   return totals;
 }
@@ -490,6 +628,12 @@ export interface SubagentSessionReport {
   cacheWaste: CacheWaste;
   byAgent: AgentUsageRow[];
   counts: Record<ReconciledRunStatus, number>;
+  /** Present only when the caller passed mainEntries: the parent session's own stats (pi's getSessionStats semantics). */
+  main?: SessionUsageStats;
+  /** main.totals + totals, field by field (no dedupe — the no-double-count note lives where the merge is built). */
+  combined?: UsageTotals;
+  /** Merge by key of main.breakdown + breakdown (main first), sorted by cost desc. */
+  combinedBreakdown?: UsageBreakdownRow[];
 }
 
 // Guard against pathological trees (or a runaway convention match): the walk
@@ -565,6 +709,8 @@ export function buildSubagentSessionReport(
   fs: ReconcileFs,
   activeRunIds?: ReadonlySet<string>,
   readPerTokenFallback?: ReadPerTokenResolver,
+  /** The parent session's own entries (in-memory, host-validated); a report without them has no main/combined fields. */
+  mainEntries?: readonly SessionEntry[],
 ): SubagentSessionReport {
   // Registry runIds are raw; the comparison happens against directory
   // segments, so normalize both sides through the same transformation
@@ -627,7 +773,29 @@ export function buildSubagentSessionReport(
 
   reconcile(rootSessionFile, 1);
 
-  return mergeReport(runs);
+  const report = mergeReport(runs);
+  // Without mainEntries the report keeps exactly its previous shape — the
+  // derived fields below are purely additive, so existing consumers see no
+  // change.
+  if (mainEntries === undefined) return report;
+  // MAIN is not a new algorithm: buildSessionUsageStats is the ported
+  // pi getSessionStats already used for every child file — called once on
+  // the parent's own entries this time.
+  const main = buildSessionUsageStats(mainEntries);
+  // No double counting, by construction: nothing injects subagent usage
+  // into the parent's countable entries. The settled run's completion
+  // message is a `custom_message` (usageSourceOf ignores it) and the launch
+  // ack's toolResult carries no usage, so MAIN's totals and the subagent
+  // totals never overlap; a dedupe guard here would be dead code (YAGNI).
+  const combined = emptyUsageTotals();
+  addUsageToTotals(combined, main.totals);
+  addUsageToTotals(combined, report.totals);
+  return {
+    ...report,
+    main,
+    combined,
+    combinedBreakdown: mergeBreakdownRows([main.breakdown, report.breakdown]),
+  };
 }
 
 function parseOrEmpty(text: string | undefined): SessionEntry[] {
@@ -697,24 +865,33 @@ function makeRun(
   };
 }
 
+// Merges breakdown lists key by key: same key sums cost and tokens, unseen
+// keys are copied; the result sorts by cost desc (pi's row ordering). Shared
+// by the per-run merge and the main+subagent total merge.
+function mergeBreakdownRows(lists: readonly (readonly UsageBreakdownRow[])[]): UsageBreakdownRow[] {
+  const rowsByKey = new Map<string, UsageBreakdownRow>();
+  for (const rows of lists) {
+    for (const row of rows) {
+      const existing = rowsByKey.get(row.key);
+      if (existing) {
+        existing.cost += row.cost;
+        existing.tokens += row.tokens;
+      } else {
+        rowsByKey.set(row.key, { key: row.key, cost: row.cost, tokens: row.tokens });
+      }
+    }
+  }
+  return Array.from(rowsByKey.values()).sort((a, b) => b.cost - a.cost);
+}
+
 function mergeReport(runs: ReconciledRun[]): SubagentSessionReport {
   const totals = emptyUsageTotals();
-  const rowsByKey = new Map<string, UsageBreakdownRow>();
+  const breakdownRows: UsageBreakdownRow[] = [];
   let unattributedCost = 0;
   let unattributedTokens = 0;
   const cacheWaste: CacheWaste = { missedTokens: 0, missedCost: 0, missCount: 0 };
   const counts: Record<ReconciledRunStatus, number> = { completed: 0, failed: 0, cancelled: 0, errored: 0, running: 0, unknown: 0 };
   const byAgentRows = new Map<string, AgentUsageRow>();
-
-  const mergeBreakdownRow = (row: UsageBreakdownRow): void => {
-    const existing = rowsByKey.get(row.key);
-    if (existing) {
-      existing.cost += row.cost;
-      existing.tokens += row.tokens;
-    } else {
-      rowsByKey.set(row.key, { key: row.key, cost: row.cost, tokens: row.tokens });
-    }
-  };
 
   for (const run of runs) {
     counts[run.status] += 1;
@@ -727,7 +904,7 @@ function mergeReport(runs: ReconciledRun[]): SubagentSessionReport {
       totals.cost += effective.cost;
     }
     if (run.stats) {
-      for (const row of run.stats.breakdown) mergeBreakdownRow(row);
+      breakdownRows.push(...run.stats.breakdown);
       cacheWaste.missedTokens += run.stats.cacheWaste.missedTokens;
       cacheWaste.missedCost += run.stats.cacheWaste.missedCost;
       cacheWaste.missCount += run.stats.cacheWaste.missCount;
@@ -758,10 +935,142 @@ function mergeReport(runs: ReconciledRun[]): SubagentSessionReport {
   // show is omitted, so "unattributed" appears only when message-only runs
   // actually carry usage.
   if (unattributedCost > 0 || unattributedTokens > 0) {
-    mergeBreakdownRow({ key: "unattributed", cost: unattributedCost, tokens: unattributedTokens });
+    breakdownRows.push({ key: "unattributed", cost: unattributedCost, tokens: unattributedTokens });
   }
 
-  const breakdown = Array.from(rowsByKey.values()).sort((a, b) => b.cost - a.cost);
+  const breakdown = mergeBreakdownRows([breakdownRows]);
   const byAgent = Array.from(byAgentRows.values()).sort((a, b) => b.cost - a.cost);
   return { runs, totals, breakdown, cacheWaste, byAgent, counts };
+}
+
+// --- relaunch candidates (retry/continue) ---
+
+// One settled or orphaned run of THIS session that retry/continue could
+// re-dispatch. `usage` is display-only; it feeds neither the command's
+// behavior nor any accounting.
+export interface SubagentRelaunchCandidate {
+  /** Raw runId (the completion message's, or the ack's for enriched orphans); the dir segment for an un-enriched orphan. */
+  readonly runId: string;
+  /** The settled run's completion-message jobId, or the launch ack's jobId for orphans; absent when unrecoverable. */
+  readonly jobId?: string;
+  /** Resolved agent name, or "unknown" when nothing on disk names the agent. */
+  readonly agent: string;
+  /** The run's task: details.task.task, the ack's task, or the child's first user message. */
+  readonly task?: string;
+  /** Orphans display as "interrupted": crash, kill and disconnect are indistinguishable from disk. */
+  readonly status: "failed" | "errored" | "cancelled" | "interrupted";
+  /** The child's session.jsonl path — present means `continue` can branch from it. */
+  readonly sessionFile?: string;
+  /** Disk stats when the child file exists, else the completion message's aggregated usage. Display only. */
+  readonly usage?: AggregatedUsage;
+  /** The launch ack's recorded copy of the original call's invocation override, when one was recorded; relaunch wiring re-validates it. Absent (the key is omitted, never undefined-valued) for legacy acks. */
+  readonly params?: InvocationOverride;
+}
+
+// A child run's display usage: its own disk stats converted to the
+// AggregatedUsage shape when they exist on disk (disk-first, like
+// effectiveTotals), else the parent's message usage, else nothing.
+function displayUsageOf(run: ReconciledRun): AggregatedUsage | undefined {
+  if (run.stats) {
+    const totals = run.stats.totals;
+    return {
+      input: totals.input,
+      output: totals.output,
+      cacheRead: totals.cacheRead,
+      cacheWrite: totals.cacheWrite,
+      totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: totals.cost,
+      },
+    };
+  }
+  return run.messageUsage;
+}
+
+/**
+ * Depth-1 settled/orphaned runs of THIS session that `/subagents retry` and
+ * `/subagents continue` can act on, reconstructed from disk.
+ *
+ * Internally one `buildSubagentSessionReport` walk carries the run statuses
+ * (no second tree walk); a second read of the tiny parent file enriches
+ * orphans with the launch acks (jobId, agent, task — the crash lost the
+ * completion message, so `makeRun`'s orphan branch knows only "unknown").
+ * The consumed-orphan bookkeeping lives in the command wiring; orphans here
+ * are always fresh candidates.
+ */
+export function buildRelaunchCandidates(
+  sessionFile: string,
+  fs: ReconcileFs,
+  activeRunIds?: ReadonlySet<string>,
+): SubagentRelaunchCandidate[] {
+  // Registry runIds are raw; normalize through runIdDirName exactly like
+  // buildSubagentSessionReport does, so the "running" orphan (a live job in
+  // THIS session) is excluded and never offered for relaunch.
+  const report = buildSubagentSessionReport(sessionFile, fs, activeRunIds);
+
+  const parentEntries = parseOrEmpty(fs.readTextFile(sessionFile));
+  const ackBySegment = new Map<string, SubagentAckDetails>();
+  const jobIdBySegment = new Map<string, string>();
+  for (const entry of parentEntries) {
+    const ack = subagentAckEntryOf(entry);
+    if (ack?.runId) {
+      const segment = runIdDirName(ack.runId);
+      if (!ackBySegment.has(segment)) ackBySegment.set(segment, ack);
+    }
+    const result = subagentResultEntryOf(entry);
+    const runId = result?.details?.runId;
+    const jobId = result?.details?.jobId;
+    if (result && typeof runId === "string" && runId && typeof jobId === "string" && jobId) {
+      if (!jobIdBySegment.has(runIdDirName(runId))) jobIdBySegment.set(runIdDirName(runId), jobId);
+    }
+  }
+
+  return report.runs
+    .filter(
+      (run) =>
+        run.depth === 1 &&
+        (run.status === "failed" || run.status === "errored" || run.status === "cancelled" ||
+          // Orphaned with status "unknown": the dir is on disk, its completion
+          // message never reached the parent, and no live job owns the runId
+          // (the "running" orphan is a live job in this session, not a
+          // candidate). Deeper descendants and completed runs never qualify.
+          (run.orphaned && run.status === "unknown")),
+    )
+    .map((run): SubagentRelaunchCandidate => {
+      if (!run.orphaned) {
+        // The recorded params ride in by runId segment like everything else
+        // read from the ack; relaunch-launched runs have no ack, so the
+        // lookup can only miss, never mismatch.
+        const params = ackBySegment.get(runIdDirName(run.runId))?.params;
+        return {
+          runId: run.runId,
+          jobId: jobIdBySegment.get(runIdDirName(run.runId)),
+          agent: run.agent,
+          task: run.task,
+          status: run.status as "failed" | "errored" | "cancelled",
+          sessionFile: run.sessionFile,
+          usage: displayUsageOf(run),
+          // Key omitted, never undefined-valued: candidates are pinned by
+          // full deepEqual, and a present-but-undefined key would break the
+          // legacy (pre-params) fixtures.
+          ...(params !== undefined ? { params } : {}),
+        };
+      }
+      const segment = run.runId; // makeRun keys orphans by their dir segment.
+      const ack = ackBySegment.get(runIdDirName(segment));
+      return {
+        runId: ack?.runId ?? segment,
+        jobId: ack?.jobId,
+        agent: ack?.task?.agent ?? "unknown",
+        task: ack?.task?.task ?? run.task,
+        status: "interrupted",
+        sessionFile: run.sessionFile,
+        usage: displayUsageOf(run),
+        ...(ack?.params !== undefined ? { params: ack.params } : {}),
+      };
+    });
 }

@@ -3,6 +3,7 @@ import type { AgentToolResult, MessageRenderer, Theme, ToolRenderResultOptions }
 import { Text, MouseRegion, Box, type Component } from "@earendil-works/pi-tui";
 import type { JobTask } from "./background-jobs.ts";
 import type { SubagentJobMessageDetails } from "./job-messages.ts";
+import type { InvocationOverride } from "./overrides.ts";
 import { buildSubagentCallText, type SubagentCallArgs } from "./render-call.ts";
 import { buildSubagentResultText } from "./render-result.ts";
 
@@ -24,7 +25,10 @@ export type GetAgents = (cwd: string) => readonly AgentConfig[];
 // SubagentJobMessageDetails in src/job-messages.ts), delivered later via
 // pi.sendMessage(), not on this tool's own result.
 export type SubagentToolDetails =
-  | { jobId: string; runId: string; task: JobTask }
+  // `params` is the launch ack's recorded copy of the call's requested
+  // invocation override (additive; renderSubagentResult checks only
+  // "jobId" in result.details) — present only when something was overridden.
+  | { jobId: string; runId: string; task: JobTask; params?: InvocationOverride }
   | { error: string };
 
 // Builds a name→config lookup for the render-time parameter line.

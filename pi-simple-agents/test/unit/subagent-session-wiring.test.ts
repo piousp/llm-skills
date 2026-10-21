@@ -13,6 +13,9 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { childSessionDir, createSubagentSessionManager } from "../../src/subagent-session.ts";
+import { runSingleTask } from "../../src/task-runner.ts";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AgentConfig } from "../../src/agents.ts";
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pi-simple-agents-subagent-session-wiring-"));
@@ -217,5 +220,248 @@ test("createSubagentSessionManager + real SessionManager: forked context falls b
   } finally {
     fs.rmSync(callerCwd, { recursive: true, force: true });
     fs.rmSync(targetCwd, { recursive: true, force: true });
+  }
+});
+
+// --- runSingleTask + seedSessionFile (the /subagents continue run) ---
+
+// Same AgentConfig shape the other suites' makeAgent builds; local copy so
+// this file stays independent.
+function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    name: "scout",
+    description: "wiring seed scout",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: "/agents/scout.md",
+    systemPrompt: "",
+    ...overrides,
+  };
+}
+
+// A real persisted session (create + one assistant message to trigger the
+// flush, the same idiom the forked tests above use), for seeding from.
+function persistedSessionOf(cwd: string, sessionDir: string): SessionManager {
+  const manager = SessionManager.create(cwd, sessionDir);
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "from the interrupted attempt" }],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "test",
+    usage: {
+      input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  });
+  return manager;
+}
+
+function fakeRunSession(): { session: unknown; promptArgs: string[] } {
+  const promptArgs: string[] = [];
+  const session = {
+    getAllTools: () => [],
+    bindExtensions: async () => {},
+    extensionRunner: { hasHandlers: () => false, emit: async () => {} },
+    subscribe: () => () => {},
+    prompt: async (task: string) => { promptArgs.push(task); },
+    getLastAssistantText: () => "done",
+    getContextUsage: () => undefined,
+    dispose: () => {},
+    abort: () => {},
+  };
+  return { session, promptArgs };
+}
+
+const modelRuntimeStub = { isUsingSubscription: () => false } as unknown as ModelRuntime;
+
+// A seeded run lands its session INSIDE the new runId's conventional dir
+// (derived from the CALLER's session file, not the seed's), carrying the
+// seed's conversation over — the fork, not the seed, is the new session.
+test("runSingleTask: seedSessionFile forks the seed into the new runId dir and starts from its conversation", async () => {
+  const callerCwd = makeTmpDir();
+  const runCwd = makeTmpDir();
+  try {
+    // The caller's CURRENT session (persisted) and the seed (the interrupted
+    // run's own child file) are two different files — `continue` forks the
+    // SEED; the caller's file only names where the new run's dir nests.
+    const caller = persistedSessionOf(callerCwd, path.join(callerCwd, "sessions"));
+    const callerSessionFile = caller.getSessionFile()!;
+    const seedSessionDir = path.join(callerCwd, "old-run");
+    const seed = persistedSessionOf(callerCwd, seedSessionDir);
+    seed.appendCustomEntry("persisted-marker", { note: "hello from the seed" });
+    const seedFile = seed.getSessionFile()!;
+
+    let capturedSessionManager: unknown;
+    const { session, promptArgs } = fakeRunSession();
+    const createSession = async (options: Record<string, unknown>) => {
+      capturedSessionManager = options.sessionManager;
+      return { session: session as never };
+    };
+
+    const result = await runSingleTask(
+      { agent: "scout", task: "original task" },
+      makeAgent(),
+      undefined,
+      {
+        cwd: runCwd,
+        signal: undefined,
+        modelRuntime: modelRuntimeStub,
+        callerSessionFile,
+        runId: "continue-call-a-1",
+        mode: "tui" as const,
+        seedSessionFile: seedFile,
+        createSession: createSession as never,
+        homeDir: callerCwd,
+      },
+    );
+
+    assert.equal(result.status, "success");
+    assert.ok(capturedSessionManager instanceof SessionManager);
+    const manager = capturedSessionManager as SessionManager;
+
+    // The new file nests under the NEW runId's conventional child dir
+    // (derived from the CALLER's file, never the seed's), and the fork
+    // carries the seed's conversation over (marker entry included).
+    const newFile = manager.getSessionFile()!;
+    assert.notEqual(newFile, seedFile);
+    assert.match(newFile, /continue-call-a-1.*run-0/);
+    assert.equal(fs.existsSync(newFile), true);
+    const marker = manager.getEntries().find((e) => e.type === "custom" && e.customType === "persisted-marker");
+    assert.ok(marker, "the forked session must carry the seed's entries over");
+    assert.equal(promptArgs.at(-1), "original task");
+  } finally {
+    fs.rmSync(callerCwd, { recursive: true, force: true });
+    fs.rmSync(runCwd, { recursive: true, force: true });
+  }
+});
+
+// Dangling toolCall pairs in the seed are closed with one synthetic
+// toolResult each in the FORKED copy; the seed file on disk is never touched.
+test("runSingleTask: seeding appends one synthetic toolResult per dangling toolCall, only into the forked file", async () => {
+  const callerCwd = makeTmpDir();
+  const runCwd = makeTmpDir();
+  try {
+    const caller = persistedSessionOf(callerCwd, path.join(callerCwd, "sessions"));
+    const callerSessionFile = caller.getSessionFile()!;
+    caller.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "toolu_dangle", name: "read", arguments: {} }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "test",
+      usage: {
+        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+      timestamp: Date.now() + 1,
+    });
+    const seedFile = caller.getSessionFile()!;
+    const seedBefore = fs.readFileSync(seedFile, "utf8");
+
+    let capturedSessionManager: SessionManager | undefined;
+    const { session } = fakeRunSession();
+    const createSession = async (options: Record<string, unknown>) => {
+      capturedSessionManager = options.sessionManager as SessionManager;
+      return { session: session as never };
+    };
+
+    await runSingleTask(
+      { agent: "scout", task: "continue it" },
+      makeAgent(),
+      undefined,
+      {
+        cwd: runCwd,
+        signal: undefined,
+        modelRuntime: modelRuntimeStub,
+        callerSessionFile,
+        runId: "continue-call-b-1",
+        mode: "tui" as const,
+        seedSessionFile: seedFile,
+        createSession: createSession as never,
+        homeDir: callerCwd,
+      },
+    );
+
+    const newEntries = (capturedSessionManager as SessionManager).getEntries();
+    const synthetic = newEntries.filter((e) => e.type === "message" && (e.message as { role?: string }).role === "toolResult");
+    assert.equal(synthetic.length, 1);
+    const syntheticMessage = (synthetic[0] as { message: unknown }).message as {
+      role: string;
+      toolCallId: string;
+      toolName?: string;
+      content: Array<{ text?: string }>;
+    };
+    // toolName comes from the same assistant toolCall block that opened the
+    // dangling pair (danglingToolCalls attaches it; no second scan).
+    assert.equal(syntheticMessage.toolName, "read");
+    assert.equal(syntheticMessage.toolCallId, "toolu_dangle");
+    assert.equal(
+      syntheticMessage.content.some((block) => block.text?.includes("[interrupted: the previous attempt ended before this tool call returned a result]")),
+      true,
+    );
+
+    // The forked file on disk ends with the repair, and the seed file
+    // carries none of it.
+    const forkedText = fs.readFileSync(capturedSessionManager!.getSessionFile()!, "utf8");
+    assert.match(forkedText, /\[interrupted: the previous attempt ended before this tool call returned a result\]/);
+    assert.equal(fs.readFileSync(seedFile, "utf8"), seedBefore);
+    assert.doesNotMatch(seedBefore, /\[interrupted:/);
+  } finally {
+    fs.rmSync(callerCwd, { recursive: true, force: true });
+    fs.rmSync(runCwd, { recursive: true, force: true });
+  }
+});
+
+// An empty/invalid seed: forkFrom throws inside createSubagentSessionManager,
+// the run continues on a real in-memory session, and the fallback warning
+// flows out of runSingleTask's emitWarnings — naming the agent and the error.
+test("runSingleTask: an invalid seed file degrades to an in-memory session with a warning", async (t) => {
+  const callerCwd = makeTmpDir();
+  const runCwd = makeTmpDir();
+  const warnings: string[] = [];
+  t.mock.method(console, "warn", (...args: unknown[]) => { warnings.push(String(args[0])); });
+  try {
+    const caller = persistedSessionOf(callerCwd, path.join(callerCwd, "sessions"));
+    const callerSessionFile = caller.getSessionFile()!;
+    const invalidSeed = path.join(callerCwd, "corrupt.jsonl");
+    fs.writeFileSync(invalidSeed, "not valid json\n", "utf8");
+
+    let capturedSessionManager: SessionManager | undefined;
+    const { session } = fakeRunSession();
+    const createSession = async (options: Record<string, unknown>) => {
+      capturedSessionManager = options.sessionManager as SessionManager;
+      return { session: session as never };
+    };
+
+    const result = await runSingleTask(
+      { agent: "scout", task: "x" },
+      makeAgent(),
+      undefined,
+      {
+        cwd: runCwd,
+        signal: undefined,
+        modelRuntime: modelRuntimeStub,
+        callerSessionFile,
+        runId: "continue-call-c-1",
+        mode: "tui" as const,
+        seedSessionFile: invalidSeed,
+        createSession: createSession as never,
+        homeDir: callerCwd,
+      },
+    );
+
+    assert.equal(result.status, "success");
+    assert.ok(capturedSessionManager instanceof SessionManager);
+    assert.equal(capturedSessionManager!.isPersisted(), false, "expected the in-memory fallback");
+    assert.ok(warnings.some((w) => w.includes("scout") && w.includes("seed")));
+  } finally {
+    fs.rmSync(callerCwd, { recursive: true, force: true });
+    fs.rmSync(runCwd, { recursive: true, force: true });
   }
 });

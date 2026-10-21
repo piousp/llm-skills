@@ -121,7 +121,31 @@ export function createSubagentSessionManager<S>(
   cwd: string,
   childDir: string | undefined,
   factory: SessionManagerFactory<S>,
+  // When set (the retry/continue path, src/task-runner.ts), the new session
+  // is seeded from this file — an interrupted run's own child session —
+  // REGARDLESS of defaultContext: continuing means branching from the old
+  // conversation, which is exactly what forkFrom(source) produces. Seeding
+  // replaces the initial content, so the caller's own session file is not
+  // forked and the childDir argument still names where the new session
+  // persists.
+  seedFile?: string,
 ): SubagentSessionResult<S> {
+  if (seedFile) {
+    if (!childDir) {
+      return fallbackToInMemory(cwd, factory, `${agent.name}: caller session is not persisted — falling back to fresh`);
+    }
+    try {
+      const manager = factory.forkFrom(seedFile, cwd, childDir);
+      return { manager, warnings: [] };
+    } catch (error) {
+      return fallbackToInMemory(
+        cwd,
+        factory,
+        `${agent.name}: failed to seed the new session from the interrupted run's session — falling back to fresh: ${toErrorMessage(error)}`,
+      );
+    }
+  }
+
   if (agent.defaultContext === "forked") {
     if (!callerSessionFile) {
       return fallbackToInMemory(cwd, factory, `${agent.name}: caller session is not persisted — falling back to fresh`);

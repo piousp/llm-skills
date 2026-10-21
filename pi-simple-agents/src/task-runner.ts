@@ -6,6 +6,7 @@ import { applyInvocationOverride } from "./agents.ts";
 import { runAgentViaSdk, type AgentRunResult, type RunAgentViaSdkOptions } from "./run.ts";
 import type { ProgressTracker } from "./progress.ts";
 import { buildLoaderOptions } from "./loader-config.ts";
+import { danglingToolCalls } from "./session-reconcile.ts";
 import { childSessionDir, createSubagentSessionManager } from "./subagent-session.ts";
 import { invocationOverrideOf } from "./validate.ts";
 import type { SubagentParams as ValidatedSubagentParams } from "./validate.ts";
@@ -48,6 +49,39 @@ export interface RunTaskOptions {
       derives it from the effective agents dir's layout; direct callers (tests)
       pass a tmpdir. Defaults to the real os.homedir(). */
   homeDir?: string;
+  /** The interrupted run's own child session — set ONLY by the /subagents
+      continue wiring. The new session is seeded from it (branching from the
+      old conversation, overriding defaultContext), and the forked copy gets
+      synthetic toolResults for the tool calls the interrupt left dangling.
+      The original file on disk is read-only for this whole path. */
+  seedSessionFile?: string;
+}
+
+// Each dangling pair is answered with one synthetic toolResult named by the
+// assistant toolCall block that opened it (danglingToolCalls reads the name
+// from that same block in one pass) — a synthetic result with a guessed name
+// would corrupt the conversation the seed carries, and a malformed opening
+// block still yields a closable pair named "unknown".
+//
+// Structural entry shape the dangling-repair pass works over — the SDK's
+// getEntries() union is not applicable here without importing host types.
+type TaskRunnerSessionEntries = Parameters<typeof danglingToolCalls>[0];
+
+// Closes the dangling toolCall pairs a seeded session carries over: the
+// interrupted attempt may have been killed between launching a tool call and
+// appending its result. Appended to the FORKED copy only; the source file on
+// disk is never modified.
+function repairDanglingToolCalls(manager: { getEntries(): unknown[]; appendMessage(message: unknown): string }): void {
+  for (const { toolCallId, toolName } of danglingToolCalls(manager.getEntries() as TaskRunnerSessionEntries)) {
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId,
+      toolName,
+      content: [{ type: "text", text: "[interrupted: the previous attempt ended before this tool call returned a result]" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+  }
 }
 
 // Runs one task end-to-end: resource loader creation/reload, session manager
@@ -65,7 +99,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: RunTaskOptions,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent, onSessionReady, onSessionGone } = options;
+  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, seedSessionFile, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent, onSessionReady, onSessionGone } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -84,8 +118,15 @@ export async function runSingleTask(
       cwd,
       childSessionDir(callerSessionFile, runId, RUN_INDEX),
       SESSION_MANAGER_FACTORY,
+      seedSessionFile,
     );
     emitWarnings(warnings);
+
+    // Seeding forks an interrupted run's file verbatim, which may carry open
+    // toolCall pairs; close them before the first prompt, or the model sees
+    // calls it asked for and never received. The forked copy is the only
+    // thing repaired — the old file on disk stays untouched.
+    if (seedSessionFile) repairDanglingToolCalls(manager);
 
     const result = await runAgentViaSdk(
       effectiveAgent,
