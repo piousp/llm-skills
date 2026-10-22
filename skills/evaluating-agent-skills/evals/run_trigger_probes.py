@@ -3,8 +3,8 @@
 Layer 2 (trigger-only) probes for evaluating-agent-skills itself.
 
 Scope, deliberately narrow: this skill has a real "when" clause plus explicit
-negative cases in its description (unlike name-only-invoked skills such as
-iterative-design), so should_trigger is the single highest-value, cheapest
+negative cases in its description (unlike name-only-invoked skills), so
+should_trigger is the single highest-value, cheapest
 axis to check here (SKILL.md step 1). This does NOT grade the *quality* of
 an eval suite the skill would build (that's the "Full L2" the skill's own
 README explicitly defers, see below) -- it only checks whether the skill's

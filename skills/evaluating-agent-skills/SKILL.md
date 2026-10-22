@@ -2,12 +2,11 @@
 name: evaluating-agent-skills
 description: >
   Use when building an eval suite for an existing agent Skill: defining success
-  criteria, building a prompt set, and running layered checks (offline code tests,
-  live CLI trajectory probes, LLM-as-judge) before shipping or after changing a
-  skill. This is the expansion of writing-agent-skills' description note on
-  "evaluating a skill before shipping it". Do NOT use for authoring a skill's
-  SKILL.md itself (see writing-agent-skills), and do NOT use for general
-  product/application evals unrelated to agent Skills.
+  criteria, building a prompt set, and running layered checks (offline code
+  tests, live CLI trajectory probes, LLM-as-judge) before shipping or after
+  changing a skill. Do NOT use for authoring a skill's SKILL.md itself (see
+  writing-agent-skills), and do NOT use for general product/application evals
+  unrelated to agent Skills.
 ---
 
 # Evaluating Agent Skills
@@ -19,7 +18,7 @@ This is the expansion of `writing-agent-skills`'s "evaluating a skill before
 shipping it" note (frontmatter description); read that skill first if you
 haven't authored the target skill yet.
 
-Read `qa-adversary/evals/` before adapting the templates below: its
+Read `../qa-adversary/evals/` before adapting the templates below: its
 `README.md` applies this same 4-layer method to a real review skill, including
 a documented N=1 limitation, and most decisions you'll face were already made
 there.
@@ -115,7 +114,7 @@ need to verify.
   and real minutes.
 - **No hardcoded personal paths.** Anything machine-specific (a sibling
   extension's path, a subagent config) goes through an env var with a clear
-  skip-message when unset: see `qa-adversary/evals/run_layer2b_pipeline.py`'s
+  skip-message when unset: see `../qa-adversary/evals/run_layer2b_pipeline.py`'s
   `PI_SUBAGENT_EXTENSION_PATH` handling for the pattern.
 - **If something fails, fix the description first** (Schmid: most failures are
   trigger failures, not instruction failures), but only applies to
@@ -145,12 +144,12 @@ that runs tasks, records transcripts, grades, aggregates).
   pattern and how to keep checks composable across prompts.
 - **L2b has no template, by design**: real subagent/tool wiring is too
   skill-specific to templatize. If you need it, copy and adapt
-  `qa-adversary/evals/run_layer2b_pipeline.py` directly.
+  `../qa-adversary/evals/run_layer2b_pipeline.py` directly.
 
 Copy the templates you need into `<target-skill>/evals/`, rename, and fill in
 the skill-specific pieces (`CHECK_REGISTRY` functions, prompt list, success
 criteria from step 2). Write a `README.md` in that `evals/` dir documenting
-which layers exist and why, following `qa-adversary/evals/README.md`'s
+which layers exist and why, following `../qa-adversary/evals/README.md`'s
 structure.
 
 ## Sources
@@ -160,5 +159,5 @@ structure.
 - Anthropic, "Demystifying evals for AI agents",
   https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
   (2026-01-09).
-- Worked example: `qa-adversary/evals/` (this repo): the 4-layer method
-  applied to a real review skill.
+- Worked example: `../qa-adversary/evals/`: the 4-layer method applied to a
+  real review skill in a sibling skill directory.

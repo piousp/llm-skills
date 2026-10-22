@@ -36,7 +36,7 @@ def run_pi(cwd: Path, prompt: str, timeout: int = 240) -> tuple[list[dict], str]
     (tool_calls, final_response_text). tool_calls is a list of
     {"name": str, "arguments": dict}. Do not add extensions here unless the
     prompt case specifically needs one (see the L2b pattern in
-    iterative-design/evals/run_layer2b_pipeline.py for that case)."""
+    qa-adversary/evals/run_layer2b_pipeline.py for that case)."""
     proc = subprocess.run(
         ["pi", "-ne", "--skill", str(SKILL_DIR), "--mode", "json", "-p", prompt],
         cwd=str(cwd), capture_output=True, text=True, timeout=timeout,

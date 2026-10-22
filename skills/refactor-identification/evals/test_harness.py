@@ -4,7 +4,8 @@ Layer 1 (offline, free) regression guard for this eval suite's own harness —
 not for a skill script (refactor-identification ships no scripts/*.py, it's
 pure markdown, so there is nothing else to unit-test here). Confirms every
 script imports cleanly, both prompt sets have the required schema, and both
-live-gated scripts respect the PI_LIVE_EVAL skip convention (SKILL.md step 5)
+live-gated scripts respect the PI_LIVE_EVAL skip convention (evaluating-agent-skills
+SKILL.md step 5)
 without needing to actually invoke `pi`.
 
 Run directly, no env var gate:

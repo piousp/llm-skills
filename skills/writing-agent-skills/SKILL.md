@@ -3,8 +3,9 @@ name: writing-agent-skills
 description: >
   Use when authoring, reviewing, or refactoring an agent Skill: writing SKILL.md
   frontmatter/body, structuring scripts/references/assets folders, tightening a
-  trigger description, or evaluating a skill before shipping it. Do NOT use for
-  general coding, prose writing, or non-skill documentation.
+  trigger description, or deciding whether to keep, fix, or retire a skill.
+  [DO NOT] trigger for general coding, prose writing, or non-skill
+  documentation; for building a skill's eval suite use evaluating-agent-skills.
 ---
 
 # Writing Agent Skills
@@ -17,13 +18,14 @@ When writing the skill, one rule overrides all others:
 
 ## 1. Basic skill structure
 
-A skill is a folder: `SKILL.md` (required) + optional `scripts/`, `references/`, `assets/`, `stages/`, `evals/`.
+A skill is a folder: `SKILL.md` (required) + optional `scripts/`, `references/`, `assets/`, `evals/`.
 Three loading layers:
 - Always loaded: `name` + `description` frontmatter.
 - Loaded on trigger: the `SKILL.md` body.
-- Loaded on demand: files under `scripts/`, `references/`, `assets/`, `stages/`.
+- Loaded on demand: files under `scripts/`, `references/`, `assets/`.
 - Never loaded during normal use: `evals/` holds the skill's own evaluation/test suite.
-- [ALWAYS] use relative paths for referencing these files (ie. "read `stages/first.md`")
+- [ALWAYS] use relative paths for referencing these files (ie. "read `references/first.md`")
+- To build an eval suite for a skill, load and follow `evaluating-agent-skills` (this skill defines the writing and structure standards only).
 
 ## 2. Description
 
@@ -49,10 +51,8 @@ body; the description then only needs to be accurate, not optimized for triggeri
   - Enforcement keys: [ALWAYS], [MUST], [DO], [FOLLOW]
   - Negative rules: [NEVER], [DO NOT]
   - Combine `**` and `[]` for an even stronger petition; other verbs are allowed too.
-- Add variance to both sentence length and structure. Generated prose has low
-  **burstiness** (uniform sentence rhythm) and low **perplexity** (too-predictable
-  word choice); detectors combine both signals with vocabulary markers, so surface
-  synonym-swapping does not fool them.
+- Add variance to both sentence length and structure; uniform rhythm reads as
+  generated text.
 - [NEVER] use AI-tell vocabulary:
   - EN: delve, tapestry, realm, landscape, journey, nuanced, multifaceted,
     transformative, pivotal, robust, seamless, invaluable, moreover, additionally,
@@ -73,7 +73,7 @@ Every line carries weight: it costs tokens, affects model behavior, and has a ma
 - Body of `SKILL.md` under ~500 lines.
 - Split multi-topic skills into separate `references/*.md` files the agent loads only when needed.
 - If a reference file exceeds 500 lines, put a table of contents with line hints at the top.
-- If the skill is multi-staged, separate the stages in files `stages/*.md` and reference them from the main SKILL.md with relative path.
+- If the skill is multi-staged, put each stage in its own file under a `stages/` folder (a convention of some skills, not part of the standard layout) and reference them from the main SKILL.md with relative paths.
 
 ## 5. Set the right level of freedom
 
@@ -89,9 +89,16 @@ skill problem: **write a script** and have the skill call it. Scripts live in `s
 
 ## 6. Naming the skill
 
-- Propose 3 alternatives to the user, [NEVER] pick one yourself (but give your recommendation)
+- Propose 3 alternatives to the user; [MUST] present your recommendation, [NEVER] pick one or apply the name without the user's choice
 - Name in frontmatter and directory [MUST] be equal (eg. `my-test-skill/SKILL.md` → "name: my-test-skill")
 - Use kebab-case: lowercase letters and hyphens
+
+## 7. Keeping vs retiring a skill
+
+Retire a skill when its `description` no longer fits the useful routing window, or
+its capability has been covered by another skill or by the base model. Retirement
+means deleting the skill's directory and cleaning up dangling cross-references in
+other skills. [NEVER] leave a stub folder with no real description behind.
 
 ## Source
 

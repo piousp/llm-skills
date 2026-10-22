@@ -2,16 +2,14 @@
 name: pablo-code-simplify
 description: >
   Produces a behavior-preserving simplification plan for existing code (a diff/branch, a
-  single file, or one function/symbol): runs two read-only `analyst` subagents in parallel,
-  one on `refactor-identification` and one on `pablo-code-philosophy`'s readability axis, then
-  filters every candidate through a mechanical-change gate and emits an ordered plan the
-  coordinator or another actor implements. Never writes or edits code itself. Trigger on
-  "simplify this", "clean this up", "this is over-engineered", "hazlo más simple", "limpia
-  este código", "reduce complexity", or any request to plan a readability refactor without
-  changing behavior. [DO NOT] trigger for bug-hunting (use `qa-adversary`), a pre-merge quality
-  gate on a diff (use `code-review-checklist` or `pablo-code-review`), planning new behavior
-  (use `pablo-code-planning`), or identifying structural candidates without a mechanical filter
-  (use `refactor-identification` directly).
+  single file, or one function/symbol): every candidate passes a mechanical-change gate and
+  the output is an ordered plan an actor implements. Never writes or edits code itself.
+  Trigger on "simplify this", "clean this up", "this is over-engineered", "hazlo más simple",
+  "limpia este código", "reduce complexity", or any request to plan a readability refactor
+  without changing behavior. [DO NOT] trigger for bug-hunting (use `qa-adversary`), a pre-merge
+  quality gate on a diff (use `code-review-checklist` or `pablo-code-review`), planning new
+  behavior (use `pablo-code-planning`), or identifying structural candidates without a
+  mechanical filter (use `refactor-identification` directly).
 ---
 
 # pablo-code-simplify
@@ -39,23 +37,24 @@ by step.
 
 2. **Normalize the scope into a supplied-diff contract.** `refactor-identification`'s Scope
    law only accepts a diff, a commit range, or diff content; anything else it treats as
-   out-of-scope and filters via N4. When the scope is a file or a function, don't fight this:
-   hand the actor the verbatim content and state explicitly in its task prompt: "Treat this
-   supplied content as the diff in full; every line is in-scope for anchoring. Do not derive a
-   different scope, do not run git, do not narrow to a hunk." The 1-hop context rule still
+   out-of-scope and filters via the out-of-scope gate (N4). When the scope is a file or a
+   function, don't fight this: hand the actor the verbatim content and state explicitly in
+   its task prompt: "Treat this supplied content as the diff in full; every line is in-scope
+   for anchoring. Do not derive a different scope, do not run git, do not narrow to a hunk."
+   The 1-hop context rule still
    applies on top of that content. Under this framing N4 never fires, by design: every line is
    in-scope, so `refactor-identification` can no longer tell branch-added code from
    pre-existing code. Its repo-wide occurrence counting is unaffected: it never depended on
-   that distinction. N10 (test/spec/fixture evidence) still fires normally.
+   that distinction. The test-evidence filter (N10) still fires normally.
 
 3. **Dispatch two `analyst` subagents in parallel** (never sequential, never merged into one
    call):
 
-   - `agent: "analyst"`, `skills: ["refactor-identification"]`, `timeoutMs: 1200000`: task:
+   - `agent: "analyst"`, `skills: ["refactor-identification"]`: task:
      the normalized scope (step 2's framing) plus "Apply the refactor-identification lens to
      this content. Report structural candidates (A1-A4) only, each with file:line evidence. Do
      not propose fixes."
-   - `agent: "analyst"`, `skills: ["pablo-code-philosophy"]`, `timeoutMs: 1200000`: task: the
+   - `agent: "analyst"`, `skills: ["pablo-code-philosophy"]`: task: the
      same scope content plus this explicit axis list, since the philosophy skill is written
      for someone writing code, not reviewing it: "Report readability/simplicity problems only,
      each with file:line evidence, read-only, no fixes: cyclomatic complexity and nesting depth
@@ -68,8 +67,8 @@ by step.
      not report a finding whose only evidence lives in test/spec/fixture code."
 
    Both dispatches pass the identical scope content. Leave `tools` at the analyst default
-   (read-only). [NEVER] ask either subagent for a fix, correction, or implementation: that step
-   happens later, in the coordinator.
+   (read-only) and `timeoutMs` at the subagent defaults. [NEVER] ask either subagent for a fix,
+   correction, or implementation: that step happens later, in the coordinator.
 
 4. **Merge, then gate every candidate through the mechanical-change table below.** Same-root
    candidates raised by both actors collapse into one line, tagged `Lens: both`. When scope was
@@ -107,7 +106,8 @@ behavior of its own).
 Operation-specific preconditions (if one fails, the candidate moves to "Not mechanical"):
 - **Remove dead code**: only when unreachability is proven inside the 1-hop radius. If it
   depends on reflection, DI, serialization, config, or another service's behavior, it is not
-  provably dead here; move it to "Not mechanical", cross-ref `refactor-identification` N9.
+  provably dead here; move it to "Not mechanical", cross-ref `refactor-identification`'s
+  unresolved-routing escape (N9).
 - **Inline a variable / Replace Temp with Query**: only when the inlined expression is pure
   and cheap to (re-)evaluate.
 - **Slide Statements / Split Loop**: only when reordering crosses no data dependency and
@@ -117,7 +117,7 @@ Operation-specific preconditions (if one fails, the candidate moves to "Not mech
 - **Consolidate Conditional Expression**: only when it preserves the original short-circuit
   order.
 - **Collapse duplicated branches / fold a duplicated effect into one method**: only when
-  `refactor-identification`'s N3 doesn't apply (folding a mutation, a log, or a metric into
+  `refactor-identification`'s readability-regression gate (N3) doesn't apply (folding a mutation, a log, or a metric into
   one method can make the code harder to read than the duplication it replaces, even when it
   preserves behavior).
 
@@ -154,7 +154,8 @@ cross a signature: report them, never plan them.
    - Behavior-preservation argument: <one line: why this specific edit cannot change
      observable behavior>
    - Verify: <existing test that pins this behavior, or "write a characterization test first"
-     if none exists, cross-ref `pablo-tdd`>
+     if none exists: a characterization test records and asserts the behavior the code already
+     has, so the refactor can verify it unchanged; write it at a seam per `pablo-tdd`>
 
 2. ...
 
@@ -168,8 +169,25 @@ cross a signature: report them, never plan them.
 ```
 
 Emit this template verbatim. If a step has no existing test pinning its behavior, its Verify
-line names the characterization test to write first, never skips verification. [NEVER] add an
-implementation, a diff, or applied code to this output: it is a plan.
+line names the characterization test to write first (records and asserts the behavior the code
+already has, so the refactor can verify it unchanged), placed at a seam confirmed with the
+user per `pablo-tdd`; it never skips verification. [NEVER] add an implementation, a diff, or
+applied code to this output: it is a plan.
+
+### Mini example
+
+Merge input: three candidates from `order.py`: (a) dead branch at line 90, (b) private helper
+`normalize(row)` at line 41 with both callers inside `order.py`, (c) proposed Option type on
+`findOrder(id)` at line 12.
+
+1. `order.py:90`: remove the dead branch. Tier: mechanical.
+   - Behavior-preservation argument: the guard is constant false inside the 1-hop radius, so
+     no executed path changes.
+2. `order.py:41`: inline `normalize` into its two callers. Tier: internal-signature.
+   - Behavior-preservation argument: the helper is pure and both callers already hold its input.
+   - Call sites: grep `normalize(` in `order.py`, 2 found.
+- Not mechanical: Option type on `findOrder` at `order.py:12`, disqualified: changes a public
+  signature.
 
 ## Rules
 
@@ -197,5 +215,6 @@ Load methodology from its owner by name; never duplicate it.
 - `pablo-code-philosophy`: YAGNI to KISS to DRY to SOLID pipeline and conflict precedence.
 - `pablo-code-planning`: the Analyze, Decide, Specify shape this plan adapts for existing code
   instead of new behavior.
-- `pablo-tdd`: what a characterization test is and how to write one at a seam.
+- `pablo-tdd`: seam mechanics: tests observe behavior at public boundaries only, and the seam
+  is confirmed with the user before any test is written.
 - `pablo-code-review`: the diff-resolution and parallel-dispatch pattern this skill follows.

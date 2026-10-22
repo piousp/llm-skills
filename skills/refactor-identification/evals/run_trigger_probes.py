@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Layer 2 (trigger-only) probes for refactor-identification.
+Layer 2a (trigger-only) probes for refactor-identification.
 
 Classification (evaluating-agent-skills SKILL.md step 1): this skill has a
 real "when" clause plus explicit negative cases in its description (TRIGGER:

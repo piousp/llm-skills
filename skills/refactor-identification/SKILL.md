@@ -2,17 +2,14 @@
 name: refactor-identification
 description: >
   Evidence-based detection of structural refactor candidates within the current branch's diff
-  (Java, Scala, JavaScript, TypeScript). Covers: (A1) missing/misplaced abstractions (SRP/OCP,
-  duplication, inheritance for reuse, mixed-phase functions), (A2) weak encapsulation (mutable
-  state, CQS violations, ambient dependencies, delegate chains), (A3) poor data types
-  (primitives, clumps, null-checks instead of Option/Either/ADT, redundant derived fields,
-  aliased mutable values), (A4) flags/switch where a sealed ADT fits. Findings need
-  file:line evidence and pass a When-NOT-to-report (YAGNI/KISS) gate. Identifies direction only,
-  defers how to `pablo-code-philosophy`'s `references/gof/` and `references/fp/` mechanics.
-  TRIGGER: deciding if a refactor
-  belongs in this branch, "refactor candidates" requests, or as the deep-dive behind a broader
-  code-review pass. SKIP: renames, trivial extraction, executing fixes, whole-repo scans, merge
-  gating, and judging whether to apply or how risky a specific reviewer suggestion is.
+  (Java, Scala, JavaScript, TypeScript). Four categories: (A1) missing or misplaced
+  abstractions, (A2) weak encapsulation, (A3) poor data types, (A4) flag/enum-modeled
+  variants. Findings need file:line evidence and pass a When-NOT-to-report (YAGNI/KISS) gate.
+  Identifies direction only, defers how to `pablo-code-philosophy`'s `references/gof/` and
+  `references/fp/` mechanics. TRIGGER: deciding if a refactor belongs in this branch,
+  "refactor candidates" requests, or as the deep-dive behind a broader code-review pass.
+  SKIP: renames, trivial extraction, executing fixes, whole-repo scans, merge gating, and
+  judging whether to apply or how risky a specific reviewer suggestion is.
 ---
 
 # Refactor Identification: Branch-Scoped Structural Candidates
@@ -51,7 +48,7 @@ This skill never scans a whole repository. It only looks at what the current bra
 5. **Evidence ceiling rule**: code/config read within the 1-hop radius, and tests that exercise
    it, are what settle a candidate. Documentation, wikis, comments, and domain knowledge may
    only motivate a hypothesis; [NEVER] let them decide a gate row or a finding by themselves.
-   If adjudicating a candidate needs a fact beyond the 1-hop radius or outside this repo; including a fact only documentation claims; do not infer or derive it: name the exact
+   If adjudicating a candidate needs a fact beyond the 1-hop radius or outside this repo (including a fact only documentation claims), do not infer or derive it: name the exact
    lookup that would resolve it (repo, symbol/path, what to check) and mark the candidate
    N9/Unresolved. The radius never widens; the verdict is suspended.
 
@@ -76,7 +73,7 @@ variation, or it mixes separable phases in one body.
 | Business-rule duplication | Same domain decision (same predicate over the same domain fields) encoded in multiple places; literals/field names match even if syntax differs. | All `file:line` sites + the rule in one sentence | ≥3 occurrences (3-strikes), ≥1 touched by the branch |
 | SRP violation in a touched class | Diff adds methods/fields serving a second axis of change: new imports/collaborators from an unrelated domain; methods that share no fields with the rest of the class. | Class `file:line` + list of the ≥2 axes of change + the added members' lines | ≥2 distinct reasons-to-change, ≥1 introduced/extended by the branch |
 | OCP violation (dispatch modified, not extended) | The branch ADDS a case/branch to an existing `switch`/`if-else` chain selecting behavior, instead of extending via a new implementation. | Chain `file:line`, the added branch's hunk lines, chain length after change | Chain length ≥3 after the change |
-| Misplaced logic (feature envy) | Touched method calls ≥3 getters/fields of one foreign type and ≤1 of its own class; the computation belongs on the foreign type. | Method `file:line` + count "N foreign accessor calls vs M own" | ≥3 foreign accessor calls (calibrable) |
+| Misplaced logic (feature envy) | Touched method calls ≥3 getters/fields of one foreign type and ≤1 of its own class; the computation belongs on the foreign type. | Method `file:line` + count "N foreign accessor calls vs M own" | ≥3 foreign accessor calls (calibratable) |
 | Inheritance used for reuse, not variation§ | A subclass shares fields/methods of its parent with no behavioral variation: it overrides a method only to leave it empty/pass-through, or never overrides anything: composition would carry the same state without the "is-a" claim. Does not count: a subclass required by a framework/language (`extends Exception`, a framework base class), or a sealed hierarchy (that's A4). | Subclass `file:line` + the parent member it reuses/leaves empty | 1 occurrence, ≥1 touched by the branch |
 | Mixed-phase function (no Split Phase) | A touched method does two genuinely separable jobs end to end in one body (e.g. parse/validate raw input, then compute a business result from it), with no named structure between the phases; phase-1 locals feed phase-2 logic across a long body. | Method `file:line` + the two phase line-ranges, named in one sentence each | ≥2 independently nameable phases |
 
@@ -112,7 +109,7 @@ mutable value is aliased where it should be copied.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
-| Primitive obsession | `String`/`int`/`long`/`double` carrying domain meaning (id, ISO code, currency, email, status) crossing method signatures; or the same primitive format-validated in multiple places. | Each signature `file:line` + the domain concept name | Crosses ≥3 signatures in scope, OR validated in ≥2 places (calibrable) |
+| Primitive obsession | `String`/`int`/`long`/`double` carrying domain meaning (id, ISO code, currency, email, status) crossing method signatures; or the same primitive format-validated in multiple places. | Each signature `file:line` + the domain concept name | Crosses ≥3 signatures in scope, OR validated in ≥2 places (calibratable) |
 | Stringly-typed state | Field compared against string literals to branch (`"Active".equals(status)` / `status == "Active"`). | Each comparison `file:line` + the literal set observed | ≥2 distinct literal comparisons on the same field |
 | null as domain absence | Java: method returns `null` for an expected "not found"/"missing" outcome; callers null-check. Scala: any `null`, `Option.get`, `.getOrElse(null)`. JS/TS: return of null/undefined for an expected "not found", callers guarding with ?./??/!x; TS: also optional ? members and non-null assertions | Producer `file:line` + each null-checking caller `file:line` | Java: ≥2 null-checks on the same value; Scala: 1; JS/TS: ≥2 guards, or 1 for a ! assertion |
 | Exceptions as control flow | `throw` for an expected domain outcome (validation failed, not found) with a caller that catches to branch on it. | `throw` `file:line` + catching caller `file:line` | 1 (throw+catch pair present) |

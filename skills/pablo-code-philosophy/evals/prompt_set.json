@@ -12,7 +12,7 @@
   {
     "id": "trigger_gof_strategy_decision",
     "prompt": "Do I need to apply a Strategy pattern here, or is it premature for the case I have?",
-    "expected_checks": ["mentions_keywords:yagni|premature|kiss|pattern"]
+    "expected_checks": ["mentions_keywords:\byagni\b|you ain't gonna need it"]
   },
   {
     "id": "trigger_review_diff",
@@ -42,7 +42,7 @@
   {
     "id": "core_precedence_kiss_dry_solid",
     "prompt": "I found an elegant abstraction with interfaces that eliminates all the duplication, but it makes the code much harder to read. Should I apply it anyway?",
-    "expected_checks": ["mentions_keywords:kiss|dry|solid|precedence|simpl"]
+    "expected_checks": ["mentions_keywords:\bprecedence\b|takes precedence|conflict[ -]matrix|conflict resolution|kiss\s*>\s*dry"]
   },
   {
     "id": "core_conflict_matrix_resolution",

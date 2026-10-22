@@ -52,7 +52,7 @@ descriptions with deferred validation, instead of continuing with name-only.
     repo with a committed baseline and an uncommitted change.
 - **L3 (LLM-as-judge)** - still explicitly deferred, YAGNI. Checks stay
   structural/keyword-based (an edit/write tool call's target path, or a
-  simple substring match on the response text) - no judgment calls to
+  deterministic regex match on the response text) - no judgment calls to
   outsource to a second model.
 
 ## Prompt set composition (10 cases)
@@ -78,8 +78,14 @@ There are no `should_trigger: false` / negative-control cases: the harness
 measures behavior with the load forced, and trigger validation is deferred
 per OQ2.
 
+> **Note - checks tightened (2026-10-22):** the `mentions_keywords` criterion
+> changed from loose substring any-of to regex any-of, and two probes now
+> demand real evidence of pipeline application (YAGNI by name; an explicit
+> precedence/conflict-matrix reference). Prior pass counts involving these
+> checks are **not comparable** with post-tightening results.
+
 All 10 prompts are written in English. They were originally Spanish while
-`mentions_keywords` matches English substrings only (`yagni`, `premature`,
+`mentions_keywords` matched English substrings only (`yagni`, `premature`,
 `reason`, `change`, etc.); most checks passed anyway because the `|`-joined
 keyword lists include language-neutral acronyms (`yagni|kiss|dry|solid`), which
 masked the mismatch rather than testing it. Prompts were translated to English
@@ -91,13 +97,28 @@ so the check actually measures what it claims to.
 the skill's load forced - none of them test discovery):
 
 - `mentions_keywords:<kw1>|<kw2>|...` - the response names at least one
-  relevant principle/edge-case keyword (e.g. `yagni|kiss|dry|solid`,
+  relevant principle/edge-case term (e.g. `yagni|kiss|dry|solid`,
   `pipeline`, `srp`, `premature`) instead of jumping straight to
-  code/approval with no stated rationale. Simple substring match, no
-  LLM-as-judge.
+  code/approval with no stated rationale. Each term is a
+  case-insensitive regex (`re.search`, any-of) - deterministic
+  transcript matching, no LLM-as-judge.
+  **Checks tightened 2026-10-22** (no criterion change for the other
+  probes, whose terms are plain words): `trigger_gof_strategy_decision`
+  now requires the YAGNI principle by name
+  (`\byagni\b|you ain't gonna need it` - echoing the prompt's generic
+  "pattern" no longer passes), and `core_precedence_kiss_dry_solid` now
+  requires an explicit precedence/conflict-matrix reference
+  (`\bprecedence\b|takes precedence|conflict matrix|conflict
+  resolution|kiss > dry` - a generic "simpl..." echo of "simple" no
+  longer passes).
 - `no_unrelated_edits[:<file1>,<file2>,...]` - fails if any `edit`/`write`
   tool call targets a file outside the ones named (default:
-  `messy_module.py`) - the skill's "Surgical Changes" rule.
+  `messy_module.py`) - the skill's "Surgical Changes" rule. **Fixed
+  2026-10-22**: paths are compared exactly after normalization (as
+  written, relative to the trial's workdir, or resolved against it),
+  replacing `path.endswith(file)` which had a false positive with a
+  same-basename homonym in another path (e.g.
+  `backup/messy_module.py`).
 - `no_file_edits` - for the pure-review prompt: no `edit`/`write` tool call
   should occur at all.
 - `sibling_loaded:<name>` - early `read` of a named sibling skill's

@@ -142,6 +142,7 @@ For the changed path, report one of:
 - PASS: no confirmed defect; state residual risk and any NOT COVERED paths explicitly.
 ```
 
+- Write the report in the language of the conversation.
 - Report standard: before writing findings, read `references/findings-examples.md` (well-formed
   findings, one or two per lens, doubt vs finding) and `references/bad-findings-examples.md`
   (bad findings and how to report them right).

@@ -5,7 +5,8 @@ refactor-identification. Forced loading via `--skill <dir>` — this layer
 checks HOW the skill behaves once active, not WHETHER it triggers (that's
 run_trigger_probes.py).
 
-Success criteria checked (SKILL.md step 2, defined before writing the checks):
+Success criteria checked (evaluating-agent-skills SKILL.md step 2, defined before writing
+the checks):
   - Never mutates repo code — this skill identifies candidates only, it never
     executes a refactor (Boundaries section).
   - Output follows the mandatory template verbatim: Scope / Findings /

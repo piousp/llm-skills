@@ -31,7 +31,7 @@ net, not a test of the skill itself.
   - Output follows the mandatory template verbatim: `### Scope`,
     `### Findings`, `### Filtered out`, `### Summary`.
   - Every finding is anchored with real `file:line` evidence inside the
-    diff, and carries a gate note referencing N1–N8.
+    diff, and carries a gate note referencing N1–N10.
   - A genuine structural duplicate (the skill's own A1 worked example,
     reproduced live) is correctly categorized A1 with P1.
   - A speculative single-implementation "candidate" (the skill's own
@@ -97,7 +97,7 @@ PI_LIVE_EVAL=1 python3 evals/run_trigger_probes.py
 
 ### Layer 2 — process-fidelity probes, live-gated (forced `--skill`)
 
-`run_layer2_probes.py` + `prompt_set.json`: 2 prompts, each seeding a real
+`run_layer2_probes.py` + `prompt_set.json`: 3 prompts, each seeding a real
 git fixture repo (`main` branch + a `feature` branch) reproducing one of the
 skill's own worked examples verbatim, run via `pi -ne --skill <this dir>`.
 
@@ -106,7 +106,7 @@ cd <this-skill-dir>
 PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py
 ```
 
-**N=1 finding: 2/2 probes passed, 9/9 checks.**
+**N=1 finding: 3/3 probes passed, 12/12 checks.**
 - `detects_a1_structural_duplication`: correctly found `[RF-1] A1 Structural
   duplication ... — P1`, evidence anchored at both methods' real line
   numbers, gate note citing N1/N3 as inapplicable, refactor direction
@@ -117,21 +117,29 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py
   (none)` and moved all three considered candidates to `Filtered out`
   (N1, N3, N7), never fabricating an `[RF-n]` Finding for the
   single-implementation discount rule.
+- `routes_uncertain_threshold_to_unresolved` (added with the N9 gate):
+  business-rule duplication below the ≥3 threshold locally, with a possible
+  3rd occurrence in an inaccessible repo — must land in `### Unresolved`,
+  never as a fabricated Finding or a silent drop.
 
 ### Layer 3 — LLM-as-judge, live-gated
 
-`judge.py`: re-runs the same two Layer 2b probes and sends each transcript
+`judge.py`: re-runs 2 of the 3 Layer 2 probes and sends each transcript
 to a second `pi` call for a qualitative verdict — was the A1-vs-other-
 category call actually correct (not just keyword-present), was the P1
 priority justified, was the N1 rejection rationale faithful to the skill's
 own worked example rather than a generic dismissal.
+
+Coverage note: the `routes_uncertain_threshold_to_unresolved` (N9-routing)
+probe has no judge spec — conscious decision for now (its check is
+deterministic); pending if that transcript ever needs qualitative review.
 
 ```bash
 cd <this-skill-dir>
 PI_LIVE_EVAL=1 python3 evals/judge.py
 ```
 
-Not run for this pass (Layer 2b's deterministic checks already covered the
+Not run for this pass (Layer 2's deterministic checks already covered the
 category/priority/gate-citation claims precisely enough via exact-string
 matches against the fixture's real file:line values and rule IDs — see
 step 4's cost/benefit guidance). Kept as a template for a future qualitative

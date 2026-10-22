@@ -9,7 +9,8 @@ description: >
   deciding scope, simplicity, duplication, or architecture for a code change.
   [DO NOT] trigger for non-code prose, documentation, general questions, web
   research, configuration files, planning code before implementation, or test
-  planning; the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`, and
+  planning; vague requests without a confirmed goal go to `pablo-goal-discovery`;
+  the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`, and
   `refactor-identification`, with FP/GoF mechanics in this skill's `references/fp/` and
   `references/gof/`.
 ---

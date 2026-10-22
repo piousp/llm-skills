@@ -51,7 +51,7 @@ dir, never a real skill.
   (`prompt_set.json`), each run via bare `pi -ne` (no `--skill`), checking
   only whether the transcript shows an early `read` of this skill's own
   `SKILL.md` — a positive case ("what eval layers would you use for the
-  skill at `{FIXTURE_SKILL_DIR}}`?") and two negatives mapped directly onto
+  skill at `{FIXTURE_SKILL_DIR}`?") and two negatives mapped directly onto
   the description's stated negative cases (writing a new SKILL.md → belongs
   to `writing-agent-skills`; a general product/LLM-feature eval → outside
   scope entirely). Every fixture path is generated inside the trial's own

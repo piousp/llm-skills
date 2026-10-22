@@ -14,7 +14,7 @@ invoked — its description ("authoring, reviewing,
 or refactoring an agent Skill... writing SKILL.md frontmatter/body...")
 is meant to auto-trigger from natural requests, and is explicitly
 confusable with adjacent tasks (general coding, prose writing, plain
-documentation) that its own §6 example calls out. So `should_trigger`
+documentation) that its own §2 example calls out. So `should_trigger`
 tuning (negative controls) applies here, unlike the coordinator skill.
 
 The skill is pure markdown — no `scripts/*` — so **Layer 1 is skipped**
@@ -24,7 +24,7 @@ entirely (nothing to unit-test offline).
 
 - **Outcome** — when asked to author/review a skill, does the agent
   produce or evaluate a description containing both WHAT and WHEN (§2),
-  flag a missing negative case when the topic is confusable (§6), and
+  flag a missing negative case when the topic is confusable (§2), and
   keep any authored `SKILL.md` body reasonably lean (§4)? On negative
   controls, does it correctly *not* produce skill-authoring artifacts for
   an unrelated coding/prose/docs request?
@@ -34,10 +34,10 @@ entirely (nothing to unit-test offline).
   which case the fix is "write a script," not "reword the steps"); correct
   relaxation of description-tuning advice for name-only-invoked skills
   (§2); pointing to `evaluating-agent-skills` rather than reinventing a
-  full eval harness inline (per the `Source` pointer, out of scope here);
-  correctly citing the retirement criterion — re-run unaided, retire if
-  it still passes (from the source article, not currently in `SKILL.md`
-  itself; see "Known limitations").
+  full eval harness inline (stated in §1 and the `Source` pointer, out of
+  scope here); correctly citing the retirement criterion — retire a skill
+  whose description no longer fits the routing window or whose capability
+  is covered elsewhere (`SKILL.md` §7).
 - **Efficiency** — not graded here; this skill's outputs are short
   markdown responses/files, not multi-step agentic work where token/tool-
   call bloat is a realistic regression axis.
@@ -120,8 +120,8 @@ Layer 2b to exercise.
   authored but unexecuted; run and record a first N=1 pass before
   widening to multi-trial.
 - `mentions_retirement_process` (the `retire_capability_skill` case) tests
-  a rule from the source article that the current `SKILL.md` does not
-  state anywhere (the retirement criterion was one of the source's 8 tips,
-  not carried into the 6-section distillation). Until `SKILL.md` teaches
-  it explicitly, a pass on this check reflects general model knowledge,
-  not this skill's own text.
+  the retirement criterion, which `SKILL.md` §7 now states (delete the
+  directory, clean dangling cross-references, leave no stubs). The check's
+  keywords (`unaided`, `base model`) still come from the older
+  source-article framing, so a pass can ride on the prompt's own "base
+  model" wording rather than §7's exact text.

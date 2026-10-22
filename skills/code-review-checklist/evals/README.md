@@ -5,13 +5,15 @@ Testing Agent Skills"](https://www.philschmid.de/testing-skills) and
 Anthropic's ["Demystifying evals for AI
 agents"](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
 `code-review-checklist` is a **process lens invoked explicitly**: the skill
-is a read-only review methodology, not a base-model capability gap, and it is
-triggered by name or by its trigger phrases ("checklist", "review my
-changes", "am I ready to merge"), never auto-discovered from a description.
-The trigger-tuning axis those articles emphasize therefore does not apply;
-what is adapted is the method: define success first, build a small prompt
-set, grade with deterministic checks before reaching for an LLM judge,
-isolate each run, gate live layers behind `PI_LIVE_EVAL=1`.
+is a read-only review methodology, not a base-model capability gap. It IS
+auto-discovered from its description — the trigger phrases ("checklist",
+"review my changes", "am I ready to merge") live there, and trigger probes
+(negative control, English trigger phrase) plus L3 LLM-judge specs verify
+that discovery and post-trigger behavior. What the eval does NOT tune is the
+description text itself; it adapts the articles' method: define success
+first, build a small prompt set, grade with deterministic checks before
+reaching for an LLM judge, isolate each run, gate live layers behind
+`PI_LIVE_EVAL=1`.
 
 ## Success criteria (defined before any check was written)
 

@@ -31,10 +31,15 @@ the sentence around it.
 | showcasing, remarked, aligns, surpassing, tragically, impacting | marked overuse in generated text |
 | embark, enlightening, esteemed, craft, crafting | inflated verbs and praise |
 | imagine, game-changer, unlock, discover, skyrocket, boost | hype verbs |
-| abyss, not alone, stark, testament | dramatic filler |
+| abyss, not alone, stark | dramatic filler |
 | revolutionize, disruptive, groundbreaking, cutting-edge | hype adjectives |
 | utilize, harness, illuminate, unveil, intricate, elucidate | stiff formality |
 | exciting, remarkable, powerful, inquiries | vague boosters and filler nouns |
+
+"testament" is listed once, in its "testament to" form; bare "testament"
+follows the same [NEVER] criterion. A literal instance, such as a legal
+"last testament", is the exact-right-term case: rewrite the sentence
+around it.
 
 ## Tier 2: weak modifiers to trim
 

@@ -33,6 +33,7 @@ Usage:
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -177,21 +178,38 @@ def _reads_skill_md(tool_calls: list[dict], suffix: str) -> bool:
 def mentions_keywords(tool_calls, final_text, keywords=(), **ctx) -> bool:
     """Behavioral stand-in for 'the skill's judgment layer was applied':
     the response names at least one of the relevant principle/edge-case
-    keywords (e.g. yagni|kiss|dry|solid, pipeline, srp, premature) instead
-    of jumping straight to code/approval with no stated rationale.
-    Deliberately a simple substring check -- no LLM-as-judge, per YAGNI
-    (L3 is explicitly deferred, see README)."""
+    terms instead of jumping straight to code/approval with no stated
+    rationale. Each term is a case-insensitive REGEX (any-of, `re.search`)
+    so a check can demand real evidence of pipeline application -- word
+    boundaries, precedence/conflict phrasing -- instead of a generic
+    substring like 'simpl' or 'pattern' matching an echo of the prompt
+    (checks tightened 2026-10-22, see README). Still deterministic
+    transcript matching -- no LLM-as-judge, per YAGNI (L3 is explicitly
+    deferred, see README)."""
     text = final_text.lower()
-    return any(kw.lower() in text for kw in keywords)
+    return any(re.search(kw.lower(), text) for kw in keywords)
 
 
-def no_unrelated_edits(tool_calls, final_text, allowed_files=("messy_module.py",), **ctx) -> bool:
+def _normalized(path: str) -> str:
+    """Normalized form for exact path comparison: collapsed redundant
+    segments, POSIX separators. Deliberately NOT a suffix match --
+    path.endswith() let a same-basename homonym in another directory
+    (e.g. backup/messy_module.py) pass as 'the allowed file'."""
+    return os.path.normpath(str(path)).replace(os.sep, "/")
+
+
+def no_unrelated_edits(tool_calls, final_text, allowed_files=("messy_module.py",), cwd=None, **ctx) -> bool:
     """No edit/write tool call may target a file outside the ones named in
-    the prompt -- the skill's 'Surgical Changes' rule."""
+    the prompt -- the skill's 'Surgical Changes' rule. Paths are compared
+    exactly after normalization: either as written (relative to the trial's
+    workdir) or resolved against it via `cwd`, never by suffix, so a
+    homonym in another path cannot match."""
+    allowed = {_normalized(f) for f in allowed_files}
+    if cwd is not None:
+        allowed.update(_normalized(Path(cwd) / f) for f in allowed_files)
     for tc in tool_calls:
         if tc["name"] in ("edit", "write"):
-            path = str(tc["arguments"].get("path", ""))
-            if not any(path.endswith(f) for f in allowed_files):
+            if _normalized(tc["arguments"].get("path", "")) not in allowed:
                 return False
     return True
 
@@ -222,7 +240,9 @@ CHECK_REGISTRY = {
 
 def resolve_check(check_id: str):
     """Supports parametrized check_id conventions used in prompt_set.json:
-    "reference_opened:<path-suffix>", "mentions_keywords:<kw1>|<kw2>|...", and
+    "reference_opened:<path-suffix>", "mentions_keywords:<kw1>|<kw2>|..."
+    (each term is a case-insensitive regex; the `|` split means no single
+    term may itself contain `|`), and
     "no_unrelated_edits:<file1>,<file2>,...". Bare check_ids fall back to
     the registry function's own defaults."""
     if check_id.startswith("reference_opened:"):
@@ -245,7 +265,9 @@ def run_probe(case: dict) -> dict:
         cwd = seed_env(tmp)
         tool_calls, final_text = run_pi(cwd, case["prompt"])
         checks = {
-            check_id: resolve_check(check_id)(tool_calls, final_text)
+            # cwd lets no_unrelated_edits resolve relative paths against
+            # the trial's workdir for exact (non-suffix) comparison
+            check_id: resolve_check(check_id)(tool_calls, final_text, cwd=str(cwd))
             for check_id in case["expected_checks"]
         }
         return {

@@ -48,26 +48,26 @@ step to a subagent.
   How to invoke, as three standalone calls:
 
   ```
-  {"agent": "analyst", "task": "<diff>\n\nApply the qa-adversary lens to this diff only. Do not analyze code outside the diff.", "skills": ["qa-adversary"], "timeoutMs": 1200000}
-  {"agent": "analyst", "task": "<diff>\n\nApply the code-review-checklist lens to this diff only. Do not analyze code outside the diff.", "skills": ["code-review-checklist"], "timeoutMs": 1200000}
-  {"agent": "analyst", "task": "<diff>\n\nApply the refactor-identification lens to this diff.", "skills": ["refactor-identification"], "timeoutMs": 1200000}
+  {"agent": "analyst", "task": "<diff>\n\nApply the qa-adversary lens to this diff only. Analyze only the changed lines of the diff; pre-existing code may surface only as 1-hop context per your own Scope law. Do not tighten your Scope boundaries.", "skills": ["qa-adversary"], "timeoutMs": 1200000}
+  {"agent": "analyst", "task": "<diff>\n\nApply the code-review-checklist lens to this diff only. Analyze only the changed lines of the diff; pre-existing code may surface only as 1-hop context per your own Scope law. Do not tighten your Scope boundaries.", "skills": ["code-review-checklist"], "timeoutMs": 1200000}
+  {"agent": "analyst", "task": "<diff>\n\nApply the refactor-identification lens to this diff. Analyze only the changed lines of the diff; pre-existing code may surface only as 1-hop context per your own Scope law. Do not tighten your Scope boundaries.", "skills": ["refactor-identification"], "timeoutMs": 1200000}
   ```
 
    Use each lens as-is: its own
-     Scope law already 1-hops into pre-existing code for context and its
-     P1/P2/P3 table already restricts an actionable recommendation to a
-     smell whose root cause was added or modified by the branch (P1). A
-     P2/P3 candidate rooted in pre-existing code stays a reported
-     observation, never a recommendation. [NEVER] loosen its Boundaries
-     section to widen the scan.
+   Scope law already 1-hops into pre-existing code for context and its
+   P1/P2/P3 table already restricts an actionable recommendation to a
+   smell whose root cause was added or modified by the branch (P1). A
+   P2/P3 candidate rooted in pre-existing code stays a reported
+   observation, never a recommendation. [NEVER] loosen or tighten its
+   Boundaries section; run each lens exactly as written.
 
 4. **Merge, don't append.** Wait for all three results to arrive (each call's result is delivered
    as its own message), then build one report grouped by changed file, not by lens. [NEVER] print
    three sub-reports back to back: that is the audit-report shape this skill exists to avoid.
 
-5. **Sort by issue severity** Blocking, major, minor, trivial. 
-  Give them unique identifiers: (i.e. B1, M1, M2, I1, I2, I3, G1, etc).
-  Group the issues by file as well
+5. **Sort by issue severity:** blocking, major, minor, coverage gap.
+  Give each issue a unique identifier: B1, M1, M2, I1, I2, I3, G1, etc.
+  (B = blocking, M = major, I = minor, G = coverage gap.) Group the issues by file as well.
 
 6. **Add corrections yourself.** Once the merge is done, the coordinator,
    not a subagent, drafts the ≥2 corrections/alternatives per finding
@@ -103,7 +103,7 @@ changed and *why* it matters, not just a list of line numbers.
 ## Code Review: <branch/range>
 
 ### Summary
-Verdict: PASS | NEEDS WORK | BLOCK - <N> blocking, <N> major, <N> coverage gaps
+Verdict: PASS | NEEDS WORK | BLOCK - <N> blocking, <N> major, <N> minor, <N> coverage gaps
 <one or two lines if the diff serves a single purpose. If it bundles multiple distinct
 purposes (e.g. dead-code removal + a refactor + new logic), enumerate each one as its own
 line: "1. <purpose>; 2. <purpose>; ..." This must appear before any file's findings.>
@@ -183,6 +183,10 @@ coverage assessment>
   walkthrough (before/after behavior + at least one worked data example)
   BEFORE any finding: a reader who skips the diff hunk must still
   understand what the code does from that block alone.
+- [ALWAYS] write the report's headers and finding labels in Spanish as
+  designed ("Qué hace este código", "Qué", "Por qué pasa", "Consecuencias",
+  "Soluciones", "Observaciones (no accionables)"): [NEVER] translate them
+  to English or swap them for other phrasings.
 - [ALWAYS] structure every actionable finding as Qué / Por qué pasa (≥2
   concrete examples) / Consecuencias / Soluciones (≥2 alternatives): the
   user decides which comments are worth acting on; [NEVER] present a

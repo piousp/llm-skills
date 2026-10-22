@@ -5,7 +5,7 @@ description: >
   code work begins. Runs the mattpocock grilling interview: rounds of numbered
   decisions with a recommendation each, fact lookups via scout, exit only on
   explicit user confirmation. Writes goal.md and the first decisions.md entry.
-  Invocable by name: goal-discovery. [DO NOT] trigger when a confirmed
+  Invocable as `/skill:pablo-goal-discovery`. [DO NOT] trigger when a confirmed
   goal.md already exists for this work, or when the task does not need goal
   discovery (the ask is already clear and scoped, or is pure implementation/
   planning work).
@@ -38,8 +38,10 @@ back to `/tmp/pi/session/<PI_SESSION_ID>`.
 
 ## Entry conditions
 
-- The user named `goal-discovery`, or the task matches this description and
-  the user confirms in the same turn.
+- The user named `pablo-goal-discovery` in their message, or the task
+  matches this description. That very message is the confirmation: the
+  first grilling round launches right after the Step 0 scan, in the same
+  session, with no extra confirmation requested.
 - The coordinator states in the same turn what the goal-discovery pass will
   do and which artifacts it will write (`goal.md` + the first `decisions.md`
   entry).
@@ -79,9 +81,7 @@ short; the user can always correct an assumption.
 the user should be able to answer "recommended" for the whole round. [NEVER]
 ask open-ended questions without one.
 
-**Exit.** The frontier is empty, every branch visited, nothing silently
-assumed. [DO NOT] close with "any questions?" - no auto-advance. Exit
-requires explicit user confirmation of the synthesis.
+**Exit.** When the criteria in Exit criteria below are met.
 
 ## Text markers
 
@@ -110,7 +110,8 @@ Non-blocking by design.
   first `decisions.md` entry (load-bearing decisions, gate answers, rejected
   alternatives).
 - The coordinator presents the synthesis and gets explicit user confirmation.
-  [DO NOT] auto-advance to another skill - see When to chain.
+  [DO NOT] close with "any questions?", [DO NOT] auto-advance to another
+  skill - see When to chain.
 
 ## Artifact writes (coordinator carve-outs)
 
@@ -142,7 +143,7 @@ Natural follow-ups: `pablo-code-planning` (design from the confirmed goal) or
 auto-dispatch - present the follow-ups as a list; the user names the next
 skill.
 
-## **CRITICAL**
+## Critical
 
 **[NEVER]** proceed to implementation if this skill is called.
 **[NEVER]** skip the grilling, that's *the whole point* of this skill

@@ -6,10 +6,14 @@ description: >
   decision pipeline, and specify the public API and the test plan.
   Trigger when: the task is to plan code before implementation -
   analyzing current code, reuse and abstraction opportunities, public
-  API and data shapes, and the test plan at seams.
+  API and data shapes, and the test plan at seams; user phrasing like
+  "plan this", "design the API", or "before we code" also triggers.
   [DO NOT] use for implementing: the plan never writes or edits code;
   writing tests lives in `pablo-tdd`, refactor methodology in
   `refactor-identification`, principles in `pablo-code-philosophy`.
+  [DO NOT] trigger when the ask is vague or under-specified and no
+  confirmed goal.md exists for this work; the goal-interview lives in
+  `pablo-goal-discovery`.
 ---
 
 # Code Planning
@@ -40,17 +44,19 @@ gates, no tables:
 - **A3 Poor data types** - primitives or null standing in for a domain type; exceptions used for expected control flow.
 - **A4 Flag/enum-modeled variants** - a discriminator drives dispatch that a sealed ADT would express directly.
 
-For a formal verdict on a candidate, consult `refactor-identification`
-for its full methodology (tables, thresholds, gates, priorities, and
-worked examples in its `references/examples.md`).
+For a formal verdict on a candidate, load `refactor-identification`
+and read its `references/examples.md` for calibrated detection
+examples, then apply its full methodology (tables, thresholds, gates,
+and priorities).
 
 ## Phase 2 - Decide
 
-Run every abstraction and scope decision through the decision pipeline
+[ALWAYS] load `pablo-code-philosophy` before running this phase; the
+pipeline lives there and this skill does not restate it. Then run
+every abstraction and scope decision through the decision pipeline
 YAGNI → KISS → DRY → SOLID of `pablo-code-philosophy` and its conflict
 precedence KISS > DRY > SOLID. The pipeline, its gates, and the
-conflict matrix live there as the single source; this skill does not
-restate them.
+conflict matrix live there as the single source.
 
 ## Phase 3 - Specify
 
@@ -65,10 +71,9 @@ Specify the contracts the plan commits to.
   the plan names seams and edge cases, it does not re-state the
   standards. The seams the plan lists are proposals: `pablo-tdd`
   requires confirming them with the user before tests are written.
-- **Verification criteria.** Every step of the plan carries one. For
-  multi-step tasks, define verifiable success criteria:
-  1. [Step] → verify: [check]
-  2. [Step] → verify: [check]
+- **Verification criteria.** Every step of the plan carries one, in
+  the "[Step] → verify: [check]" format defined once in the `## Output`
+  contract below. For multi-step tasks, one verification line per step.
 
 ## Ambiguity
 
@@ -84,7 +89,8 @@ nothing else.
 - Analysis - reuse opportunities and the A1-A4 signal lines.
 - Decisions - pipeline verdicts, cited to `pablo-code-philosophy` by name.
 - Contracts - public API signatures, data shapes, seams, test plan.
-- Verification - every step with "[Step] → verify: [check]".
+- Verification - every step with "[Step] → verify: [check]". This is
+  the single definition of the verification format.
 
 The four blocks are first-class output: [ALWAYS] deliver analysis and
 verification alongside decisions and contracts; do not drop them when

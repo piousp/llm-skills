@@ -29,8 +29,8 @@ Absolutas. Romper una obliga a reescribir.
 - **[NEVER]** abrir una frase con un conector de relleno que no aporta
   lógica. Si el conector no hace trabajo, eliminarlo o fusionar la frase
   con la anterior.
-- **[NEVER]** añadir una sección plantilla de cierre (retos y pasos
-  siguientes) que la tarea no haya pedido por su nombre.
+- **[NEVER]** añadir una sección plantilla, como "Retos y direcciones
+  futuras" o "Ideas clave", que la tarea no haya pedido por su nombre.
 - **[NEVER]** usar negritas sistemáticas en listas ni formato de relleno.
   Una negrita puntual para una palabra clave, como mucho, y rara vez. Una
   lista llana ya lleva su estructura.

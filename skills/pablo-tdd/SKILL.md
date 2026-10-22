@@ -12,9 +12,9 @@ description: >
   trigger for non-code prose, documentation, general questions, or web research.
 ---
 
-# Test-Driven Development
+<!-- Attribution: adapted from mattpocock/skills -->
 
-> Sourced from [mattpocock/skills](https://github.com/mattpocock/skills/tree/main/skills/engineering/tdd).
+# Test-Driven Development
 
 TDD is the red → green loop. Apply it so tests are worth keeping: know what a good test is, where tests go, the anti-patterns, how Pablo's principles apply to tests, and the rules of the loop. Every section applies on every cycle; consult them before and during the loop, not after.
 
@@ -34,14 +34,14 @@ The operational checklist and code examples live in [references/tests.md](refere
 
 A **seam** is the public boundary where tests observe behavior without reaching inside. Tests live at seams, never against internals.
 
-[ALWAYS] **test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. When a plan proposes the seams (per `pablo-code-planning`), confirm those seams with the user before implementing - the plan proposes, the user confirms, tests follow. [DO NOT] write a test at an unconfirmed seam. Ask: "What's the public interface, and which seams should we test?" Not everything can be tested; agreeing the seams up front is how testing effort lands on critical paths and complex logic instead of every edge case.
+[ALWAYS] **test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. When a plan proposes the seams (per `pablo-code-planning`), confirm those seams with the user before implementing - the plan proposes, the user confirms, tests follow. [DO NOT] write a test at an unconfirmed seam. Ask: "What's the public interface, and which seams should we test?" Not everything can be tested; agreeing the seams up front is how testing effort lands on critical paths and complex logic instead of every edge case outside those seams.
 
 ## Anti-patterns
 
 - **Implementation-coupled**: tests internal structure, mocks internal collaborators, calls private methods, asserts call counts or call order, or names the test for HOW instead of WHAT. The tell: the test breaks on refactor while behavior is unchanged.
 - **Tautological**: the assertion recomputes the expected value the way the code does (`expect(add(a, b)).toBe(a + b)`), so it passes by construction and can never disagree with the code. Expected values [MUST] come from an independent source of truth: a known-good literal, a worked example, the spec.
 - **Horizontal slicing**: all tests written first, then all implementation. Bulk tests verify imagined behavior: they test the shape of things rather than user-facing behavior, go insensitive to real changes, and commit to test structure before the implementation is understood. [ALWAYS] work in **vertical slices**: one test → one implementation → repeat, each test a tracer bullet that responds to what the last cycle taught.
-- **Bypassing the interface**: verifies through a side channel, such as querying the database directly, instead of using the public interface the caller would use.
+- **Bypassing the interface**: verifies through a side channel, such as querying the database directly, instead of using the public interface the caller would use. The offense is in verification, not setup: mocking or seeding the database at the system boundary is legitimate (see [references/mocking.md](references/mocking.md)); the test must still assert through the public interface.
 
 ## Pablo's principles, applied to tests
 
@@ -59,7 +59,7 @@ How the `pablo-code-philosophy` principles apply to test writing. The theory liv
 - **Red before green.** Write the failing test first, then only enough code to pass it. [DO NOT] anticipate future tests or add speculative features.
 - **One slice at a time.** One seam, one test, one minimal implementation per cycle.
 - **Refactoring is not part of the loop.** It belongs to the review stage (see the `code-review-checklist` skill), not the red → green implementation cycle.
-- **[STOP] at each seam** [ALWAYS] ask the user for confirmation before proceeding with the next
+- **[MUST] stop and ask the user** for confirmation before proceeding with the next seam.
 
 ## Context and decisions
 

@@ -53,8 +53,11 @@ Absolute. Breaking one means a rewrite.
 
 Habits with judgment, not a checklist.
 
+- **[ALWAYS]** prefer active voice. "The test fails at line 12" weighs more
+  than "it is observed that the test fails at line 12". The passive serves
+  when the agent of the action is unknown or unimportant.
 - **[ALWAYS]** vary sentence length and rhythm. Follow a long sentence with
-  a short one. Or 2 short setences, or 2 long ones. Vary the variation.
+  a short one. Or 2 short sentences, or 2 long ones. Vary the variation.
   Start some sentences with the verb, some with the subject,
   some with a subordinate clause. Generated prose has low burstiness
   (uniform rhythm) and low perplexity (too-predictable word choice);

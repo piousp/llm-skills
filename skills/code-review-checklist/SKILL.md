@@ -47,17 +47,26 @@ Every comment gets exactly one tier; tag each reported line with it:
 
 ## When NOT to report (gate)
 
-Run every candidate violation through these rows before reporting it. A
-candidate matching a row is downgraded or dropped as the row says, record
+Run every candidate violation through these gates before reporting it. A
+candidate matching a gate is downgraded or dropped as the gate says, record
 nothing about dropped candidates (this lens has no "filtered out" section;
 silence is the output).
 
-| ID | Situation | Action |
-|---|---|---|
-| G1 | Evidence line is in test/fixture/test-helper code (src/test, `*Test`, `*Spec`, `*Fixture`, test modules of an integration-test repo) and the rule comes from Complexity, Config vs Code, Abstractions, Immutability & FP, or Boundaries | Do not report. Test code is judged ONLY by the Tests section and Red Flags. A hardcoded timeout, a 30-line helper, a single-use overload, or a mutable variable/mutated argument in a test is not a violation |
-| G2 | A dependency version bump (pom.xml, build.sbt, package.json) not exercised by any other hunk in the diff | One FYI line max, never a Major/Blocker. Exception: a SNAPSHOT/mutable ref on a branch NOT marked POC/draft stays a Major (reproducibility) |
-| G3 | The evidence line is not inside a changed hunk of this diff | Do not report, regardless of how real the issue is. If it gates a changed line's correctness, phrase it as a Question naming the exact file to check |
-| G4 | Pure style preference (formatting, indentation, trailing newline, import order) in a file the branch touched for other reasons | FYI at most, one line |
+- **G1**: test/fixture/test-helper evidence:
+  - When: the evidence line is in test/fixture/test-helper code (`src/test`, `*Test`, `*Spec`,
+    `*Fixture`, test modules of an integration-test repo) AND the rule comes from Complexity,
+    Config vs Code, Abstractions, Immutability & FP, or Boundaries.
+  - Action: do not report. Test code is judged ONLY by the Tests section and Red Flags.
+  - Not a violation in tests: a hardcoded timeout, a 30-line helper, a single-use overload, or a
+    mutable variable/mutated argument.
+- **G2**: a dependency version bump (pom.xml, build.sbt, package.json) not exercised by any
+  other hunk in the diff: one FYI line max, never a Major/Blocker. Exception: a SNAPSHOT/mutable
+  ref on a branch NOT marked POC/draft stays a Major (reproducibility).
+- **G3**: the evidence line is not inside a changed hunk of this diff: do not report, regardless
+  of how real the issue is. If it gates a changed line's correctness, phrase it as a Question
+  naming the exact file to check.
+- **G4**: pure style preference (formatting, indentation, trailing newline, import order) in a
+  file the branch touched for other reasons: FYI at most, one line.
 
 Nits (Consistency, Naming, Comments) survive the gate but never flip a
 verdict and never take more than one line each.
@@ -142,7 +151,7 @@ verdict and never take more than one line each.
 - Behavior that should be runtime-configurable is hardcoded
 - Magic numbers/strings that belong in config/constants
 - Production code only: constants in test code (timeouts, poll intervals,
-  fixture values) are test data, not config candidates; see gate row G1
+  fixture values) are test data, not config candidates; see gate G1
 
 ### Immutability & FP (Major)
 
@@ -194,7 +203,7 @@ already covered under Red Flags.
 
 ### Naming clarity (Nit)
 
-- Variable, functions and tests should directly reference what they do and what they mean
+- Variables, functions, and tests should directly reference what they do and what they mean
 - Follow conventions (ie. camelCase) from already existing code.
 
 ### Tests (Major, unless it's purely a naming nit)

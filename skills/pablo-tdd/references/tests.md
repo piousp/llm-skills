@@ -45,7 +45,7 @@ A change that spans several seams needs a plan-level answer: which tests, at whi
 The higher the cyclomatic complexity, the more tests the code needs: every decision path is behavior. Two coverage kinds get mixed up; keep them apart:
 
 - **Boundaries**: limit values of the inputs, nulls, empty, zero, extremes, error paths.
-- **Branches**: each if/else, switch/match, guard clause; every decision path is tested.
+- **Branches**: each if/else, switch/match, guard clause; every decision path *within the agreed seams* is tested. Effort concentrates on critical paths and complex logic, not on every edge case across the codebase (see Seams in [SKILL.md](../SKILL.md)).
 
 Worked example: `divide(x, y)`.
 
@@ -55,6 +55,8 @@ Worked example: `divide(x, y)`.
 ## Anti-patterns
 
 The anti-patterns: implementation-coupled, tautological, horizontal slicing, bypassing the interface, are detailed in [SKILL.md](../SKILL.md). Review them there before writing tests.
+
+The "Integration-style" sections in the examples are not a fifth anti-pattern: the Good case shows behavior through the real flow; the Bad case, asserting that an internal collaborator was called, is an instance of the implementation-coupled anti-pattern.
 
 ## Code Examples
 
