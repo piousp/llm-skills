@@ -59,17 +59,10 @@ writes code itself; someone else implements the plan.
 
 ## Language-specific technique
 
-**`functional-programming`**
-The mechanical companion to the FP principles in `pablo-code-philosophy`: immutability, pure
-functions, typed error handling with `Option`/`Either`, and the Java and Scala idioms for each.
-Use it when refactoring imperative code toward FP, or when reviewing exception-driven control
-flow that should be a typed result instead.
-
-**`gof-design-patterns`**
-A curated set of 12 Gang-of-Four patterns (Strategy, Builder, Observer, Visitor, and others) with
-a table mapping code smells to the pattern that fixes them, and an equally important table for
-when applying a pattern would be over-engineering. Use it when a class hierarchy, a callback
-chain, or a growing if-else ladder looks like it wants a name.
+FP and GoF pattern mechanics are reference material inside `pablo-code-philosophy` itself
+(see its `references/fp/` and `references/gof/` directories; the philosophy's principal files
+also cover the same topics: immutability/pure functions/typed errors and 12 GoF patterns with
+smell-to-pattern and over-engineering guard tables).
 
 ## Skill authoring
 
@@ -96,6 +89,6 @@ revising anything longer than a one-line reply.
 The `pablo-*` skills form a loose pipeline: `pablo-goal-discovery` clarifies the ask,
 `pablo-code-planning` scopes the work, `pablo-tdd` drives the implementation, and
 `pablo-code-review` (or its component lenses) gates the result before merge.
-`pablo-code-philosophy` sits underneath all of them as the shared rulebook.
-`functional-programming` and `gof-design-patterns` are reference material the philosophy and
-review skills call into when a decision needs mechanical detail rather than a principle.
+`pablo-code-philosophy` sits underneath all of them as the shared rulebook; when a decision needs
+mechanical detail rather than a principle, its `references/fp/` and `references/gof/` carry that
+material.

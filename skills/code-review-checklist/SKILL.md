@@ -174,7 +174,7 @@ Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512
 - Sequential coupling [Coupler]: API requires calls in an undocumented, easy-to-get-wrong order
 
 Deliberately NOT checked here (documented so they aren't silently reintroduced): *Anemic domain
-model* - contradicts `functional-programming`/`pablo-code-philosophy`'s prescribed separation of
+model* - contradicts `pablo-code-philosophy`'s (and its FP mechanics reference's) prescribed separation of
 data from behavior, so it isn't a smell in this codebase. *Call super*, *Circle-ellipse problem*,
 *Yo-yo problem*, *Poltergeist*: deep-inheritance smells, rare in composition-favoring Scala/Java
 service code. *Object cesspool*: no established, checkable meaning. *Race hazard*: duplicate,

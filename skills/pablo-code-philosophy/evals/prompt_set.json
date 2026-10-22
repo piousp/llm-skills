@@ -27,7 +27,7 @@
   {
     "id": "edge_mixed_philosophy_fp",
     "prompt": "I want to redesign this validation pipeline in validations.scala using functional composition. Does the abstraction make sense or is it premature?",
-    "expected_checks": ["mentions_keywords:yagni|kiss|premature", "sibling_loaded:functional-programming"]
+    "expected_checks": ["mentions_keywords:yagni|kiss|premature", "reference_opened:references/fp/mechanics.md"]
   },
   {
     "id": "edge_clean_file_surgical",

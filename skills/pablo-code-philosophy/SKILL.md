@@ -9,8 +9,9 @@ description: >
   deciding scope, simplicity, duplication, or architecture for a code change.
   [DO NOT] trigger for non-code prose, documentation, general questions, web
   research, configuration files, planning code before implementation, or test
-  planning; the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`,
-  `functional-programming`, `gof-design-patterns`, and `refactor-identification`.
+  planning; the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`, and
+  `refactor-identification`, with FP/GoF mechanics in this skill's `references/fp/` and
+  `references/gof/`.
 ---
 
 # Code Philosophy
@@ -31,11 +32,11 @@ description: >
 - **SOLID** - Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion. [WHEN] deciding on architecture, layering, or responsibilities, read [references/principles/SOLID.md](references/principles/SOLID.md).
 - **Low cyclomatic complexity** - [ALWAYS] fix the shape of the data so the conditional disappears, instead of adding a branch. [WHEN] tempted to add a branch for a special case, read [references/principles/KISS.md#low-cyclomatic-complexity](references/principles/KISS.md#low-cyclomatic-complexity).
 - **Avoid nested logic calls** - [ALWAYS] prefer flat, early-return style over deep call chains; a coordinator function calls and receives results. [WHEN] reviewing a deep call chain, read [references/principles/KISS.md#avoid-nested-logic-calls](references/principles/KISS.md#avoid-nested-logic-calls).
-- **GoF patterns** - [ALWAYS] apply design patterns with judgment, not religion. [WHEN] considering a design pattern, read [references/principles/GoF.md](references/principles/GoF.md).
+- **GoF patterns** - [ALWAYS] apply design patterns with judgment, not religion. [WHEN] considering a design pattern, read [references/principles/GoF.md](references/principles/GoF.md); for the recognition heuristics and the curated 12-pattern catalog, read [references/gof/mechanics.md](references/gof/mechanics.md).
 - **No speculative abstractions** - [NEVER] add an abstraction for a variation that doesn't exist yet; YAGNI gates it. [WHEN] tempted to add an abstraction for a future variation, read [references/principles/YAGNI.md](references/principles/YAGNI.md) and [references/principles/GoF.md](references/principles/GoF.md).
 - **Don't reinvent the wheel** - [ALWAYS] follow known design patterns and reuse existing code over writing new shapes. [WHEN] about to write a new shape from scratch, read [references/principles/GoF.md](references/principles/GoF.md).
 - **Unix philosophy** - [ALWAYS] design for composition. [WHEN] designing component boundaries, CLI, or tool behavior, read [references/principles/UNX.md](references/principles/UNX.md).
-- **Light FP** - Monads, immutability, typed errors, composition with judgment. [WHEN] choosing between imperative and functional style, read [references/principles/FP.md](references/principles/FP.md).
+- **Light FP** - Monads, immutability, typed errors, composition with judgment. [WHEN] choosing between imperative and functional style, read [references/principles/FP.md](references/principles/FP.md); for the mechanical detail (smell tables, language idioms), read [references/fp/mechanics.md](references/fp/mechanics.md).
 - **Tests are part of the deliverable** - [ALWAYS] ship every change or new code with a unit-test plan; the how, and the bare-snippet exception where Surgical Changes wins, lives in `pablo-tdd`.
 - **Data structures first** - [ALWAYS] start with the data model; if the structure is wrong, the algorithm is irrelevant. [ALWAYS] eliminate special cases by fixing the shape of the data, not by piling up conditionals. [ALWAYS] make every value the type can take name a real case of the domain; a neutral/placeholder instance exists to satisfy the caller, not the model. [WHEN] designing the data model or checking for placeholder values, read [references/principles/KISS.md#every-value-of-a-type-must-name-a-domain-case](references/principles/KISS.md#every-value-of-a-type-must-name-a-domain-case).
 - **Composition over inheritance** - [ALWAYS] prefer composition over inheritance, except for Algebraic Data Types. [WHEN] deciding between composition and inheritance, read [references/principles/SOLID.md](references/principles/SOLID.md), the L section.

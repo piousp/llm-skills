@@ -79,7 +79,7 @@ See [`../../examples/fp.java.md`](../../examples/fp.java.md) and [`../../example
 - [NEVER] treat immutability as a religion. A mutable accumulator inside a single function's
   scope is not a violation.
 - [NEVER] assume `.map().flatMap()` chains are automatically more readable than an imperative
-  sequence; see the anti-pattern table in `functional-programming` for when composition hurts.
+  sequence; see the anti-pattern table in [../fp/mechanics.md](../fp/mechanics.md) for when composition hurts.
 - [ALWAYS] reserve typed error handling (`Either`/`Option`) for *expected* failure. Don't wrap
   genuine bugs or unrecoverable I/O errors in `Either` just to avoid throwing.
 - [ALWAYS] write the tests. Pure functions are easier to test, not tested for free.
@@ -94,4 +94,4 @@ See [`../../examples/fp.java.md`](../../examples/fp.java.md) and [`../../example
 - **SOLID** → See [SOLID.md](SOLID.md). Covered by the `FP vs SOLID` row in [references/interactions.md](../interactions.md).
 - **GoF** → See [GoF.md](GoF.md). Covered by the `GoF vs FP` row in the conflict matrix, [SKILL.md](../../SKILL.md).
 - **UNIX** → See [UNX.md](UNX.md). Covered by the `FP vs UNIX` row in [references/interactions.md](../interactions.md).
-- **Mechanics** - for per-language idioms, the smell → principle table, and worked examples, see the `functional-programming` skill.
+- **Mechanics** - for per-language idioms, the smell → principle table, and worked examples, see [../fp/mechanics.md](../fp/mechanics.md).

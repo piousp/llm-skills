@@ -1,9 +1,9 @@
 # Pattern Catalog
 
-Worked before/after examples for the recurring implementation shapes referenced from `SKILL.md`.
+Worked before/after examples for the recurring implementation shapes referenced from `mechanics.md`.
 Each pattern shows the imperative/OOP starting point and its FP equivalent, in both Java and Scala.
 Read the "when this is worth it" note before applying: none of these are worth doing unconditionally
-(see the anti-pattern table in `SKILL.md`).
+(see the anti-pattern table in `mechanics.md`).
 
 ## Pattern 1: Validation pipeline with typed errors (errors as data)
 
@@ -12,7 +12,7 @@ signature, and let failures short-circuit the pipeline instead of unwinding the 
 
 **When it's worth it:** the failure is an expected domain outcome (bad input, business-rule
 violation), and there's more than one step in the pipeline where it can fail. For a single validation
-check with one caller, a direct `if`/throw is simpler; see `SKILL.md`'s anti-pattern table.
+check with one caller, a direct `if`/throw is simpler; see `mechanics.md`'s anti-pattern table.
 
 ### Java
 
@@ -78,7 +78,7 @@ that's genuinely all the loop does.
 
 **When it's worth it:** the loop body is a single accumulation step with no early-exit logic, no
 side effect other than updating the accumulator, and no index dependency. If the loop also logs,
-short-circuits conditionally, or needs the index, keep the loop; see `SKILL.md`'s anti-pattern
+short-circuits conditionally, or needs the index, keep the loop; see `mechanics.md`'s anti-pattern
 table ("a simple loop with one clear side effect").
 
 ### Java

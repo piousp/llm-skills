@@ -1,6 +1,6 @@
 # Java Pattern Mechanics
 
-Idiom-level guidance for applying the 12 patterns in `SKILL.md` to Java code. For worked
+Idiom-level guidance for applying the 12 patterns in `mechanics.md` to Java code. For worked
 before/after examples, see `patterns.md`.
 
 **Version gate first.** Several patterns below have a lighter-weight Java 17+ form using `record`
@@ -43,13 +43,13 @@ case XML -> new XmlParser(); ... }`) is equivalent and removes the fall-through 
 `default` clause, but check the version first, per the gate at the top of this file.
 
 Keep the factory a plain method, not a class hierarchy of factories; that step up is Abstract
-Factory, which is out of scope (see `SKILL.md`'s Boundaries) unless whole families of related
+Factory, which is out of scope (see `mechanics.md`'s Boundaries) unless whole families of related
 objects genuinely need to vary together.
 
 ### Builder
 
 Use a nested `static` builder class (or, for one that must validate before construction, a
-`build()` that returns a `Result`/throws on invalid combinations; see `functional-programming`'s
+`build()` that returns a `Result`/throws on invalid combinations; see `../fp/mechanics.md`'s
 typed-error-handling section for the former):
 
 ```java
@@ -77,7 +77,7 @@ public final class RetryPolicy {
 
 On Java 17+, if the object is a plain immutable data carrier with no conditional
 assembly/validation logic, a `record` with a compact canonical constructor for validation is
-simpler than a Builder; check the anti-pattern table in `SKILL.md` ("2-3 required parameters, no
+simpler than a Builder; check the anti-pattern table in `mechanics.md` ("2-3 required parameters, no
 optional/conditional logic") before reaching for the Builder form at all.
 
 ## Structural
@@ -126,7 +126,7 @@ public final class LoggingDistributionClient implements DistributionClient {
 
 Layers compose by construction: `new LoggingDistributionClient(new RetryingDistributionClient(base))`.
 If you only ever need one fixed layer, a plain wrapper method is equally clear and skips the
-interface ceremony; see `SKILL.md`'s anti-pattern table.
+interface ceremony; see `mechanics.md`'s anti-pattern table.
 
 ### Composite
 
@@ -257,7 +257,7 @@ public final class ValidationChain {
 gate at the top of this file. On a confirmed Java 9+ repo, the stream form is equivalent and
 arguably reads more declaratively.)
 
-Note this is also exactly `functional-programming`'s "composition of small validators" case: for
+Note this is also exactly `../fp/mechanics.md`'s "composition of small validators" case: for
 a chain that stops at the first failure, decide there whether you need the full Chain of
 Responsibility object structure or whether a `Stream`/`Optional` pipeline like the one above is
 already the whole answer (it usually is, in Java, once you strip the pattern down to its essence).

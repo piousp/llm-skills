@@ -110,7 +110,8 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py
 - `detects_a1_structural_duplication`: correctly found `[RF-1] A1 Structural
   duplication ... — P1`, evidence anchored at both methods' real line
   numbers, gate note citing N1/N3 as inapplicable, refactor direction
-  pointing at `functional-programming`'s higher-order-function row — no
+  pointing at `pablo-code-philosophy`'s `references/fp/mechanics.md`
+  higher-order-function row — no
   repo file was ever edited/written.
 - `rejects_single_implementation_by_n1`: correctly emitted `### Findings\n-
   (none)` and moved all three considered candidates to `Filtered out`

@@ -1,6 +1,6 @@
 # Java FP Mechanics
 
-Idiom-level guidance for applying the principles in `SKILL.md` to Java code. For worked
+Idiom-level guidance for applying the principles in `mechanics.md` to Java code. For worked
 before/after examples, see `patterns.md`.
 
 ## `Optional`
@@ -29,7 +29,7 @@ replacement for `null` everywhere.
   collection, aggregating a value, or filtering: that's exactly `map`/`filter`/`collect`/`reduce`.
   Keep the index-based loop when the logic genuinely needs the index, needs to break early in a way
   that's awkward to express as a predicate, or mutates external state as its primary purpose (see the
-  anti-pattern table in `SKILL.md`).
+  anti-pattern table in `mechanics.md`).
 - **No side effects inside `map`/`filter`.** These are meant to be pure transformations; mutating a
   variable outside the lambda breaks referential transparency, is unsafe if the stream is ever made
   parallel, and makes the pipeline's real effect invisible at the call site. If you need a side
@@ -113,7 +113,7 @@ check.
 ## Typed error handling in Java
 
 Java's stdlib has no `Either`. Given no FP library is a dependency in these repos (see "Boundaries"
-in `SKILL.md`), two patterns cover what's needed:
+in `mechanics.md`), two patterns cover what's needed:
 
 - **`Optional<T>`** when the only information needed is "found" vs. "not found": no error detail to
   carry.

@@ -202,31 +202,32 @@ def no_file_edits(tool_calls, final_text, **ctx) -> bool:
     return not any(tc["name"] in ("edit", "write") for tc in tool_calls)
 
 
-def sibling_loaded(tool_calls, final_text, sibling: str = "", **ctx) -> bool:
-    """Checks for an early `read` of <sibling>/SKILL.md -- still meaningful:
-    forcing this skill's load says nothing about whether a sibling skill's
-    own (unforced) discovery also fires for a mixed-topic prompt."""
-    if not sibling:
+def reference_opened(tool_calls, final_text, suffix: str = "", **ctx) -> bool:
+    """Checks for an early `read` of a reference file (path suffix match).
+    The demoted FP/GoF mechanics now live inside this skill's references/,
+    so surfacing mechanical detail in a mixed-topic prompt shows up as
+    opening the target doc, not loading a sibling skill."""
+    if not suffix:
         return False
-    return _reads_skill_md(tool_calls, f"{sibling}/SKILL.md")
+    return _reads_skill_md(tool_calls, suffix)
 
 
 CHECK_REGISTRY = {
     "mentions_keywords": mentions_keywords,
     "no_unrelated_edits": no_unrelated_edits,
     "no_file_edits": no_file_edits,
-    "sibling_loaded": sibling_loaded,
+    "reference_opened": reference_opened,
 }
 
 
 def resolve_check(check_id: str):
     """Supports parametrized check_id conventions used in prompt_set.json:
-    "sibling_loaded:<name>", "mentions_keywords:<kw1>|<kw2>|...", and
+    "reference_opened:<path-suffix>", "mentions_keywords:<kw1>|<kw2>|...", and
     "no_unrelated_edits:<file1>,<file2>,...". Bare check_ids fall back to
     the registry function's own defaults."""
-    if check_id.startswith("sibling_loaded:"):
-        _, sibling = check_id.split(":", 1)
-        return lambda tc, ft, **ctx: sibling_loaded(tc, ft, sibling=sibling, **ctx)
+    if check_id.startswith("reference_opened:"):
+        _, suffix = check_id.split(":", 1)
+        return lambda tc, ft, **ctx: reference_opened(tc, ft, suffix=suffix, **ctx)
     if check_id.startswith("mentions_keywords:"):
         _, kws = check_id.split(":", 1)
         keywords = kws.split("|")

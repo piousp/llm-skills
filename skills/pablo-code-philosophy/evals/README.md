@@ -61,8 +61,8 @@ descriptions with deferred validation, instead of continuing with name-only.
   endpoint to an existing API (surgical edits), a DRY extraction decision,
   a GoF/Strategy gate decision, reviewing a diff (no edits), a refactor
   where the YAGNI cut-off is the central decision, a request mixing design
-  philosophy with FP mechanics (both this skill and `functional-programming`
-  may be relevant), and a "clean up this file" request that must exercise
+  philosophy with FP mechanics (the FP mechanics live in this skill's
+  `references/fp/`), and a "clean up this file" request that must exercise
   the "Surgical Changes" section (edit only the named file, not an
   unrelated one).
 - **3 core-coverage cases** (AUD-14/OQ3) exercising the center of the skill:

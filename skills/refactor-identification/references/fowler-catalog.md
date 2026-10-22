@@ -12,7 +12,7 @@ candidates still live in `SKILL.md`'s A1-A4 tables and in `pablo-code-simplify`'
 | Change Value to Reference | Excluded unless real entity identity exists (FP.md, "structural equality is not identity"); default is value |
 | Collapse Hierarchy | A1 "Inheritance used for reuse, not variation" |
 | Combine Functions into Class | Excluded unless shared mutable state is real (GoF vs FP conflict row, `pablo-code-philosophy`) |
-| Combine Functions into Transform | `functional-programming` (composition/pipeline) |
+| Combine Functions into Transform | `pablo-code-philosophy` `references/fp/mechanics.md` (composition/pipeline) |
 | Consolidate Conditional Expression | `pablo-code-simplify` gate, mechanical (precondition: preserves short-circuit order) |
 | Decompose Conditional | `pablo-code-simplify` gate, mechanical |
 | Encapsulate Collection | A2 "Mutable internals escaping" |
@@ -49,14 +49,14 @@ candidates still live in `SKILL.md`'s A1-A4 tables and in `pablo-code-simplify`'
 | Rename Variable | `pablo-code-simplify` gate, mechanical |
 | Replace Command with Function | Excluded unless shared mutable state or undo is real (GoF vs FP conflict row) |
 | Replace Conditional with Polymorphism | A4, constrained to a sealed ADT + pattern match; never an open subclass hierarchy (SOLID.md) |
-| Replace Constructor with Factory Function | A2 "Invariant bypassed by mutator" / `gof-design-patterns` Factory Method row |
+| Replace Constructor with Factory Function | A2 "Invariant bypassed by mutator" / `pablo-code-philosophy` `references/gof/mechanics.md` Factory Method row |
 | Replace Control Flag with Break | `pablo-code-simplify` gate, mechanical |
 | Replace Derived Variable with Query | A3 "Redundant derived field" |
 | Replace Error Code with Exception | Excluded: FP.md typed-error handling goes the other direction (exception/error code → Either) |
 | Replace Exception with Precheck | A3 "Exceptions as control flow" |
 | Replace Function with Command | Excluded unless shared mutable state or undo is real (GoF vs FP conflict row) |
 | Replace Inline Code with Function Call | A1 "Structural duplication" / `pablo-code-simplify` gate, mechanical |
-| Replace Loop with Pipeline | `pablo-code-simplify` gate, mechanical (precondition: preserves laziness/short-circuit/exception timing) + `functional-programming` |
+| Replace Loop with Pipeline | `pablo-code-simplify` gate, mechanical (precondition: preserves laziness/short-circuit/exception timing) + `pablo-code-philosophy` `references/fp/mechanics.md` |
 | Replace Magic Literal | `code-review-checklist` "Config vs Code" |
 | Replace Nested Conditional with Guard Clauses | `pablo-code-simplify` gate, mechanical |
 | Replace Parameter with Query | `pablo-code-simplify` internal-signature tier, only when the query is pure over the same object |

@@ -1,7 +1,7 @@
 # Scala FP Mechanics
 
-Idiom-level guidance for applying the principles in `SKILL.md` to Scala code. These repos use
-**stdlib-only** functional types: no Cats, no ZIO (see "Boundaries" in `SKILL.md`). For worked
+Idiom-level guidance for applying the principles in `mechanics.md` to Scala code. These repos use
+**stdlib-only** functional types: no Cats, no ZIO (see "Boundaries" in `mechanics.md`). For worked
 before/after examples, see `patterns.md`.
 
 ## `Option`
@@ -32,7 +32,7 @@ val result: Option[Summary] =
 - **Use it when the failure case carries information the caller needs to act on** (a validation
   message, an error code); that's the difference from `Option`, which only says "absent," not "why."
 - **Chain with a `for`-comprehension** the same way as `Option`: this is exactly what makes `Either`
-  a "chainable" (monad-like) type per `SKILL.md`'s Functor/Monad section:
+  a "chainable" (monad-like) type per `mechanics.md`'s Functor/Monad section:
 
 ```scala
 def process(input: RawInput): Either[String, Output] =
@@ -83,7 +83,7 @@ result match {
 
 ## Accumulating multiple errors (the "Validated" use case)
 
-No Cats `Validated` here; none of these repos depend on Cats (see "Boundaries" in `SKILL.md`). The
+No Cats `Validated` here; none of these repos depend on Cats (see "Boundaries" in `mechanics.md`). The
 same effect, collecting *all* validation failures instead of stopping at the first one, is built with
 a stdlib-only accumulating result type, following whatever `DomainResult`-style accumulating ADT
 precedent already exists in the codebase (e.g., a result type with a dedicated case for surfacing

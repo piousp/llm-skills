@@ -1,6 +1,6 @@
 # Scala Pattern Mechanics
 
-Idiom-level guidance for applying the 12 patterns in `SKILL.md` to Scala code. The central fact
+Idiom-level guidance for applying the 12 patterns in `mechanics.md` to Scala code. The central fact
 to internalize before writing any of
 these in Scala: **several GoF patterns exist specifically to work around gaps in Java's type
 system that Scala doesn't have.** `sealed trait`/case classes give you closed algebraic data types
@@ -30,7 +30,7 @@ def eval(expr: Expression): Int = expr match {
 The compiler flags a non-exhaustive `match` on a sealed hierarchy (with `-Xfatal-warnings` or
 equivalent), the same safety net Visitor gives you in Java, with none of the `accept`/`visit`
 boilerplate. **Do not implement a Java-style Visitor class in Scala** when the node types are
-already (or could be) a `sealed trait`; see `SKILL.md`'s anti-pattern table. Reach for something
+already (or could be) a `sealed trait`; see `mechanics.md`'s anti-pattern table. Reach for something
 Visitor-shaped only if the operations genuinely need to be added from *outside* the module that
 owns the sealed hierarchy, which the compiler-checked `match` can't help with, and even then,
 prefer a typeclass (see below) over hand-rolled double dispatch.
@@ -70,7 +70,7 @@ val policy = RetryPolicy(maxAttempts = 5)
 Reach for an actual builder only when construction needs multi-step validation that can't be
 expressed as a single case class constructor (e.g., accumulating errors across several optional
 fields before allowing `build()`), and even there, prefer the accumulating-errors ADT from
-`functional-programming`'s `scala.md` over a mutable builder object.
+`../fp/scala.md` over a mutable builder object.
 
 ### Factory Method → companion object `apply`
 
@@ -94,7 +94,7 @@ lives.
 ## Patterns that still earn their keep in Scala
 
 These aren't erased by language features; they address a structural concern the type system
-doesn't solve for you. Implement them, but still check `SKILL.md`'s anti-pattern table first.
+doesn't solve for you. Implement them, but still check `mechanics.md`'s anti-pattern table first.
 
 ### Adapter → an implementation of the target trait, or an implicit conversion
 
@@ -204,7 +204,7 @@ def validate(input: RawInput): Option[String] =
 
 (`.view.flatMap(...).headOption` short-circuits on the first match and works on any Scala 2.11+/3;
 `Iterator.nextOption()` is Scala 2.13+ only; verify the target repo's Scala version before using
-it, the same way `functional-programming`'s `scala.md` gates right-biased `Either` on 2.13+/3.)
+it, the same way `../fp/scala.md` gates right-biased `Either` on 2.13+/3.)
 
 Or, when each handler is naturally a `PartialFunction`, `orElse` chains them directly:
 
@@ -212,7 +212,7 @@ Or, when each handler is naturally a `PartialFunction`, `orElse` chains them dir
 val handler: PartialFunction[RawInput, String] = handleXml orElse handleJson orElse handleFallback
 ```
 
-Same note as Java: this overlaps with `functional-programming`'s validator-composition case:
+Same note as Java: this overlaps with `../fp/mechanics.md`'s validator-composition case:
 decide whether you need the full Chain-of-Responsibility framing or whether the function-list
 form above is already the entire answer (in Scala, it usually is).
 
@@ -238,7 +238,7 @@ call site.
 
 Don't introduce Cats' `Free` monad, tagless-final effect encodings, or a typeclass-heavy
 reimplementation of any pattern above as a way to make it "more functional": that's out of scope
-for the same reason `functional-programming`'s Boundaries section excludes monad transformers and
+for the same reason `../fp/mechanics.md`'s Boundaries section excludes monad transformers and
 tagless final: no repo here depends on Cats/ZIO, and every idiom above is expressible in stdlib
 Scala. If a real need for one of those surfaces, raise it as a dependency decision, not something
 introduced silently while implementing a pattern from this catalog.

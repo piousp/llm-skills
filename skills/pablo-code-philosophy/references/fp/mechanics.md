@@ -1,22 +1,9 @@
----
-name: functional-programming
-description: >
-  Mechanical, intermediate-level FP guidance for Java and Scala: immutability,
-  pure functions, composition, referential transparency, higher-order functions, fold/reduce, and
-  typed error handling (Option/Either, custom accumulating-error ADTs). TRIGGER when: refactoring
-  imperative/OOP code toward FP, designing/reviewing typed error handling (Either/Option/Result/
-  Validated-style types), reviewing heavy mutable state, nested conditionals, exception-driven
-  control flow, or Streams/Optional/records/sealed interfaces/pattern matching/for-comprehensions.
-  Also use when pablo-code-philosophy's "Light FP" bullet needs mechanical detail: that skill
-  delegates here. Provides a code-smell → FP-principle table AND a when-NOT-to-apply-FP table.
-  SKIP: monad transformers, tagless final, or FP libraries not already a dependency (Cats, Vavr,
-  ZIO); out of scope, see "Boundaries" below.
----
 
 # Functional Programming: Mechanics
 
-Use this as the mechanical companion to `pablo-code-philosophy`'s "Light FP" bullet: that skill
-states the philosophy in one paragraph; here you get the recognition heuristics, the
+Use this as the mechanical companion to `pablo-code-philosophy`'s "Light FP" principle: the
+pointed one-liner lives in this skill's main SKILL.md bullet and the rules version in
+`../principles/FP.md`; here you get the recognition heuristics, the
 per-language idioms, and the worked pattern catalog to apply it correctly in Java and Scala
 service code.
 
@@ -26,7 +13,7 @@ keep the imperative form.
 
 ## Principles (intermediate level)
 
-These are the concepts this skill assumes and applies. Boundaries are listed at the end.
+These are the concepts this reference assumes and applies. Boundaries are listed at the end.
 
 - **Immutability**: prefer values that don't change after construction (`final` fields, `val`,
   immutable collections). A mutable accumulator is acceptable *inside* a single function when the
@@ -46,7 +33,7 @@ These are the concepts this skill assumes and applies. Boundaries are listed at 
   `andThen`, passing a validator as a parameter). Use them to parameterize *behavior*, not just data.
 - **Fold/reduce**: collapse a collection into a single value via an accumulator function
   (`reduce`/`fold` in Java Streams, `foldLeft`/`foldRight` in Scala). This is the FP alternative to a
-  loop with a mutable accumulator; see `references/patterns.md` for when the swap is worth it.
+  loop with a mutable accumulator; see `patterns.md` for when the swap is worth it.
 - **Functor/Monad, informally**: you don't need the category-theory vocabulary; you need the
   *shape*. A type is "mappable" (Functor-like) if it has a `.map` that transforms the contents
   without changing the container (`Optional<T>.map`, `Option[T].map`, `Stream<T>.map`). A type is
@@ -57,7 +44,7 @@ These are the concepts this skill assumes and applies. Boundaries are listed at 
 - **Typed error handling**: when a failure is an expected outcome of the domain (validation failed,
   record not found), encode it in the return type (`Either<Error, T>`, `Option<T>`) instead of
   throwing. Reserve exceptions for truly exceptional, unrecoverable conditions (bugs, I/O failures
-  the caller can't reasonably handle). See `references/patterns.md` for the accumulating-errors
+  the caller can't reasonably handle). See `patterns.md` for the accumulating-errors
   pattern (the "Validated" use case) built on stdlib types.
 
 ## Recognition heuristic: code smell → FP principle
@@ -97,22 +84,22 @@ abstractions" principle: don't buy composability nobody is going to use.
 The concepts above are language-agnostic; the idioms to express them are not. Read the file for the
 language you're touching:
 
-- **Java** → `references/java.md`. Covers Streams, `Optional`, and the Java-17+ vs. Java-8/11
+- **Java** → `java.md`. Covers Streams, `Optional`, and the Java-17+ vs. Java-8/11
   split for records/sealed interfaces; check the target repo's `pom.xml` `java.version` before
   picking a form.
-- **Scala** → `references/scala.md`. Covers `Option`/`Either`/`Try`, pattern matching, case
+- **Scala** → `scala.md`. Covers `Option`/`Either`/`Try`, pattern matching, case
   classes, and for-comprehensions.
 
 ## Pattern catalog
 
-`references/patterns.md` has worked before/after examples, in both languages, for the recurring
+`patterns.md` has worked before/after examples, in both languages, for the recurring
 implementation patterns: a validation pipeline built on `Either`, folding vs. a mutable-accumulator
 loop, and function composition vs. method-chaining. Read it when implementing one of these shapes
 rather than re-deriving the pattern from principles each time.
 
 ## Boundaries (explicitly out of scope)
 
-This skill stops at stdlib-only, intermediate FP. It deliberately does not cover:
+This reference stops at stdlib-only, intermediate FP. It deliberately does not cover:
 
 - **Monad transformers** (`EitherT`, `OptionT`): not needed for the two-level nesting these
   codebases actually have; if you find yourself wanting one, the simpler fix is usually flattening
@@ -124,6 +111,6 @@ This skill stops at stdlib-only, intermediate FP. It deliberately does not cover
   as `cats.effect.IO` may still show up transitively (e.g., pulled in by a library like
   `scanamo-cats-effect`), treat that as incidental, not as license to write idiomatic Cats. Don't
   add one of these libraries to
-  reach for a pattern in this skill; every pattern here is expressible in stdlib `Optional`/`Option`/
+  reach for a pattern in this reference; every pattern here is expressible in stdlib `Optional`/`Option`/
   `Either`/`Stream`. If a real need for one of these libraries arises, that's a dependency decision to
   raise explicitly, not something to introduce silently while implementing a feature.

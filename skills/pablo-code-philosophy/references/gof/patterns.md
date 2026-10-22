@@ -1,8 +1,8 @@
 # Pattern Catalog
 
-Worked before/after examples for all 12 patterns covered by `SKILL.md`, in both Java and Scala.
+Worked before/after examples for all 12 patterns covered by `mechanics.md`, in both Java and Scala.
 Each entry shows the smell-driven starting point and the pattern applied. Read the "when it's
-worth it" note before applying, check it against `SKILL.md`'s anti-pattern table; none of these
+worth it" note before applying, check it against `mechanics.md`'s anti-pattern table; none of these
 are worth doing unconditionally.
 
 **Contents:** Creational (Factory Method, Builder) · Structural (Adapter, Decorator, Composite) ·
@@ -44,7 +44,7 @@ val parser = Parser.forFormat(format) // companion object apply; see scala.md
 
 **When it's worth it:** several optional fields with defaults, or assembly steps that need
 validating together before construction. For 2-3 required fields with no optional logic, skip it;
-see `SKILL.md`'s anti-pattern table.
+see `mechanics.md`'s anti-pattern table.
 
 Java, before (telescoping constructors, or one constructor with 6 parameters most callers barely
 use):
@@ -69,7 +69,7 @@ doesn't exist in Scala:
 val policy = RetryPolicy(maxAttempts = 5, backoff = 2.seconds) // named + default params
 ```
 
-If Scala code needs multi-step validation before construction, see `functional-programming`'s
+If Scala code needs multi-step validation before construction, see `../fp/mechanics.md`'s
 accumulating-errors ADT; that's the correct Scala replacement for a validating Builder, not a
 mutable builder object.
 
@@ -364,7 +364,7 @@ def validate(input: RawInput): Option[String] =
   handlers.view.flatMap(h => h(input)).headOption
 ```
 
-Note both "after" forms are also just `functional-programming`'s validator-composition pattern;
+Note both "after" forms are also just `../fp/mechanics.md`'s validator-composition pattern;
 naming it Chain of Responsibility doesn't change the code, only clarifies intent when discussing
 the design.
 
@@ -412,7 +412,7 @@ def onPaymentReceived(): OrderState = state.onPaymentReceived(this)
 ```
 
 The Scala "before" is already a `sealed trait`-friendly `match`; the "after" is worth it only once
-each state's *behavior* (not just its label) grows enough to want its own type, per `SKILL.md`'s
+each state's *behavior* (not just its label) grows enough to want its own type, per `mechanics.md`'s
 anti-pattern table.
 
 ### Visitor

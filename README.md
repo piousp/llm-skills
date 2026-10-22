@@ -17,8 +17,6 @@ Frontmatter, such as `tools`, `model`, and turn limits, is harness-specific. The
 | `pablo-code-planning` | Plans the code to touch: reuse opportunities, scope, public API, and test plan, before any implementation. |
 | `pablo-tdd` | The red-green loop: what a good test is, where tests go, anti-patterns. |
 | `pablo-toolkit` | Session-scoped transparency for the pablo-* skills: prompt preview before delegation, change tree after edits. |
-| `functional-programming` | Mechanical FP guidance for Java and Scala: immutability, composition, typed error handling. |
-| `gof-design-patterns` | 12 GoF patterns with a code-smell to pattern table and an over-engineering guard. |
 | `refactor-identification` | Detects structural refactor candidates in a branch diff: missing abstractions, weak encapsulation, poor data types. |
 | `iterative-design` | Deprecated. Coordinator method: goal discovery, planner, one vertical TDD loop, refactor, QA gate. Superseded by the pablo-* skills; kept for reference. |
 | `code-review-checklist` | Review lens: checks a diff against the coding philosophy and flags test coverage gaps. Read-only. |

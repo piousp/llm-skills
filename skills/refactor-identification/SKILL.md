@@ -8,7 +8,8 @@ description: >
   (primitives, clumps, null-checks instead of Option/Either/ADT, redundant derived fields,
   aliased mutable values), (A4) flags/switch where a sealed ADT fits. Findings need
   file:line evidence and pass a When-NOT-to-report (YAGNI/KISS) gate. Identifies direction only,
-  defers how to gof-design-patterns/functional-programming. TRIGGER: deciding if a refactor
+  defers how to `pablo-code-philosophy`'s `references/gof/` and `references/fp/` mechanics.
+  TRIGGER: deciding if a refactor
   belongs in this branch, "refactor candidates" requests, or as the deep-dive behind a broader
   code-review pass. SKIP: renames, trivial extraction, executing fixes, whole-repo scans, merge
   gating, and judging whether to apply or how risky a specific reviewer suggestion is.
@@ -22,9 +23,9 @@ Do not use it as a substitute for a broader code-review checklist pass: that pas
 part of A1 superficially (its "Abstractions" section and the SRP/OCP portion of "Structural
 Code Smells") as part of a broad, fast merge gate; reach for this skill only when that
 surface-level pass isn't enough. See Boundaries below for the exact split. Identify candidates only; never execute a refactor and never explain *how* to apply a
-pattern once one is chosen. Route the "how" to `gof-design-patterns` (pattern catalog) and
-`functional-programming` (FP mechanics); route the cut-off criterion (when NOT to bother) to
-`pablo-code-philosophy`.
+pattern once one is chosen. Route the "how" to `pablo-code-philosophy`'s `references/gof/`
+(pattern catalog) and `references/fp/` (FP mechanics); route the cut-off criterion (when NOT to
+bother) to that same skill.
 
 ## Scope law: the branch's work only
 
@@ -265,13 +266,13 @@ caller's prompt explicitly asks for them.
 
 | Category | This skill (identification) | The "how" (cross-reference, never duplicate) |
 |---|---|---|
-| A1 | detect + measure | `gof-design-patterns`: Strategy / Template Method / Factory Method rows; `functional-programming`: higher-order-function row (structural dup with no shared state); `pablo-code-philosophy` `references/principles/DRY.md` (2-vs-3 rule); `references/principles/SOLID.md` (the L section, composition over inheritance) for the inheritance-for-reuse row |
-| A2 | detect + measure | `functional-programming`: immutability principle; `gof-design-patterns`: Builder row (validated construction); `pablo-code-philosophy`: "Scientific code" (`references/principles/FP.md`), which also grounds the CQS and ambient-dependency rows |
-| A3 | detect + measure | `functional-programming`: typed error handling + `references/patterns.md` (validation pipeline, accumulating errors); its `references/java.md` / `references/scala.md` for idioms; `pablo-code-philosophy` `references/principles/KISS.md` ("No field that another field already carries") for the derived-field row, `references/principles/FP.md` ("structural equality is not identity") for the value/reference row |
-| A4 | detect + measure | `functional-programming` `references/scala.md` (sealed trait + case classes + match); `gof-design-patterns`: State row (complex per-state behavior), and its Visitor caveat (never Visitor an ADT) |
+| A1 | detect + measure | `pablo-code-philosophy` `references/gof/mechanics.md`: Strategy / Template Method / Factory Method rows; `references/fp/mechanics.md`: higher-order-function row (structural dup with no shared state); `references/principles/DRY.md` (2-vs-3 rule); `references/principles/SOLID.md` (the L section, composition over inheritance) for the inheritance-for-reuse row |
+| A2 | detect + measure | `pablo-code-philosophy`: `references/fp/mechanics.md` immutability section; `references/gof/mechanics.md` Builder row (validated construction); "Scientific code" (`references/principles/FP.md`), which also grounds the CQS and ambient-dependency rows |
+| A3 | detect + measure | `pablo-code-philosophy`: `references/fp/mechanics.md` typed error handling + `references/fp/patterns.md` (validation pipeline, accumulating errors); `references/fp/java.md` / `references/fp/scala.md` for idioms; `references/principles/KISS.md` ("No field that another field already carries") for the derived-field row, `references/principles/FP.md` ("structural equality is not identity") for the value/reference row |
+| A4 | detect + measure | `pablo-code-philosophy` `references/fp/scala.md` (sealed trait + case classes + match); `references/gof/mechanics.md`: State row (complex per-state behavior), and its Visitor caveat (never Visitor an ADT) |
 | Gate | n/a | `pablo-code-philosophy`: pipeline YAGNI→KISS→DRY→SOLID; conflict matrix KISS > DRY > SOLID; the gate N1–N10 is its instantiation |
 
-Never restate a gof/fp table row here. Point to it by skill name and row/section so the
+Never restate a gof/fp table row here. Point to it by reference path and row/section so the
 implementer reads the recipe from its source of truth.
 
 ## Per-language detection cues
@@ -306,8 +307,8 @@ caller's request itself falls outside what this lens produces.
 
 - Renames, formatting, trivial extract-method, comment/doc-only changes: none of these alter
   the code's structural shape.
-- Executing the refactor or giving implementation steps: `gof-design-patterns` and
-  `functional-programming` own the "how".
+- Executing the refactor or giving implementation steps: `pablo-code-philosophy`'s
+  `references/gof/` and `references/fp/` own the "how".
 - Whole-repo scanning, or any finding not anchored in the branch's diff.
 - Merge verdicts or review severities: a broader code-review pass owns the pass/FAIL gate. Some
   overlap with such a checklist is intentional and expected: a boolean parameter or an
