@@ -108,7 +108,29 @@ function buildJobListEntry(job: JobSnapshot, now: number, theme: ProgressTheme):
   }
 }
 
-// Full status listing for the `/subagents` command. Takes jobs in whatever
+// Plain-text man page for bare /subagents (and /subagents help): one line
+// per subcommand with its argument shape, then the auto-resolution rules.
+export function buildHelpText(): string {
+  return [
+    "/subagents subcommands:",
+    "",
+    "  /subagents                            this help",
+    "  /subagents list                       list running and recently finished jobs (newest first)",
+    "  /subagents status [id]                detail one job: activity, recent tool calls, usage",
+    "  /subagents peek [id]                  live window over one job (w fullscreen, q/Esc close, Ctrl+O expand)",
+    "  /subagents cancel [id]                stop a running job",
+    "  /subagents steer <id> <message>       inject a message into a running job's live session",
+    "  /subagents followUp <id> <message>    queue a message for the end of the run (it extends the run)",
+    "  /subagents retry [id]                 re-dispatch a settled run as a new job",
+    "  /subagents continue [id]              relaunch an interrupted run from its persisted child session",
+    "  /subagents clear                      drop finished jobs from the list",
+    "  /subagents session                    combined session spend: main + subagents",
+    "",
+    "Without an id, status/peek/cancel/steer/followUp pick the single active job on their own (several actives ask for one). retry/continue resolve their target from settled runs on disk; they only relaunch runs that failed, errored, or were interrupted (cancelled runs need an explicit id).",
+  ].join("\n");
+}
+
+// Full status listing for the `/subagents list` command. Takes jobs in whatever
 // order the caller wants shown (the registry's `list()` is already
 // newest-first); this function does not re-sort.
 export function buildJobListText(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string {
@@ -118,6 +140,7 @@ export function buildJobListText(jobs: readonly JobSnapshot[], now: number, them
 
 export type SubagentsCommand =
   | { readonly kind: "list" }
+  | { readonly kind: "help" }
   | { readonly kind: "cancel"; readonly id?: string }
   | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
@@ -131,9 +154,17 @@ export type SubagentsCommand =
 
 export function parseSubagentsCommand(args: string): SubagentsCommand {
   const trimmed = args.trim();
-  if (trimmed === "") return { kind: "list" };
+  // Bare /subagents is the help view; the listing lives at /subagents list.
+  if (trimmed === "") return { kind: "help" };
 
   const [sub, ...rest] = trimmed.split(/\s+/);
+  if (sub === "help") return { kind: "help" };
+  if (sub === "list") {
+    // list takes no arguments (same rule as session): anything extra is a
+    // usage error rather than a silently ignored suffix.
+    if (rest.length > 0) return { kind: "usage-error", message: "Usage: /subagents list" };
+    return { kind: "list" };
+  }
   if (sub === "cancel") {
     // Bare cancel auto-resolves its target (active jobs only).
     const id = rest[0];
@@ -175,7 +206,7 @@ export function parseSubagentsCommand(args: string): SubagentsCommand {
     if (rest.length > 0) return { kind: "usage-error", message: "Usage: /subagents session" };
     return { kind: "session" };
   }
-  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents [status|peek|cancel|steer|followUp|retry|continue] [id] [|clear|session]` };
+  return { kind: "usage-error", message: `Unknown /subagents subcommand "${sub}". Usage: /subagents for help; /subagents peek|status|cancel|retry|continue [id]; /subagents steer|followUp <id> <message>; /subagents list|clear|session` };
 }
 
 // --- /subagents retry | continue ---

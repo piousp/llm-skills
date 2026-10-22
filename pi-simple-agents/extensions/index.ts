@@ -14,7 +14,7 @@ import type { SubagentParams as ValidatedSubagentParams, ValidationResult } from
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, buildHelpText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
 import { addUsageToTotals, buildSubagentSessionReport, buildRelaunchCandidates, type ReconcileFs, type SessionEntry, type SubagentRelaunchCandidate } from "../src/session-reconcile.ts";
 import { runIdDirName } from "../src/subagent-session.ts";
 import type { AgentConfig } from "../src/agents.ts";
@@ -553,10 +553,14 @@ export default async function (
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
-    description: "List background subagent jobs; /subagents peek|status|cancel <id>, /subagents steer|followUp <id> <message>, /subagents retry|continue [id], /subagents clear, or /subagents session",
+    description: "Background subagent jobs; /subagents peek|status|cancel|retry|continue [id], /subagents steer|followUp <id> <message>, /subagents list|clear|session, bare /subagents for help",
     handler: async (args, ctx) => {
       captureUi(ctx);
       const command = parseSubagentsCommand(args);
+      if (command.kind === "help") {
+        ctx.ui.notify(buildHelpText(), "info");
+        return;
+      }
       if (command.kind === "list") {
         ctx.ui.notify(buildJobListText(jobs.list(), Date.now(), ctx.ui.theme), "info");
         return;

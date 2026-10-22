@@ -96,7 +96,7 @@ Jobs are **in-memory only, per pi session**: nothing persists across a restart, 
 
 ### The `/subagents` command
 
-`/subagents` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
+Bare `/subagents` (and `/subagents help`) prints the help text: every subcommand with its argument shape, plus the auto-resolution rules. `/subagents list` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
 
 `/subagents status <id>` shows what one job is doing in more detail than the list. For a running job it reports: status, elapsed time, the current **activity** (see below), the most recent tool call with its arguments summary, the last 10 tool calls of the run (`… (+N earlier)` elides older ones), and the live usage footer (the list view only carries usage once a job settles). For a finished job it renders exactly the list view's entry (result or error plus the usage footer). An unknown id reports `No job with id "<id>" in this session.`, the same warning wording as `cancel`.
 
@@ -134,7 +134,7 @@ While at least one job is running, a persistent panel appears below the editor: 
 ◯ S1001 scout grep Find all fetch() calls in src/  1m 23s
 ```
 
-It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to: the same thing `/subagents` shows on demand, kept visible without asking.
+It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to: the same thing `/subagents list` shows on demand, kept visible without asking.
 
 ### Expanding a job's result (Ctrl+O)
 

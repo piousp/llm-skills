@@ -5,6 +5,7 @@ import {
   formatToolDuration,
   buildJobsWidgetLines,
   buildJobListText,
+  buildHelpText,
   buildJobStatusText,
   buildSubagentSessionText,
   buildSubagentStatusText,
@@ -167,13 +168,37 @@ test("buildJobListText: preserves the order of the given jobs array (caller deci
   assert.ok(text.indexOf("S1002") < text.indexOf("S1001"));
 });
 
+test("buildHelpText: every subcommand appears with its argument shape", () => {
+  const text = buildHelpText();
+  for (const sub of ["list", "status [id]", "peek [id]", "cancel [id]", "steer <id> <message>", "followUp <id> <message>", "retry [id]", "continue [id]", "clear", "session"]) {
+    assert.match(text, new RegExp(sub.replace(/\[/g, "\\[").replace(/\]/g, "\\]")));
+  }
+});
+
+test("buildHelpText: states the auto-resolution rules", () => {
+  const text = buildHelpText();
+  assert.match(text, /Without an id/);
+  assert.match(text, /failed, errored, or were interrupted/);
+});
+
 // --- parseSubagentsCommand ---
 
-test("parseSubagentsCommand: empty string is list", () => {
-  assert.deepEqual(parseSubagentsCommand(""), { kind: "list" });
+test("parseSubagentsCommand: empty string is help", () => {
+  assert.deepEqual(parseSubagentsCommand(""), { kind: "help" });
 });
-test("parseSubagentsCommand: whitespace-only is list", () => {
-  assert.deepEqual(parseSubagentsCommand("   "), { kind: "list" });
+test("parseSubagentsCommand: whitespace-only is help", () => {
+  assert.deepEqual(parseSubagentsCommand("   "), { kind: "help" });
+});
+test("parseSubagentsCommand: bare 'list' lists", () => {
+  assert.deepEqual(parseSubagentsCommand("list"), { kind: "list" });
+});
+test("parseSubagentsCommand: 'list' takes no arguments (same rule as session)", () => {
+  const result = parseSubagentsCommand("list extra");
+  assert.equal(result.kind, "usage-error");
+  if (result.kind === "usage-error") assert.equal(result.message, "Usage: /subagents list");
+});
+test("parseSubagentsCommand: bare 'help' is help", () => {
+  assert.deepEqual(parseSubagentsCommand("help"), { kind: "help" });
 });
 test("parseSubagentsCommand: 'cancel <id>' is a cancel command", () => {
   assert.deepEqual(parseSubagentsCommand("cancel S1002"), { kind: "cancel", id: "S1002" });
@@ -193,13 +218,19 @@ test("parseSubagentsCommand: 'status <id> extra' takes the first token as the id
 test("parseSubagentsCommand: unknown subcommand lists status in the usage hint", () => {
   const result = parseSubagentsCommand("foo");
   if (result.kind === "usage-error") {
-    assert.match(result.message, /status\|peek\|cancel/);
-    assert.match(result.message, /\|clear/);
+    assert.match(result.message, /peek\|status\|cancel\|retry\|continue \[id\]/);
+    assert.match(result.message, /list\|clear\|session/);
   }
 });
 test("parseSubagentsCommand: unknown subcommand is a usage error", () => {
   const result = parseSubagentsCommand("foo");
   assert.equal(result.kind, "usage-error");
+});
+test("parseSubagentsCommand: unknown subcommand usage hint points at bare help", () => {
+  const result = parseSubagentsCommand("foo");
+  if (result.kind === "usage-error") {
+    assert.match(result.message, /Usage: \/subagents for help/);
+  }
 });
 test("parseSubagentsCommand: 'clear' is a clear command", () => {
   assert.deepEqual(parseSubagentsCommand("clear"), { kind: "clear" });

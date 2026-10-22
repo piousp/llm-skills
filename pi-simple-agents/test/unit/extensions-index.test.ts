@@ -384,15 +384,34 @@ test("wiring: registers the subagents command, the subagent-result message rende
   assert.ok(pi.handlers.has("session_shutdown"));
 });
 
-test("wiring: /subagents with no running jobs reports the empty-list message", async () => {
+test("wiring: /subagents list with no running jobs reports the empty-list message", async () => {
   const pi = makeFakePi();
   await extensionFactory(pi as unknown as ExtensionAPI);
 
   const ctx = fakeCommandCtx();
-  await pi.commands.get("subagents")!.handler("", ctx);
+  await pi.commands.get("subagents")!.handler("list", ctx);
 
   assert.equal(ctx.notifications.length, 1);
   assert.match(ctx.notifications[0].message, /No background subagent jobs/);
+});
+
+test("wiring: bare /subagents prints the help text, and 'list' does the listing", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+
+  const helpCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("", helpCtx);
+  assert.equal(helpCtx.notifications.length, 1);
+  assert.equal(helpCtx.notifications[0].type, "info");
+  assert.match(helpCtx.notifications[0].message, /\/subagents subcommands:/);
+
+  const helpExplicitCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("help", helpExplicitCtx);
+  assert.match(helpExplicitCtx.notifications[0].message, /\/subagents subcommands:/);
+
+  const listCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("list", listCtx);
+  assert.match(listCtx.notifications[0].message, /No background subagent jobs/);
 });
 
 test("wiring: /subagents cancel <unknown-id> reports not-found as a warning", async () => {
@@ -499,7 +518,7 @@ test("wiring: bare 'cancel' auto-cancels the single active job (notification + s
 
   // The job actually flipped to cancelling: the list view shows the state.
   const listCtx = fakeCommandCtx();
-  await pi.commands.get("subagents")!.handler("", listCtx);
+  await pi.commands.get("subagents")!.handler("list", listCtx);
   assert.match(listCtx.notifications[0].message, new RegExp(`${jobId} cancelling`));
 
   await waitUntil(() => pi.sentMessages.length > 0);
@@ -1100,7 +1119,7 @@ test("wiring: session_shutdown cancels running jobs, clears the widget, and supp
   assert.equal(pi.sentMessages.length, sentBefore); // shutdown suppressed delivery
 
   const listCtx = fakeExecuteCtx({ cwd: fixture.cwd });
-  await pi.commands.get("subagents")!.handler("", listCtx);
+  await pi.commands.get("subagents")!.handler("list", listCtx);
   assert.match(listCtx.notifications.at(-1)!.message, /cancelled/);
 });
 
@@ -1168,7 +1187,7 @@ test("wiring: /subagents cancel on a real running job, then /subagents clear, th
   assert.match(ctx.notifications.at(-1)!.message, /Cleared 1 finished job/);
 
   const afterClearCtx = fakeExecuteCtx({ cwd: fixture.cwd });
-  await pi.commands.get("subagents")!.handler("", afterClearCtx);
+  await pi.commands.get("subagents")!.handler("list", afterClearCtx);
   assert.doesNotMatch(afterClearCtx.notifications.at(-1)!.message, new RegExp(jobId));
 });
 

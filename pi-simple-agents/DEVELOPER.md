@@ -1123,10 +1123,12 @@ function formatElapsed(ms: number): string; // "0s", "1m 00s", "1h 00m"
 function buildJobsWidgetLines(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string[] | undefined;
 function buildJobListText(jobs: readonly JobSnapshot[], now: number, theme: ProgressTheme): string;
 function buildJobStatusText(job: JobSnapshot, now: number, theme: ProgressTheme): string;
+function buildHelpText(): string; // bare /subagents and /subagents help
 function jobNotFoundText(id: string): string;
 
 type SubagentsCommand =
   | { readonly kind: "list" }
+  | { readonly kind: "help" }
   | { readonly kind: "cancel"; readonly id?: string }
   | { readonly kind: "status"; readonly id?: string }
   | { readonly kind: "peek"; readonly id?: string }
@@ -1175,7 +1177,9 @@ one line per still-unfinished task across every active job (`◯` running, `◌`
 time ticking from `now - job.startedAt`, plus a trailing hint line. `buildJobListText` (used by the
 `/subagents` command, not the widget) reuses `buildProgressLine` (`src/progress.ts`) for a running
 job's body and a local per-task renderer (agent, success/`FAILED`, usage footer) for a finished
-one; it does not re-sort — callers pass `jobs.list()`, already newest-first.
+one; it does not re-sort — callers pass `jobs.list()`, already newest-first. `buildHelpText` backs
+bare `/subagents` and `/subagents help` (a plain-text man page); the listing moved there from the
+bare view in 1.5.1.
 
 `buildJobStatusText` backs `/subagents status <id>`. Settled jobs reuse `buildJobListEntry` directly (the
 module-local renderer a list entry is built from), so a finished job reports identically in both. A
@@ -1262,6 +1266,16 @@ closes that gap entirely from already-persisted data — nothing new is written:
 - **Branches**: the whole parent file is read, no branch filtering — the same scope as pi's
   `/session` (`getSessionStats` iterates every entry), and a run billed in an abandoned branch
   still happened.
+- **Persistence limits**: pi flushes the parent session file synchronously per entry, so anything
+  a settled job reported is on disk. With `--no-session` neither parent nor child files exist:
+  child runs and their aggregate usage stay in memory and the spend is unrecoverable after a
+  restart. When forking the caller session fails (`forkFrom`/`atPath` throws), a child falls back
+  to an in-memory session; the only trace left is the parent's aggregate `details.usage`, which
+  lands in the report's `unattributed` bucket without a per-model breakdown. The timestamped
+  `<ts>_<id>.jsonl` files a `continue` fork writes next to a child are never walked by the report:
+  the continued run is attributed from its completion message's `details.usage` (the fork replays
+  the seed's history without re-calling the LLM) and the seed run exactly once from its own
+  `session.jsonl`. A provider that never reports usage shows zero; that spend is irrecoverable.
 
 The report shape is `SubagentSessionReport { runs, totals, breakdown, cacheWaste, byAgent, counts }`;
 `buildSubagentSessionText` (`src/job-view.ts`) renders it. The wiring passes
