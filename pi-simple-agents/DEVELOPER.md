@@ -1410,8 +1410,8 @@ reachable from the registry's async `onChange` callback.
 
 ## Extension wiring (background jobs)
 
-`extensions/index.ts`'s default export wires all four modules above into the registered tool, two
-new registrations, and three event handlers — all scoped inside the factory function's closure
+`extensions/index.ts`'s default export wires all four modules above into the two registered tools,
+the message renderer, the `/subagents` command, and three event handlers — all scoped inside the factory function's closure
 (per-session, like the job registry itself, never module-level):
 
 - `pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage)`: renders
@@ -1453,6 +1453,24 @@ new registrations, and three event handlers — all scoped inside the factory fu
   sessions, a crash before the ack flush, or a launch that was itself a retry/continue) run the
   agent's own defaults, and both commands' success outputs (one shared renderer per verb,
   `buildRelaunchResultText`) say which of the two happened.
+- `pi.registerTool(SUBAGENT_JOB_TOOL_NAME, ...)`: the `subagent_job` tool, registered beside
+  `subagent`. It carries `SUBAGENT_JOB_DESCRIPTION`, the `SubagentJobParams` TypeBox schema
+  (`action`, optional `id`, optional `message`), `executionMode: "sequential"` (sibling calls in
+  one batch are serialized, so two interventions on the same job cannot both pass the budget
+  check), and no `renderCall`/`renderResult` (the host's default rendering). Its `execute`
+  validates the params (`validateJobParams`) and delegates to the SAME `handleJobAction` closure
+  the command uses, passing `PLAIN_THEME` instead of `ctx.ui.theme` (the model reads plain text)
+  and the closure-scoped `toolInterventions` set. A structural problem is an `errorResult`; every
+  guard outcome is a normal result carrying the action's text. `handleJobAction(action, id,
+  message, ctx, budget?)` was extracted in 1.5.2 from the command handler's
+  `list|status|cancel|steer|followUp|retry|continue` branches: it resolves the target, runs the
+  registry call, and returns `{ text, level }`, which the command notifies and the tool returns.
+  `budget` is `undefined` on the command path, so a user-typed action is never refused. The
+  budget is a `Set<string>` of spent run ids, checked before an intervention and appended only
+  on success (`cancelling`, `injected`, a completed relaunch), so a failed guard costs nothing;
+  `handleRelaunch` checks it against the candidate before the consumed-orphan check and adds the
+  source run id after a successful launch. A relaunch mints a new run id, which is budget-fresh
+  by construction.
 - `pi.on("agent_before_settle", ...)`: the settle barrier (see `createSettleBarrier` above).
 - `pi.on("agent_settled", ...)`: the `!ctx.hasUI` safety-net cleanup, see above.
 - `pi.on("session_shutdown", ...)`: `uiRef?.ui?.setStatus(STATUS_KEY, undefined)` (the accumulated
@@ -1879,7 +1897,10 @@ when no seed was given.
 
 ```typescript
 const SUBAGENT_BASE_DESCRIPTION =
-  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). Use /subagents to list running/recent jobs and /subagents cancel <id> to cancel one. You may redirect a running subagent with `/subagents steer <id> <message>` or queue a follow-up with `/subagents followUp <id> <message>` — but only when the user explicitly asks; never steer or follow up a subagent on your own initiative, and a job that has already settled can no longer be messaged.";
+  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). A running job can be cancelled, steered, or queued a follow-up with the `subagent_job` tool, or with the user's `/subagents` command; a job that has already settled can no longer be messaged. A run that settled as failed or errored, or was interrupted mid-run, can be re-dispatched with `subagent_job` action `retry` or, when it left a persisted child session, continued from that point with action `continue` — both relaunch with the original call's recorded parameters when the launch acknowledgment persisted them, and with the agent's own defaults otherwise. Interventions (cancel, steer, followUp, retry, continue) are allowed once per job on your own initiative; a second intervention on the same job requires asking the user first — the `subagent_job` tool refuses it and says so. `status` and `list` are read-only and always allowed.";
+
+const SUBAGENT_JOB_DESCRIPTION =
+  "Manage a background subagent job launched by the subagent tool. Actions: status (detail one job; without an id it auto-targets the single active job), list (all running/recent jobs, newest first), cancel (stop a running job), steer (inject a message into a running job's live session to redirect it; needs message), followUp (queue a message for the end of the run; it extends the run; needs message), retry (re-dispatch a settled run as a NEW job), continue (relaunch an interrupted run from its persisted child session, keeping its partial work; the agent re-verifies half-done work first). status and list are read-only and always allowed. The other five are interventions: allowed once per job on your own initiative; a second intervention on the same job is refused, and needs the user to ask for it. Target by job id (from the subagent acknowledgment, e.g. S1002); retry/continue also accept a run id, and without an id they resolve their target from settled runs on disk (cancelled runs are user intent and need an explicit id).";
 
 function buildSubagentToolDescription(
   agents: ReadonlyArray<Pick<AgentConfig, "name" | "description">>,
@@ -1894,6 +1915,10 @@ non-string description, e.g. from a hand-edited override file, is treated as emp
 throwing). Computed once, at extension registration time, against `process.cwd()` — the SDK has no
 API to re-describe an already-registered tool, so agents added or renamed while pi is running don't
 appear until restart. Pure.
+
+`SUBAGENT_JOB_DESCRIPTION` is the `subagent_job` tool's static description: the seven actions,
+which two are read-only, and the one-intervention-per-job rule with the refusal wording. No
+agents section, since actions are not agents. Also pure.
 
 ### src/warn.ts
 

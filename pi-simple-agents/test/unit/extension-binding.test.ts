@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   needsExtensionBinding,
   SUBAGENT_TOOL_NAME,
+  SUBAGENT_JOB_TOOL_NAME,
   missingRequestedTools,
   type ToolSource,
 } from "../../src/extension-binding.ts";
@@ -49,6 +50,26 @@ test("needsExtensionBinding: empty tool set and no requested tools returns false
 
 test("needsExtensionBinding: the package's own subagent tool is excluded", () => {
   assert.equal(needsExtensionBinding([packageTool(SUBAGENT_TOOL_NAME, "pi-simple-agents"), builtinTool("read")]), false);
+});
+
+test("needsExtensionBinding: the package's own subagent_job tool is excluded too", () => {
+  // 1.5.2 regression guard: an agent with no `tools:` list sees both package
+  // tools, and neither may trigger a bind (that would pay the MCP connect
+  // cost in every such run).
+  assert.equal(needsExtensionBinding([packageTool(SUBAGENT_JOB_TOOL_NAME, "pi-simple-agents"), builtinTool("read")]), false);
+  assert.equal(
+    needsExtensionBinding([
+      packageTool(SUBAGENT_TOOL_NAME, "pi-simple-agents"),
+      packageTool(SUBAGENT_JOB_TOOL_NAME, "pi-simple-agents"),
+      localTool("custom-tool", "local"),
+    ]),
+    false,
+  );
+});
+
+test("missingRequestedTools: a requested package tool is never reported missing", () => {
+  assert.deepEqual(missingRequestedTools([], [SUBAGENT_TOOL_NAME, SUBAGENT_JOB_TOOL_NAME]), []);
+  assert.deepEqual(missingRequestedTools([], [SUBAGENT_JOB_TOOL_NAME, "mcp__srv__tool"]), ["mcp__srv__tool"]);
 });
 
 test("needsExtensionBinding: a real package tool alongside the subagent tool still returns true", () => {

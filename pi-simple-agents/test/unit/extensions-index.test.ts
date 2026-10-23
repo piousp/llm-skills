@@ -10,7 +10,9 @@ import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker } from "../../src/progress.ts";
-import { jobNotFoundText } from "../../src/job-view.ts";
+import { jobNotFoundText, NO_JOBS_TEXT, budgetExhaustedText } from "../../src/job-view.ts";
+import { SUBAGENT_JOB_TOOL_NAME } from "../../src/extension-binding.ts";
+import { SUBAGENT_JOB_DESCRIPTION } from "../../src/tool-description.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
 import { childSessionDir } from "../../src/subagent-session.ts";
 import type { AgentConfig } from "../../src/agents.ts";
@@ -45,15 +47,17 @@ function loadExtensionFakePi() {
 }
 
 async function loadExtension(createModelRuntime?: () => Promise<ModelRuntime>, pathsOverride?: AgentRegistryPaths): Promise<any> {
-  let captured: any;
+  // Keyed by tool name: the factory registers the subagent tool and the
+  // subagent_job tool, and ~19 call sites here want the former.
+  const tools = new Map<string, any>();
   const fakePi = {
     ...loadExtensionFakePi(),
     registerTool: (cfg: any) => {
-      captured = cfg;
+      tools.set(cfg.name, cfg);
     },
   } as unknown as ExtensionAPI;
   await extensionFactory(fakePi, createModelRuntime, undefined, pathsOverride);
-  return captured;
+  return tools.get("subagent");
 }
 
 // Richer fake that captures every registration, for the wiring tests that
@@ -64,10 +68,10 @@ function makeFakePi() {
   const messageRenderers = new Map<string, (...args: any[]) => unknown>();
   const handlers = new Map<string, (...args: any[]) => unknown>();
   const sentMessages: Array<{ message: unknown; options: unknown }> = [];
-  let tool: any;
+  const tools = new Map<string, any>();
   return {
     registerTool: (cfg: any) => {
-      tool = cfg;
+      tools.set(cfg.name, cfg);
     },
     registerCommand: (name: string, opts: any) => commands.set(name, opts),
     registerMessageRenderer: (type: string, renderer: any) => messageRenderers.set(type, renderer),
@@ -84,8 +88,10 @@ function makeFakePi() {
     messageRenderers,
     handlers,
     sentMessages,
+    // Every registered tool, keyed by name (the job tool's tests need it).
+    tools,
     get tool() {
-      return tool;
+      return tools.get("subagent");
     },
   };
 }
@@ -104,7 +110,7 @@ function fakeAgentSession(finalText: string) {
   };
 }
 
-function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?: string } = {}) {
+function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?: string; sessionFile?: string } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
   const setStatusCalls: Array<{ key: string; text: string | undefined }> = [];
   return {
@@ -112,7 +118,9 @@ function fakeExecuteCtx(overrides: { hasUI?: boolean; signal?: AbortSignal; cwd?
     mode: "tui" as const,
     hasUI: overrides.hasUI ?? true,
     signal: overrides.signal,
-    sessionManager: { getSessionFile: () => undefined, getEntries: () => [] },
+    // sessionFile feeds the retry/continue tool path, whose first guard is a
+    // persisted caller session; undefined = not persisted yet.
+    sessionManager: { getSessionFile: () => overrides.sessionFile, getEntries: () => [] },
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setWidget: (_key: string, _lines: unknown, _opts?: unknown) => {},
@@ -2497,4 +2505,202 @@ test("wiring: the subagents command description names retry and continue", async
   const pi = makeFakePi();
   await extensionFactory(pi as unknown as ExtensionAPI);
   assert.match(pi.commands.get("subagents")!.description ?? "", /retry\|continue/);
+});
+
+// --- subagent_job tool ---
+
+// The tool registration itself: name/label/description/parameters come from
+// the job tool's own constants, and executionMode is sequential so two
+// interventions on one job in a single batch cannot both pass the budget
+// pre-check.
+test("wiring: registers the subagent_job tool with the job description, sequential execution, and no custom rendering", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  assert.ok(jobTool, "the subagent_job tool must be registered");
+  assert.equal(jobTool.name, "subagent_job");
+  assert.equal(jobTool.label, "Subagent job");
+  assert.equal(jobTool.description, SUBAGENT_JOB_DESCRIPTION);
+  assert.equal(jobTool.executionMode, "sequential");
+  // The model reads the result text; there is nothing to render.
+  assert.equal(jobTool.renderCall, undefined);
+  assert.equal(jobTool.renderResult, undefined);
+  // The subagent registration is untouched by the second tool.
+  assert.equal(pi.tool.name, "subagent");
+  assert.equal(pi.tool.label, "Subagent");
+});
+
+// A malformed call is an error (isError); everything the job itself answers is
+// plain text. These cover the two structural cases the tool guards itself.
+test("subagent_job execute: an action outside the seven is an error, nothing is dispatched", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+
+  const result = await jobTool.execute("tc-bad-action", { action: "restart" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /Unknown action "restart"/);
+});
+
+test("subagent_job execute: steer/followUp without a message (or with an empty one) is an error", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+
+  for (const params of [
+    { action: "steer" },
+    { action: "steer", message: "" },
+    { action: "followUp" },
+    { action: "followUp", message: "" },
+  ]) {
+    const result = await jobTool.execute("tc-no-message", params, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+    assert.equal(result.isError, true, `expected isError for ${JSON.stringify(params)}`);
+    assert.match(result.content[0].text, /needs a non-empty "message"/);
+  }
+});
+
+// Read-only views are normal results even when there is nothing to view: the
+// call was well formed, the registry is just empty.
+test("subagent_job execute: status and list on an empty registry are normal results with the empty-registry text", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+
+  for (const action of ["status", "list"]) {
+    const result = await jobTool.execute("tc-empty", { action }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.content, [{ type: "text", text: NO_JOBS_TEXT }]);
+    assert.equal(result.details.action, action);
+    assert.equal(result.details.id, undefined);
+  }
+});
+
+test("subagent_job execute: status with an unknown id is a normal result with the shared not-found wording", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+
+  const result = await jobTool.execute("tc-unknown", { action: "status", id: "S9999" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.content, [{ type: "text", text: jobNotFoundText("S9999") }]);
+  assert.equal(result.details.id, "S9999");
+});
+
+// The budget: one intervention per job through the tool. The job is not acted
+// on twice, and a second verb on the same job is refused too (the budget is
+// per job, not per action).
+test("subagent_job execute: cancel spends the job's one intervention; a second tool intervention on it is refused", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners, steerCalls } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const launched = await pi.tool.execute("call-budget-cancel", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (launched.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  const jobCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+
+  const first = await jobTool.execute("tc-cancel-1", { action: "cancel", id: jobId }, undefined, undefined, jobCtx);
+  assert.equal(first.isError, undefined);
+  // Same cancel wording the /subagents command path shows (one shared view).
+  assert.equal(first.content[0].text, `Cancelling job ${jobId}\u2026`);
+
+  // Second cancel of the same job: refused by the spent budget, so the job is
+  // never cancelled twice (a real second cancel would say "already cancelling").
+  const second = await jobTool.execute("tc-cancel-2", { action: "cancel", id: jobId }, undefined, undefined, jobCtx);
+  assert.equal(second.isError, undefined);
+  assert.equal(second.content[0].text, budgetExhaustedText("cancel", jobId, "call-budget-cancel"));
+
+  // A different verb on the same job is spent too.
+  const steer = await jobTool.execute("tc-steer-spent", { action: "steer", id: jobId, message: "hurry" }, undefined, undefined, jobCtx);
+  assert.equal(steer.isError, undefined);
+  assert.equal(steer.content[0].text, budgetExhaustedText("steer", jobId, "call-budget-cancel"));
+  assert.deepEqual(steerCalls, []); // nothing was injected
+
+  // The job settles exactly once.
+  await waitUntil(() => pi.sentMessages.length > 0);
+  assert.equal(pi.sentMessages.length, 1);
+});
+
+// A guard failure is not an intervention: the budget is only spent when the
+// action actually reached the job.
+test("subagent_job execute: a failed guard does not spend the budget; the next steer on a live job injects", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners, steerCalls } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const launched = await pi.tool.execute("call-budget-guard", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const jobId = (launched.details as { jobId: string }).jobId;
+  await waitUntil(() => listeners.length > 0);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  const jobCtx = fakeExecuteCtx({ cwd: fixture.cwd });
+
+  // Unknown id: the guard fails, nothing is injected, and no budget is spent.
+  const refused = await jobTool.execute("tc-steer-unknown", { action: "steer", id: "S9999", message: "first" }, undefined, undefined, jobCtx);
+  assert.equal(refused.isError, undefined);
+  assert.equal(refused.content[0].text, jobNotFoundText("S9999"));
+  assert.deepEqual(steerCalls, []);
+
+  // Same job, next call: the intervention is still available.
+  const injected = await jobTool.execute("tc-steer-live", { action: "steer", id: jobId, message: "go left" }, undefined, undefined, jobCtx);
+  assert.equal(injected.isError, undefined);
+  assert.equal(injected.content[0].text, `Steering message queued for job ${jobId}.`);
+  assert.deepEqual(steerCalls, ["go left"]);
+
+  await settleRunningJob(pi, jobId);
+});
+
+// The relaunch verbs through the tool: the source run's budget is spent after
+// one retry, and the relaunched run's new runId is budget-fresh (a different
+// run, not a second intervention on the old one).
+test("subagent_job execute: retry relaunches through the tool, spends the source run's budget, and a retry of the relaunched run is not refused", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { launches, createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2001", "call-a", "scout", "do the thing"),
+    rlCompletionEntry("S2001", "call-a", "failed", "scout", "do the thing"),
+  ]);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  // The tool path takes the caller session from ctx.sessionManager.
+  const jobCtx = fakeExecuteCtx({ cwd: fixture.cwd, sessionFile: parentFile });
+
+  const first = await jobTool.execute("tc-retry-1", { action: "retry", id: "call-a" }, undefined, undefined, jobCtx);
+  assert.equal(first.isError, undefined);
+  assert.match(first.content[0].text, /^Retrying scout as job S\d+ \(runId retry-call-a-1\)/);
+  await waitUntil(() => launches.length > 0);
+  assert.equal(launches.length, 1);
+  await waitUntil(() => pi.sentMessages.length > 0); // the relaunched job settled
+
+  const second = await jobTool.execute("tc-retry-2", { action: "retry", id: "call-a" }, undefined, undefined, jobCtx);
+  assert.equal(second.isError, undefined);
+  assert.equal(second.content[0].text, budgetExhaustedText("retry", "S2001", "call-a"));
+  assert.equal(launches.length, 1); // nothing was relaunched a second time
+
+  // The relaunched run left its child session on disk (a real run persists
+  // one; this fake session does not, so the fixture writes the same layout).
+  rlChildFile(dir, "retry-call-a-1");
+  const third = await jobTool.execute("tc-retry-3", { action: "retry", id: "retry-call-a-1" }, undefined, undefined, jobCtx);
+  // Budget-fresh: the guard chain runs past the budget check and stops at the
+  // agent resolution instead (this harness persists no ack for that run).
+  assert.doesNotMatch(third.content[0].text, /one-intervention-per-job limit is spent/);
+  assert.match(third.content[0].text, /Unknown agent: unknown/);
 });

@@ -138,6 +138,10 @@ export interface ProgressTheme {
   bold?(text: string): string;
 }
 
+/** Identity theme: markup-free text. The subagent_job tool returns texts to the
+ * model, where theme styling is noise; the TUI command path keeps the real theme. */
+export const PLAIN_THEME: ProgressTheme = { fg: (_color, text) => text };
+
 function statusFor(progress: TaskProgress): string {
   if (progress.done) return "done";
   if (progress.runningTools.length > 0) {

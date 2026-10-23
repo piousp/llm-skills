@@ -2,6 +2,7 @@
 
 [![npm version](https://badge.fury.io/js/pi-simple-agents.svg)](https://badge.fury.io/js/pi-simple-agents)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/piousp/badge.svg)](https://hub.xerj.org/contributors/piousp)
 
 Subagents for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). Write an agent as a Markdown file, then call it from any pi session with the `subagent` tool.
 
@@ -26,6 +27,22 @@ tools: read, grep, find, ls
 Explore the codebase and report findings, compressed and read-only.
 ```
 
+## Override an agent
+
+`settings.json` changes any agent field without touching its `.md` file. The user file is `~/.pi/agent/settings.json`, the project file is `{project}/.pi/settings.json`, and the project wins:
+
+```json
+{
+  "pi-simple-agents": {
+    "agentOverrides": {
+      "scout": { "model": "openrouter/anthropic/claude-sonnet-4-20250514", "thinking": "high" }
+    }
+  }
+}
+```
+
+`subagents.agentOverrides` works as an alias for the same key. Values merge field by field, so a field left out keeps its frontmatter value. `model` takes a `provider/modelId` reference or `"inherit"`. [docs/REFERENCE.md](docs/REFERENCE.md#overriding-agent-configuration-overrides) lists the precedence rules and the accepted fields.
+
 ## Use it
 
 Ask for it in plain words:
@@ -40,12 +57,14 @@ Or call the tool directly:
 subagent agent: "scout", task: "Find all functions that use fetch() in src/"
 ```
 
-Each call starts its own background job (see below), so running several at once just means calling `subagent` once per task:
+Each call starts its own background job, so running several at once just means calling `subagent` once per task:
 
 ```
 subagent agent: "scout", task: "List all .ts files in src/"
 subagent agent: "web-scout", task: "Find the latest version of the API docs"
 ```
+
+The call answers at once with a job id, and the result arrives later as its own message. Jobs are managed with `/subagents`: [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs) covers the lifecycle, and the next section lists every subcommand.
 
 A call can override `model`, `tools`, `skills`, `thinking`, `maxTurns` and `timeoutMs` for that run only:
 
@@ -54,16 +73,6 @@ subagent agent: "scout", task: "Find the latest version of the API docs", model:
 ```
 
 Omit them all by default: the agent's own frontmatter/settings resolution is what runs, and an override belongs in the call only when the user asks for it by name.
-
-## Background jobs
-
-`subagent` never waits for a run to finish. A call answers in the same turn with a job id (`S1001`, `S1002`, …) and runs the task in the background. When the run settles, its result arrives as its own message and the model gets a follow-up turn to act on it, unless the job was cancelled. While it runs, the user can redirect the job with `/subagents steer <id> <message>` or queue a follow-up with `/subagents followUp <id> <message>` (see below).
-
-Jobs live in memory: nothing carries over after a restart. A run that settled as failed or errored, or was interrupted mid-run (its process died while working), can always be brought back with `/subagents retry [id]` or, when it left a persisted child session, `/subagents continue [id]`. While at least one is running, a panel below the editor shows a line per job with a one-word status. The word is the tool currently executing (`read`, or `playwright` for `mcp__playwright__navigate`), `thinking` or `output` while only the model streams, `waiting` before the first signal. The panel disappears once nothing is running.
-
-Once a job settles, the footer's status area also carries a running total of settled subagent spend: `sub: 3 runs, 1.2M tok, $0.980` (the cost segment is omitted when it is zero, as happens with subscription models). The line stays until the session shuts down. `/subagents clear` leaves it alone: it reports actual session spend, the same scope as `/subagents session`.
-
-Usage reporting needs a persisted session. Each child run persists its own `session.jsonl` next to the parent's, so `/subagents session` reconciles every run, including one whose process died mid-flight; with `--no-session` nothing reaches disk and the spend is unrecoverable. [DEVELOPER.md](DEVELOPER.md) lists the persistence limits in full.
 
 ## The /subagents command
 

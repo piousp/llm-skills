@@ -27,6 +27,11 @@ emitted, not the chat text describing what the agent did.
   `/`), never a bare alias (`sonnet`, `opus`, etc.).
 - **Trigger discipline**: off-topic prompts and prompts answerable
   directly produce no `subagent` call at all.
+- **Job management is graded on the call, not the prose**: a prompt that
+  asks for a job action passes only when a `subagent_job` call carries the
+  right `action` (and a non-empty `message` for `steer`), never when the
+  text merely describes the command. The negative control passes only with
+  zero `subagent_job` calls.
 
 ## Why L1/L2 don't apply here
 
@@ -58,16 +63,20 @@ prose, so no LLM-as-judge layer was built.
 
 `run_layer2b_pipeline.py` loads a real `subagent` tool via an explicit
 `-e <path>` to a pi extension that provides one (e.g. this package's own
-`extensions/` dir), runs each of `prompt_set.json`'s 9 cases as an
+`extensions/` dir), runs each of `prompt_set.json`'s 13 cases as an
 independent single-turn `pi -p` call (no multi-turn/gate sequencing needed;
 unlike a coordinator skill, nothing here spans phases), and grades the
 emitted `subagent` call(s) against the deterministic `CHECK_REGISTRY`.
 
-Every case delegates to the `worker` agent with a trivial one-word-reply
-task, to keep real subagent runs fast and cheap. The one exception,
-`nine_independent_as_separate_calls`, asks for 9 independent replies to
-confirm the model issues 9 separate calls rather than inventing a batch
-array; it alone spawns up to 9 real `worker` runs.
+Most cases delegate to the `worker` agent with a trivial one-word-reply
+task, to keep real subagent runs fast and cheap. Three of them exercise job
+management instead: `cancel_running_job` and `steer_running_job` launch a run
+and then have the model act on it unsolicited, and
+`failed_job_recovery_continue` forces a `maxTurns` failure and expects the
+model to pick `continue` on its own. Those three cost two real runs each
+(the relaunch included). `nine_independent_as_separate_calls` asks for 9
+independent replies to confirm the model issues 9 separate calls rather
+than inventing a batch array; it alone spawns up to 9 real `worker` runs.
 
 Costs real LLM tokens and, for that one case, real subagent runtime, gated
 behind `PI_LIVE_EVAL=1`, never part of a default/offline suite:
@@ -80,7 +89,7 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py
 
 ## Prompt set (step 3)
 
-9 cases in `prompt_set.json`: single mode, two independent tasks as two
+13 cases in `prompt_set.json`: single mode, two independent tasks as two
 separate calls, a per-call model override, a bare-alias case (must resolve
 to `provider/modelId`, never pass the alias through), a 9-independent-tasks
 case (checks the model issues 9 separate calls, no `tasks` array), two
@@ -88,6 +97,15 @@ negative controls (`should_trigger: false`: unrelated question,
 directly-answerable request), and one mixed-request case checking a
 user's phrasing that blends a solo task with an independent pair still
 produces separate calls, never a `tasks` array.
+
+Four cases added for 1.5.2's `subagent_job` tool: `cancel_running_job` and
+`steer_running_job` (the model must act on the job it just launched without
+being asked, graded on the `action` it emits and, for steer, on a non-empty
+`message`), `failed_job_recovery_continue` (a forced `maxTurns` failure; the
+right verb is `continue`, because it keeps the partial work), and
+`settled_job_needs_nothing` as the negative control for the intervention
+budget: a job that finished sells nothing to do, so any `subagent_job` call
+fails the case.
 
 ## N=1 findings (full run, 2026-07-30)
 
@@ -127,7 +145,7 @@ this pass.
   `maxTurns`, `timeoutMs`); out of scope by design (see `SKILL.md`'s own
   "Not covered here").
 - **No coverage of `thinking`, `maxTurns`, or `timeoutMs` overrides**:
-  `prompt_set.json`'s 9 cases only exercise `model`/`tools`/`skills`
+  `prompt_set.json`'s 13 cases only exercise `model`/`tools`/`skills`
   placement and the mode/cap/trigger checks; the three newer per-invocation
   params have no dedicated prompt case yet. Out of scope for this pass
   (adding cases is live-gated and token-costly).

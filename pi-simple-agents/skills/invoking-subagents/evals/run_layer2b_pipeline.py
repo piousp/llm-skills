@@ -26,6 +26,7 @@ Usage:
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,15 @@ def run_pi(cwd: Path, prompt: str, timeout: int = 600) -> tuple[list[dict], str]
 
 def _subagent_calls(tool_calls: list[dict]) -> list[dict]:
     return [tc for tc in tool_calls if tc["name"] == "subagent"]
+
+
+def _job_calls(tool_calls: list[dict]) -> list[dict]:
+    """Calls to the job-management tool this skill teaches alongside `subagent`."""
+    return [tc for tc in tool_calls if tc["name"] == "subagent_job"]
+
+
+def _has_job_action(tool_calls: list[dict], action: str) -> bool:
+    return any(c["arguments"].get("action") == action for c in _job_calls(tool_calls))
 
 
 def _model_format_valid(model) -> bool:
@@ -146,6 +156,37 @@ def check_all_nine_replies_attempted(tool_calls, final_text, **ctx) -> bool:
     return len(_subagent_calls(tool_calls)) >= 9
 
 
+# ── Job-management checks: the graded signal is the tool call, not the prose ──
+
+def check_subagent_launched(tool_calls, final_text, **ctx) -> bool:
+    calls = _subagent_calls(tool_calls)
+    return len(calls) >= 1 and all("agent" in c["arguments"] and "task" in c["arguments"] for c in calls)
+
+
+def check_job_action_cancel_self(tool_calls, final_text, **ctx) -> bool:
+    return _has_job_action(tool_calls, "cancel")
+
+
+def check_job_action_steer_self(tool_calls, final_text, **ctx) -> bool:
+    return any(
+        c["arguments"].get("action") == "steer" and str(c["arguments"].get("message", "")).strip()
+        for c in _job_calls(tool_calls)
+    )
+
+
+def check_job_action_continue_self(tool_calls, final_text, **ctx) -> bool:
+    """A turn-limit failure keeps partial work, so `continue` is the right verb."""
+    return _has_job_action(tool_calls, "continue")
+
+
+def check_no_job_management_calls(tool_calls, final_text, **ctx) -> bool:
+    return len(_job_calls(tool_calls)) == 0
+
+
+def check_final_text_reports_settlement(tool_calls, final_text, **ctx) -> bool:
+    return re.search(r"\b(done|finished|completed)\b", final_text, re.IGNORECASE) is not None
+
+
 CHECK_REGISTRY = {
     "single_call_agent_mode": check_single_call_agent_mode,
     "agent_is_worker": check_agent_is_worker,
@@ -158,6 +199,12 @@ CHECK_REGISTRY = {
     "model_format_valid_everywhere": check_model_format_valid_everywhere,
     "no_subagent_call": check_no_subagent_call,
     "all_nine_replies_attempted": check_all_nine_replies_attempted,
+    "subagent_launched": check_subagent_launched,
+    "job_action_cancel_self": check_job_action_cancel_self,
+    "job_action_steer_self": check_job_action_steer_self,
+    "job_action_continue_self": check_job_action_continue_self,
+    "no_job_management_calls": check_no_job_management_calls,
+    "final_text_reports_settlement": check_final_text_reports_settlement,
 }
 
 
@@ -177,6 +224,7 @@ def run_probe(case: dict) -> dict:
             "trigger_ok": trigger_ok,
             "passed": all(checks.values()) and trigger_ok,
             "subagent_calls": [c["arguments"] for c in _subagent_calls(tool_calls)],
+            "job_calls": [c["arguments"] for c in _job_calls(tool_calls)],
             "response": final_text,
         }
 
@@ -204,6 +252,7 @@ def main() -> int:
         for check, ok in result["checks"].items():
             print(f"    {'ok' if ok else 'FAIL'}: {check}")
         print(f"    subagent_calls: {json.dumps(result['subagent_calls'])[:400]}")
+        print(f"    job_calls: {json.dumps(result['job_calls'])[:400]}")
         print(f"    response: {result['response'][:200]!r}")
         print()
 

@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAgentRegistry, type AgentRegistryPaths } from "../src/agent-registry.ts";
 import { MAX_TIMEOUT_MS, type RunAgentViaSdkOptions } from "../src/run.ts";
-import { SUBAGENT_TOOL_NAME } from "../src/extension-binding.ts";
+import { SUBAGENT_TOOL_NAME, SUBAGENT_JOB_TOOL_NAME } from "../src/extension-binding.ts";
 import { createRenderSubagentCall, renderSubagentResult, renderSubagentResultMessage, type GetAgents } from "../src/render-extensions.ts";
 import { runSingleTask } from "../src/task-runner.ts";
 import { validateSubagentParams, resolveAgent, invocationOverrideOf } from "../src/validate.ts";
@@ -14,12 +14,13 @@ import type { SubagentParams as ValidatedSubagentParams, ValidationResult } from
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
 import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type SettledJob } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
-import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, buildHelpText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
+import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, buildHelpText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, budgetExhaustedText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
 import { addUsageToTotals, buildSubagentSessionReport, buildRelaunchCandidates, type ReconcileFs, type SessionEntry, type SubagentRelaunchCandidate } from "../src/session-reconcile.ts";
 import { runIdDirName } from "../src/subagent-session.ts";
 import type { AgentConfig } from "../src/agents.ts";
 import { createPeekManager } from "../src/peek-window.ts";
-import { buildSubagentToolDescription } from "../src/tool-description.ts";
+import { PLAIN_THEME, type ProgressTheme } from "../src/progress.ts";
+import { buildSubagentToolDescription, SUBAGENT_JOB_DESCRIPTION } from "../src/tool-description.ts";
 import { toErrorMessage } from "../src/warn.ts";
 
 // Footer status-line key for the running subagent-spend total, set through
@@ -128,6 +129,52 @@ export const SubagentParams = Type.Object({
   ...overrideProperties,
 });
 
+export const SubagentJobParams = Type.Object({
+  action: Type.Union(
+    ["status", "list", "cancel", "steer", "followUp", "retry", "continue"].map((a) => Type.Literal(a)),
+    { description: 'Job action. Read-only (always allowed): "status", "list". Interventions (once per job without asking the user): "cancel", "steer", "followUp", "retry", "continue".' },
+  ),
+  id: Type.Optional(Type.String({
+    description: 'Target job id from the subagent acknowledgment (e.g. "S1002"); retry/continue also accept a run id. Omit to auto-target: status/cancel/steer/followUp pick the single active job (several actives return the ids to pick from); retry/continue resolve from settled runs on disk.',
+  })),
+  message: Type.Optional(Type.String({
+    description: 'The message to inject \u2014 required for "steer" and "followUp", ignored otherwise.',
+  })),
+});
+
+// The seven job actions, in the order the description lists them: the one list
+// the schema above, the validator below, and the dispatcher's union share.
+const JOB_ACTIONS = ["status", "list", "cancel", "steer", "followUp", "retry", "continue"] as const;
+
+type JobAction = (typeof JOB_ACTIONS)[number];
+
+// Raw-params validator for subagent_job, shaped like validateSubagentParams
+// (src/validate.ts): execute() receives whatever the model reported, so the
+// action is narrowed against JOB_ACTIONS and the two message-carrying verbs
+// require a non-empty message. Structural problems only \u2014 everything the job
+// itself answers (not found, not running, budget spent) is a normal result.
+function validateJobParams(raw: unknown): ValidationResult<{ action: JobAction; id?: string; message?: string }> {
+  if (typeof raw !== "object" || raw === null) {
+    return { ok: false, error: `Provide an object with an "action" of ${JOB_ACTIONS.join("|")}.` };
+  }
+  const fields = raw as Record<string, unknown>;
+  const action = JOB_ACTIONS.find((candidate) => candidate === fields.action);
+  if (!action) {
+    return { ok: false, error: `Unknown action ${JSON.stringify(fields.action)} \u2014 expected one of ${JOB_ACTIONS.join("|")}.` };
+  }
+  const { id, message } = fields;
+  if (id !== undefined && typeof id !== "string") {
+    return { ok: false, error: '"id" must be a string.' };
+  }
+  if (message !== undefined && typeof message !== "string") {
+    return { ok: false, error: '"message" must be a string.' };
+  }
+  if ((action === "steer" || action === "followUp") && !message) {
+    return { ok: false, error: `Action "${action}" needs a non-empty "message" to inject.` };
+  }
+  return { ok: true, value: { action, id, message } };
+}
+
 // The job registry's onSettled hook, pulled out to its own function so the
 // wiring (build the completion message, hand it to pi.sendMessage with the
 // right delivery options) is unit-testable with a fake `pi` and a synthetic
@@ -198,6 +245,22 @@ export const CONTINUATION_PROMPT =
   "Continue the interrupted task from the conversation history above. First " +
   "re-verify the state of any files or operations the previous attempt may " +
   "have left half-done, then proceed to complete the task.";
+
+// What a job action hands back to its caller: the notification text plus the
+// level /subagents notifies it with (the tool path returns the same text to the
+// model instead). Views and successes are "info"; every guard is "warning".
+type JobActionText = { text: string; level: "info" | "warning" };
+
+// The slice of the command context the shared job actions read. Deliberately
+// not the whole ExtensionUIContext: /subagents passes ctx.ui.theme (a host
+// Theme, which satisfies ProgressTheme), the subagent_job tool path passes the
+// plain theme, and every view here only ever needs ProgressTheme.
+type JobActionContext = {
+  cwd: string;
+  mode: RunAgentViaSdkOptions["mode"];
+  sessionManager: { getSessionFile(): string | undefined };
+  theme: ProgressTheme;
+};
 
 export default async function (
   pi: ExtensionAPI,
@@ -312,6 +375,11 @@ export default async function (
   // Nothing persists across a restart, exactly like the job registry.
   const consumedOrphanSegments = new Set<string>();
   const relaunchAttempts = new Map<string, number>();
+  // One intervention per job, tool path only: a runId spent here refuses the
+  // next tool-driven cancel/steer/followUp/retry/continue. The /subagents
+  // command never passes a budget, so a user-typed action is never refused;
+  // a relaunch mints a new runId, which is budget-fresh by construction.
+  const toolInterventions = new Set<string>();
 
   // One closure for everything that starts a run of one task: the subagent
   // tool's execute() and the /subagents retry|continue commands launch
@@ -382,21 +450,14 @@ export default async function (
   async function handleRelaunch(
     spec: RelaunchSpec,
     command: { readonly kind: RelaunchKind; readonly id?: string },
-    ctx: {
-      cwd: string;
-      mode: RunAgentViaSdkOptions["mode"];
-      sessionManager: { getSessionFile(): string | undefined };
-      ui: ExtensionUIContext;
-    },
-  ): Promise<void> {
+    ctx: JobActionContext & { budget?: Set<string> },
+  ): Promise<JobActionText> {
     if (!modelRuntimeResult.ok) {
-      ctx.ui.notify(`failed to initialize model runtime: ${modelRuntimeResult.error}`, "warning");
-      return;
+      return { text: `failed to initialize model runtime: ${modelRuntimeResult.error}`, level: "warning" };
     }
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) {
-      ctx.ui.notify("No session file on disk yet — /subagents retry|continue needs a persisted session.", "warning");
-      return;
+      return { text: "No session file on disk yet — /subagents retry|continue needs a persisted session.", level: "warning" };
     }
     // Same resolution inputs as /subagents session: the disk-first walk
     // (orphans labeled "running" when a live registry job owns the
@@ -416,25 +477,27 @@ export default async function (
     const target = resolveRelaunchTarget(spec.kind, command.id, pool);
 
     if (target.kind === "ambiguous") {
-      ctx.ui.notify(buildRelaunchCandidatesText(target.candidates, ctx.ui.theme, spec.verb), "info");
-      return;
+      return { text: buildRelaunchCandidatesText(target.candidates, ctx.theme, spec.verb), level: "info" };
     }
     if (target.kind === "not-found") {
-      ctx.ui.notify(relaunchNotFoundText(target.token), "warning");
-      return;
+      return { text: relaunchNotFoundText(target.token), level: "warning" };
     }
     if (target.kind === "none") {
-      ctx.ui.notify(spec.noneText, "info");
-      return;
+      return { text: spec.noneText, level: "info" };
     }
     const candidate = target.candidate;
+
+    // One intervention per job: only the tool path seeds a budget (the
+    // command never does), so a user-issued relaunch is never stopped here.
+    if (ctx.budget?.has(candidate.runId)) {
+      return { text: budgetExhaustedText(spec.kind, candidate.jobId, candidate.runId), level: "warning" };
+    }
 
     // An orphan already re-dispatched once in this session: interrupted
     // candidates are the only consumed entries (marked at the launch
     // below); message-driven settled runs are never consumed.
     if (isConsumedOrphan(candidate, consumedOrphanSegments)) {
-      ctx.ui.notify(consumedOrphanText(candidate.runId), "warning");
-      return;
+      return { text: consumedOrphanText(candidate.runId), level: "warning" };
     }
     const seedSessionFile = spec.seedSessionFileOf(candidate);
     // continue needs a persisted child session to branch from; a run
@@ -442,14 +505,12 @@ export default async function (
     // by retry instead. Bare continue never resolves here (the pool is
     // pre-filtered to sessionFile-bearing candidates).
     if (spec.kind === "continue" && !seedSessionFile) {
-      ctx.ui.notify(notContinuableText(candidate), "warning");
-      return;
+      return { text: notContinuableText(candidate), level: "warning" };
     }
     // An interrupted run whose launch ack was also lost carries no
     // agent name anywhere on disk; nothing to resolve or run.
     if (spec.kind === "continue" && candidate.agent === "unknown") {
-      ctx.ui.notify(agentNameNotOnDiskText(candidate), "warning");
-      return;
+      return { text: agentNameNotOnDiskText(candidate), level: "warning" };
     }
     // Same resolution as the subagent tool's own call — the error text
     // is verbatim ("Unknown agent: X. Available agents: …"); a retry
@@ -457,8 +518,7 @@ export default async function (
     // disk stops here with no launch.
     const resolved = resolveAgent(candidate.agent, availableAgents);
     if (!resolved.ok) {
-      ctx.ui.notify(resolved.error, "warning");
-      return;
+      return { text: resolved.error, level: "warning" };
     }
 
     // Faithful relaunch: the launch ack records the original call's
@@ -473,13 +533,11 @@ export default async function (
     // success output says which of the two happened.
     const task = spec.taskOf(candidate);
     if (task === undefined) {
-      ctx.ui.notify(noTaskText(candidate), "warning");
-      return;
+      return { text: noTaskText(candidate), level: "warning" };
     }
     const revalidated = validateSubagentParams({ agent: resolved.value.name, task, ...candidate.params });
     if (!revalidated.ok) {
-      ctx.ui.notify(`Run ${candidate.runId}'s recorded parameters failed validation (${revalidated.error}) — nothing was launched.`, "warning");
-      return;
+      return { text: `Run ${candidate.runId}'s recorded parameters failed validation (${revalidated.error}) — nothing was launched.`, level: "warning" };
     }
     // A well-typed but OUT-OF-RANGE recorded value would otherwise degrade
     // silently at run time (resolveMaxTurns/resolveTimeoutMs warn and fall
@@ -503,7 +561,114 @@ export default async function (
       // per orphan per session.
       consumedOrphanSegments.add(runIdDirName(candidate.runId));
     }
-    ctx.ui.notify(buildRelaunchResultText(spec.kind, candidate, job.id, newRunId, dropped), "info");
+    ctx.budget?.add(candidate.runId);
+    return { text: buildRelaunchResultText(spec.kind, candidate, job.id, newRunId, dropped), level: "info" };
+  }
+
+  // The shared dispatch behind the seven job actions: the /subagents command
+  // and the subagent_job tool resolve their target and walk the same guard
+  // chain, so their wording and levels cannot drift apart. `budget` is the tool
+  // path's one-intervention-per-job record — a Set because this dispatcher both
+  // checks it (has) and records into it (add, only on success); the command
+  // path passes none, so a user-issued action is never refused.
+  async function handleJobAction(
+    action: "status" | "list" | "cancel" | "steer" | "followUp" | "retry" | "continue",
+    id: string | undefined,
+    message: string | undefined,
+    ctx: JobActionContext,
+    budget?: Set<string>,
+  ): Promise<JobActionText> {
+    if (action === "list") {
+      return { text: buildJobListText(jobs.list(), Date.now(), ctx.theme), level: "info" };
+    }
+    if (action === "status") {
+      let job: JobSnapshot;
+      if (id) {
+        const found = jobs.get(id);
+        if (!found) {
+          return { text: jobNotFoundText(id), level: "warning" };
+        }
+        job = found;
+      } else {
+        // Bare status auto-picks its target: the single active job, or the
+        // newest settled one; several actives are ambiguous and ask for an id.
+        const target = resolveAutoTarget(jobs.list());
+        if (target.kind === "ambiguous") {
+          return { text: ambiguousJobsText(target.ids), level: "info" };
+        }
+        if (target.kind === "none") {
+          return { text: NO_JOBS_TEXT, level: "info" };
+        }
+        job = target.job;
+      }
+      return { text: buildJobStatusText(job, Date.now(), ctx.theme), level: "info" };
+    }
+    if (action === "cancel") {
+      let snapshot: JobSnapshot | undefined;
+      let cancelId = id;
+      if (!cancelId) {
+        // Bare cancel only targets active jobs (a settled job is nothing to
+        // cancel); several actives are ambiguous and ask for an id.
+        const target = resolveActiveTarget(jobs.list());
+        if (target.kind === "ambiguous") {
+          return { text: ambiguousJobsText(target.ids), level: "info" };
+        }
+        if (target.kind === "none") {
+          return { text: "No running jobs to cancel.", level: "warning" };
+        }
+        snapshot = target.job;
+        cancelId = target.job.id;
+      } else {
+        // An explicit id may name nothing at all: jobs.cancel answers
+        // not-found on its own, so no snapshot means no budget to check.
+        snapshot = jobs.get(cancelId);
+      }
+      if (snapshot && budget?.has(snapshot.runId)) {
+        return { text: budgetExhaustedText("cancel", snapshot.id, snapshot.runId), level: "warning" };
+      }
+      const result = jobs.cancel(cancelId);
+      if (result.kind === "cancelling") budget?.add(result.job.runId);
+      return describeCancelResult(result);
+    }
+    if (action === "steer" || action === "followUp") {
+      // Both verbs carry a message (the parser guarantees one); the empty
+      // fallback only keeps the inject signature total.
+      const injectMessage = message ?? "";
+      let snapshot: JobSnapshot | undefined;
+      let injectId = id;
+      if (!injectId) {
+        // Bare steer/followUp only targets active jobs, like bare cancel (a
+        // settled job can no longer be messaged); several actives are
+        // ambiguous and ask for an id.
+        const target = resolveActiveTarget(jobs.list());
+        if (target.kind === "ambiguous") {
+          return { text: ambiguousJobsText(target.ids), level: "info" };
+        }
+        if (target.kind === "none") {
+          return {
+            text: action === "steer" ? "No running jobs to steer." : "No running jobs to follow up on.",
+            level: "warning",
+          };
+        }
+        snapshot = target.job;
+        injectId = target.job.id;
+      } else {
+        snapshot = jobs.get(injectId);
+      }
+      if (snapshot && budget?.has(snapshot.runId)) {
+        return { text: budgetExhaustedText(action, snapshot.id, snapshot.runId), level: "warning" };
+      }
+      // Awaiting the inject keeps the guard chain's result (not-live, a
+      // throwing live session) observable through the same notify as cancel.
+      const result = action === "steer"
+        ? await jobs.steer(injectId, injectMessage)
+        : await jobs.followUp(injectId, injectMessage);
+      // Only a delivered message spends the budget: a failed guard (not-live,
+      // not-running, ...) leaves the job's one intervention unspent.
+      if (result.kind === "injected") budget?.add(result.job.runId);
+      return describeInjectResult(action, result);
+    }
+    return handleRelaunch(RELAUNCH_SPECS[action], { kind: action, id }, { ...ctx, budget });
   }
 
   const { agents } = await registry.load(process.cwd());
@@ -550,6 +715,37 @@ export default async function (
     },
   });
 
+  // The job-management tool: the same seven-action chain /subagents runs, with
+  // the one-intervention-per-job budget and the plain theme (the model reads
+  // these texts, so theme markup would be noise).
+  pi.registerTool({
+    name: SUBAGENT_JOB_TOOL_NAME,
+    label: "Subagent job",
+    description: SUBAGENT_JOB_DESCRIPTION,
+    parameters: SubagentJobParams,
+    // Sequential on purpose: sibling tool calls are serialized, so two
+    // interventions on the same job in one batch cannot both pass the budget
+    // pre-check.
+    executionMode: "sequential",
+    execute: async (_toolCallId, rawParams, _signal, _onUpdate, ctx) => {
+      const parsedParams = validateJobParams(rawParams);
+      if (!parsedParams.ok) {
+        return errorResult(parsedParams.error);
+      }
+      const { action, id, message } = parsedParams.value;
+      // Guard-chain outcomes are normal results (what happened to the job);
+      // only a malformed call is an error above.
+      const { text } = await handleJobAction(
+        action,
+        id,
+        message,
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: PLAIN_THEME },
+        toolInterventions,
+      );
+      return { content: [{ type: "text" as const, text }], details: { action, id } };
+    },
+  });
+
   pi.registerMessageRenderer(SUBAGENT_RESULT_MESSAGE_TYPE, renderSubagentResultMessage);
 
   pi.registerCommand("subagents", {
@@ -559,85 +755,6 @@ export default async function (
       const command = parseSubagentsCommand(args);
       if (command.kind === "help") {
         ctx.ui.notify(buildHelpText(), "info");
-        return;
-      }
-      if (command.kind === "list") {
-        ctx.ui.notify(buildJobListText(jobs.list(), Date.now(), ctx.ui.theme), "info");
-        return;
-      }
-      if (command.kind === "status") {
-        let job: JobSnapshot;
-        if (command.id) {
-          const found = jobs.get(command.id);
-          if (!found) {
-            ctx.ui.notify(jobNotFoundText(command.id), "warning");
-            return;
-          }
-          job = found;
-        } else {
-          // Bare status auto-picks its target: the single active job, or the
-          // newest settled one; several actives are ambiguous and ask for an id.
-          const target = resolveAutoTarget(jobs.list());
-          if (target.kind === "ambiguous") {
-            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
-            return;
-          }
-          if (target.kind === "none") {
-            ctx.ui.notify(NO_JOBS_TEXT, "info");
-            return;
-          }
-          job = target.job;
-        }
-        ctx.ui.notify(buildJobStatusText(job, Date.now(), ctx.ui.theme), "info");
-        return;
-      }
-      if (command.kind === "cancel") {
-        let cancelId = command.id;
-        if (!cancelId) {
-          // Bare cancel only targets active jobs (a settled job is nothing to
-          // cancel); several actives are ambiguous and ask for an id.
-          const target = resolveActiveTarget(jobs.list());
-          if (target.kind === "ambiguous") {
-            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
-            return;
-          }
-          if (target.kind === "none") {
-            ctx.ui.notify("No running jobs to cancel.", "warning");
-            return;
-          }
-          cancelId = target.job.id;
-        }
-        const { text, level } = describeCancelResult(jobs.cancel(cancelId));
-        ctx.ui.notify(text, level);
-        return;
-      }
-      if (command.kind === "steer" || command.kind === "followUp") {
-        let injectId = command.id;
-        if (!injectId) {
-          // Bare steer/followUp only targets active jobs, like bare cancel (a
-          // settled job can no longer be messaged); several actives are
-          // ambiguous and ask for an id.
-          const target = resolveActiveTarget(jobs.list());
-          if (target.kind === "ambiguous") {
-            ctx.ui.notify(ambiguousJobsText(target.ids), "info");
-            return;
-          }
-          if (target.kind === "none") {
-            ctx.ui.notify(
-              command.kind === "steer" ? "No running jobs to steer." : "No running jobs to follow up on.",
-              "warning",
-            );
-            return;
-          }
-          injectId = target.job.id;
-        }
-        // Awaiting the inject keeps the guard chain's result (not-live, a
-        // throwing live session) observable through the same notify as cancel.
-        const result = command.kind === "steer"
-          ? await jobs.steer(injectId, command.message)
-          : await jobs.followUp(injectId, command.message);
-        const { text, level } = describeInjectResult(command.kind, result);
-        ctx.ui.notify(text, level);
         return;
       }
       if (command.kind === "peek") {
@@ -701,11 +818,19 @@ export default async function (
         ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
         return;
       }
-      if (command.kind === "retry" || command.kind === "continue") {
-        await handleRelaunch(RELAUNCH_SPECS[command.kind], command, ctx);
+      if (command.kind === "usage-error") {
+        ctx.ui.notify(command.message, "warning");
         return;
       }
-      ctx.ui.notify(command.message, "warning");
+      // The seven job actions are the same chain the subagent_job tool runs;
+      // this handler only owns the notify.
+      const { text, level } = await handleJobAction(
+        command.kind,
+        "id" in command ? command.id : undefined,
+        "message" in command ? command.message : undefined,
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: ctx.ui.theme },
+      );
+      ctx.ui.notify(text, level);
     },
   });
 

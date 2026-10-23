@@ -13,6 +13,15 @@ export interface ToolSource {
 /** The tool this package itself registers. Excluded from needsExtensionBinding: an agent that can nest subagents does not, by that fact alone, need any MCP server connected — the nested subagent makes its own binding decision independently. */
 export const SUBAGENT_TOOL_NAME = "subagent";
 
+/** The job-management tool this package registers alongside the subagent tool: status/list/cancel/steer/followUp/retry/continue over the same job registry. */
+export const SUBAGENT_JOB_TOOL_NAME = "subagent_job";
+
+/** Every tool this package registers itself. Excluded as a set from needsExtensionBinding and missingRequestedTools: a run whose toolset shows only these needs no session_start (the nested run makes its own binding decision), and a requested package tool is never "missing". Missing the second entry here is what made 1.5.2's subagent_job trigger a bind for every run whose toolset included it. */
+export const PACKAGE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  SUBAGENT_TOOL_NAME,
+  SUBAGENT_JOB_TOOL_NAME,
+]);
+
 /**
  * Source paths of pi's built-in extensions whose tools depend on session_start
  * (MCP connects its servers there; tool_search/codemode reach MCP tools). Base
@@ -31,7 +40,7 @@ function isBindingTool(tool: ToolSource): boolean {
 
 /**
  * True if the subagent needs session_start emitted: some registered tool
- * (other than this package's own subagent tool) came from an installed
+ * (other than this package's own tools) came from an installed
  * extension package or a session_start-dependent built-in extension, or some
  * requested tool isn't registered yet — only an extension can still supply it
  * at session_start (e.g. `mcp__<server>__<tool>`, registered once the server connects).
@@ -42,7 +51,7 @@ export function needsExtensionBinding(
   tools: readonly ToolSource[],
   requestedToolNames: readonly string[] = [],
 ): boolean {
-  const candidates = tools.filter((tool) => tool.name !== SUBAGENT_TOOL_NAME);
+  const candidates = tools.filter((tool) => !PACKAGE_TOOL_NAMES.has(tool.name));
   if (candidates.some(isBindingTool)) return true;
   // Same predicate as the fail-loud check after bind in runAgentViaSdk: the
   // bind decision and the missing-tools verdict must agree on what counts as
@@ -85,7 +94,7 @@ export function missingRequestedTools(
 ): string[] {
   const registered = tools.map((tool) => tool.name);
   return requestedToolNames.filter((name) => {
-    if (name === SUBAGENT_TOOL_NAME || CLAUDE_INERT_TOOLS.has(name)) return false;
+    if (PACKAGE_TOOL_NAMES.has(name) || CLAUDE_INERT_TOOLS.has(name)) return false;
     if (!name.includes("*")) return !registered.includes(name);
     return !registered.some((toolName) => matchesToolEntries([name], toolName));
   });
