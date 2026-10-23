@@ -19,7 +19,8 @@ Frontmatter, such as `tools`, `model`, and turn limits, is harness-specific. The
 | `pablo-toolkit` | Session-scoped transparency for the pablo-* skills: prompt preview before delegation, change tree after edits. |
 | `refactor-identification` | Detects structural refactor candidates in a branch diff: missing abstractions, weak encapsulation, poor data types. |
 | `iterative-design` | Deprecated. Coordinator method: goal discovery, planner, one vertical TDD loop, refactor, QA gate. Superseded by the pablo-* skills; kept for reference. |
-| `code-review-checklist` | Review lens: checks a diff against the coding philosophy and flags test coverage gaps. Read-only. |
+| `code-review-checklist` | Review lens: checks a diff against the coding philosophy and read-only. |
+| `pablo-test-review` | Review lens for the tests in a diff: can they fail, and which critical tests are missing. Read-only. |
 | `qa-adversary` | Adversarial QA lens: hunts correctness bugs and regressions in a diff. Read-only. |
 | `agent-prompting` | How to write and assemble delegation prompts for subagents: flow map, templates, delegate-vs-do criteria. |
 | `writing-agent-skills` | Authoring a skill's SKILL.md and support files, with an eval suite. |

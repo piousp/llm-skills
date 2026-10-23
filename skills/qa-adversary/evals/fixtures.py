@@ -113,6 +113,44 @@ def invoice_total(order):
     return sum(line["amount"] for line in order["lines"])
 '''
 
+POM_SNAPSHOT_BUMP = '''\
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>widget-service</artifactId>
+  <version>1.0.0</version>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.acme</groupId>
+      <artifactId>acme-commons</artifactId>
+      <!-- bumped by the change under review -->
+      <scope>compile</scope>
+      <version>2.4.0-PROJ-42-SNAPSHOT</version>
+    </dependency>
+  </dependencies>
+</project>
+'''
+
+TF_CONCURRENCY = '''\
+resource "aws_lambda_function" "ingest" {
+  function_name = "widget-ingest"
+  handler       = "ingest.handler"
+  runtime       = "python3.12"
+  reserved_concurrent_executions = 5
+}
+'''
+
+TEST_WAIT_SHORTENED = '''\
+from helpers import assert_never, replayed
+
+
+def test_replay_is_ignored():
+    event_id = "evt-1"
+    assert_never(lambda: replayed(event_id), within_s=3)
+'''
+
 
 def _write(repo: Path, files: dict[str, str]) -> None:
     """Write files under repo, creating parent directories as needed."""
@@ -151,6 +189,28 @@ def seed_inline_business_rule(tmp: Path) -> Path:
     (>= 75.00 grants free shipping at exactly 75.00, ticket says strict)."""
     repo = tmp / "repo"
     _write(repo, {"shipping.py": SHIPPING_BUGGY})
+    return repo
+
+
+def seed_inline_snapshot_bump(tmp: Path) -> Path:
+    """pom.xml whose acme-commons version (line 14) was bumped to a
+    ticket-qualified SNAPSHOT: build metadata, not behavior."""
+    repo = tmp / "repo"
+    _write(repo, {"pom.xml": POM_SNAPSHOT_BUMP})
+    return repo
+
+
+def seed_inline_tf_concurrency(tmp: Path) -> Path:
+    """infra/lambda.tf with a concurrency cap; the handler code is absent."""
+    repo = tmp / "repo"
+    _write(repo, {"infra/lambda.tf": TF_CONCURRENCY})
+    return repo
+
+
+def seed_inline_test_wait(tmp: Path) -> Path:
+    """Integration test whose negative-wait window was shortened (10 -> 3)."""
+    repo = tmp / "repo"
+    _write(repo, {"tests/integration/test_replay_guard.py": TEST_WAIT_SHORTENED})
     return repo
 
 
@@ -194,4 +254,7 @@ SEEDERS: dict[str, Callable[[Path], Path]] = {
     "seed_inline_business_rule": seed_inline_business_rule,
     "seed_git_diff_coverage": seed_git_diff_coverage,
     "seed_inline_clean_control": seed_inline_clean_control,
+    "seed_inline_snapshot_bump": seed_inline_snapshot_bump,
+    "seed_inline_tf_concurrency": seed_inline_tf_concurrency,
+    "seed_inline_test_wait": seed_inline_test_wait,
 }

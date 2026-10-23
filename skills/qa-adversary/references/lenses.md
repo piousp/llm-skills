@@ -13,7 +13,7 @@ problem / metamorphic testing). Citations at the bottom of SKILL.md.*
 - Silently swallowed or broadened exceptions; a domain error path that no longer fires.
 - **Constraint-inversion probe**: assume the opposite of each of the author's implicit assumptions
   (reversed input order, flipped polarity, event-driven instead of polled) and check whether the
-  logic still holds under that inversion.
+  logic still holds under that inversion. An inversion whose premise the diff does not show is an Open Question, not a Finding.
 
 ### Lens 2: Data-handling bugs
 - **Null / empty / absent**: null vs empty collection vs missing optional field; `Optional.get`
@@ -34,16 +34,15 @@ problem / metamorphic testing). Citations at the bottom of SKILL.md.*
   that violates it.
 - Discrepancy between what the ticket asked for and what the code does (over-reach or under-reach).
 - Implicit rules made wrong: a threshold, an eligibility check, a routing/decision rule, especially
-  wherever this domain has known non-obvious business-logic hotspots.
+  wherever this domain has known non-obvious business-logic hotspots. An inferred (unwritten) rule is never BLOCK: write "before → after: intended?" at MEDIUM at most.
 - **Letter-vs-spirit check**: the code may satisfy the ticket's literal wording while violating its
   intent (over-reach or under-reach); verify against the *spirit* of the requirement, not just the
   acceptance criterion as written.
 
 ### Lens 4: Regression risk (impact analysis / RTS)
 - Which existing behaviors does this change alter? For each, is there a test asserting the *old*
-  behavior that will now fail, or worse, one that will silently pass because it never covered it?
-- **Mutation-adequacy lens**: treat the changed lines as a mutant. If you reverted or slightly
-  altered a changed line, would *any* existing test fail? If not, the change is under-covered, say so.
+  behavior that will now fail?
+- Whether a test can fail at all (weakened assertions, mutation-style adequacy) belongs to `pablo-test-review`.
 - Cross-service ripple: changed DTO/contract/payload consumed by another service (trace it).
 
 ### Lens 5: Concurrency & state
@@ -55,14 +54,14 @@ problem / metamorphic testing). Citations at the bottom of SKILL.md.*
 When there is no obvious expected output, reason with **metamorphic relations**: invariants that
 must hold across related inputs (e.g. reordering inputs must not change the decision; scaling input
 X should relate to output predictably; a filtered subset must not produce more results than the
-whole). Flag any change that could violate such an invariant.
+whole). Flag a change that violates such an invariant for a named pair of inputs; "could violate" without the pair is an Open Question.
 
 ### Lens 7: Failure & degradation paths
 - External dependency timeout / unavailability / partial response (datastore, queue, cache,
   downstream service): does the change degrade gracefully or crash / lose data?
 - Error messages/codes that changed and would mislead operators or break consumers parsing them.
 - **Assumed-dependency probe**: name every dependency the code assumes is present (a lock, a DB, an
-  upstream service, guaranteed ordering); what happens when it is absent or degraded instead?
+  upstream service, guaranteed ordering); what happens when it is absent or degraded instead? An absent dependency is an Open Question unless the diff removes the guard that handled it.
 
 ### Lens 8: Security (attacker lens)
 - Review the changed lines as an attacker would; OWASP Top 10 classes, concretely:

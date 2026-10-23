@@ -1,7 +1,7 @@
 # Worked Examples
 
 One resolved example per category (plus one for the A3 "Redundant derived field" row), one
-candidate filtered by the gate, and one candidate left Unresolved (N9). Each shows the
+candidate filtered by the gate (N1), and one candidate filtered by N9 (copy in another repo). Each shows the
 before-snippet (as it appears in a branch's diff) and the exact block it produces.
 
 ## A1: Structural duplication (Java)
@@ -148,36 +148,26 @@ one discount rule exists and the branch introduces no second one.
   implementation is planned by this branch)
 ```
 
-## Unresolved (N9): business-rule occurrence count decided by another repo (Java)
+## Filtered by N9: duplicate whose other copy lives in another repo (Java)
 
-Branch diff adds `qualifiesForFreeShipping` to `ShippingCalculator.java`, encoding the same
-eligibility predicate already used once elsewhere in this repo, in `OrderValidator.java`.
+Branch diff adds `qualifiesForFreeShipping` to `ShippingCalculator.java`, encoding an
+eligibility predicate that may also exist in the separate pricing-engine repo.
 
 ```java
-// OrderValidator.java:2 (pre-existing, not touched)
-boolean isEligibleForLoyaltyDiscount(Customer customer, Order order) {
-    return customer.getTier() == Tier.PREMIUM && order.getTotal() > 500;
-}
-
 // ShippingCalculator.java:2 (touched by this branch)
 boolean qualifiesForFreeShipping(Customer customer, Order order) {
     return customer.getTier() == Tier.PREMIUM && order.getTotal() > 500;
 }
 ```
 
-This repo has only 2 occurrences of the predicate, below the business-rule duplication
-threshold (>=3, 3-strikes). But the same predicate is also known to be encoded somewhere in
-the pricing-engine repo, which is not checked out here. Whether this candidate clears the
-threshold (a Finding) or stays below it (correctly not a candidate at all) depends on a fact
-this repo cannot supply, so the evidence-ceiling rule blocks a verdict either way rather than
-assuming the occurrence count locally observed is the true count.
+This repo has 1 local occurrence (threshold ≥2). The other copy, if any, lives in the
+pricing-engine repo, which is not checked out here. A cross-repo helper is P3 at best, so N9
+sends it to one Filtered out line naming the repo; it is never a Finding and never silently
+dropped.
 
 ```markdown
-### Unresolved (needs out-of-scope evidence)
-- [RF-U1] A1 Business-rule duplication at `ShippingCalculator.java:2` (`customer.getTier() ==
-  Tier.PREMIUM && order.getTotal() > 500`, 2 occurrences locally, below the >=3 threshold),
-  missing fact: does a 3rd occurrence of this predicate exist in pricing-engine, resolves
-  via: `grep-across-repos` on pricing-engine for the same eligibility predicate
+### Filtered out
+- A1 Business-rule duplication at `ShippingCalculator.java:2`, filtered by N9 (other copy, if any, lives in pricing-engine; not checkable here, and a cross-repo fix is P3 at best)
 ```
 
 ## A3: Redundant derived field (Java)

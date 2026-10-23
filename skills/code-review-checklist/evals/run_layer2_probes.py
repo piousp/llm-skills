@@ -143,24 +143,6 @@ def check_no_code_mutation(tool_calls, final_text, **ctx) -> bool:
     return True
 
 
-def check_read_test_file(tool_calls, final_text, **ctx) -> bool:
-    """Every test_file in the fixture must be read (via read tool or bash)."""
-    test_files = ctx.get("fixture", {}).get("test_files", [])
-    for tf in test_files:
-        found = False
-        for tc in tool_calls:
-            args = tc.get("arguments", {})
-            if tc.get("name") == "read" and tf in str(args.get("path", "")):
-                found = True
-                break
-            if tc.get("name") == "bash" and tf in str(args.get("command", "")):
-                found = True
-                break
-        if not found:
-            return False
-    return True
-
-
 def check_derived_diff_via_git(tool_calls, final_text, **ctx) -> bool:
     return any(
         tc.get("name") == "bash" and "git diff" in str(tc.get("arguments", {}).get("command", ""))
@@ -210,7 +192,7 @@ def check_verdict_ready(tool_calls, final_text, **ctx) -> bool:
     return re.search(r"\bREADY\b", final_text) is not None and "NEEDS WORK" not in final_text
 
 
-_SEVERITY_RE = re.compile(r"- \[(Blocker|Major|Nit|Question|FYI)\]")
+_SEVERITY_RE = re.compile(r"- \[(Blocker|Major|Minor|Nit|Question|FYI)\]")
 
 
 def check_severity_tagged(tool_calls, final_text, **ctx) -> bool:
@@ -223,7 +205,6 @@ def check_blocker_forces_needs_work(tool_calls, final_text, **ctx) -> bool:
 
 _PRAISE_PHRASES = [
     "well done", "great job", "nice work", "good work", "good job",
-    "excelente", "buen trabajo", "muy buen trabajo",
 ]
 
 
@@ -237,7 +218,7 @@ def check_has_file_line_refs(tool_calls, final_text, **ctx) -> bool:
 
 
 def _make_planted_check(name: str):
-    """Factory for the nine found_planted_* checks — token+file mentions."""
+    """Factory for the eight found_planted_* checks — token+file mentions."""
     def check(tool_calls, final_text, **ctx) -> bool:
         planted = _planted(ctx, name)
         if planted is None:
@@ -253,7 +234,7 @@ def check_clean_diff_all_pass(tool_calls, final_text, **ctx) -> bool:
     section; Question/FYI are informational, not violations. Verdict must be
     READY (zero violations is what the skill maps to READY)."""
     return (
-        re.search(r"- \[(Blocker|Major|Nit)\]", final_text) is None
+        re.search(r"- \[(Blocker|Major|Minor|Nit)\]", final_text) is None
         and re.search(r"### .+: FAIL", final_text) is None
         and re.search(r"\bREADY\b", final_text) is not None
     )
@@ -263,11 +244,27 @@ def check_no_blocker_or_major_tags(tool_calls, final_text, **ctx) -> bool:
     return "[Blocker]" not in final_text and "[Major]" not in final_text
 
 
+_SUGGESTION_RE = re.compile(
+    r"`|→|->|\b(suggest|consider|rename|replace|extract|use|add|remove|inline|move|change|drop|instead)\b",
+    re.IGNORECASE,
+)
+
+
+def check_minor_has_suggestion(tool_calls, final_text, **ctx) -> bool:
+    """Every `- [Minor]` line carries at least one concrete suggestion
+    (backticked code, an arrow, or an imperative verb). Vacuously true when
+    the review has no Minor line."""
+    for line in final_text.splitlines():
+        m = re.match(r"\s*- \[Minor\]\s*(.*)", line)
+        if m and not _SUGGESTION_RE.search(m.group(1)):
+            return False
+    return True
+
+
 _NO_DIFF_PHRASES = [
     "no changes", "nothing to review", "no diff", "nothing to diff",
     "no unstaged changes", "working tree clean", "clean working tree",
-    "no hay cambios", "sin cambios", "no hay nada", "nada que revisar",
-    "no hay diff", "there are no changes",
+    "there are no changes",
 ]
 
 
@@ -291,17 +288,8 @@ def check_negative_control_no_review(tool_calls, final_text, **ctx) -> bool:
     return True
 
 
-def check_coverage_gap_section(tool_calls, final_text, **ctx) -> bool:
-    return "Coverage Gaps" in final_text
-
-
-def check_suggested_tests_section(tool_calls, final_text, **ctx) -> bool:
-    return "Suggested Tests" in final_text
-
-
 CHECK_REGISTRY = {
     "no_code_mutation": check_no_code_mutation,
-    "read_test_file": check_read_test_file,
     "derived_diff_via_git": check_derived_diff_via_git,
     "derived_diff_via_git_cached": check_derived_diff_via_git_cached,
     "derived_diff_via_git_branch": check_derived_diff_via_git_branch,
@@ -317,12 +305,11 @@ CHECK_REGISTRY = {
     "no_blocker_or_major_tags": check_no_blocker_or_major_tags,
     "no_diff_graceful_base": check_no_diff_graceful_base,
     "negative_control_no_review": check_negative_control_no_review,
-    "coverage_gap_section": check_coverage_gap_section,
-    "suggested_tests_section": check_suggested_tests_section,
+    "minor_has_suggestion": check_minor_has_suggestion,
 }
 for _planted_name in (
     "secret", "mutable_let", "swallowed_catch", "bool_param", "complexity",
-    "scope_violation", "weak_test", "naming_nit", "redundant_comment",
+    "scope_violation", "naming_nit", "redundant_comment",
 ):
     CHECK_REGISTRY[f"found_planted_{_planted_name}"] = _make_planted_check(_planted_name)
 
@@ -390,6 +377,8 @@ _DIFF_EXPECTATIONS: dict[str, tuple[str, set[str]]] = {
     "negative_control": ("unstaged", set()),
     "english_trigger_phrase": ("unstaged", {"src/labels.ts"}),
     "nit_only_ready": ("unstaged", {"src/user.ts", "tests/user.test.ts"}),
+    "negative_internal_snapshot_bump": ("unstaged", {"pom.xml"}),
+    "negative_small_growth_long_method": ("unstaged", {"src/report.ts", "tests/report.test.ts"}),
 }
 
 
@@ -416,8 +405,8 @@ def _process_orders_span(text: str) -> int:
 
     Counts from the blank separator line above the declaration through the
     closing brace — the range the fixture spec documents as "lines 10-35",
-    i.e. 26 lines. The skill checklist's complexity threshold is ">25 lines";
-    this documents that the planted function clears it."""
+    i.e. 26 lines. The checklist has no absolute line limit; this documents
+    that the planted function is large enough to read as over-complex."""
     lines = text.splitlines()
     sig = next(i for i, ln in enumerate(lines) if "export function processOrders" in ln)
     close = next(i for i in range(sig, len(lines)) if lines[i] == "}")
@@ -576,8 +565,20 @@ def _run_smoke_tests() -> list[str]:
         if CHECK_REGISTRY["found_planted_secret"]([], "No issues found.", fixture=fixture):
             problems.append("smoke found_planted_secret: missing mention accepted")
 
+        # --- minor_has_suggestion
+        if not check_minor_has_suggestion([], "- [Minor] a.ts:3: weak assertion; use `toBe(\"o1\")` instead"):
+            problems.append("smoke minor_has_suggestion: Minor with suggestion rejected")
+        if check_minor_has_suggestion([], "- [Minor] a.ts:3: the assertion is weak"):
+            problems.append("smoke minor_has_suggestion: Minor without suggestion accepted")
+        if not check_minor_has_suggestion([], "- [Nit] a.ts:3: naming"):
+            problems.append("smoke minor_has_suggestion: no-Minor review rejected")
+
+        # --- clean_diff_all_pass counts Minor as a violation
+        if check_clean_diff_all_pass([], "- [Minor] a.ts:1: x; use y\nREADY"):
+            problems.append("smoke clean_diff_all_pass: Minor accepted as clean")
+
         # --- no_diff_graceful_base
-        if not check_no_diff_graceful_base([], "No hay cambios. Working tree clean — nothing to review."):
+        if not check_no_diff_graceful_base([], "No changes. Working tree clean — nothing to review."):
             problems.append("smoke no_diff_graceful_base: graceful no-diff not detected")
         if check_no_diff_graceful_base([], "Working tree clean\n- [Blocker] src/a.ts:1 — x"):
             problems.append("smoke no_diff_graceful_base: severity tags not rejected")
@@ -585,10 +586,10 @@ def _run_smoke_tests() -> list[str]:
             problems.append("smoke no_diff_graceful_base: Verdict present not rejected")
 
         # --- negative_control_no_review
-        if not check_negative_control_no_review([], "Una cola es FIFO; una pila es LIFO. Ejemplo con deque:"):
+        if not check_negative_control_no_review([], "A queue is FIFO; a stack is LIFO. Example with deque:"):
             problems.append("smoke negative_control_no_review: plain answer rejected")
         if check_negative_control_no_review(
-            [{"name": "bash", "arguments": {"command": "git diff"}}], "Respuesta..."):
+            [{"name": "bash", "arguments": {"command": "git diff"}}], "Answer..."):
             problems.append("smoke negative_control_no_review: git diff tool call accepted")
         if check_negative_control_no_review([], "## Review: main\n### Verdict: READY"):
             problems.append("smoke negative_control_no_review: review format accepted")

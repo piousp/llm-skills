@@ -8,7 +8,8 @@
       "output_has_required_sections",
       "finding_has_file_line_evidence",
       "gate_note_present",
-      "identifies_a1_category"
+      "identifies_a1_category",
+      "a1_added_copy_is_p1"
     ]
   },
   {
@@ -23,13 +24,23 @@
     ]
   },
   {
-    "id": "routes_uncertain_threshold_to_unresolved",
+    "id": "routes_cross_repo_duplicate_to_filtered_out",
     "prompt": "Following the refactor-identification skill (invoked by name), analyze the current branch's diff (repo at {REPO_DIR}, base branch `main`, current branch `feature`) for structural refactor candidates. Note: this same eligibility predicate (customer tier == PREMIUM && order total > 500) is also used somewhere in the pricing-engine repo, which is not checked out here and you have no access to it.",
     "should_trigger": true,
     "expected_checks": [
       "no_repo_mutation",
       "output_has_required_sections",
-      "routes_uncertain_threshold_to_unresolved"
+      "routes_cross_repo_duplicate_to_filtered_out"
+    ]
+  },
+  {
+    "id": "ignores_out_of_language_files",
+    "prompt": "Following the refactor-identification skill (invoked by name), analyze the current branch's diff (repo at {REPO_DIR}, base branch `main`, current branch `feature`) for structural refactor candidates.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_repo_mutation",
+      "output_has_required_sections",
+      "lists_out_of_language_scope"
     ]
   }
 ]

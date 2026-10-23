@@ -175,33 +175,27 @@ def check_no_test_execution(tool_calls: list[dict], final_text: str, **ctx) -> b
 
 
 def check_report_structure(tool_calls: list[dict], final_text: str, **ctx) -> bool:
-    """The final report carries all five template sections (English or
-    Spanish headers, markdown heading or bold label)."""
+    """The final report carries all five template sections (English
+    headers, markdown heading or bold label)."""
     low = final_text.lower()
     return all(_has_section_header(low, kw) for kw in _SECTION_HEADER_PATTERNS.values())
 
 
 _SECTION_HEADER_PATTERNS = {
     "title": r"qa adversary",
-    "findings": r"findings|hallazgos",
-    "coverage": r"integration coverage|cobertura",
-    "questions": r"open questions|dudas|preguntas abiertas",
-    "verdict": r"verdict|veredicto",
+    "findings": r"findings",
+    "coverage": r"integration coverage",
+    "questions": r"open questions",
+    "verdict": r"verdict",
 }
 
 
 def _has_section_header(low: str, keywords: str) -> bool:
     """Section headers are recognized only at line starts: a markdown
     heading (#{1,6}) or a standalone bold label whose whole line is the
-    label (optionally closed with ':'/'('/')'), in English or Spanish.
-    Line anchoring rejects prose like 'see the **Cobertura** below'.
-    First live run: the agent rendered the report fully in Spanish with
-    headers like 'Cobertura de integración' / 'Dudas abiertas' — English
-    substrings missed them, so matching is keyword-based with a header
-    marker, not an exact '### ' prefix match. Accepted-risk framing
-    (unchanged): a bold label only counts as a header when it stands
-    alone on its own line — the line-anchoring refinement is what makes
-    prose like 'see the **Cobertura** below' no longer false-positive."""
+    label (optionally closed with ':'/'('/')'). Line anchoring rejects
+    prose like 'see the **Coverage** below'; matching is keyword-based
+    with a header marker, not an exact '### ' prefix match."""
     heading = re.search(r"^\s*#{1,6}\s*(?:%s)" % keywords, low, re.MULTILINE)
     if heading:
         return True
@@ -218,13 +212,13 @@ def _extract_verdict(low: str) -> str | None:
     """Extract the verdict value (pass/block/needs clarification) from the
     lowercased report. Star characters are stripped first: '*' never occurs
     in the verdict vocabulary, and stripping makes the extraction robust to
-    any bold formatting of the label and/or value (**Veredicto:** **BLOCK**,
+    any bold formatting of the label and/or value (**Verdict:** **BLOCK**,
     ### Verdict: **PASS**, ...). None when no verdict line parses. Shared by
     check_verdict_valid and check_clean_control_only."""
     m = re.search(
-        r"(verdict|veredicto)\s*:\s*(pass|block|needs clarification)",
+        r"verdict\s*:\s*(pass|block|needs clarification)",
         low.replace("*", ""))
-    return m.group(2) if m else None
+    return m.group(1) if m else None
 
 
 def check_verdict_valid(tool_calls: list[dict], final_text: str, **ctx) -> bool:
@@ -267,8 +261,7 @@ def check_findings_have_failure_scenario(tool_calls: list[dict], final_text: str
     if not blocks:
         return True
     for block in blocks:
-        if not any(re.match(r"^\s*(failure scenario|escenario(?:\s+de\s+(?:fallo|falla|error|fracaso))?)\s*:",
-                             l, re.IGNORECASE)
+        if not any(re.match(r"^\s*failure scenario\s*:", l, re.IGNORECASE)
                    for l in block):
             return False
     return True
@@ -299,6 +292,32 @@ def check_clean_control_only(tool_calls: list[dict], final_text: str, **ctx) -> 
     return True
 
 
+def check_no_findings(tool_calls: list[dict], final_text: str, **ctx) -> bool:
+    """No numbered [SEV] finding line anywhere in the report."""
+    return not any(_FINDING_LINE_RE.match(line) for line in final_text.splitlines())
+
+
+def check_no_block_high_medium(tool_calls: list[dict], final_text: str, **ctx) -> bool:
+    """No finding line rated BLOCK, HIGH or MEDIUM (LOW and coverage lines
+    are acceptable)."""
+    for line in final_text.splitlines():
+        m = _FINDING_LINE_RE.match(line)
+        if m and m.group(1).lower() in ("block", "high", "medium"):
+            return False
+    return True
+
+
+def check_open_question_mentions_token(tool_calls: list[dict], final_text: str, **ctx) -> bool:
+    """The text from the first 'open questions' heading onward mentions at
+    least one ctx token (the doubt is raised, not silently dropped)."""
+    low = final_text.lower()
+    idx = low.find("open questions")
+    if idx < 0:
+        return False
+    tail = low[idx:]
+    return any(str(tok).lower() in tail for tok in ctx.get("tokens", []))
+
+
 CHECK_REGISTRY: dict[str, Callable[[list[dict], str], bool]] = {
     "no_source_or_test_mutation": check_no_source_or_test_mutation,
     "no_test_execution": check_no_test_execution,
@@ -311,6 +330,9 @@ CHECK_REGISTRY: dict[str, Callable[[list[dict], str], bool]] = {
     "found_planted_bug_rule_03": check_found_planted_bug,
     "found_planted_bug_repo_04": check_found_planted_bug,
     "clean_control_only": check_clean_control_only,
+    "no_findings": check_no_findings,
+    "no_block_high_medium": check_no_block_high_medium,
+    "open_question_mentions_token": check_open_question_mentions_token,
 }
 
 
@@ -359,6 +381,10 @@ PROBES: dict[str, Callable[[], dict]] = {
 def check_consistency() -> list[str]:
     """Offline validation of prompt_set.json against the registry/seeders."""
     errors: list[str] = []
+    for sample, want in (("### verdict: **block**", "block"), ("**verdict:** **needs clarification**", "needs clarification"),
+                         ("verdict: pass", "pass"), ("no verdict line", None)):
+        if _extract_verdict(sample) != want:
+            errors.append(f"_extract_verdict({sample!r}) != {want!r}")
     required = {"id", "prompt", "should_trigger", "seed", "ctx", "expected_checks"}
     for case in load_prompt_set():
         cid = case.get("id", "?")
@@ -374,7 +400,8 @@ def check_consistency() -> list[str]:
         for check_id in case.get("expected_checks", []):
             if check_id not in CHECK_REGISTRY:
                 errors.append(f"{cid}: unknown expected_check {check_id!r}")
-            if check_id.startswith("found_planted_bug") and not ctx.get("tokens"):
+            if (check_id.startswith("found_planted_bug")
+                    or check_id == "open_question_mentions_token") and not ctx.get("tokens"):
                 errors.append(f"{cid}: check {check_id!r} needs non-empty ctx['tokens']")
     return errors
 
@@ -390,6 +417,9 @@ def fixture_smoke_test() -> list[str]:
         ("seed_inline_data_handling", "cart.py", "price_lookup[sku]"),
         ("seed_inline_business_rule", "shipping.py", "order.subtotal >= 75.00"),
         ("seed_inline_clean_control", "invoice.py", 'sum(line["amount"] for line in order["lines"])'),
+        ("seed_inline_snapshot_bump", "pom.xml", "2.4.0-PROJ-42-SNAPSHOT"),
+        ("seed_inline_tf_concurrency", "infra/lambda.tf", "reserved_concurrent_executions = 5"),
+        ("seed_inline_test_wait", "tests/integration/test_replay_guard.py", "within_s=3"),
     ]
     for seed_key, filename, needle in inline_checks:
         with tempfile.TemporaryDirectory() as tmp_str:

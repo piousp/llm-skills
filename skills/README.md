@@ -30,9 +30,9 @@ legitimate, which patterns are anti-patterns. Apply it whenever a code change ne
 ## Review and QA
 
 **`pablo-code-review`**
-Runs three read-only lenses on the same diff and merges them into one report: `qa-adversary` for
-bugs, `code-review-checklist` for style, `refactor-identification` for structural debt. Use it for
-a full PR review in one pass. For a narrower question, call one of the three lenses directly
+Runs four read-only lenses on the same diff and merges them into one report: `qa-adversary` for
+bugs, `code-review-checklist` for style, `refactor-identification` for structural debt, `pablo-test-review` for test quality. Use it for
+a full PR review in one pass. For a narrower question, call one of the lenses directly
 instead.
 
 **`qa-adversary`**
@@ -41,9 +41,13 @@ bugs, data-handling mistakes, and regressions. Reads tests to judge coverage, ne
 never touches code. Use it before merging, or whenever someone asks "will this break anything".
 
 **`code-review-checklist`**
-Checks a diff against Pablo's quality checklist and flags missing test coverage. Read-only, and
+Checks a diff against Pablo's quality checklist. Read-only, and
 focused on style and structure rather than correctness. Pair it with `qa-adversary` if you also
 need a bug hunt.
+
+**`pablo-test-review`**
+Read-only lens for the tests in a diff: can the changed tests actually fail, which brittle or
+missing assertions to fix or add. Each item is written as a PR comment.
 
 **`refactor-identification`**
 A deeper, evidence-based dive into structural problems in a branch's diff: missing abstractions,

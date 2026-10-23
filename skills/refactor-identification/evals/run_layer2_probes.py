@@ -17,10 +17,12 @@ the checks):
   - A speculative single-implementation "candidate" is correctly filtered by
     N1 in Filtered out, not reported as a Finding (the skill's own worked
     "Filtered by the gate" example).
-  - A business-rule duplicate whose occurrence count depends on a fact
-    outside this repo (below threshold locally, possibly not below
-    threshold elsewhere) is routed to Unresolved (N9), not silently dropped
-    and not fabricated as a Finding or a Filtered-out verdict.
+  - A duplicate whose other copy lives in another repo (1 local occurrence)
+    is routed by N9 to one Filtered-out line naming the repo, never a
+    Finding and never silently dropped.
+  - A copy the branch ADDS next to an untouched one is P1 (A1).
+  - A file in a language outside the lens scope is listed as
+    "out of language scope" and yields no candidates.
 
 Gated behind PI_LIVE_EVAL=1 — costs real LLM tokens.
 
@@ -139,23 +141,16 @@ def seed_single_implementation_repo(tmp: Path) -> Path:
     return repo
 
 
-def seed_uncertain_threshold_repo(tmp: Path) -> Path:
-    """feature branch adds a second occurrence of a business-rule predicate
-    already used once elsewhere in this repo (2 occurrences total, below the
-    >=3 business-dup threshold) — but the prompt states a possible 3rd
-    occurrence lives in another repo the agent cannot check."""
+def seed_cross_repo_duplicate_repo(tmp: Path) -> Path:
+    """base commit holds only a README; the feature branch adds
+    ShippingCalculator.java with 1 occurrence of a business-rule predicate.
+    The prompt states another copy may live in a repo the agent cannot check."""
     repo = tmp / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
-    (repo / "OrderValidator.java").write_text(
-        "class OrderValidator {\n"
-        "    boolean isEligibleForLoyaltyDiscount(Customer customer, Order order) {\n"
-        "        return customer.getTier() == Tier.PREMIUM && order.getTotal() > 500;\n"
-        "    }\n"
-        "}\n"
-    )
+    (repo / "README.md").write_text("placeholder\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "init")
     _git(repo, "checkout", "-q", "-b", "feature")
@@ -171,10 +166,41 @@ def seed_uncertain_threshold_repo(tmp: Path) -> Path:
     return repo
 
 
+def seed_python_only_repo(tmp: Path) -> Path:
+    """feature branch adds tools/sync.py with 2 identical functions: a language
+    outside the lens scope, so no candidates may be produced."""
+    repo = tmp / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "eval@example.com")
+    _git(repo, "config", "user.name", "eval")
+    (repo / "README.md").write_text("placeholder\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "sync.py").write_text(
+        "def sync_orders(items):\n"
+        "    total = 0\n"
+        "    for i in items:\n"
+        "        total += i.amount * i.quantity\n"
+        "    return total\n\n\n"
+        "def sync_refunds(items):\n"
+        "    total = 0\n"
+        "    for i in items:\n"
+        "        total += i.amount * i.quantity\n"
+        "    return total\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add tools/sync.py")
+    return repo
+
+
 SEED_REGISTRY = {
     "detects_a1_structural_duplication": seed_structural_duplication_repo,
     "rejects_single_implementation_by_n1": seed_single_implementation_repo,
-    "routes_uncertain_threshold_to_unresolved": seed_uncertain_threshold_repo,
+    "routes_cross_repo_duplicate_to_filtered_out": seed_cross_repo_duplicate_repo,
+    "ignores_out_of_language_files": seed_python_only_repo,
 }
 
 
@@ -229,28 +255,37 @@ def does_not_report_speculative_strategy_finding(tool_calls, final_text, **ctx) 
     return "[rf-" not in findings_block
 
 
-def routes_uncertain_threshold_to_unresolved(tool_calls, final_text, **ctx) -> bool:
-    """The fixture's business-rule predicate has only 2 occurrences inside
-    this repo (below the >=3 business-dup threshold), but the prompt states
-    a possible 3rd occurrence lives in another repo not available here. The
-    skill must not silently drop it (evidence-ceiling rule) and must not
-    fabricate a Finding or a Filtered-out verdict either — it belongs in
-    Unresolved, citing the missing cross-repo fact."""
+def routes_cross_repo_duplicate_to_filtered_out(tool_calls, final_text, **ctx) -> bool:
+    """The fixture has 1 local occurrence of the predicate (threshold >=2); the
+    prompt says another copy may live in a repo not available here. N9 sends
+    it to one Filtered-out line naming that repo: never a Finding, never
+    silently dropped."""
     low = final_text.lower()
     findings_idx = low.find("### findings")
-    unresolved_idx = low.find("### unresolved")
     filtered_idx = low.find("### filtered out")
-    if findings_idx == -1 or unresolved_idx == -1 or filtered_idx == -1:
+    if findings_idx == -1 or filtered_idx == -1 or filtered_idx <= findings_idx:
         return False
-    if not (findings_idx < unresolved_idx < filtered_idx):
+    if "[rf-" in low[findings_idx:filtered_idx]:
+        return False  # fabricated as a Finding
+    return "pricing-engine" in low[filtered_idx:]
+
+
+def a1_added_copy_is_p1(tool_calls, final_text, **ctx) -> bool:
+    """A copy the branch ADDS next to an untouched one is P1 (examples.md A1)."""
+    return bool(re.search(r"\[RF-\d+\]\s*A1[^\n]*P1", final_text))
+
+
+def lists_out_of_language_scope(tool_calls, final_text, **ctx) -> bool:
+    """A file in a language outside Java/Scala/JS/TS is listed as out of
+    language scope and yields no Finding."""
+    low = final_text.lower()
+    if "out of language scope" not in low or "sync.py" not in low:
         return False
-    findings_block = low[findings_idx:unresolved_idx]
-    unresolved_block = low[unresolved_idx:filtered_idx]
-    if "[rf-" in findings_block:
-        return False  # fabricated as a confirmed Finding
-    if "(none)" in unresolved_block and "[rf-u" not in unresolved_block:
-        return False  # silently dropped instead of flagged
-    return True
+    findings_idx = low.find("### findings")
+    next_idx = min((i for i in (low.find("### unresolved"), low.find("### filtered out")) if i > findings_idx), default=-1)
+    if findings_idx == -1 or next_idx == -1:
+        return False
+    return "[rf-" not in low[findings_idx:next_idx]
 
 
 CHECK_REGISTRY = {
@@ -261,7 +296,9 @@ CHECK_REGISTRY = {
     "identifies_a1_category": identifies_a1_category,
     "cites_n1_in_filtered_out": cites_n1_in_filtered_out,
     "does_not_report_speculative_strategy_finding": does_not_report_speculative_strategy_finding,
-    "routes_uncertain_threshold_to_unresolved": routes_uncertain_threshold_to_unresolved,
+    "routes_cross_repo_duplicate_to_filtered_out": routes_cross_repo_duplicate_to_filtered_out,
+    "a1_added_copy_is_p1": a1_added_copy_is_p1,
+    "lists_out_of_language_scope": lists_out_of_language_scope,
 }
 
 

@@ -34,20 +34,21 @@ JUDGE_SPECS: list[tuple[str, Callable, str]] = [
     (
         "diff_handed_in_prompt",
         lambda: run_case("diff_handed_in_prompt"),
-        "SKILL.md Process step 1: cuando el prompt entrega el diff, 'use exactly that. "
+        "SKILL.md Process step 1: when the prompt hands in the diff, 'use exactly that. "
         "Do not go looking for a different diff and do not ask anything — the caller "
-        "isn't present to answer; treat the prompt as self-contained.' El prompt entregó "
-        "un diff que agrega un SOURCE_HOST_TOKEN hardcodeado y un catch ignorado en "
-        "src/billing.ts (archivo que no existe en el repo). Juzga si la respuesta revisa "
-        "exactamente ese diff, no pide contexto faltante, y no sustituye un diff distinto "
-        "(p.ej. revisar archivos del repo o afirmar que no hay cambios).",
+        "isn't present to answer; treat the prompt as self-contained.' The prompt supplied "
+        "a diff that adds a hardcoded SOURCE_HOST_TOKEN and an ignored catch in "
+        "src/billing.ts (a file whose committed version lacks those lines). Judge whether "
+        "the response reviews exactly that diff, does not ask for missing context, and does "
+        "not substitute a different diff (e.g. reviewing repo files or claiming there are "
+        "no changes).",
     ),
     (
         "no_diff_graceful",
         lambda: run_case("no_diff_graceful"),
-        "El repo no tiene cambios. Juzga si la respuesta lo maneja con elegancia: "
-        "afirma explícitamente que no hay nada que revisar, no fabrica una revisión "
-        "de código sin cambios ni inventa violaciones, no crashea ni produce veredicto.",
+        "The repo has no changes. Judge whether the response handles it gracefully: "
+        "it explicitly states there is nothing to review, does not fabricate a review "
+        "of unchanged code or invent violations, does not crash and produces no verdict.",
     ),
 ]
 

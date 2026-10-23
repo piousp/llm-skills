@@ -1,0 +1,436 @@
+[
+  {
+    "id": "P1_removed_assertion",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/WidgetMapperTest.java\n+++ b/src/test/java/com/acme/widget/WidgetMapperTest.java\n@@ -13,6 +13,5 @@\n         WidgetDto dto = mapper.map(widget);\n         assertEquals(\"w-1\", dto.id());\n         assertEquals(\"Bolt\", dto.name());\n-        assertEquals(Status.ARCHIVED, dto.status());\n     }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p1_removed_assertion",
+    "ctx": {
+      "file": "WidgetMapperTest.java",
+      "tokens": [
+        "status",
+        "archived"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p1"
+    ]
+  },
+  {
+    "id": "P2_sibling_helper_missing",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/WidgetCopyTest.java\n+++ b/src/test/java/com/acme/widget/WidgetCopyTest.java\n@@ -35,4 +35,11 @@\n         assertEquals(\"\", copy.name());\n         assertSourceUntouched(source);\n     }\n+\n+    @Test\n+    void copiesToSecondRegion() {\n+        store.put(new Widget(\"w-4\", \"Washer\", \"eu\"));\n+        Widget copy = copier.copy(\"w-4\", \"ap\");\n+        assertEquals(\"ap\", copy.region());\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p2_sibling_helper_missing",
+    "ctx": {
+      "file": "WidgetCopyTest.java",
+      "tokens": [
+        "assertSourceUntouched"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p2"
+    ]
+  },
+  {
+    "id": "P3_brittle_foreign_message",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/ConfigLoaderTest.java\n+++ b/src/test/java/com/acme/widget/ConfigLoaderTest.java\n@@ -14,4 +14,13 @@\n         Config config = loader.load(\"{\\\"schemaVersion\\\": \\\"3.0.0\\\"}\");\n         assertEquals(\"3.0.0\", config.schemaVersion());\n     }\n+\n+    @Test\n+    void rejectsMalformedJson() {\n+        JsonProcessingException e = assertThrows(JsonProcessingException.class,\n+            () -> loader.load(\"{\\\"schemaVersion\\\": }\"));\n+        assertEquals(\"Unexpected character ('}' (code 125)): expected a value\\n\"\n+            + \" at [Source: (String)\\\"{\\\"schemaVersion\\\": }\\\"; line: 1, column: 19]\",\n+            e.getMessage());\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p3_brittle_foreign_message",
+    "ctx": {
+      "file": "ConfigLoaderTest.java",
+      "tokens": [
+        "assertThrows",
+        "contains("
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p3"
+    ]
+  },
+  {
+    "id": "P4_new_branch_untested",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/main/java/com/acme/widget/WidgetService.java\n+++ b/src/main/java/com/acme/widget/WidgetService.java\n@@ -9,6 +9,9 @@\n \n     public SubmitResult submit(SubmitRequest request) {\n         Widget widget = Widget.from(request);\n+        if (request.isDryRun()) {\n+            return SubmitResult.preview(widget.id());\n+        }\n         repository.save(widget);\n         return SubmitResult.stored(widget.id());\n     }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p4_new_branch_untested",
+    "ctx": {
+      "file": "WidgetService.java",
+      "tokens": [
+        "dryrun",
+        "dry-run",
+        "dry run",
+        "preview"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p4",
+      "gap_ranked_first",
+      "has_gap"
+    ]
+  },
+  {
+    "id": "P5_claim_not_checked",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/main/java/com/acme/widget/WidgetDeleter.java\n+++ b/src/main/java/com/acme/widget/WidgetDeleter.java\n@@ -15,7 +15,8 @@\n \n     public void delete(String id) {\n         Widget widget = repository.get(id);\n-        WidgetEvent event = WidgetEvent.deleted(widget);\n+        WidgetEvent event = WidgetEvent.deleted(widget)\n+            .withDereferencedAt(clock.millis());\n         sink.publish(event);\n         repository.remove(id);\n     }\n--- a/src/test/java/com/acme/widget/WidgetDeleterTest.java\n+++ b/src/test/java/com/acme/widget/WidgetDeleterTest.java\n@@ -19,4 +19,12 @@\n         deleter.delete(\"w-1\");\n         assertEquals(0, repository.count());\n     }\n+\n+    @Test\n+    void setsDereferencedAtOnDelete() {\n+        repository.save(new Widget(\"w-2\", \"Nut\", Status.ACTIVE));\n+        deleter.delete(\"w-2\");\n+        WidgetEvent event = sink.last();\n+        assertEquals(Status.DELETED, event.getStatus());\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p5_claim_not_checked",
+    "ctx": {
+      "file": "WidgetDeleterTest.java",
+      "tokens": [
+        "getDereferencedAt"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p5"
+    ]
+  },
+  {
+    "id": "P6_it_polling_values",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/it/ReplayIT.java\n+++ b/src/test/java/com/acme/it/ReplayIT.java\n@@ -5,13 +5,16 @@\n import org.junit.jupiter.api.Test;\n \n class ReplayIT {\n+    // The replay marker TTL is short, so poll quickly.\n+    private static final long POLL_MS = 250;\n+    private static final long MAX_WAIT_S = 45;\n     private final WidgetApi api = new WidgetApi(Env.baseUrl());\n \n     @Test\n     void replayedWidgetBecomesVisible() throws Exception {\n         String id = api.submit(\"Bolt\");\n         api.replay(id);\n-        Thread.sleep(500);\n+        Polling.until(() -> \"ACTIVE\".equals(api.status(id)), POLL_MS, MAX_WAIT_S);\n         assertEquals(\"ACTIVE\", api.status(id));\n     }\n }\n```\n\nThis is an integration-test repository (widget-integration-tests); its main sources count as test code.\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p6_it_polling_values",
+    "ctx": {
+      "file": "ReplayIT.java",
+      "tokens": [
+        "poll",
+        "250",
+        "45",
+        "ttl"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p6",
+      "question_tier_only"
+    ]
+  },
+  {
+    "id": "P7_it_many_candidate_gaps",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/main/java/com/acme/it/LifecycleScenarios.java\n+++ b/src/main/java/com/acme/it/LifecycleScenarios.java\n@@ -10,4 +10,19 @@\n         String id = api.create(\"Bolt\");\n         Assertions.assertEquals(\"DRAFT\", api.status(id));\n     }\n+\n+    @Test\n+    void activatesADraft() {\n+        String id = api.create(\"Nut\");\n+        api.activate(id);\n+        Assertions.assertEquals(\"ACTIVE\", api.status(id));\n+    }\n+\n+    @Test\n+    void archivesAnActiveWidget() {\n+        String id = api.create(\"Washer\");\n+        api.activate(id);\n+        api.archive(id);\n+        Assertions.assertEquals(\"ARCHIVED\", api.status(id));\n+    }\n }\n```\n\nThis is an integration-test repository (widget-integration-tests); its main sources count as test code.\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p7_it_many_candidate_gaps",
+    "ctx": {
+      "file": "LifecycleScenarios.java",
+      "tokens": [
+        "restore",
+        "round trip",
+        "round-trip"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p7",
+      "has_gap"
+    ]
+  },
+  {
+    "id": "P8_test_asserts_nothing",
+    "kind": "positive",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- /dev/null\n+++ b/src/main/java/com/acme/widget/Slugger.java\n@@ -0,0 +1,9 @@\n+package com.acme.widget;\n+\n+import java.util.Locale;\n+\n+public final class Slugger {\n+    public static String slugify(String title) {\n+        return title.trim().toLowerCase(Locale.ROOT).replaceAll(\"[^a-z0-9]+\", \"-\");\n+    }\n+}\n--- /dev/null\n+++ b/src/test/java/com/acme/widget/SluggerTest.java\n@@ -0,0 +1,10 @@\n+package com.acme.widget;\n+\n+import org.junit.jupiter.api.Test;\n+\n+class SluggerTest {\n+    @Test\n+    void slugifyRuns() {\n+        Slugger.slugify(\"Hello World\");\n+    }\n+}\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "p8_test_asserts_nothing",
+    "ctx": {
+      "file": "SluggerTest.java",
+      "tokens": [
+        "hello-world"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "found_p8"
+    ]
+  },
+  {
+    "id": "N1_not_null_smoke",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/CopyClientFactoryTest.java\n+++ b/src/test/java/com/acme/widget/CopyClientFactoryTest.java\n@@ -1,6 +1,7 @@\n package com.acme.widget;\n \n import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.junit.jupiter.api.Assertions.assertNotNull;\n \n import org.junit.jupiter.api.Test;\n \n@@ -13,4 +14,10 @@\n         assertEquals(\"https://example.test\", client.endpoint());\n         assertEquals(3, client.retries());\n     }\n+\n+    @Test\n+    void builderCreatesClient() {\n+        CopyClient client = factory.build(new CopyConfig(\"https://example.test\", 0));\n+        assertNotNull(client);\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n1_not_null_smoke",
+    "ctx": {
+      "forbidden": [
+        "assertNotNull"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items",
+      "absent_n1"
+    ]
+  },
+  {
+    "id": "N2_reflection_real_method",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- /dev/null\n+++ b/src/main/java/com/acme/widget/ReplayHandler.java\n@@ -0,0 +1,12 @@\n+package com.acme.widget;\n+\n+import java.time.Clock;\n+import java.time.Instant;\n+\n+public class ReplayHandler {\n+    private Clock clock;\n+\n+    public Instant nextRun() {\n+        return clock.instant().plusSeconds(60);\n+    }\n+}\n--- /dev/null\n+++ b/src/test/java/com/acme/widget/ReplayHandlerTest.java\n@@ -0,0 +1,22 @@\n+package com.acme.widget;\n+\n+import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.mockito.Mockito.CALLS_REAL_METHODS;\n+import static org.mockito.Mockito.mock;\n+\n+import java.lang.reflect.Field;\n+import java.time.Clock;\n+import java.time.Instant;\n+import java.time.ZoneOffset;\n+import org.junit.jupiter.api.Test;\n+\n+class ReplayHandlerTest {\n+    @Test\n+    void nextRunIsOneMinuteAhead() throws Exception {\n+        ReplayHandler handler = mock(ReplayHandler.class, CALLS_REAL_METHODS);\n+        Field field = ReplayHandler.class.getDeclaredField(\"clock\");\n+        field.setAccessible(true);\n+        field.set(handler, Clock.fixed(Instant.parse(\"2024-01-01T00:00:00Z\"), ZoneOffset.UTC));\n+        assertEquals(Instant.parse(\"2024-01-01T00:01:00Z\"), handler.nextRun());\n+    }\n+}\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n2_reflection_real_method",
+    "ctx": {
+      "forbidden": [
+        "reflection",
+        "CALLS_REAL_METHODS",
+        "setAccessible"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items",
+      "absent_n2"
+    ]
+  },
+  {
+    "id": "N3_scala_eventually",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- /dev/null\n+++ b/src/main/scala/com/acme/widget/WidgetPublisher.scala\n@@ -0,0 +1,7 @@\n+package com.acme.widget\n+\n+import akka.actor.ActorRef\n+\n+class WidgetPublisher(sink: ActorRef) {\n+  def publish(event: WidgetEvent): Unit = sink ! event\n+}\n--- /dev/null\n+++ b/src/test/scala/com/acme/widget/WidgetPublisherSpec.scala\n@@ -0,0 +1,19 @@\n+package com.acme.widget\n+\n+import akka.testkit.TestProbe\n+import org.scalatest.concurrent.Eventually\n+import org.scalatest.matchers.should.Matchers\n+import org.scalatest.wordspec.AnyWordSpec\n+\n+class WidgetPublisherSpec extends AnyWordSpec with Matchers with Eventually {\n+  \"WidgetPublisher\" should {\n+    \"forward the event to the sink\" in {\n+      val probe = TestProbe()(system)\n+      val publisher = new WidgetPublisher(probe.ref)\n+      publisher.publish(WidgetEvent(\"w-1\"))\n+      eventually {\n+        received(probe) should contain(WidgetEvent(\"w-1\"))\n+      }\n+    }\n+  }\n+}\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n3_scala_eventually",
+    "ctx": {
+      "forbidden": [
+        "eventually"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items",
+      "absent_n3"
+    ]
+  },
+  {
+    "id": "N4_copied_exception_pattern",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/QuantityTest.java\n+++ b/src/test/java/com/acme/widget/QuantityTest.java\n@@ -19,4 +19,9 @@\n     void rejectsMinValue() {\n         assertThrows(Exception.class, () -> Quantity.of(Integer.MIN_VALUE));\n     }\n+\n+    @Test\n+    void rejectsMinusHundred() {\n+        assertThrows(Exception.class, () -> Quantity.of(-100));\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n4_copied_exception_pattern",
+    "ctx": {
+      "forbidden": [
+        "Exception.class"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items",
+      "absent_n4"
+    ]
+  },
+  {
+    "id": "N5_unit_negative_wait",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/RelayTest.java\n+++ b/src/test/java/com/acme/widget/RelayTest.java\n@@ -2,6 +2,7 @@\n \n import static org.mockito.ArgumentMatchers.any;\n import static org.mockito.Mockito.mock;\n+import static org.mockito.Mockito.after;\n import static org.mockito.Mockito.verify;\n \n import org.junit.jupiter.api.Test;\n@@ -16,4 +17,10 @@\n         relay.forward(message);\n         verify(sink).accept(message);\n     }\n+\n+    @Test\n+    void dropsExpiredMessages() {\n+        relay.forward(Message.expired(\"m-2\"));\n+        verify(sink, after(2000).never()).accept(any());\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n5_unit_negative_wait",
+    "ctx": {
+      "forbidden": [
+        "after(2000)",
+        "never()"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items",
+      "absent_n5"
+    ]
+  },
+  {
+    "id": "N6_clean_tests_only",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/test/java/com/acme/widget/DateParserTest.java\n+++ b/src/test/java/com/acme/widget/DateParserTest.java\n@@ -1,8 +1,10 @@\n package com.acme.widget;\n \n import static org.junit.jupiter.api.Assertions.assertEquals;\n+import static org.junit.jupiter.api.Assertions.assertThrows;\n \n import java.time.LocalDate;\n+import java.time.format.DateTimeParseException;\n import org.junit.jupiter.api.Test;\n \n class DateParserTest {\n@@ -10,4 +12,14 @@\n     void parsesIsoDate() {\n         assertEquals(LocalDate.of(2024, 2, 29), DateParser.parse(\"2024-02-29\"));\n     }\n+\n+    @Test\n+    void rejectsNonIsoDate() {\n+        assertThrows(DateTimeParseException.class, () -> DateParser.parse(\"29/02/2024\"));\n+    }\n+\n+    @Test\n+    void parsesFirstDayOfYear() {\n+        assertEquals(LocalDate.of(2025, 1, 1), DateParser.parse(\"2025-01-01\"));\n+    }\n }\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n6_clean_tests_only",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "silent_result"
+    ]
+  },
+  {
+    "id": "N7_prod_style_only",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/src/main/java/com/acme/widget/Pricing.java\n+++ b/src/main/java/com/acme/widget/Pricing.java\n@@ -2,6 +2,7 @@\n \n public final class Pricing {\n     public static int discountPercent(int quantity) {\n-        return quantity >= 10 ? 5 : 0;\n+        int x = quantity > 10 ? 5 : 0;\n+        return x;\n     }\n }\n--- a/src/test/java/com/acme/widget/PricingTest.java\n+++ b/src/test/java/com/acme/widget/PricingTest.java\n@@ -6,7 +6,17 @@\n \n class PricingTest {\n     @Test\n-    void tenOrMoreGetsFivePercent() {\n-        assertEquals(5, Pricing.discountPercent(10));\n+    void moreThanTenGetsFivePercent() {\n+        assertEquals(5, Pricing.discountPercent(11));\n+    }\n+\n+    @Test\n+    void exactlyTenGetsNoDiscount() {\n+        assertEquals(0, Pricing.discountPercent(10));\n+    }\n+\n+    @Test\n+    void fewerThanTenGetsNoDiscount() {\n+        assertEquals(0, Pricing.discountPercent(9));\n     }\n }\n```\n\nOnly the test lens is in scope here; the production change is reviewed elsewhere.\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n7_prod_style_only",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "no_non_nit_items"
+    ]
+  },
+  {
+    "id": "N8_seven_untested_paths",
+    "kind": "negative",
+    "prompt": "Apply the pablo-test-review skill to this change. Produce the report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- /dev/null\n+++ b/src/main/java/com/acme/widget/WidgetExporter.java\n@@ -0,0 +1,33 @@\n+package com.acme.widget;\n+\n+import java.util.List;\n+\n+public final class WidgetExporter {\n+    public String toCsv(List<Widget> widgets) {\n+        return Csv.join(widgets);\n+    }\n+\n+    public String toJson(List<Widget> widgets) {\n+        return Json.array(widgets);\n+    }\n+\n+    public String toXml(List<Widget> widgets) {\n+        return Xml.wrap(\"widgets\", widgets);\n+    }\n+\n+    public List<Widget> filterActive(List<Widget> widgets) {\n+        return widgets.stream().filter(w -> w.status() == Status.ACTIVE).toList();\n+    }\n+\n+    public List<Widget> sortByName(List<Widget> widgets) {\n+        return widgets.stream().sorted(java.util.Comparator.comparing(Widget::name)).toList();\n+    }\n+\n+    public int countArchived(List<Widget> widgets) {\n+        return (int) widgets.stream().filter(w -> w.status() == Status.ARCHIVED).count();\n+    }\n+\n+    public String summary(List<Widget> widgets) {\n+        return widgets.size() + \" widgets, \" + countArchived(widgets) + \" archived\";\n+    }\n+}\n```\n\nThe repo at <repo> contains the post-change code; use it for sibling tests, 1-hop production reads and line numbers.",
+    "should_trigger": true,
+    "seed": "n8_seven_untested_paths",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "tier_vocab_valid",
+      "no_b_tier",
+      "items_have_file_line",
+      "items_have_change_token",
+      "gap_cap_le_1",
+      "visible_cap_le_3",
+      "nit_cap_le_1",
+      "question_form",
+      "has_gap"
+    ]
+  }
+]

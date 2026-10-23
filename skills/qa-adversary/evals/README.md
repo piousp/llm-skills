@@ -34,7 +34,7 @@ not from what the report *claims*.
 
 - **O1 — report_structure.** The final report carries all five template
   sections: `## QA Adversary`, `### Findings`, `### Integration Coverage`,
-  `### Open Questions`, `### Verdict` (Spanish headers also accepted).
+  `### Open Questions`, `### Verdict`.
 - **O2 — verdict_valid.** Verdict is one of PASS | BLOCK | NEEDS
   CLARIFICATION, and it is consistent: any `[BLOCK]`/`[HIGH]` finding
   anywhere in the report forces verdict BLOCK.
@@ -51,6 +51,10 @@ not from what the report *claims*.
 - **O5 — probe 5 (clean negative control).** Verdict PASS or NEEDS
   CLARIFICATION with residual risk stated; no `[BLOCK]`/`[HIGH]` findings —
   a behavior-preserving refactor must not be burned to look thorough.
+- **O6 — negative probes.** Build metadata (SNAPSHOT bump), an absent
+  handler behind an infra config change, and a test-only wait-window change
+  produce no inflated findings (`negative_snapshot_bump`,
+  `negative_absent_handler_concurrency`, `negative_test_wait_shortening`).
 
 **Style & instructions**
 
@@ -169,7 +173,7 @@ PI_LIVE_EVAL=1 python3 evals/judge.py
 
 ## Prompt set
 
-Five probe cases (`prompt_set.json`). `<repo>` is a runtime placeholder the
+Eight probe cases (`prompt_set.json`). `<repo>` is a runtime placeholder the
 harness replaces with the seeded temp repo path. "Six common checks" =
 `no_source_or_test_mutation`, `no_test_execution`, `report_structure`,
 `verdict_valid`, `findings_have_file_line`, `findings_have_failure_scenario`.
@@ -181,6 +185,9 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 | `business_rule_threshold_vs_ticket` | `> 75.00` → `>= 75.00`; an order of exactly $75 gets free shipping | inline diff (`shipping.py`) | SHIP-204 — strict "over $75" | 6 common + `found_planted_bug_rule_03` |
 | `repo_git_diff_coverage` | `start + size` → `start + size + 1`; one extra element whenever the slice extends past the page boundary; seeded integration tests do not cover that path | seeded git repo, unstaged working-tree diff (`paging.py`) | none — `git diff` | 6 common + `found_planted_bug_repo_04` |
 | `clean_negative_control_refactor` | none — behavior-preserving loop → `sum(...)` | inline diff (`invoice.py`) | none — pre-change baseline | 6 common + `clean_control_only` |
+| `negative_snapshot_bump` | none — dependency bumped to a ticket-qualified SNAPSHOT (build metadata, not behavior) | inline diff (`pom.xml`, line 14) | prompt says the dependency ships with this service | 6 common + `no_findings` + `clean_control_only` |
+| `negative_absent_handler_concurrency` | none — concurrency cap added in infra config whose handler code is in another repo | inline diff (`infra/lambda.tf`) | prompt says the handler is unavailable | 6 common + `no_findings` + `open_question_mentions_token` |
+| `negative_test_wait_shortening` | none — negative-wait window in a test shortened 10 → 3 | inline diff (`tests/integration/test_replay_guard.py`) | prompt says test-only change | 6 common + `no_block_high_medium` (passes whether the skill reports a coverage line, a doubt, or a LOW finding) |
 
 ## Check registry
 
@@ -188,12 +195,15 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 |---|---|
 | `no_source_or_test_mutation` | No tool call named `edit`/`write`/`notepad` in the transcript (guardrail, O3). |
 | `no_test_execution` | No bash segment starts a test runner and no `run_tests`/`test_runner` tool call (guardrail, O3). |
-| `report_structure` | Lower-cased final text contains all five template sections, EN or ES (O1). |
+| `report_structure` | Lower-cased final text contains all five template sections (O1). |
 | `verdict_valid` | Verdict line extracts to `pass`/`block`/`needs clarification`; any `[block]`/`[high]` in the text forces `block` (O2). |
 | `findings_have_file_line` | Every numbered `[SEV]` finding line carries a `file:line` anchor (O4). |
 | `findings_have_failure_scenario` | Every finding block (numbered `[SEV]` line up to the next one or a `###` header) contains a `Failure scenario:` line (O4). |
 | `found_planted_bug_logic_01` / `_data_02` / `_rule_03` / `_repo_04` | Final text contains the fixture file basename AND at least one token describing the planted defect, from `ctx` (O4). |
 | `clean_control_only` | Verdict `pass`/`needs clarification` and no `[block]`/`[high]` anywhere in the text (O5). |
+| `no_findings` | No numbered `[SEV]` finding line anywhere in the report (O6). |
+| `no_block_high_medium` | No finding line rated BLOCK, HIGH or MEDIUM (O6). |
+| `open_question_mentions_token` | The text from the first "open questions" heading onward mentions at least one `ctx` token (O6). |
 
 **Brittleness notes (accepted, deliberate):**
 
@@ -213,30 +223,18 @@ harness replaces with the seeded temp repo path. "Six common checks" =
   its residual-risk sentence would trip the consistency rule. Accepted: the
   template's PASS wording states residual risk without quoting severities,
   and the semantic case (P5) is judged at L3 by the clean-honesty judge.
-- **ES/EN section-header tolerance (broadened after the first live run).**
-  The first live run of probe 4 produced a fully Spanish report with
-  headers the original regex missed (`Cobertura de integración`, `Dudas
-  abiertas`, `Escenario de fallo:`); the checks failed although the report
-  was substantively correct (bug found, BLOCK verdict, concrete scenario).
-  Fix: `report_structure` now matches headers as markdown headings at any
-  level (`#{1,6}`) *or* standalone bold labels, with EN/ES keywords
-  (`findings|hallazgos`, `integration coverage|cobertura`, `open
-  questions|dudas|preguntas abiertas`, `verdict|veredicto`);
-  `findings_have_failure_scenario` accepts `failure scenario` or `escenario`
-  /`escenario de fallo|falla|error|fracaso` ("falla" was caught in a later
-  run). Refinements applied during the N=5 analysis: headers are recognized
-  **only at line starts** — a markdown heading (`#{1,6}`) or a standalone
-  bold label whose whole line is the label (optionally closed with
-  `:`/`(`/`)`, and optionally followed by a bold value, e.g. `**Veredicto:**
-  **BLOCK**`). Prose like 'see the **Cobertura** below' does not
-  false-positive as a section header. Recorded as a harness finding, not a
-  skill defect — see Results.
-- **Bilingual planted-bug tokens.** `found_planted_bug_*` matches the file
-  basename + any of the `ctx` tokens; the token lists carry EN and ES
-  variants (e.g. `exactly 75`/`exactamente 75`, `extra element`/`elemento
-  extra`, `missing sku`/`sku ausente`) because fully Spanish reports were
-  observed in ~20% of trials. Coarse by design; soundness is the L3
-  judge's job.
+- **Section-header tolerance.** `report_structure` matches headers as
+  markdown headings at any level (`#{1,6}`) *or* standalone bold labels
+  (keywords `findings`, `integration coverage`, `open questions`,
+  `verdict`). Headers are recognized **only at line starts** — a markdown
+  heading or a standalone bold label whose whole line is the label
+  (optionally closed with `:`/`(`/`)`, and optionally followed by a bold
+  value, e.g. `**Verdict:** **BLOCK**`). Prose like 'see the **Coverage**
+  below' does not false-positive as a section header.
+  `findings_have_failure_scenario` requires a `Failure scenario:` line.
+- **Planted-bug tokens.** `found_planted_bug_*` matches the file basename +
+  any of the `ctx` tokens (e.g. `exactly 75`, `extra element`,
+  `missing sku`). Coarse by design; soundness is the L3 judge's job.
 - **Verdict extraction tolerates bold formatting.** `_extract_verdict`
   strips `*` characters before matching (they never occur in the verdict
   vocabulary), so `**Verdict:** **BLOCK**`, `### Verdict: **PASS**`, and
@@ -257,7 +255,7 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 ## Verification runbook
 
 ```bash
-cd /home/pablo/.pi/agent/skills/qa-adversary
+cd <this-skill-dir>
 python3 -m py_compile evals/run_layer2_probes.py evals/judge.py evals/fixtures.py evals/run_layer2b_pipeline.py
 python3 evals/run_layer2_probes.py --check      # offline: registry + fixtures smoke test
 python3 evals/judge.py --check                  # offline: spec/probe wiring
@@ -318,8 +316,8 @@ never burned.
 ### Phase 1 — N=1
 
 **L2 5/5 probes PASS, L3 9/9 judge entries PASS** after one harness finding
-was fixed (run 1 of `repo_git_diff_coverage` produced a fully Spanish report
-whose headers the original regex missed — see the "Documented finding"
+was fixed (run 1 of `repo_git_diff_coverage` produced a report in another
+language whose headers the original regex missed — see the "Documented finding"
 below). Details preserved in the tables that follow (L3 scores are from the
 N=1 phase).
 
@@ -330,7 +328,7 @@ N=1 phase).
 | probe | trials | notes |
 |---|---|---|
 | `logic_change_inverted_condition` | 5/5 | bug always found; BLOCK; ticket cited |
-| `data_handling_missing_key` | 5/5 | KeyError bug always found; mixed EN/ES reports |
+| `data_handling_missing_key` | 5/5 | KeyError bug always found |
 | `business_rule_threshold_vs_ticket` | 5/5 | rule violation always found; BLOCK; ticket cited |
 | `repo_git_diff_coverage` | 5/5 | diff derived via git; off-by-one + NOT COVERED always reported |
 | `clean_negative_control_refactor` | 5/5 | honest PASS with residual risk; no manufactured findings |
@@ -365,15 +363,16 @@ transcript shows a single `subagent` tool call and no mutation.
 
 ### Fixes applied during this session (all harness, none skill)
 
-1. **ES/EN section headers** — run 1 of probe 4 emitted a fully Spanish
-   report; headers/ES variants broadened (see brittleness notes).
-2. **"Escenario de falla:"** — Spanish scenario-line variant not covered;
-   added `falla` to the regex.
-3. **Bilingual planted-bug tokens** — fully Spanish reports missed EN-only
-   tokens (~20% of P3 trials); added ES variants.
+1. **Section headers** — run 1 of probe 4 emitted a report in another
+   language; header matching was broadened (the harness is now English-only
+   and the skill's report headers are English).
+2. **Scenario-line variants** — the failure-scenario regex was widened
+   (since removed with the English-only policy).
+3. **Planted-bug tokens** — non-English reports missed EN-only tokens
+   (~20% of P3 trials); variants were added (since removed).
 4. **Verdict extraction vs bold formatting** — `**Verdict:** **BLOCK**`
    failed extraction; `_extract_verdict` now strips `*` first.
-5. **Double-bold section headers** — `**Veredicto:** **BLOCK**` as the only
+5. **Double-bold section headers** — `**Verdict:** **BLOCK**` as the only
    verdict header failed `report_structure`; the bold-label pattern now
    tolerates a trailing bold value.
 6. **`no_test_execution` diagnostics** — offending bash segments are now
@@ -398,19 +397,15 @@ transcript shows a single `subagent` tool call and no mutation.
 
 **Run 1 of `repo_git_diff_coverage` FAILED** two deterministic checks
 (`report_structure`, `findings_have_failure_scenario`) although the report was
-substantively correct: the agent produced the report fully in Spanish
-(`Cobertura de integración`, `Dudas abiertas`, `Escenario de fallo:`,
-`Fuente de intención:`), and the original ES/EN regex variants did not cover
-these translations (the skill is used bilingually; AGENTS.md mandates
-Spanish responses). Per the runbook (fix the harness before the skill), the
-checks were broadened — see the brittleness notes under Check registry — and
-a single re-run passed 7/7. A second independent run of the same probe also
-passed 7/7 with an English report. Cause: harness brittleness; the skill
-itself behaved correctly in all three runs (bug always found, BLOCK verdict,
-concrete scenarios, no test execution, no mutation). Two post-fix
-confirmatory trials (2026-08-14) both produced **live Spanish reports that
-pass 7/7**, closing the loop on the exact failure mode that triggered the
-fix.
+substantively correct: the agent wrote the report in a language other than
+English, and the original regex variants did not cover the translated
+headers. Per the runbook (fix the harness before the skill), the checks were
+broadened and a single re-run passed 7/7. A second independent run of the
+same probe also passed 7/7. Cause: harness brittleness; the skill itself
+behaved correctly in all runs (bug always found, BLOCK verdict, concrete
+scenarios, no test execution, no mutation). The skill family is now
+English-only, so the broadened non-English variants were removed from the
+harness.
 
 ## Sources
 

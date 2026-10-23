@@ -23,11 +23,11 @@ correct defect detection**:
 - *Outcome*: the review is derived from the real diff (`git diff` /
   `git diff --cached` / `git diff main...HEAD`, or from a diff handed in the
   prompt) and the planted defects are found: hardcoded secret, mutable `let`,
-  swallowed catch, boolean parameter, >25-line function, scope violation,
-  tautological test, naming nit, redundant comment.
+  swallowed catch, boolean parameter, over-complex function, scope violation,
+  naming nit, redundant comment.
 - *Style & instructions*: the response follows SKILL.md's exact format:
   `## Review:`, severity-tiered `### Section: pass | FAIL` blocks, `file:line`
-  references, `Coverage Gaps` and `Suggested Tests` sections, `Verdict:
+  references, `Verdict:
   READY | NEEDS WORK`, no praise (the lens "reports defects only, by
   design"), and, critically, no code mutation: "You do NOT modify code"
   is enforced as a hard check on the tool-call transcript.
@@ -45,17 +45,16 @@ The skill is 100% markdown (SKILL.md + `references/*.md`); there is no
 ### Layer 2: trajectory/tool-call probes, live-gated (central)
 
 `run_layer2_probes.py` + `fixtures.py` + `prompt_set.json`: each probe seeds
-a temp git repo (10 fixture builders: git init/commit, unstaged edits,
+a temp git repo (12 fixture builders: git init/commit, unstaged edits,
 staged-only changes, a two-commit feature branch, a clean tree), runs bare
 `pi -ne --skill <this dir> --mode json -p <prompt>`, parses the NDJSON
-transcript for tool calls, and grades the response against 28 deterministic
+transcript for tool calls, and grades the response against 25 deterministic
 checks in `CHECK_REGISTRY` (dispatch pattern per
-`evaluating-agent-skills/references/check-registry-pattern.md`). Ten prompts
+`evaluating-agent-skills/references/check-registry-pattern.md`). Twelve prompts
 cover the skill's main paths and edge cases:
 
 1. `dirty_diff_unstaged`: unstaged diff with 7 planted defects (secret,
-   mutable let, swallowed catch, complexity, bool param, scope violation,
-   weak test).
+   mutable let, swallowed catch, complexity, bool param, scope violation).
 2. `clean_diff_all_pass`: tests-only change (no production edits),
    must come back READY.
 3. `staged_diff_only`: only staged changes, must use `git diff --cached`.
@@ -71,15 +70,21 @@ cover the skill's main paths and edge cases:
 10. `nit_only_ready`: only nits (snake_case local + redundant "what"
     comment, no new public API), verdict must be READY with no
     Blocker/Major tags.
+11. `negative_internal_snapshot_bump` (C16): a same-organization
+    `-SNAPSHOT` dependency bump in `pom.xml`; at most one FYI line, verdict
+    READY, no Blocker/Major tag.
+12. `negative_small_growth_long_method` (C16): a 3-line guard added to an
+    existing 40-line linear function, with its test; no Complexity finding,
+    no Blocker/Major tag.
 
 The offline safety net is built into the same script: `--validate` re-seeds
 every fixture and asserts the exact `git diff` file set per case (unstaged /
 `--cached` / `main...HEAD`), that every planted token is present in the
 working files (or in the prompt-embedded diff for the self-contained case),
-that fixture A's `src/orders.ts` really contains a >25-line `processOrders`,
+that fixture A's `src/orders.ts` really contains an over-complex (>25-line) `processOrders`,
 that every `expected_checks` id exists in `CHECK_REGISTRY`, and runs
-synthetic-transcript smoke tests for six checks (expected-pass /
-expected-fail pairs). No LLM tokens are spent.
+synthetic-transcript smoke tests for the key checks, including
+`minor_has_suggestion` (expected-pass / expected-fail pairs). No LLM tokens are spent.
 
 Live runs cost real LLM tokens and are gated behind `PI_LIVE_EVAL=1`, not
 part of any default/offline suite:
@@ -87,7 +92,7 @@ part of any default/offline suite:
 ```bash
 cd <this-skill-dir>
 python3 evals/run_layer2_probes.py --validate      # offline, free
-PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py  # live, all 10 prompts
+PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py  # live, all 12 prompts
 ```
 
 ### Layer 3: LLM-as-judge, live-gated
@@ -120,20 +125,20 @@ pointed at a subagent extension would be the next addition.
 
 ## Prompt language
 
-Prompts are predominantly Spanish (the skill owner works in Spanish); one
-prompt is English verbatim (`english_trigger_phrase`) to lock in the
-description's English trigger phrases ("Am I ready to merge?", "Run the code
-review checklist"). The checks grade the *response* against SKILL.md's
-English output contract (`## Review:`, `Verdict:`, `Coverage Gaps`,
-`Suggested Tests`) regardless of input language, that is intentional: the
-lens's output format is the contract.
+All prompts and judge specs are in English (the skill is public). One prompt
+(`english_trigger_phrase`) locks in the description's trigger phrases ("Am I
+ready to merge?", "Run the code review checklist"). The checks grade the
+*response* against SKILL.md's English output contract (`## Review:`,
+`Verdict:`): the lens's output format is
+the contract. `minor_has_suggestion` enforces that every `[Minor]` line
+carries at least one concrete suggestion.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `python3 evals/run_layer2_probes.py --validate` | Offline validation: fixtures, planted tokens, diff sets, registry coverage, smoke checks. No tokens, no gate |
-| `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py` | Live Layer 2, all 10 prompts |
+| `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py` | Live Layer 2, all 12 prompts |
 | `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --only <id1,id2>` | Live Layer 2, subset (comma- or space-separated) |
 | `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --save-out <DIR>` | Live Layer 2, saving per-probe JSON results to DIR |
 | `PI_LIVE_EVAL=1 python3 evals/judge.py` | Live Layer 3: 2 LLM-judge specs |
@@ -158,7 +163,7 @@ lens's output format is the contract.
 
 First live run, N=1 per prompt (all layers, `PI_LIVE_EVAL=1`):
 
-**Layer 2: 10/10 probes passed, 94/94 checks.**
+**Layer 2 (first run, before the 3 C16 negative probes and `minor_has_suggestion` were added): 10/10 probes passed, 94/94 checks.**
 
 | Probe | Result | n_tool_calls |
 |---|---|---|

@@ -2,7 +2,7 @@
 
 What happens when this fails, and can it fail forever? This file covers: **resource
 opened without a guaranteed close**, **caught exception swallowed, logged-and-ignored,
-or rethrown as a less specific type**, and **retry/timeout/backoff with no bound**. Each
+or rethrown without its original cause**, and **retry/timeout/backoff with no bound**. Each
 example pairs a change the review should flag with the fix that satisfies the checklist.
 
 ### 1. Resource opened without a guaranteed close

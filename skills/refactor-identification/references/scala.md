@@ -45,7 +45,6 @@ reported.
 
 | Cue | What to look for | What to record |
 |---|---|---|
-| Boolean parameter | Touched method signature has a `Boolean` param, body has an `if (thatParam)` | Signature `file:line`, branching `if` `file:line` |
 | Duplicated dispatch over one enum/flag | Same discriminator (`Int` flag, `String` tag, non-sealed enum) matched in ≥2 places repo-wide, once one is anchored in the diff | Each dispatch `file:line`, discriminator name, variant count |
 | isInstanceOf / unsealed match cascade | `grep -n "isInstanceOf\|asInstanceOf"`, or `match` with `case _: T` branches over a trait that isn't `sealed` | Cascade `file:line`, branch count, hierarchy root |
 | Mode field checked repeatedly | Same field name appears in an `if`/`match` guard at the top of ≥3 methods of the touched class | Field `file:line`, each method `file:line` |

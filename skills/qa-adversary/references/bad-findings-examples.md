@@ -112,12 +112,12 @@ Verdict: NEEDS CLARIFICATION
 **Why it fails:** no consumer of the backoff value was traced, so the blast radius is unknown.
 HIGH requires an affected caller; without one the severity is not justified.
 
-**Reported properly:** trace the caller first; downgrade when nothing consumes the value:
+**Reported properly:** trace the caller first. With no consumer traced and no assertion
+removed, it is not a Finding: report it on the Integration Coverage line, naming the one
+missing assertion:
 ```
-6. [LOW] services/notifications/Backoff:74 - backoff multiplier changed from 3 to 2
-   Failure scenario: the multiplier is read only in the email retry path; reverting the
-   change still passes every existing test, so the change is under-covered but low-blast.
-   Lens: regression
+- services/notifications/Backoff:74 (multiplier 3 → 2): NOT COVERED (missing: assert the
+  retry schedule)
 ```
 (see findings-examples.md #7 for the shape)
 

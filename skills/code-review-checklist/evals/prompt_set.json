@@ -1,11 +1,10 @@
 [
   {
     "id": "dirty_diff_unstaged",
-    "prompt": "Revisa mis cambios sin commitear con el checklist de code review. Estoy por armar un PR con el procesamiento de órdenes y pagos.",
+    "prompt": "Review my uncommitted changes with the code review checklist. I'm about to open a PR for the order and payment processing.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
-      "read_test_file",
       "derived_diff_via_git",
       "review_format_present",
       "verdict_present",
@@ -19,19 +18,16 @@
       "found_planted_swallowed_catch",
       "found_planted_bool_param",
       "found_planted_scope_violation",
-      "found_planted_weak_test",
-      "coverage_gap_section",
-      "suggested_tests_section",
+      "minor_has_suggestion",
       "no_praise"
     ]
   },
   {
     "id": "clean_diff_all_pass",
-    "prompt": "Revisa mis cambios con el checklist: ¿está listo para merge?",
+    "prompt": "Review my changes with the checklist: is this ready to merge?",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
-      "read_test_file",
       "derived_diff_via_git",
       "review_format_present",
       "verdict_present",
@@ -42,7 +38,7 @@
   },
   {
     "id": "staged_diff_only",
-    "prompt": "Revisa mis cambios staged con el checklist de code review antes del commit.",
+    "prompt": "Review my staged changes with the code review checklist before I commit.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -60,25 +56,22 @@
   },
   {
     "id": "feature_branch_diff",
-    "prompt": "Revisa mi rama feature contra main con el checklist: ¿está lista para el PR?",
+    "prompt": "Review my feature branch against main with the checklist: is it ready for the PR?",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
-      "read_test_file",
       "derived_diff_via_git_branch",
       "review_format_present",
       "verdict_present",
       "severity_tagged",
       "has_file_line_refs",
       "found_planted_bool_param",
-      "coverage_gap_section",
-      "suggested_tests_section",
       "no_praise"
     ]
   },
   {
     "id": "single_blocker_needs_work",
-    "prompt": "Revisa mis cambios con el checklist.",
+    "prompt": "Review my changes with the checklist.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -95,7 +88,7 @@
   },
   {
     "id": "no_diff_graceful",
-    "prompt": "Revisa mis cambios con el checklist de code review.",
+    "prompt": "Review my changes with the code review checklist.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -105,7 +98,7 @@
   },
   {
     "id": "diff_handed_in_prompt",
-    "prompt": "Actúa como revisor de código con el checklist. Este es el diff exacto a revisar (ya extraído, trátalo como autosuficiente):\n\n--- a/src/billing.ts\n+++ b/src/billing.ts\n@@ -1,3 +1,13 @@\n export function invoiceTotal(items: number[]): number {\n  return items.reduce((a, b) => a + b, 0);\n }\n+\n+const SOURCE_HOST_TOKEN = \"dev-token-9d2b9f8e\";\n+\n+export async function chargeUser(userId: number): Promise<void> {\n+  try {\n+    await fetch(\"/api/charge\", { method: \"POST\" });\n+  } catch (e) {\n+    // ignored\n+  }\n+}\n",
+    "prompt": "Act as a code reviewer with the checklist. This is the exact diff to review (already extracted, treat it as self-contained):\n\n--- a/src/billing.ts\n+++ b/src/billing.ts\n@@ -1,3 +1,13 @@\n export function invoiceTotal(items: number[]): number {\n  return items.reduce((a, b) => a + b, 0);\n }\n+\n+const SOURCE_HOST_TOKEN = \"dev-token-9d2b9f8e\";\n+\n+export async function chargeUser(userId: number): Promise<void> {\n+  try {\n+    await fetch(\"/api/charge\", { method: \"POST\" });\n+  } catch (e) {\n+    // ignored\n+  }\n+}\n",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -122,7 +115,7 @@
   },
   {
     "id": "negative_control",
-    "prompt": "¿Cuál es la diferencia entre una cola y una pila? Dame un ejemplo en Python.",
+    "prompt": "What is the difference between a queue and a stack? Give me an example in Python.",
     "should_trigger": false,
     "expected_checks": [
       "negative_control_no_review"
@@ -140,14 +133,12 @@
       "severity_tagged",
       "has_file_line_refs",
       "found_planted_bool_param",
-      "coverage_gap_section",
-      "suggested_tests_section",
       "no_praise"
     ]
   },
   {
     "id": "nit_only_ready",
-    "prompt": "Revisa estos cambios con el checklist, ¿puedo mergear?",
+    "prompt": "Review these changes with the checklist: can I merge?",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -159,6 +150,33 @@
       "has_file_line_refs",
       "found_planted_naming_nit",
       "found_planted_redundant_comment",
+      "no_blocker_or_major_tags",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "negative_internal_snapshot_bump",
+    "prompt": "Review my changes with the checklist.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_ready",
+      "no_blocker_or_major_tags",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "negative_small_growth_long_method",
+    "prompt": "Review my changes with the checklist.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
       "no_blocker_or_major_tags",
       "no_praise"
     ]

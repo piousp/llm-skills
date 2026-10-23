@@ -8,11 +8,7 @@
       "file": "discounts.py",
       "tokens": [
         "> 90",
-        "exclusive",
-        "exclusivo",
-        "exactamente 90",
-        "90 dias",
-        "90 días"
+        "exclusive"
       ]
     },
     "expected_checks": [
@@ -35,9 +31,7 @@
       "tokens": [
         "price_lookup[sku]",
         "keyerror",
-        "missing sku",
-        "sku ausente",
-        "clave ausente"
+        "missing sku"
       ]
     },
     "expected_checks": [
@@ -86,9 +80,7 @@
       "tokens": [
         "size + 1",
         "extra element",
-        "off-by-one",
-        "elemento extra",
-        "un elemento de más"
+        "off-by-one"
       ]
     },
     "expected_checks": [
@@ -115,6 +107,63 @@
       "findings_have_file_line",
       "findings_have_failure_scenario",
       "clean_control_only"
+    ]
+  },
+  {
+    "id": "negative_snapshot_bump",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/pom.xml\n+++ b/pom.xml\n@@ -14,1 +14,1 @@\n-      <version>2.3.0</version>\n+      <version>2.4.0-PROJ-42-SNAPSHOT</version>\n```\n\nThe dependency is built by the same organization; ticket PROJ-42 changes acme-commons and this service together.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_snapshot_bump",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "no_findings",
+      "clean_control_only"
+    ]
+  },
+  {
+    "id": "negative_absent_handler_concurrency",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/infra/lambda.tf\n+++ b/infra/lambda.tf\n@@ -4,0 +5,1 @@\n+  reserved_concurrent_executions = 5\n```\n\nThe handler's code lives in another repository that is not available here.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_tf_concurrency",
+    "ctx": {
+      "file": "infra/lambda.tf",
+      "tokens": [
+        "reserved_concurrent_executions",
+        "concurrency",
+        "handler"
+      ]
+    },
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "no_findings",
+      "open_question_mentions_token"
+    ]
+  },
+  {
+    "id": "negative_test_wait_shortening",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/tests/integration/test_replay_guard.py\n+++ b/tests/integration/test_replay_guard.py\n@@ -6,1 +6,1 @@\n-    assert_never(lambda: replayed(event_id), within_s=10)\n+    assert_never(lambda: replayed(event_id), within_s=3)\n```\n\nTest-only change; no production code changed.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "should_trigger": true,
+    "seed": "seed_inline_test_wait",
+    "ctx": {},
+    "expected_checks": [
+      "no_source_or_test_mutation",
+      "no_test_execution",
+      "report_structure",
+      "verdict_valid",
+      "findings_have_file_line",
+      "findings_have_failure_scenario",
+      "no_block_high_medium"
     ]
   }
 ]

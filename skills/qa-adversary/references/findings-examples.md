@@ -130,20 +130,19 @@ if account.balance >= 0:          # before: balance > 0
 
 ## Lens 4: Regression risk
 
-### 7. Mutation-adequacy probe: changed line with no test that would fail
+### 7. Changed line with no integration test: Integration Coverage line, not a Finding
 
 ```pseudocode
 # changed line: retryDelay = retryDelay * 2   (was: retryDelay * 3)
 ```
 
+Not a Finding: no integration test exercises the changed line. It goes on the Integration
+Coverage line, naming the one missing assertion:
 ```
-7. [MEDIUM] services/notifications/Backoff:74 - backoff multiplier changed, no test asserts
-   the value
-   Failure scenario: the line is reverted to * 3 and the full suite still passes (no
-   assertion reads retryDelay) → the change is under-covered; a future regression in the
-   retry schedule ships silently.
-   Lens: regression
+- services/notifications/Backoff:74 (retry multiplier 3 → 2): NOT COVERED (no test reads
+  retryDelay; missing: assert the 2nd retry waits 2× the first)
 ```
+Whether a unit test can fail is graded by `pablo-test-review`, not here.
 
 ### 8. Cross-service ripple: DTO field renamed, consumer binds by shape
 

@@ -51,7 +51,6 @@ well.
 
 | Cue | What to look for | What to record |
 |---|---|---|
-| Boolean parameter | Touched signature has a flag-named param (`isX`, `force`, `dryRun`) with `if (thatParam)` in the body; `grep -n ", true)\|, false)"` for call sites | Signature `file:line`, branching `if` `file:line`, call sites |
 | Duplicated dispatch over one discriminator | ≥2 `switch (x.type)`, `if (kind === '…')` chains, or lookup-object maps over the same field, once one is anchored in the diff | Each dispatch `file:line`, discriminator, variant count |
 | typeof / instanceof cascade | `grep -n "typeof \|instanceof \|Array.isArray"`; ≥2 branches distinguishing shapes of one conceptual input | Cascade `file:line`, branch count, the shapes distinguished |
 | Mode field checked across methods | Same `this.<mode>` field in a guard at the top of ≥3 methods of a touched class | Field `file:line`, each method `file:line` |
@@ -67,6 +66,6 @@ well.
   outside is.
 - Lint-owned issues (`prefer-const`, `==` vs `===`, unused vars) are not structural: **N8**.
 - Framework-mandated shapes are not smells: React props objects and hook dependency arrays are
-  not data clumps; Express `(req, res, next)` is not a boolean-flag signature.
+  not data clumps.
 - These cues are starting greps, not exhaustive detectors; read the surrounding code before
   recording a candidate; a matching grep line without the shape described is not evidence.

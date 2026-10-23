@@ -39,7 +39,6 @@ JavaScript counterpart.
 | Non-exhaustive discriminated-union dispatch | `switch (x.kind)` over a union with no `never`/`assertNever` default, or an `if/else if` narrowing chain over the union | Dispatch `file:line`, union `file:line`, missing exhaustive branch |
 | Union without a discriminant | `type X = A \| B` separated by `'field' in obj`, `typeof`, or truthiness instead of a shared `kind` literal | Union `file:line`, each narrowing `file:line` |
 | `enum` with duplicated switch | `grep -n "enum "`, then ≥2 `switch` over that enum where variants carry different data | Enum `file:line`, each dispatch `file:line`, variant count |
-| Boolean param where a literal union fits | Touched signature takes `boolean` and the two paths differ in inputs or return shape | Signature `file:line`, branching `if` `file:line` |
 | Optional-members-as-variants (**override**) | `interface`/`type` with ≥2 optional members whose presence depends on one discriminant field | Type `file:line`, discriminant, optional member lines |
 
 ## Notes

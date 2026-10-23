@@ -93,6 +93,10 @@ export function processOrders(orders: Order[]): string[] {
 export function formatOrderLabel(order: Order, verbose: boolean): string {
   return verbose ? `${order.id} (${order.status})` : order.id;
 }
+
+export function orderLabels(orders: Order[]): string[] {
+  return orders.map((o) => formatOrderLabel(o, true));
+}
 """
 
 PAYMENTS_BASE = """export interface PaymentResult {
@@ -225,6 +229,8 @@ LABELS_WORK = """export interface Label {
 export function formatLabel(label: Label, verbose: boolean): string {
   return verbose ? `${label.name} <${label.email}>` : label.name;
 }
+
+export const shortLabel = (l: Label): string => formatLabel(l, false);
 """
 
 USER_BASE = """export interface User {
@@ -278,6 +284,10 @@ test("formatName handles an empty name", () => {
 FORMAT_ORDER_LABEL_ADD = """export function formatOrderLabel(order: Order, verbose: boolean): string {
   return verbose ? `${order.id} (${order.status})` : order.id;
 }
+
+export function orderLabels(orders: Order[]): string[] {
+  return orders.map((o) => formatOrderLabel(o, true));
+}
 """
 
 # D — commit 2 addition to tests/orders.test.ts: covers the zero-percent
@@ -288,6 +298,50 @@ ZERO_PERCENT_TEST = """test("discount handles zero percent", () => {
 });
 """
 
+
+POM_BASE = """<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>acme-service</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.acme</groupId>
+      <artifactId>acme-commons</artifactId>
+      <version>2.3.0</version>
+    </dependency>
+  </dependencies>
+</project>
+"""
+POM_WORK = POM_BASE.replace("<version>2.3.0</version>", "<version>2.4.0-PROJ-42-SNAPSHOT</version>")
+
+_REPORT_COLS = [f"c{i}" for i in range(1, 37)]
+_REPORT_PUSHES = "\n".join(f'  lines.push("{c}=" + row["{c}"]);' for c in _REPORT_COLS)
+# 40-line linear function: signature, `lines`, 36 pushes, return, closing brace
+REPORT_BASE = f"""export type Row = Record<string, string>;
+
+export function buildReport(row: Row): string {{
+  const lines: string[] = [];
+{_REPORT_PUSHES}
+  return lines.join("\\n");
+}}
+"""
+REPORT_WORK = REPORT_BASE.replace(
+    "export function buildReport(row: Row): string {\n",
+    'export function buildReport(row: Row): string {\n  if (Object.keys(row).length === 0) {\n    return "";\n  }\n',
+)
+REPORT_TEST_BASE = """import { test, expect } from "vitest";
+import { buildReport } from "../src/report";
+
+test("buildReport joins the columns", () => {
+  expect(buildReport({ c1: "a" } as Record<string, string>)).toContain("c1=a");
+});
+"""
+REPORT_TEST_WORK = REPORT_TEST_BASE + """
+test("buildReport returns an empty string for an empty row", () => {
+  expect(buildReport({})).toBe("");
+});
+"""
 
 def git(repo: Path, *args: str) -> None:
     """Run a git command in repo with eval identity (no global config needed)."""
@@ -327,7 +381,7 @@ def write(path: Path, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 def build_dirty_diff_unstaged(tmp: Path) -> Fixture:
-    """A — unstaged working tree with 7 planted defects.
+    """A — unstaged working tree with 6 planted defects.
 
     git diff expected: {README.md, src/orders.ts, src/payments.ts,
     tests/payments.test.ts}.
@@ -355,7 +409,6 @@ def build_dirty_diff_unstaged(tmp: Path) -> Fixture:
             "complexity": ("processOrders", "orders.ts"),
             "bool_param": ("verbose", "orders.ts"),
             "scope_violation": ("Node 20", "README.md"),
-            "weak_test": ("without throwing", "payments.test.ts"),
         },
         "test_files": ["payments.test.ts", "orders.test.ts"],
         "branch": None,
@@ -540,6 +593,37 @@ def build_nit_only_ready(tmp: Path) -> Fixture:
     }
 
 
+def build_negative_internal_snapshot_bump(tmp: Path) -> Fixture:
+    """C16a — internal-org SNAPSHOT bump in pom.xml, nothing else exercises it.
+    Expected: at most one FYI line; READY; no Blocker/Major tags.
+
+    git diff expected: {pom.xml}.
+    """
+    repo = tmp / "repo"
+    git_init(repo)
+    write(repo / "pom.xml", POM_BASE)
+    commit_all(repo, "base")
+    write(repo / "pom.xml", POM_WORK)
+    return {"cwd": repo, "planted": {}, "test_files": [], "branch": None}
+
+
+def build_negative_small_growth_long_method(tmp: Path) -> Fixture:
+    """C16b — a 3-line guard added to an existing 40-line linear function,
+    with its test. Small relative growth: no Complexity violation.
+
+    git diff expected: {src/report.ts, tests/report.test.ts}.
+    """
+    repo = tmp / "repo"
+    git_init(repo)
+    write(repo / "package.json", PACKAGE_JSON)
+    write(repo / "src/report.ts", REPORT_BASE)
+    write(repo / "tests/report.test.ts", REPORT_TEST_BASE)
+    commit_all(repo, "base")
+    write(repo / "src/report.ts", REPORT_WORK)
+    write(repo / "tests/report.test.ts", REPORT_TEST_WORK)
+    return {"cwd": repo, "planted": {}, "test_files": ["report.test.ts"], "branch": None}
+
+
 FIXTURE_BUILDERS: dict[str, Callable[[Path], Fixture]] = {
     "dirty_diff_unstaged": build_dirty_diff_unstaged,
     "clean_diff_all_pass": build_clean_diff_all_pass,
@@ -551,4 +635,6 @@ FIXTURE_BUILDERS: dict[str, Callable[[Path], Fixture]] = {
     "negative_control": build_negative_control,
     "english_trigger_phrase": build_english_trigger_phrase,
     "nit_only_ready": build_nit_only_ready,
+    "negative_internal_snapshot_bump": build_negative_internal_snapshot_bump,
+    "negative_small_growth_long_method": build_negative_small_growth_long_method,
 }

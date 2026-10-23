@@ -45,7 +45,6 @@ reported.
 
 | Cue | What to look for | What to record |
 |---|---|---|
-| Boolean parameter | Touched method signature has a `boolean`/`Boolean` param, body has an `if (thatParam)` | Signature `file:line`, branching `if` `file:line` |
 | Duplicated dispatch over one enum | `grep -rn "switch (.*Status\|switch (.*Type"`; same enum name in ≥2 switch statements repo-wide, once one is anchored in the diff | Each dispatch `file:line`, discriminator name, variant count |
 | instanceof cascade | `grep -n "instanceof"`; ≥2 branches checking concrete types of one non-sealed hierarchy | Cascade `file:line`, branch count, hierarchy root |
 | Mode field checked repeatedly | Same field name appears in an `if` at the top of ≥3 methods of the touched class | Field `file:line`, each method `file:line` |

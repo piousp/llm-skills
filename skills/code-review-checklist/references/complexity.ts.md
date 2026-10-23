@@ -1,7 +1,7 @@
 # Complexity examples: TypeScript / JavaScript
 
 Can a reader follow this function top to bottom in one breath? This file covers:
-**function exceeding 25 lines or cyclomatic complexity > 5**, **nested conditionals
+**function grown far beyond its size by the diff (doubling a 50-line function, not a few lines added to a long one) or cyclomatic complexity > 5**, **nested conditionals
 deeper than 2 levels**, **voodoo programming** (retries, barriers, sleeps with no comment
 explaining why), and **hack upon hack** (a new workaround layered on an existing
 workaround). Each example pairs a change the review should flag with the fix that

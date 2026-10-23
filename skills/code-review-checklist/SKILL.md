@@ -2,16 +2,17 @@
 name: code-review-checklist
 description: >
   Code-review lens: validates the current changes against Pablo's
-  coding-philosophy checklist (Red Flags through Tests, severity-tiered) and
-  identifies test-coverage gaps. Never modifies code. Apply it directly, or
+  coding-philosophy checklist (Red Flags through Naming clarity,
+  severity-tiered). Never modifies code. Apply it directly, or
   hand it to a read-only analysis agent (e.g. `analyst`) as its lens. Use
   before creating a PR, when asking 'checklist', 'review my changes', 'am I
   ready to merge'. [DO NOT] trigger to modify code directly (this lens never
   writes), or when the ask is about correctness/regression bugs rather than
-  quality/style; use `qa-adversary` for that.
+  quality/style; use `qa-adversary` for that, or when the ask is about test
+  quality or missing tests (use `pablo-test-review`).
 ---
 
-Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist and identify missing test coverage. You do NOT modify code.
+Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist. You do NOT modify code.
 
 ## Process
 
@@ -26,12 +27,14 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
      - `git diff main...HEAD` for the full branch
      - Ask the user for the parent branch if it isn't obvious; compare against the remote origin
        parent.
-2. Read the diff carefully. For each changed file, also read the corresponding test file if one exists.
-3. Focus on the diff only, don't review unchanged code.
+2. Read the diff carefully.
+3. Scope law: report only on changed lines. For context you may read the full changed files,
+   and files that define or call a changed symbol (1 hop). Two greps go further,
+   only to judge an added element: the repo and its internal dependencies for an existing
+   helper equivalent to added code (Duplicate functionality), and the repo for callers of an
+   added class, method, parameter or dependency (zero callers: Question "who uses this?").
 4. Run every checklist section against the diff. Report ONLY violations.
    No praise: this lens reports defects only, by design.
-5. Analyze test coverage gaps.
-6. Suggest missing tests.
 
 ---
 
@@ -40,7 +43,11 @@ Applying this lens, you act as a code reviewer. Your job is to validate changes 
 Every comment gets exactly one tier; tag each reported line with it:
 
 - **Blocker**: Red Flags only. Any single Blocker fails the review outright.
-- **Major**: a real checklist violation; must be fixed before merge, but doesn't alone fail the review.
+- **Major**: a checklist violation with a named, concrete consequence (what breaks, for whom,
+  how it surfaces); must be fixed before merge.
+- **Minor**: a real violation without such a consequence: worth a comment, never flips the
+  verdict. One line plus at least one concrete suggestion (replacement or comment-ready
+  wording). A section marked "(Minor; Major with a named consequence)" defaults to Minor.
 - **Nit**: optional, author's judgment call (naming, comments, local-style consistency).
 - **Question**: missing context the author should clarify; not a violation by itself
 - **FYI**: informational point, no action required
@@ -56,17 +63,24 @@ silence is the output).
   - When: the evidence line is in test/fixture/test-helper code (`src/test`, `*Test`, `*Spec`,
     `*Fixture`, test modules of an integration-test repo) AND the rule comes from Complexity,
     Config vs Code, Abstractions, Immutability & FP, or Boundaries.
-  - Action: do not report. Test code is judged ONLY by the Tests section and Red Flags.
+  - Action: do not report. Test code is judged by `pablo-test-review`; here only Red Flags
+    (secrets, broken imports) apply.
   - Not a violation in tests: a hardcoded timeout, a 30-line helper, a single-use overload, or a
     mutable variable/mutated argument.
 - **G2**: a dependency version bump (pom.xml, build.sbt, package.json) not exercised by any
-  other hunk in the diff: one FYI line max, never a Major/Blocker. Exception: a SNAPSHOT/mutable
-  ref on a branch NOT marked POC/draft stays a Major (reproducibility).
+  other hunk in the diff: one FYI line max, never a Major/Blocker on its own. This includes a SNAPSHOT,
+  ticket-qualified or feature-branch version of an artifact from the same organization. When
+  sibling/context PRs are known, a snapshot version that differs between them is a concrete
+  mismatch: Major (consistency check); otherwise only the FYI line. A SNAPSHOT/mutable ref of a
+  third-party artifact is a Minor (reproducibility).
 - **G3**: the evidence line is not inside a changed hunk of this diff: do not report, regardless
   of how real the issue is. If it gates a changed line's correctness, phrase it as a Question
   naming the exact file to check.
 - **G4**: pure style preference (formatting, indentation, trailing newline, import order) in a
   file the branch touched for other reasons: FYI at most, one line.
+- **G5**: one item per root cause. Violations that one fix removes are one item listing every
+  rule they break; an item needing two independent fixes is two items (definition:
+  `pablo-code-review` `references/merge-rules.md` § Root cause).
 
 Nits (Consistency, Naming, Comments) survive the gate but never flip a
 verdict and never take more than one line each.
@@ -76,14 +90,14 @@ verdict and never take more than one line each.
 ### Red Flags (Blocker: instant fail, any one blocks merge)
 
 - Secrets, credentials, or tokens in tracked files
-- Existing public API contract broken without explicit request
-- Test suite broken (removed assertions, broken imports)
-- Non-deterministic code (uncontrolled randomness, race conditions)
+- Existing public API contract broken without explicit request, with a caller in this repo left un-updated. Consumers outside the repo: one Question, none if the user supplied the companion PR(s). [NEVER] propose an alias or @Deprecated shim as the fix
+- Test suite broken (broken imports, code that no longer compiles)
+- Non-deterministic code: uncontrolled randomness, or a race with a concrete interleaving AND evidence in the diff or repo that concurrent callers exist (without that evidence: a Question)
 - Hidden mutable shared state added
 - Examples for the two ambiguous items (non-determinism, hidden shared state): read
   `references/redflags.scala.md`, `references/redflags.java.md`, `references/redflags.ts.md`
 
-### Design & Functionality (Major)
+### Design & Functionality (Minor; Major with a named consequence)
 
 - Duplicate functionality: the same behavior already exists in a library or module the change
   should reuse
@@ -95,20 +109,27 @@ verdict and never take more than one line each.
 - Examples per language: read `references/design-functionality.scala.md`,
   `references/design-functionality.java.md`, `references/design-functionality.ts.md`
 
-### Data Shape (Major)
+### Data Shape (Minor; Major with a named consequence)
 
 - New conditionals that could be eliminated by fixing the data structure
-- Boolean parameter that selects between two behaviors (should be two functions)
+- Boolean parameter added by the diff that selects between two behaviors, with ≥1 caller passing a literal `true`/`false` (should be two functions); a flag fed from config or request data is not a violation
 - Inheritance where composition suffices (excluding ADTs)
 - Special-case insanity: a pile of conditionals patching around a data model that should encode
   the case directly
+- Closed set of strings: ≥2 string constants added by the diff that are the allowed values of
+  one field: Question "enum?"; in the repo that declares the type, always raise it
+- Map key or Set element type without value equality (no equals/hashCode, not a
+  record/case class/data class): Major (lookups silently miss)
 - Examples per language: read `references/datashape.scala.md`, `references/datashape.java.md`,
   `references/datashape.ts.md`
 
-### Complexity (Major)
+### Complexity (Minor; Major with a named consequence)
 
-- Function exceeds 25 lines or cyclomatic complexity > 5
-- Nested conditionals deeper than 2 levels
+- Size: report growth relative to the function's size, caused by the diff: doubling a
+  50-line function is a violation, a few lines added to an already long one is not. No
+  absolute line limit.
+- Cyclomatic complexity > 5 or conditionals nested deeper than 2 levels, introduced or
+  worsened by the diff
 - Problem solved in significantly more lines than necessary
 - Flat, early-return style - no nested call chains deeper than 2 levels
 - Voodoo programming: retries, barriers, sleeps, or workarounds with no comment explaining why
@@ -118,7 +139,7 @@ verdict and never take more than one line each.
 - Examples per language: read `references/complexity.scala.md`, `references/complexity.java.md`,
   `references/complexity.ts.md`
 
-### Boundaries (Major)
+### Boundaries (Minor; Major with a named consequence)
 
 - Business logic in controller/handler/entry point
 - Side effects mixed with pure computation in same function
@@ -128,32 +149,35 @@ verdict and never take more than one line each.
 - Examples per language: read `references/boundaries.scala.md`, `references/boundaries.java.md`,
   `references/boundaries.ts.md`
 
-### Scope Discipline (Major)
+### Scope Discipline (Question, at most 1 per review)
 
-- Files changed unrelated to the task
-- Adjacent code reformatted beyond the request
-- Imports/variables removed that weren't left unused by this change
-- Garbage patch: broad, unrelated changes bundled in and disguised as cleanup
+- A file or element unrelated to the task: one Question anchored on its first added line
+  ("why is X in this change?"); [NEVER] ask to split the PR
+- Adjacent code reformatted beyond the request, or imports/variables removed that weren't
+  left unused by this change: Nit
+- Garbage patch (broad, unrelated changes disguised as cleanup): the one Question above,
+  naming them
 
-### Abstractions (Major)
+### Abstractions (Minor; Major with a named consequence)
 
 - New abstraction without a second concrete use case today (YAGNI)
 - Generic utility for a single call site
 - Error handling for a scenario that cannot occur
 - Enterprise sludge: factories/builders/managers/config knobs layered onto a trivial task
+- Added class, method, parameter or dependency with zero callers in the repo: Question "who uses this?" (Scope law grep, Process step 3)
 - Examples per language: read `references/abstractions.scala.md`, `references/abstractions.java.md`,
   `references/abstractions.ts.md`
 - For a quantified, branch-scoped deep-dive on SRP/OCP violations and structural duplication,
   see `refactor-identification`.
 
-### Config vs Code (Major)
+### Config vs Code (Minor; Major with a named consequence)
 
 - Behavior that should be runtime-configurable is hardcoded
 - Magic numbers/strings that belong in config/constants
 - Production code only: constants in test code (timeouts, poll intervals,
   fixture values) are test data, not config candidates; see gate G1
 
-### Immutability & FP (Major)
+### Immutability & FP (Minor; Major with a named consequence)
 
 - Mutable variable where const/final/readonly works
 - Function modifies its input arguments
@@ -161,23 +185,22 @@ verdict and never take more than one line each.
 - Examples per language: read `references/immutability-fp.scala.md`,
   `references/immutability-fp.java.md`, `references/immutability-fp.ts.md`
 
-### Error Handling & Resources (Major)
+### Error Handling & Resources (Minor; Major with a named consequence)
 
 - Resource opened (file/connection/stream) without a guaranteed close (try-with-resources /
   `Using` / equivalent)
-- Caught exception swallowed, logged-and-ignored, or rethrown as a less specific type
+- Caught exception swallowed or logged-and-ignored, or rethrown without its original cause
 - Retry/timeout/backoff added with no bound (could loop or block indefinitely)
 - Examples per language: read `references/error-handling.scala.md`,
   `references/error-handling.java.md`, `references/error-handling.ts.md`
 
-### Structural Code Smells (Major)
+### Structural Code Smells (Minor; Major with a named consequence)
 
 Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512298570/article1.pdf)
 (Bloater / OO Abuser / Change Preventer / Dispensable / Coupler):
 
 - God object [Bloater]: one class/object accumulating unrelated responsibilities
-- Circular dependency [Coupler]: at class, package, module, or build-graph level (SBT subproject /
-  Maven module cycles count, not just classes)
+- Circular dependency [Coupler]: at module or build-graph level (SBT subproject / Maven module cycles); package cycles inside one module are not reported as findings (see `Data:` line in Output format)
 - Constant interface [OO Abuser]: Java only: interface used solely to hold constants (Effective
   Java, Item 22, "use interfaces only to define types")
 - Sequential coupling [Coupler]: API requires calls in an undocumented, easy-to-get-wrong order
@@ -195,6 +218,8 @@ already covered under Red Flags.
 - Public API/README/doc behavior changed but the doc/comment wasn't updated to match
 - Docs not updated when the change alters build, test, interaction, release, deletion, or
   deprecation behavior
+- Hand-wavy claims: a statement about performance, safety, or correctness in a comment/PR
+  description with no test or benchmark backing it
 
 ### Consistency (Nit)
 
@@ -203,59 +228,10 @@ already covered under Red Flags.
 
 ### Naming clarity (Nit)
 
-- Variables, functions, and tests should directly reference what they do and what they mean
+- Variables and functions should directly reference what they do and what they mean
 - Follow conventions (ie. camelCase) from already existing code.
 
-### Tests (Major, unless it's purely a naming nit)
-
-- Tests ship with the production change in the same CL (except emergencies)
-- Should be scientific: reproducible, falsifiable, testing the hypothesis.
-- Falsifiability check: for each test, ask "if this code were broken, would this test catch
-  it?" A test that can't fail on broken code verifies nothing. Examples per language:
-  read `references/falsifiability.scala.md`, `references/falsifiability.java.md`,
-  `references/falsifiability.ts.md`
-- Are testing boundaries and test cases
-- Are simple, straightforward, with the fewest assumptions possible.
-- Names correspond to what the test is testing.
-- Should not test other than the added code
-- Should not test code from libraries, except contract/serialization tests that verify the
-  integration boundary itself, not the library's own logic
-- Test that asserts nothing: tautological, only checks an exception type exists, or passes
-  while exercising no behavior
-- Test that duplicates the implementation logic instead of validating behavior
-- Test coupled to internals: private methods, field order, fragile data structures
-- Over-mocking: mocks that prevent testing real integration or behavior
-- Flaky by design: timing, sleeps, randomness, network or filesystem assumptions
-- For concurrent or parallel changes: race conditions, deadlocks, ordering assumptions, and
-  non-determinism in the tests themselves. Examples per language:
-  read `references/concurrency.scala.md`, `references/concurrency.java.md`,
-  `references/concurrency.ts.md`
-- Test forcing the implementation to expose internals unnecessarily
-- Hand-wavy bullshit: a claim about performance, safety, or correctness in a comment/PR description
-  with no test or benchmark backing it
-
 ---
-
-## Coverage Gap Analysis
-
-Identify what the changes do that existing tests don't cover:
-
-- New public methods without corresponding test methods
-- New branches/conditions without test cases for each path
-- Changed behavior in existing methods where tests only cover the old behavior
-- Edge cases: nulls, empty collections, boundary values, error paths
-
-Coverage metrics: line/branch coverage find untested code, but do not prove correctness or
-good assertions. Do not treat a hard coverage threshold as a gate; teams optimize the metric
-with trivial tests. Mutation testing is a stronger signal of test strength.
-
-## Suggest Missing Tests
-
-For each gap found, provide:
-
-- A concrete test method name (following the repo's naming convention)
-- What it should assert
-- A skeleton implementation if the user asks for it
 
 ## Review Communication
 
@@ -278,34 +254,34 @@ For each gap found, provide:
 - [Blocker] file:line: violation
 
 ### Design & Functionality: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Data Shape: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Complexity: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Boundaries: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Scope Discipline: pass | FAIL
-- [Major] file:line: description
+- [Question] file:line: why is <element> in this change?
 
 ### Abstractions: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Config vs Code: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Immutability & FP: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Error Handling & Resources: pass | FAIL
-- [Major] file:line: description
+- [Minor|Major] file:line: description
 
 ### Structural Code Smells: pass | FAIL
-- [Major] file:line: smell name [bucket]: description
+- [Minor|Major] file:line: smell name [bucket]: description
 
 ### Comments & Documentation: pass | FAIL
 - [Nit|Major] file:line: description
@@ -316,19 +292,9 @@ For each gap found, provide:
 ### Naming clarity: pass | FAIL
 - [Nit] file:line: description
 
-### Tests: pass | FAIL
-- [Major] file:line: description
+### Verdict: READY | NEEDS WORK (B blockers, N major, m minor, M nits, Q questions)
 
-### Coverage Gaps
-- <SourceFile>: <method/branch> has no test covering <scenario>
-- ...
-
-### Suggested Tests
-- `testMethodName`: asserts <what>
-- `testMethodName`: asserts <what>
-- ...
-
-### Verdict: READY | NEEDS WORK (B blockers, N major, M nits, Q questions, K coverage gaps)
+Data: <optional, only when package cycles were observed; never a finding>
 ```
 
 ## Rules
@@ -337,6 +303,6 @@ For each gap found, provide:
 - Report violations with file:line references, each tagged with its severity tier
 - If a section has zero violations, print "pass", do not elaborate
 - Keep output scannable: one line per violation
-- A single Blocker means the verdict is NEEDS WORK regardless of everything else
-- For coverage gaps, read the actual test files to avoid false positives
-- Follow the repo's test naming convention when suggesting test names
+- A single Blocker means the verdict is NEEDS WORK regardless of everything else; otherwise NEEDS WORK iff ≥1 Major. Minor, Nit, Question and FYI never flip the verdict
+- Every Minor is one line and carries at least one concrete suggestion (replacement code or comment-ready wording); a Minor without one is not reported
+- Package-level cycles inside one module are not findings; if you saw any, add one `Data:` line at the very end of the report (after the Verdict), e.g. `Data: package cycle a.b -> a.c -> a.b (not a finding)`

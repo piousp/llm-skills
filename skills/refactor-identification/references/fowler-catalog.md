@@ -40,8 +40,8 @@ candidates still live in `SKILL.md`'s A1-A4 tables and in `pablo-code-simplify`'
 | Pull Up Method | Excluded outside a sealed ADT |
 | Push Down Field | A1 "Inheritance used for reuse, not variation" |
 | Push Down Method | A1 "Inheritance used for reuse, not variation" |
-| Remove Dead Code | `pablo-code-simplify` gate, mechanical (precondition: unreachability proven in-radius, else N9) |
-| Remove Flag Argument | A4 "Boolean parameter selects behavior" |
+| Remove Dead Code | `code-review-checklist` Abstractions (detection: zero callers → Question); `pablo-code-simplify` (removal) |
+| Remove Flag Argument | `code-review-checklist` Data Shape (boolean parameter) |
 | Remove Middle Man | `pablo-code-simplify` gate, mechanical + philosophy axis-list (over-abstraction) |
 | Remove Setting Method | A2 (invariant rows) |
 | Remove Subclass | A1 "Inheritance used for reuse, not variation" |
