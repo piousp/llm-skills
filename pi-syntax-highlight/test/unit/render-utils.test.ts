@@ -7,6 +7,7 @@ import {
   diffChangeLine,
   isJsonDocument,
   moreLinesFooter,
+  replaceTabs,
   reuseText,
   splitTrailingNotice,
   styleDiffLine,
@@ -80,6 +81,19 @@ test("textOutput: image blocks become the built-in fallback when images are hidd
 test("textOutput: an image without a mime type falls back to the placeholder one", () => {
   const result = { content: [{ type: "image" }] };
   assert.equal(textOutput(result, false), imageFallback("image/unknown"));
+});
+
+test("replaceTabs: a single tab becomes three spaces", () => {
+  assert.equal(replaceTabs("\tconst x = 1;"), "   const x = 1;");
+});
+
+test("replaceTabs: every tab of the line is replaced", () => {
+  assert.equal(replaceTabs("a\tb\tc"), "a   b   c");
+});
+
+test("replaceTabs: a line without tabs is unchanged", () => {
+  assert.equal(replaceTabs("  indented with spaces"), "  indented with spaces");
+  assert.equal(replaceTabs(""), "");
 });
 
 test("splitTrailingNotice: a blank-line-separated bracket block becomes the notice", () => {

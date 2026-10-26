@@ -57,6 +57,13 @@ function imageIndicator(block: { mimeType?: string; data?: string }): string {
   return imageFallback(mimeType, dims);
 }
 
+// The host's text renderer expands a tab to three spaces before painting a read
+// body, so a file indented with tabs keeps the same column geometry this package
+// measures against when it adds its own gutter.
+export function replaceTabs(text: string): string {
+  return text.replace(/\t/g, "   ");
+}
+
 // The generic overlay receives an output that ends with a notice such as
 // "\n\n[100 matches limit]". The blank line is the only separator, so a block
 // that itself contains a newline is body text, not a notice.

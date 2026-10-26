@@ -3,6 +3,43 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [0.1.0] - 2026-10-25
+
+### Added
+
+- `read` result renderer: line-number gutter counted from the line the tool
+  actually read, body highlighted by file language, continuation and truncation
+  notices in the warning color, stock footer and collapse behavior.
+- `read` and `write` call headers: path with a hyperlink, line range, compact
+  header for skills and agent resource files, and a highlighted content preview
+  for `write` that is capped while the argument streams.
+- `edit` result renderer: diff highlighted by file language, dimmed line numbers,
+  changed words in reverse video, error body in the error color. The diff fills
+  the body of the call's own box, so the header keeps its success or failure
+  background.
+- Markdown styling for assistant messages: headings in the accent color with one
+  attribute per level, inline code with its backtick delimiters restored, and
+  blockquote text in the accent color. Sequences close the attribute they opened
+  and never cross a line; the visible text is unchanged apart from the restored
+  delimiters.
+- `diff` dependency for the word-level highlight of an edited line.
+
+### Changed
+
+- `read` numbers its body and lifts the tool's continuation notice out of the
+  highlighted text.
+- `edit` no longer paints its diff through pi's `renderDiff`, which reads the
+  module-global theme and does not highlight code.
+
+### Fixed
+
+- The highlight cache now invalidates on a theme change. The theme object is a
+  proxy of stable identity, so comparing references never saw the switch; the
+  cache is keyed by the color sequences the highlighter actually reads.
+- Tool failures are detected through the render context. The host passes no
+  `isError` inside the result, so the previous check was always false and
+  `grep`, `find`, `ls` and the generic overlay never painted an error.
+
 ## [0.0.1] - 2026-10-24
 
 ### Added

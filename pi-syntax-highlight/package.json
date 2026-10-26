@@ -1,8 +1,8 @@
 {
   "name": "pi-syntax-highlight",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": false,
-  "description": "Syntax highlighting for pi tool output (grep, find, ls, bash) and language detection for unlabeled markdown fences.",
+  "description": "Syntax highlighting for pi tool output (grep, find, ls, bash, read, edit, write) and for assistant markdown (headings, blockquotes, inline code), plus language detection for unlabeled markdown fences.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/piousp/llm-skills.git",
@@ -25,6 +25,9 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "dependencies": {
+    "diff": "^8.0.4"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^1.4.0",

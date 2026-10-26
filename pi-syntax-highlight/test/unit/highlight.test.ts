@@ -21,6 +21,14 @@ const THEME_B = { ...fakeTheme };
 // line with one color, so the assertions do not depend on tokenizer output.
 const UNKNOWN_LANG = "no-such-language";
 
+// A theme that answers `getFgAnsi` behaves like the host's: one object whose
+// colors change under it. The map keeps the colors mutable, so a theme switch is
+// simulated without swapping the reference.
+function valueTheme(): { theme: { getFgAnsi: (color: string) => string }; ansi: Map<string, string> } {
+  const ansi = new Map<string, string>();
+  return { ansi, theme: { getFgAnsi: (color: string) => ansi.get(color) ?? `<${color}>` } };
+}
+
 test("highlight: the same language and code come back from the cache", () => {
   clearHighlightCache();
   const first = highlight("plain text", UNKNOWN_LANG);
@@ -56,4 +64,44 @@ test("syncHighlightTheme: the same theme reference keeps the cache", () => {
   const first = highlight("plain text", UNKNOWN_LANG);
   syncHighlightTheme(THEME_A);
   assert.equal(highlight("plain text", UNKNOWN_LANG), first);
+});
+
+test("syncHighlightTheme: a theme with unchanged colors keeps the cache", () => {
+  clearHighlightCache();
+  const { theme } = valueTheme();
+  syncHighlightTheme(theme);
+  const first = highlight("plain text", UNKNOWN_LANG);
+  // Every frame of a session renders with the same colors, so the second sync
+  // must not throw away what the first one painted.
+  syncHighlightTheme(theme);
+  assert.equal(highlight("plain text", UNKNOWN_LANG), first);
+});
+
+test("syncHighlightTheme: a color that changed under the same reference invalidates the cache", () => {
+  clearHighlightCache();
+  const { theme, ansi } = valueTheme();
+  syncHighlightTheme(theme);
+  const first = highlight("plain text", UNKNOWN_LANG);
+  ansi.set("syntaxKeyword", "\x1b[38;5;1m");
+  syncHighlightTheme(theme);
+  const repainted = highlight("plain text", UNKNOWN_LANG);
+  assert.notEqual(repainted, first);
+  // Only the paint was dropped: the content is what the source says.
+  assert.deepEqual(repainted, first);
+});
+
+test("syncHighlightTheme: a theme whose getFgAnsi throws is compared by reference", () => {
+  clearHighlightCache();
+  const getFgAnsi = (): string => {
+    throw new Error("Theme not initialized");
+  };
+  const throwing = { getFgAnsi };
+  syncHighlightTheme(throwing);
+  const first = highlight("plain text", UNKNOWN_LANG);
+  // The reference is the only signal left, and it did not move.
+  syncHighlightTheme(throwing);
+  assert.equal(highlight("plain text", UNKNOWN_LANG), first);
+  // A different reference is the one thing that still invalidates.
+  syncHighlightTheme({ getFgAnsi });
+  assert.notEqual(highlight("plain text", UNKNOWN_LANG), first);
 });

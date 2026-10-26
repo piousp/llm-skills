@@ -1,4 +1,4 @@
-import { highlightCode } from "@earendil-works/pi-coding-agent";
+import { highlightCode, type ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export type HighlightFn = (code: string, lang: string) => string[];
 
@@ -13,15 +13,56 @@ const CACHE_LIMIT = 64;
 // with the theme it is about to paint with.
 const cache = new Map<string, string[]>();
 
+// The tokens `highlightCode` paints with. Reading their sequences is the only
+// observable the theme offers that changes when the user switches themes.
+const SYNC_TOKENS = [
+  "syntaxKeyword",
+  "syntaxString",
+  "syntaxNumber",
+  "syntaxComment",
+  "syntaxFunction",
+  "syntaxType",
+  "syntaxVariable",
+  "syntaxPunctuation",
+  "text",
+  "muted",
+] as const satisfies readonly ThemeColor[];
+
 let syncedTheme: unknown;
+let syncedSignature: string | undefined;
 let syncedThemeSet = false;
 
-// The first call only registers the theme; a call with a different reference
-// means the module-global theme was swapped, and every cached line is stale.
+// The theme a renderer receives is a proxy of stable identity, so comparing
+// references would never invalidate: the signature is the concatenation of the
+// sequences the highlighter paints with, which is what actually changes. It stays
+// a value comparison on purpose; a theme whose colors did not move leaves the
+// cache alone, which is every frame of a normal session.
+// Themes without `getFgAnsi` (the fakes in tests) and themes that throw before
+// initialization fall back to the identity comparison the module started with.
+function themeSignature(theme: unknown): string | undefined {
+  if (typeof theme !== "object" || theme === null) return undefined;
+  const getFgAnsi = (theme as { getFgAnsi?: unknown }).getFgAnsi;
+  if (typeof getFgAnsi !== "function") return undefined;
+  const read = getFgAnsi as (this: unknown, color: ThemeColor) => unknown;
+  try {
+    return SYNC_TOKENS.map((token) => String(read.call(theme, token))).join("\u0000");
+  } catch {
+    return undefined;
+  }
+}
+
+// The first call only registers the theme; a later call with a different value
+// means the module-global theme changed, and every cached line is stale.
 export function syncHighlightTheme(theme: unknown): void {
-  if (syncedThemeSet && syncedTheme === theme) return;
-  if (syncedThemeSet) cache.clear();
+  const signature = themeSignature(theme);
+  if (syncedThemeSet) {
+    const unchanged =
+      signature !== undefined ? signature === syncedSignature : theme === syncedTheme;
+    if (unchanged) return;
+    cache.clear();
+  }
   syncedTheme = theme;
+  syncedSignature = signature;
   syncedThemeSet = true;
 }
 

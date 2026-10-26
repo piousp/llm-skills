@@ -8,6 +8,16 @@ export interface StyleTheme {
   bold(text: string): string;
 }
 
+// The subset the markdown pass needs. `fg()` wraps a whole string in the color
+// and closes it at the end, which cannot recolor a span inside a line the host
+// already painted: that pass has to build the escape sequence itself and close
+// it at an exact position. Declared apart from `StyleTheme` for the same reason
+// that one exists: a module only asks for the members it reads.
+export interface AnsiTheme {
+  getFgAnsi(color: ThemeColor): string;
+  getBgAnsi(color: ThemeBg): string;
+}
+
 // Colors named by the role they play in tool output, so retheming the package
 // is one edit here instead of a hunt through every renderer.
 export interface SyntaxTokens {
@@ -16,6 +26,9 @@ export interface SyntaxTokens {
   lineNumber: ThemeColor;
   context: ThemeColor;
   content: ThemeColor;
+  // A body printed flat, with no syntax pass: the host paints those with
+  // `toolOutput`, which is not the `text` the rest of the bodies use.
+  plain: ThemeColor;
   notice: ThemeColor;
   empty: ThemeColor;
   broken: ThemeColor;
@@ -27,15 +40,38 @@ export const TOKEN = {
   lineNumber: "syntaxNumber",
   context: "dim",
   content: "text",
+  plain: "toolOutput",
   notice: "warning",
   empty: "dim",
   broken: "error",
 } as const satisfies SyntaxTokens;
 
+// The markdown tokens this package paints itself. The host's markdown theme is
+// not extensible, so the tokens whose color the pass can reach are named here
+// instead of being read from a theme entry the host decides.
+export const MD_TOKEN = { quote: "accent" } as const satisfies { quote: ThemeColor };
+
 // `Theme.bold()` wraps a whole string in both codes, which cannot emphasize a
 // span inside an already rendered line: emphasis needs each marker on its own.
 export const BOLD_ON = "\x1b[1m";
 export const BOLD_OFF = "\x1b[22m";
+
+// The same constraint for the attributes the markdown pass injects: each marker
+// travels alone and closes only what it opened, so the host's style survives the
+// span. No `\x1b[0m` reset is ever emitted, because it would drop that style too.
+export const ITALIC_ON = "\x1b[3m";
+export const ITALIC_OFF = "\x1b[23m";
+export const UNDERLINE_ON = "\x1b[4m";
+export const UNDERLINE_OFF = "\x1b[24m";
+export const INVERSE_ON = "\x1b[7m";
+export const INVERSE_OFF = "\x1b[27m";
+export const FG_DEFAULT = "\x1b[39m";
+export const BG_DEFAULT = "\x1b[49m";
+// `\x1b[22m` closes both bold and dim, which is why `BOLD_OFF` and `DIM_OFF`
+// share the sequence and why the only place dim is re-opened is a span that
+// knows the host left it off.
+export const DIM_ON = "\x1b[2m";
+export const DIM_OFF = "\x1b[22m";
 
 const CODE_EXTENSIONS = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
