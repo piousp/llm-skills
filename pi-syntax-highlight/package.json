@@ -1,6 +1,6 @@
 {
   "name": "pi-syntax-highlight",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "description": "Syntax highlighting for pi: colors tool output (grep, find, ls, bash, read, edit, write), diffs, JSON and assistant markdown, and detects the language of unlabeled code fences.",
   "license": "MIT",

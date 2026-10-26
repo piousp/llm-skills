@@ -3,6 +3,31 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [0.1.2] - 2026-10-26
+
+### Added
+
+- `bash` and `powershell` results whose body is a recognized language are
+  tokenized as one block instead of painted flat: YAML, SQL, TOML, shell,
+  Python, JavaScript, TypeScript, Go, Rust, XML and HTML. Error, warning and
+  `path:line:` lines keep the color they already had, and replace the
+  highlighted line instead of being wrapped inside it. No theme color is derived
+  or adjusted: the body is painted with the active theme's own syntax tokens.
+- `detectOutputLanguage` in `detect-language.ts`: the fence detector behind a
+  list of languages that show up in shell output, with higher thresholds for
+  YAML and SQL. Three measured false positives set those thresholds: two
+  `key: value` lines are `git log`, three `curl -I` headers pass any key count
+  that ignores case, and "Update the docs in the table from last week" reads as
+  SQL.
+
+### Changed
+
+- Detection reads the first `HIGHLIGHT_LINE_BUDGET` lines, the same lines the
+  tokenizer paints, so the tail of a body past that line keeps the plain
+  content color.
+- README: the bash row lists the detected languages, and an existing error is
+  fixed. The collapsed call keeps the last visual lines, not the opening ones.
+
 ## [0.1.1] - 2026-10-26
 
 ### Added
