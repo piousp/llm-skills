@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.4
+
+- **Package gallery metadata: the pi.dev page now carries a real description, a license and a preview image.** pi.dev builds the page description from the first README paragraph, and the README opened with the badge block, so the gallery showed three badge links where the prose belongs; the tagline is now that first paragraph ("Subagents for pi with no fuss: one Markdown file per agent, one tool call to run it, and overrides to fit your workflow.") and the badges sit under it. `package.json` gains `description` (npm derives one from the README when the field is missing), `license: "MIT"` (without it the gallery reported `License unknown` while the README and the badge claimed MIT) and `pi.image` pointing at `assets/icon.png`; `keywords` grows from `pi-package` alone to also cover `pi-extension`, `pi`, `subagents`, `agents`, `delegation` and `background-jobs`.
+- New `assets/icon.svg` (source) and `assets/icon.png` (1200x750, the same size `pi-better-harness` uses). The gallery card frame is `aspect-ratio: 16/10` and the detail thumbnail is `16/9` with `object-fit: cover`, so a square logo loses its top and bottom edges there; this canvas crops 5% of the height in the thumbnail and keeps the glyph inside the central area. `pi.image` is an absolute raw.githubusercontent.com URL, the form both existing gallery previews use, so the commit has to land on `main` before `npm publish` or the gallery shows a broken image.
+- No code changes.
+
 ## 1.5.3
 
 - **Fix: drop the unused `zod` dependency.** `package.json` declared `zod: ^3.24.0`, but nothing in `src/`, `extensions/` or `test/` imported it: frontmatter is parsed with `yaml` and the validation is hand-written. Every installed copy therefore resolved `zod@3.25.76`, which `npm audit` reports as high severity (GHSA-mrhx-c7xc-m3w5, memory exhaustion while validating oversized constrained collections) and which has no backport to the 3.x line, so the only non-breaking fix is to stop declaring it. `package-lock.json` regenerated and the leftover `node_modules/zod` pruned; `npm audit --omit=dev` inside `pi-simple-agents/` reports zero vulnerabilities. `npm audit` including dev dependencies still flags `undici` under `@earendil-works/pi-coding-agent`, a pre-existing dev-only advisory untouched by this change. No code changes.

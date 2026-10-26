@@ -1,10 +1,10 @@
 # pi-simple-agents
 
+Subagents for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with no fuss: one Markdown file per agent, one tool call to run it, and overrides to fit your workflow.
+
 [![npm version](https://badge.fury.io/js/pi-simple-agents.svg)](https://badge.fury.io/js/pi-simple-agents)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/piousp/badge.svg)](https://hub.xerj.org/contributors/piousp)
-
-Subagents for [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent). Write an agent as a Markdown file, then call it from any pi session with the `subagent` tool.
 
 ## Install
 
