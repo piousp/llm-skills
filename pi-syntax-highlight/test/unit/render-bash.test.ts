@@ -192,3 +192,121 @@ test("formatDuration: identical to the built-in formatter", () => {
   // toFixed rounds 59.999 up to 60, which is what stock pi prints.
   assert.equal(formatDuration(59999), "60.0s");
 });
+
+test("buildBashBody: a detected body is highlighted as one block", () => {
+  const calls: HighlightCall[] = [];
+  const output = "apiVersion: v1\nkind: Service\nmetadata:\n  name: pi";
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, [{ code: output, lang: "yaml" }]);
+  assert.equal(
+    body,
+    [
+      "<yaml>apiVersion: v1</yaml>",
+      "<yaml>kind: Service</yaml>",
+      "<yaml>metadata:</yaml>",
+      "<yaml>  name: pi</yaml>",
+    ].join("\n"),
+  );
+});
+
+test("buildBashBody: an error line inside a detected body keeps its color", () => {
+  const output = "apiVersion: v1\nkind: Service\nERROR: boom\n  name: pi";
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight([]) }));
+  assert.equal(
+    body,
+    [
+      "<yaml>apiVersion: v1</yaml>",
+      "<yaml>kind: Service</yaml>",
+      styled("error", "ERROR: boom"),
+      "<yaml>  name: pi</yaml>",
+    ].join("\n"),
+  );
+});
+
+test("buildBashBody: a path, line and text line inside a detected body keeps its three colors", () => {
+  const output = "apiVersion: v1\nkind: Service\nsrc/app.ts:12: some text\n  name: pi";
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight([]) }));
+  const split = [
+    styled("accent", "src/app.ts"),
+    styled("dim", ":"),
+    styled("syntaxNumber", "12"),
+    styled("dim", ":"),
+    " ",
+    styled("text", "some text"),
+  ].join("");
+  assert.equal(
+    body,
+    ["<yaml>apiVersion: v1</yaml>", "<yaml>kind: Service</yaml>", split, "<yaml>  name: pi</yaml>"].join("\n"),
+  );
+});
+
+test("buildBashBody: the highlight budget leaves the tail of a detected body flat", () => {
+  const lines = Array.from({ length: 400 }, (_, index) => `key${index}: value${index}`);
+  const output = [...lines, "tail text"].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight([]) }));
+  const painted = body.split("\n");
+  assert.equal(painted.length, 401);
+  assert.equal(painted[399], "<yaml>key399: value399</yaml>");
+  assert.equal(painted[400], styled("text", "tail text"));
+});
+
+test("buildBashBody: a signal past the highlight budget is not detected", () => {
+  const calls: HighlightCall[] = [];
+  const filler = Array.from({ length: 400 }, (_, index) => `plain output line ${index}`);
+  const output = [...filler, "apiVersion: v1"].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, []);
+  const painted = body.split("\n");
+  assert.equal(painted.length, 401);
+  assert.equal(painted[400], styled("text", "apiVersion: v1"));
+});
+
+test("buildBashBody: a long directory listing keeps the flat paint", () => {
+  const calls: HighlightCall[] = [];
+  const output = [
+    "total 8",
+    "-rw-r--r-- 1 pi pi  512 Jan  1 12:00 package.json",
+    "drwxr-xr-x 3 pi pi 4096 Jan  1 12:00 src",
+  ].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, []);
+  assert.equal(
+    body,
+    [
+      styled("text", "total 8"),
+      styled("text", "-rw-r--r-- 1 pi pi  512 Jan  1 12:00 package.json"),
+      styled("text", "drwxr-xr-x 3 pi pi 4096 Jan  1 12:00 src"),
+    ].join("\n"),
+  );
+});
+
+test("buildBashBody: a traceback keeps the flat paint and its error line", () => {
+  const calls: HighlightCall[] = [];
+  const output = [
+    "Traceback (most recent call last):",
+    '  File "app.py", line 3, in <module>',
+    "    main()",
+    "ValueError: boom",
+  ].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, []);
+  assert.equal(
+    body,
+    [
+      styled("error", "Traceback (most recent call last):"),
+      styled("text", '  File "app.py", line 3, in <module>'),
+      styled("text", "    main()"),
+      styled("text", "ValueError: boom"),
+    ].join("\n"),
+  );
+});
+
+test("buildBashBody: a partial result highlights a detected body and prints no timer", () => {
+  const calls: HighlightCall[] = [];
+  const output = "apiVersion: v1\nkind: Service\nmetadata:\n  name: pi";
+  const { timer } = buildBashBody(
+    bashInput({ output, isPartial: true, durationMs: 4200, highlight: makeHighlight(calls) }),
+  );
+  assert.equal(timer, undefined);
+  assert.deepEqual(calls.map((call) => call.lang), ["yaml"]);
+});

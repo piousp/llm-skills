@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectLanguage } from "../../src/detect-language.ts";
+import { detectLanguage, detectOutputLanguage } from "../../src/detect-language.ts";
 
 test("detectLanguage: a JSON object and a JSON array are both json", () => {
   assert.equal(detectLanguage(`{\n  "name": "pi",\n  "version": "1.0.0"\n}`), "json");
@@ -121,4 +121,104 @@ test("detectLanguage: a log, prose, and empty text have no language", () => {
 
 test("detectLanguage: a single short line never carries a language", () => {
   assert.equal(detectLanguage("x = 1"), undefined);
+});
+
+test("detectOutputLanguage: two plain keys with an indented one are yaml", () => {
+  assert.equal(detectOutputLanguage("apiVersion: v1\nkind: Service\nmetadata:\n  name: pi"), "yaml");
+});
+
+test("detectOutputLanguage: three plain keys are yaml without any structure", () => {
+  assert.equal(detectOutputLanguage("name: pi\nversion: 0.1.0\nlicense: MIT"), "yaml");
+});
+
+test("detectOutputLanguage: two bare keys with no structure are not yaml", () => {
+  // The same body is yaml to the fence detector; the guard is what keeps it out
+  // of the tokenizer, where its error and warning lines keep their colors.
+  assert.equal(detectOutputLanguage("error: boom\nwarning: careful\nplain text"), undefined);
+});
+
+test("detectOutputLanguage: a git log is not yaml", () => {
+  assert.equal(
+    detectOutputLanguage(
+      [
+        "commit 8f2a1c0",
+        "Author: Ada <ada@example.com>",
+        "Date:   Mon Jan 1 12:00:00 2024 +0000",
+        "",
+        "    Add the output guard",
+      ].join("\n"),
+    ),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: HTTP headers are not yaml", () => {
+  assert.equal(
+    detectOutputLanguage("HTTP/1.1 200 OK\nContent-Type: application/json\nContent-Length: 42"),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: a query with a terminator is sql", () => {
+  assert.equal(detectOutputLanguage("SELECT id, email\nFROM users\nWHERE created_at > now();"), "sql");
+});
+
+test("detectOutputLanguage: prose with one clause keyword is not sql", () => {
+  assert.equal(
+    detectOutputLanguage("select the row from the list that matches the current filter\nIt keeps the widths untouched."),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: an environment dump is bash", () => {
+  assert.equal(detectOutputLanguage("PATH=/usr/local/bin:/usr/bin\nHOME=/home/pi\nLANG=en_US.UTF-8"), "bash");
+});
+
+test("detectOutputLanguage: a JSON prefix is never json", () => {
+  assert.equal(detectOutputLanguage("[1, 2,\n3"), undefined);
+});
+
+test("detectOutputLanguage: a diff keeps the diff painter", () => {
+  const patch = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,2 +1,2 @@",
+    "-old line",
+    "+new line",
+  ].join("\n");
+  assert.equal(detectOutputLanguage(patch), undefined);
+});
+
+test("detectOutputLanguage: a java body is outside the allowlist", () => {
+  assert.equal(
+    detectOutputLanguage('public class Main {\n    public static void main(String[] args) {'),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: a JavaScript body is javascript", () => {
+  assert.equal(detectOutputLanguage("const x = 1;\nfunction f() {\n  return x;\n}"), "javascript");
+});
+
+test("detectOutputLanguage: three HTTP headers are not yaml", () => {
+  assert.equal(
+    detectOutputLanguage("Content-Type: application/json\nContent-Length: 42\nAccept-Ranges: bytes"),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: prose with two lowercase clause keywords is not sql", () => {
+  assert.equal(
+    detectOutputLanguage("Update the docs in the table from last week\nIt keeps the widths untouched."),
+    undefined,
+  );
+});
+
+test("detectOutputLanguage: a bare parent key with a list is yaml", () => {
+  assert.equal(detectOutputLanguage("ports:\n  - 80\n  - 443\nname: pi"), "yaml");
+});
+
+test("detectOutputLanguage: a lowercase query with no terminator stays flat", () => {
+  assert.equal(detectOutputLanguage("SELECT id\nfrom users\nwhere active"), undefined);
 });

@@ -1,4 +1,5 @@
-// Language detection for markdown fences that arrive without an info string.
+// Language detection for markdown fences that arrive without an info string, and
+// for the body of a tool result (`detectOutputLanguage`, below).
 //
 // A fence body is a short snippet, so every heuristic here is a regular
 // expression over the raw text: parsing would cost more than the wrong color it
@@ -44,6 +45,7 @@ const CSS_FOREIGN_SIGNAL =
 
 const SQL_STATEMENT_KEYWORD = /^(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\b/i;
 const SQL_CLAUSE_KEYWORD = /\b(?:FROM|WHERE|VALUES|TABLE)\b/i;
+const SQL_CLAUSE_KEYWORD_UPPER = /\b(?:FROM|WHERE|VALUES|TABLE)\b/g;
 
 // Anchored to the start of a line and closed by the colon that ends a Python
 // header: `public class Foo {` and `def f()` inside a patch are those other
@@ -101,6 +103,14 @@ const STATEMENT_TERMINATOR = /[;{}][ \t]*$/m;
 // annotation and `{ a: 1 }` is code, both ruled out by the pattern below.
 const YAML_PLAIN_KEY = /^[A-Za-z_][\w.-]*:[ \t]*\S/gm;
 const YAML_FOREIGN_SIGNAL = /[{(=]|\b(?:const|let|function)\s/;
+// A key indented under another one, which is what separates a document with two
+// top-level keys from two log lines that happen to carry a colon.
+const YAML_INDENTED_KEY = /^[ \t]+[A-Za-z_][\w.-]*:/gm;
+// A document key starts in lowercase and may carry no value at all, which is
+// what a parent of a nested block looks like (`metadata:`). HTTP header names
+// are Title-Case and are the reason for the case rule: `curl -I` output is not
+// a document, but three of its headers satisfy any count that ignores case.
+const YAML_DOCUMENT_KEY = /^[a-z_][\w.-]*:[ \t]*(?:\S.*)?$/gm;
 
 const TOML_SECTION = /^\[[\w.-]+\][ \t]*$/m;
 const TOML_KEY_VALUE = /^\w[\w.-]*[ \t]*=/gm;
@@ -112,6 +122,28 @@ const SHELL_PIPELINE = /\|[ \t]*[\w./-]+/gm;
 // separator row is the one line shell output never prints.
 const TABLE_ROW = /^[ \t]*\|/;
 const TABLE_RULE = "|---";
+
+// Languages worth detecting in shell output. A wrong label paints the body with
+// a grammar that does not fit it, which reads worse than flat text, so a
+// language enters only when it really shows up in a terminal and its detector
+// is strict enough not to fire on a log. Left out for the first reason or the
+// second: java, csharp and kotlin (`public`, `static`, `using`, `fun` are log
+// words), css, scss and less (`key: value;` is also every environment dump),
+// lua, haskell, elixir, cmake, gradle, protobuf, clojure, erlang and properties
+// (no realistic shell-output scenario).
+const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
+  "yaml", // kubectl, helm, compose
+  "toml", // cat pyproject.toml, Cargo.toml
+  "sql", // psql -f
+  "bash", // environment dumps, transcripts
+  "python",
+  "javascript",
+  "typescript",
+  "go",
+  "rust", // cat of source files
+  "xml",
+  "html", // curl
+]);
 
 type Detector = (text: string) => string | undefined;
 
@@ -148,6 +180,14 @@ function detectSql(text: string): string | undefined {
   const firstWord = firstNonBlankLine(text).trim().split(/\s+/)[0] ?? "";
   if (!SQL_STATEMENT_KEYWORD.test(firstWord)) return undefined;
   return SQL_CLAUSE_KEYWORD.test(text) ? "sql" : undefined;
+}
+
+// A statement terminator or a second clause in uppercase is what makes the block
+// a query: prose that starts with "Update" and mentions a table and a form of
+// "from" satisfies the fence detector, and its lowercase is what keeps it out of
+// here. The cost is a lowercase query with no terminator, which stays flat.
+function sqlSurvivesOutput(text: string): boolean {
+  return text.includes(";") || countMatches(text, SQL_CLAUSE_KEYWORD_UPPER) >= 2;
 }
 
 function detectPython(text: string): string | undefined {
@@ -189,6 +229,15 @@ function detectYaml(text: string): string | undefined {
 function detectYamlKeys(text: string): string | undefined {
   if (countMatches(text, YAML_PLAIN_KEY) < 2) return undefined;
   return YAML_FOREIGN_SIGNAL.test(text) ? undefined : "yaml";
+}
+
+// Two bare `key: value` lines are as much git log and HTTP headers as they are a
+// document, so the guard asks for a third key or for structure.
+function yamlSurvivesOutput(text: string): boolean {
+  const keys = countMatches(text, YAML_DOCUMENT_KEY);
+  if (keys >= 3) return true;
+  if (keys < 2) return false;
+  return countMatches(text, YAML_INDENTED_KEY) > 0 || countMatches(text, YAML_ITEM) > 0;
 }
 
 function detectToml(text: string): string | undefined {
@@ -251,6 +300,22 @@ export function detectLanguage(text: string): string | undefined {
     if (language !== undefined) return language;
   }
   return undefined;
+}
+
+// The language of a tool-output body, or undefined when the body should keep its
+// per-line styling. Shell output is log-shaped far more often than code-shaped,
+// so this is `detectLanguage` plus two guard rails: the allowlist above, and the
+// higher thresholds the two loosest detectors need to survive a log.
+export function detectOutputLanguage(text: string): string | undefined {
+  const language = detectLanguage(text);
+  if (language === undefined) return undefined;
+  // The caller checks these two shapes over the whole body, so a sample that
+  // parses as JSON is a prefix of it, not the document.
+  if (language === "json" || language === "diff") return undefined;
+  if (!OUTPUT_LANGUAGES.has(language)) return undefined;
+  if (language === "yaml") return yamlSurvivesOutput(text) ? language : undefined;
+  if (language === "sql") return sqlSurvivesOutput(text) ? language : undefined;
+  return language;
 }
 
 function nonBlankLines(text: string): string[] {

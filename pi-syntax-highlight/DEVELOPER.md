@@ -13,7 +13,7 @@ Needs Node 24 or newer (the tests run through `--experimental-strip-types`) and 
 - `render-utils.ts` holds the pieces those builders share: gutters, footers, the expand hint, the truncation notice.
 - `highlight.ts` wraps pi's `highlightCode` with a cache, and `tokens.ts` holds the SGR sequences the code reads directly.
 - `style-path.ts`, `render-path.ts`, `emphasis.ts` handle the small decisions a diff or a path needs: which color a basename gets, where the match sits inside a line, which words changed.
-- `grep-parse.ts` splits grep's `path:line: text` and `path-line- text` forms. `detect-language.ts` answers a language for a fence or a file name.
+- `grep-parse.ts` splits grep's `path:line: text` and `path-line- text` forms. `detect-language.ts` answers a language for a fence or a file name, and `detectOutputLanguage` answers one for a tool-output body.
 - `markdown-fence-lang.ts`, `markdown-style.ts`, `markdown-theme.ts` are the markdown pass: which fence gets a label, which line gets a sequence, which palette the sequences use.
 - `active-theme.ts` keeps the theme object from the last rendered tool result.
 
@@ -24,6 +24,14 @@ The theme reaches the renderers as a proxy of stable identity, so a reference co
 Tool failure is read from the render context, not from the result: the host passes no `isError` field inside `AgentToolResult`, so a check there is always false and no renderer ever paints an error. `render-generic` and the path renderers both read the context flag.
 
 Without an initialized theme the renderers fall back to the plain tool output color. The markdown pass degrades the same way: with no theme captured yet, it emits no sequences at all.
+
+## How a bash body gets its language
+
+Diff and JSON are recognized over the whole body. Anything else goes to `detectOutputLanguage`, which wraps the fence detector with an allowlist and two raised thresholds, because shell output is log-shaped far more often than code-shaped. Three false positives decided that design, all measured: two `key: value` lines are `git log`, `curl -I` headers are a YAML document to any count that ignores case, and "Update the docs in the table from last week" is SQL. A wrong label paints the body with a grammar that does not fit it, which reads worse than flat text.
+
+Detection reads the first `HIGHLIGHT_LINE_BUDGET` lines, the same lines the tokenizer will paint, so nothing is detected in a region that would stay flat anyway. A classified line (error, warning, `path:line:`) replaces the highlighted one instead of being wrapped inside it: `theme.fg()` closes at the end of the string and cannot recolor a span of an already painted line.
+
+`render-generic` does not use the detector yet. It recognizes JSON and diff only, and unknown tools keep the plain content color for anything else.
 
 ## How the markdown styling works
 
@@ -49,6 +57,8 @@ Three constructs stay out of reach even for that hook:
 
 ## Known limits
 
+- A bash body is read once, from its head: a log that turns into YAML after the first `HIGHLIGHT_LINE_BUDGET` lines keeps the flat paint.
+- A lowercase SQL query with no terminator stays flat, which is the price of rejecting English prose that starts with "Update" or "Delete".
 - `grep` output whose path itself contains `:N: ` or `-N- ` is inherently ambiguous; pi does not disambiguate it either.
 - Only one markdown transformer is allowed per extension; the pipeline inside this one is a single pass.
 - A `read` body records the line number where each source line starts. A source line longer than the terminal wraps, and the wrapped continuation does not repeat the gutter.

@@ -1,7 +1,8 @@
 import { truncateToVisualLines } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { detectOutputLanguage } from "./detect-language.ts";
 import { parseGrepLine } from "./grep-parse.ts";
-import { highlight as builtInHighlight, highlightLines, type HighlightFn } from "./highlight.ts";
+import { HIGHLIGHT_LINE_BUDGET, highlight as builtInHighlight, highlightLines, type HighlightFn } from "./highlight.ts";
 import { DIFF_HEADER, colonPrefix, isJsonDocument, styleDiffLine, truncationWarnings } from "./render-utils.ts";
 import { TOKEN, type StyleTheme } from "./tokens.ts";
 
@@ -79,6 +80,15 @@ function isDiffOutput(lines: string[]): boolean {
   return hunks > 0 || changes > 1;
 }
 
+// Detection reads the same lines the tokenizer will paint: past the budget the
+// body falls back to the plain color, so a signal from there would not change a
+// painted line. The head is the sample because a document announces its language
+// at the top.
+function detectionSample(lines: string[]): string {
+  const head = lines.length <= HIGHLIGHT_LINE_BUDGET ? lines : lines.slice(0, HIGHLIGHT_LINE_BUDGET);
+  return head.join("\n");
+}
+
 // Commands that print compiler or test output repeat grep's "path:line: text"
 // shape, so it is parsed with the same function instead of a second regex.
 function styleLine(line: string, theme: StyleTheme): string {
@@ -90,6 +100,22 @@ function styleLine(line: string, theme: StyleTheme): string {
   return `${colonPrefix(path, entry.line, theme)} ${theme.fg(TOKEN.content, entry.text)}`;
 }
 
+// The three shapes the flat path colors by hand. A grammar has no red for
+// `npm ERR!`, so those lines keep what they get today.
+function classifies(line: string): boolean {
+  return ERROR_LINE.test(line) || WARNING_LINE.test(line) || parseGrepLine(line).kind === "match";
+}
+
+function styleDetectedLines(lines: string[], language: string, theme: StyleTheme, highlight: HighlightFn): string[] {
+  const fallback = (line: string): string => theme.fg(TOKEN.content, line);
+  const painted = highlightLines(lines.join("\n"), language, fallback, highlight);
+  // A painted line cannot be recolored from the inside (see `AnsiTheme` in
+  // tokens.ts), so a classified line replaces the highlighted one instead of
+  // being wrapped. `highlightLines` splits the same code, which is what keeps
+  // the two arrays aligned.
+  return painted.map((line, index) => (classifies(lines[index]) ? styleLine(lines[index], theme) : line));
+}
+
 function styleOutput(output: string, theme: StyleTheme, highlight: HighlightFn): string {
   const lines = output.split("\n");
   if (isDiffOutput(lines)) return lines.map((line) => styleDiffLine(line, theme)).join("\n");
@@ -99,6 +125,8 @@ function styleOutput(output: string, theme: StyleTheme, highlight: HighlightFn):
     const fallback = (line: string): string => theme.fg(TOKEN.content, line);
     return highlightLines(output, "json", fallback, highlight).join("\n");
   }
+  const language = detectOutputLanguage(detectionSample(lines));
+  if (language !== undefined) return styleDetectedLines(lines, language, theme, highlight).join("\n");
   return lines.map((line) => styleLine(line, theme)).join("\n");
 }
 

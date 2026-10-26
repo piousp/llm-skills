@@ -25,7 +25,7 @@ Needs pi 1.4 or newer. Node 24 or newer matters only for running the working cop
 |---|---|
 | `grep` | Paths and line numbers styled, each matched line highlighted in the language of its file, the match itself emphasized. The truncation footer stays. |
 | `find`, `ls` | Directories dimmed with a trailing slash, basenames colored by file family. The limit footer stays. |
-| `bash`, `powershell` | Finished output styled: diffs, JSON, paths, errors. A collapsed call shows its opening lines, the expand hint, and the duration. |
+| `bash`, `powershell` | Finished output styled: diffs, JSON, paths, errors, and a body in a recognized language (YAML, SQL, TOML, shell, Python, JavaScript, TypeScript, Go, Rust, XML, HTML). Error, warning and `path:line:` lines keep their own color inside a highlighted body. A collapsed call shows its last lines, the expand hint, and the duration. |
 | `read` | Line numbers count from the offset the read started at, not from 1, and the body is highlighted by file language. A collapsed read stays silent, the way stock pi leaves it. |
 | `edit` | The diff is highlighted by file language, line numbers dimmed, changed words in reverse video. A failure paints the body in the error color. |
 | `write` | The header previews the content while it streams, highlighted and capped, with the stock line footer. |
@@ -40,6 +40,7 @@ Headings take the theme's accent color, with one extra attribute per level so th
 ## Limits
 
 - A `grep` output whose own path contains `:N: ` is ambiguous, and pi does not disambiguate it either.
+- A bash body is identified and tokenized from its first 400 lines. A language that only appears after that line leaves the body flat, and the lines past it keep the plain content color.
 - No initialized theme, no color: every renderer falls back to plain tool output, and the markdown pass writes nothing.
 - The accent color of a heading stops at its first inline token, so text after `**bold**` or `` `code` `` in the same heading returns to the theme heading color.
 - Fence labels and fence chrome stay unstyled, and so does the `│` border of a blockquote.
