@@ -103,9 +103,8 @@ Four cases added for 1.5.2's `subagent_job` tool: `cancel_running_job` and
 being asked, graded on the `action` it emits and, for steer, on a non-empty
 `message`), `failed_job_recovery_continue` (a forced `maxTurns` failure; the
 right verb is `continue`, because it keeps the partial work), and
-`settled_job_needs_nothing` as the negative control for the intervention
-budget: a job that finished sells nothing to do, so any `subagent_job` call
-fails the case.
+`settled_job_needs_nothing` as the negative control for interventions: a job
+that finished leaves nothing to do, so any `subagent_job` call fails the case.
 
 ## N=1 findings (full run, 2026-07-30)
 

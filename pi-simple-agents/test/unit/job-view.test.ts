@@ -17,7 +17,6 @@ import {
   describeCancelResult,
   describeInjectResult,
   describeClearResult,
-  budgetExhaustedText,
   buildRelaunchCandidatesText,
   buildRelaunchResultText,
   resolveRelaunchTarget,
@@ -428,35 +427,6 @@ test("describeInjectResult: injected surfaces the SDK disposition verbatim per v
     describeInjectResult("followUp", { kind: "injected", job, disposition: "handled" }),
     { text: "Follow-up handled for job S1003 (an extension consumed it).", level: "info" },
   );
-});
-
-// --- budgetExhaustedText ---
-
-// The tool path's one-intervention-per-job refusal: it must name the spent
-// target precisely and hand the model the exact command to relay to the user
-// (who runs /subagents without a budget).
-test("budgetExhaustedText: with a jobId names both ids and routes the user to /subagents <action> <jobId>", () => {
-  const text = budgetExhaustedText("cancel", "S1003", "call-1");
-  assert.match(text, /Job S1003 \(run call-1\)/);
-  assert.match(text, /one-intervention-per-job limit is spent/);
-  assert.match(text, /`\/subagents cancel S1003`/);
-});
-test("budgetExhaustedText: without a jobId names the run id and routes the user to /subagents <action> <runId>", () => {
-  const text = budgetExhaustedText("steer", undefined, "retry-call-1-1");
-  assert.match(text, /^Run retry-call-1-1 was already acted on once/);
-  assert.match(text, /`\/subagents steer retry-call-1-1`/);
-  assert.doesNotMatch(text, /Job undefined/);
-});
-test("budgetExhaustedText: each of the five interventions renders its own command", () => {
-  for (const action of ["cancel", "steer", "followUp", "retry", "continue"] as const) {
-    const text = budgetExhaustedText(action, "S1003", "call-1");
-    assert.match(text, new RegExp(`\`/subagents ${action} S1003\``));
-  }
-  // Every one of them is a distinct text (the action is not shared wording).
-  const texts = (["cancel", "steer", "followUp", "retry", "continue"] as const).map((action) =>
-    budgetExhaustedText(action, "S1003", "call-1"),
-  );
-  assert.equal(new Set(texts).size, texts.length);
 });
 
 // --- widget: activity word in the running line ---

@@ -10,7 +10,7 @@ import type { JobSnapshot, SettledJob } from "../../src/background-jobs.ts";
 import { validateSubagentParams } from "../../src/validate.ts";
 import { buildSubagentCallText } from "../../src/render-call.ts";
 import { createProgressTracker } from "../../src/progress.ts";
-import { jobNotFoundText, NO_JOBS_TEXT, budgetExhaustedText } from "../../src/job-view.ts";
+import { jobNotFoundText, NO_JOBS_TEXT } from "../../src/job-view.ts";
 import { SUBAGENT_JOB_TOOL_NAME } from "../../src/extension-binding.ts";
 import { SUBAGENT_JOB_DESCRIPTION } from "../../src/tool-description.ts";
 import { buildSubagentResultText } from "../../src/render-result.ts";
@@ -2510,10 +2510,9 @@ test("wiring: the subagents command description names retry and continue", async
 // --- subagent_job tool ---
 
 // The tool registration itself: name/label/description/parameters come from
-// the job tool's own constants, and executionMode is sequential so two
-// interventions on one job in a single batch cannot both pass the budget
-// pre-check.
-test("wiring: registers the subagent_job tool with the job description, sequential execution, and no custom rendering", async (t) => {
+// the job tool's own constants; no executionMode override, since repeated
+// interventions on one job are allowed and need no serialization.
+test("wiring: registers the subagent_job tool with the job description and no custom rendering", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   await extensionFactory(pi as unknown as ExtensionAPI, undefined, undefined, fixture.paths);
@@ -2523,7 +2522,7 @@ test("wiring: registers the subagent_job tool with the job description, sequenti
   assert.equal(jobTool.name, "subagent_job");
   assert.equal(jobTool.label, "Subagent job");
   assert.equal(jobTool.description, SUBAGENT_JOB_DESCRIPTION);
-  assert.equal(jobTool.executionMode, "sequential");
+  assert.equal(jobTool.executionMode, undefined);
   // The model reads the result text; there is nothing to render.
   assert.equal(jobTool.renderCall, undefined);
   assert.equal(jobTool.renderResult, undefined);
@@ -2594,17 +2593,16 @@ test("subagent_job execute: status with an unknown id is a normal result with th
   assert.equal(result.details.id, "S9999");
 });
 
-// The budget: one intervention per job through the tool. The job is not acted
-// on twice, and a second verb on the same job is refused too (the budget is
-// per job, not per action).
-test("subagent_job execute: cancel spends the job's one intervention; a second tool intervention on it is refused", async (t) => {
+// No per-job cap: a repeated intervention on the same job reaches the
+// registry's real guards and reports whatever the registry answered.
+test("subagent_job execute: repeated interventions on the same job act or hit the real guards, never a refusal", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { session, listeners, steerCalls } = hangingStreamingSession();
   const createSession = async () => ({ session } as any);
   await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const launched = await pi.tool.execute("call-budget-cancel", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const launched = await pi.tool.execute("call-repeat-cancel", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
   const jobId = (launched.details as { jobId: string }).jobId;
   await waitUntil(() => listeners.length > 0);
 
@@ -2616,58 +2614,69 @@ test("subagent_job execute: cancel spends the job's one intervention; a second t
   // Same cancel wording the /subagents command path shows (one shared view).
   assert.equal(first.content[0].text, `Cancelling job ${jobId}\u2026`);
 
-  // Second cancel of the same job: refused by the spent budget, so the job is
-  // never cancelled twice (a real second cancel would say "already cancelling").
+  // Second cancel of the same job: not refused, it reaches the registry again.
+  // Both arms are real registry outcomes: "cancelling" while the abort is
+  // still in flight (a cancelling job is still active) and the not-running
+  // arm once it settled — which one lands depends on a microtask race.
   const second = await jobTool.execute("tc-cancel-2", { action: "cancel", id: jobId }, undefined, undefined, jobCtx);
   assert.equal(second.isError, undefined);
-  assert.equal(second.content[0].text, budgetExhaustedText("cancel", jobId, "call-budget-cancel"));
+  assert.doesNotMatch(second.content[0].text, /limit is spent|refus/i);
+  assert.match(second.content[0].text, new RegExp(`^(Cancelling job ${jobId}\u2026|Job ${jobId} is already cancelled \u2014 nothing to cancel\\.)$`));
 
-  // A different verb on the same job is spent too.
-  const steer = await jobTool.execute("tc-steer-spent", { action: "steer", id: jobId, message: "hurry" }, undefined, undefined, jobCtx);
+  // A different verb on the same job once it settled: describeInjectResult's
+  // not-running arm with the steer phrasing — still not a refusal. Waiting on
+  // the delivery first keeps the settled state deterministic.
+  await waitUntil(() => pi.sentMessages.length > 0);
+  const steer = await jobTool.execute("tc-steer-after-cancel", { action: "steer", id: jobId, message: "hurry" }, undefined, undefined, jobCtx);
   assert.equal(steer.isError, undefined);
-  assert.equal(steer.content[0].text, budgetExhaustedText("steer", jobId, "call-budget-cancel"));
+  assert.equal(steer.content[0].text, `Job ${jobId} is already cancelled \u2014 nothing to steer.`);
   assert.deepEqual(steerCalls, []); // nothing was injected
 
   // The job settles exactly once.
-  await waitUntil(() => pi.sentMessages.length > 0);
   assert.equal(pi.sentMessages.length, 1);
 });
 
-// A guard failure is not an intervention: the budget is only spent when the
-// action actually reached the job.
-test("subagent_job execute: a failed guard does not spend the budget; the next steer on a live job injects", async (t) => {
+// A guard failure changes nothing for the following call: each intervention
+// reaches the registry's guards on its own.
+test("subagent_job execute: a failed guard (unknown id) returns the shared not-found text; the next steer on a live job injects", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { session, listeners, steerCalls } = hangingStreamingSession();
   const createSession = async () => ({ session } as any);
   await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
 
-  const launched = await pi.tool.execute("call-budget-guard", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  const launched = await pi.tool.execute("call-guard-unknown", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
   const jobId = (launched.details as { jobId: string }).jobId;
   await waitUntil(() => listeners.length > 0);
 
   const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
   const jobCtx = fakeExecuteCtx({ cwd: fixture.cwd });
 
-  // Unknown id: the guard fails, nothing is injected, and no budget is spent.
+  // Unknown id: the guard fails and nothing is injected.
   const refused = await jobTool.execute("tc-steer-unknown", { action: "steer", id: "S9999", message: "first" }, undefined, undefined, jobCtx);
   assert.equal(refused.isError, undefined);
   assert.equal(refused.content[0].text, jobNotFoundText("S9999"));
   assert.deepEqual(steerCalls, []);
 
-  // Same job, next call: the intervention is still available.
+  // Same job, next call: the guard chain runs again from the top.
   const injected = await jobTool.execute("tc-steer-live", { action: "steer", id: jobId, message: "go left" }, undefined, undefined, jobCtx);
   assert.equal(injected.isError, undefined);
   assert.equal(injected.content[0].text, `Steering message queued for job ${jobId}.`);
   assert.deepEqual(steerCalls, ["go left"]);
 
+  // And again: a second steer on the same live job injects too.
+  const injectedAgain = await jobTool.execute("tc-steer-again", { action: "steer", id: jobId, message: "go right" }, undefined, undefined, jobCtx);
+  assert.equal(injectedAgain.isError, undefined);
+  assert.equal(injectedAgain.content[0].text, `Steering message queued for job ${jobId}.`);
+  assert.deepEqual(steerCalls, ["go left", "go right"]);
+
   await settleRunningJob(pi, jobId);
 });
 
-// The relaunch verbs through the tool: the source run's budget is spent after
-// one retry, and the relaunched run's new runId is budget-fresh (a different
-// run, not a second intervention on the old one).
-test("subagent_job execute: retry relaunches through the tool, spends the source run's budget, and a retry of the relaunched run is not refused", async (t) => {
+// The relaunch verbs through the tool: no per-job cap, so the same source run
+// relaunches again with the next attempt number, and the relaunched run's new
+// runId is a target in its own right (there is no per-job memory).
+test("subagent_job execute: retry relaunches through the tool, and a repeated retry of the same run relaunches again with a fresh attempt number", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { launches, createSession } = relaunchLaunchCapture();
@@ -2690,17 +2699,21 @@ test("subagent_job execute: retry relaunches through the tool, spends the source
   assert.equal(launches.length, 1);
   await waitUntil(() => pi.sentMessages.length > 0); // the relaunched job settled
 
+  // No refusal: the same source run relaunches again with the next attempt number.
   const second = await jobTool.execute("tc-retry-2", { action: "retry", id: "call-a" }, undefined, undefined, jobCtx);
   assert.equal(second.isError, undefined);
-  assert.equal(second.content[0].text, budgetExhaustedText("retry", "S2001", "call-a"));
-  assert.equal(launches.length, 1); // nothing was relaunched a second time
+  assert.match(second.content[0].text, /^Retrying scout as job S\d+ \(runId retry-call-a-2\)/);
+  await waitUntil(() => launches.length >= 2);
+  assert.equal(launches.length, 2);
 
   // The relaunched run left its child session on disk (a real run persists
   // one; this fake session does not, so the fixture writes the same layout).
   rlChildFile(dir, "retry-call-a-1");
   const third = await jobTool.execute("tc-retry-3", { action: "retry", id: "retry-call-a-1" }, undefined, undefined, jobCtx);
-  // Budget-fresh: the guard chain runs past the budget check and stops at the
-  // agent resolution instead (this harness persists no ack for that run).
-  assert.doesNotMatch(third.content[0].text, /one-intervention-per-job limit is spent/);
+  // The relaunched run id resolves as its own candidate, and the guard chain
+  // stops at the agent resolution (this harness persists no ack for that run).
   assert.match(third.content[0].text, /Unknown agent: unknown/);
+
+  // Both relaunches settle, so neither job is left running past the test.
+  await waitUntil(() => pi.sentMessages.length >= 2);
 });

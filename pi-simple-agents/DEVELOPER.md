@@ -1455,22 +1455,21 @@ the message renderer, the `/subagents` command, and three event handlers — all
   `buildRelaunchResultText`) say which of the two happened.
 - `pi.registerTool(SUBAGENT_JOB_TOOL_NAME, ...)`: the `subagent_job` tool, registered beside
   `subagent`. It carries `SUBAGENT_JOB_DESCRIPTION`, the `SubagentJobParams` TypeBox schema
-  (`action`, optional `id`, optional `message`), `executionMode: "sequential"` (sibling calls in
-  one batch are serialized, so two interventions on the same job cannot both pass the budget
-  check), and no `renderCall`/`renderResult` (the host's default rendering). Its `execute`
-  validates the params (`validateJobParams`) and delegates to the SAME `handleJobAction` closure
-  the command uses, passing `PLAIN_THEME` instead of `ctx.ui.theme` (the model reads plain text)
-  and the closure-scoped `toolInterventions` set. A structural problem is an `errorResult`; every
+  (`action`, optional `id`, optional `message`), and no `renderCall`/`renderResult` (the host's
+  default rendering). Its `execute` validates the params (`validateJobParams`) and delegates to
+  the SAME `handleJobAction` closure the command uses, passing `PLAIN_THEME` instead of
+  `ctx.ui.theme` (the model reads plain text). A structural problem is an `errorResult`; every
   guard outcome is a normal result carrying the action's text. `handleJobAction(action, id,
-  message, ctx, budget?)` was extracted in 1.5.2 from the command handler's
+  message, ctx)` was extracted in 1.5.2 from the command handler's
   `list|status|cancel|steer|followUp|retry|continue` branches: it resolves the target, runs the
   registry call, and returns `{ text, level }`, which the command notifies and the tool returns.
-  `budget` is `undefined` on the command path, so a user-typed action is never refused. The
-  budget is a `Set<string>` of spent run ids, checked before an intervention and appended only
-  on success (`cancelling`, `injected`, a completed relaunch), so a failed guard costs nothing;
-  `handleRelaunch` checks it against the candidate before the consumed-orphan check and adds the
-  source run id after a successful launch. A relaunch mints a new run id, which is budget-fresh
-  by construction.
+  Interventions carry no per-job limit: the tool keeps no budget, so the model may cancel, steer,
+  follow up, retry or continue the same job as often as it decides to, and a repeated verb lands
+  on the registry's own guards (`cancelling` again, `not-running` once settled). The only brake
+  on a runaway recovery loop is advisory: the tool descriptions and the bundled skill say to stop
+  and report when a second attempt fails the same way. The tool deliberately sets no
+  `executionMode`, since without a per-job budget there is no pre-check two sibling calls could
+  both pass.
 - `pi.on("agent_before_settle", ...)`: the settle barrier (see `createSettleBarrier` above).
 - `pi.on("agent_settled", ...)`: the `!ctx.hasUI` safety-net cleanup, see above.
 - `pi.on("session_shutdown", ...)`: `uiRef?.ui?.setStatus(STATUS_KEY, undefined)` (the accumulated
@@ -1897,10 +1896,10 @@ when no seed was given.
 
 ```typescript
 const SUBAGENT_BASE_DESCRIPTION =
-  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). A running job can be cancelled, steered, or queued a follow-up with the `subagent_job` tool, or with the user's `/subagents` command; a job that has already settled can no longer be messaged. A run that settled as failed or errored, or was interrupted mid-run, can be re-dispatched with `subagent_job` action `retry` or, when it left a persisted child session, continued from that point with action `continue` — both relaunch with the original call's recorded parameters when the launch acknowledgment persisted them, and with the agent's own defaults otherwise. Interventions (cancel, steer, followUp, retry, continue) are allowed once per job on your own initiative; a second intervention on the same job requires asking the user first — the `subagent_job` tool refuses it and says so. `status` and `list` are read-only and always allowed.";
+  "Launch a subagent in the background. Returns immediately with a job id; the job's result is delivered later as a message in this conversation. Do not call this tool again to poll for or wait on a result — it arrives automatically. To run several subagents concurrently, call this tool once per task (each call starts its own independent background job). A running job can be cancelled, steered, or queued a follow-up with the `subagent_job` tool, or with the user's `/subagents` command; a job that has already settled can no longer be messaged. A run that settled as failed or errored, or was interrupted mid-run, can be re-dispatched with `subagent_job` action `retry` or, when it left a persisted child session, continued from that point with action `continue` — both relaunch with the original call's recorded parameters when the launch acknowledgment persisted them, and with the agent's own defaults otherwise. Interventions (cancel, steer, followUp, retry, continue) are on your own initiative, with no per-job cap — you may act on the same job as often as the situation calls for. `status` and `list` are read-only and always allowed. Advice, not a rule: when a second recovery attempt fails the same way, stop and report instead of relaunching again.";
 
 const SUBAGENT_JOB_DESCRIPTION =
-  "Manage a background subagent job launched by the subagent tool. Actions: status (detail one job; without an id it auto-targets the single active job), list (all running/recent jobs, newest first), cancel (stop a running job), steer (inject a message into a running job's live session to redirect it; needs message), followUp (queue a message for the end of the run; it extends the run; needs message), retry (re-dispatch a settled run as a NEW job), continue (relaunch an interrupted run from its persisted child session, keeping its partial work; the agent re-verifies half-done work first). status and list are read-only and always allowed. The other five are interventions: allowed once per job on your own initiative; a second intervention on the same job is refused, and needs the user to ask for it. Target by job id (from the subagent acknowledgment, e.g. S1002); retry/continue also accept a run id, and without an id they resolve their target from settled runs on disk (cancelled runs are user intent and need an explicit id).";
+  "Manage a background subagent job launched by the subagent tool. Actions: status (detail one job; without an id it auto-targets the single active job), list (all running/recent jobs, newest first), cancel (stop a running job), steer (inject a message into a running job's live session to redirect it; needs message), followUp (queue a message for the end of the run; it extends the run; needs message), retry (re-dispatch a settled run as a NEW job), continue (relaunch an interrupted run from its persisted child session, keeping its partial work; the agent re-verifies half-done work first). status and list are read-only and always allowed. The other five are interventions: allowed on your own initiative, with no per-job cap — you may act on the same job repeatedly. Advice, not a rule: when a second intervention fails the same way, stop and report instead of repeating it. Target by job id (from the subagent acknowledgment, e.g. S1002); retry/continue also accept a run id, and without an id they resolve their target from settled runs on disk (cancelled runs are user intent and need an explicit id).";
 
 function buildSubagentToolDescription(
   agents: ReadonlyArray<Pick<AgentConfig, "name" | "description">>,
@@ -1917,8 +1916,8 @@ API to re-describe an already-registered tool, so agents added or renamed while 
 appear until restart. Pure.
 
 `SUBAGENT_JOB_DESCRIPTION` is the `subagent_job` tool's static description: the seven actions,
-which two are read-only, and the one-intervention-per-job rule with the refusal wording. No
-agents section, since actions are not agents. Also pure.
+which two are read-only, and that the five interventions carry no per-job cap, with the
+stop-and-report advice. No agents section, since actions are not agents. Also pure.
 
 ### src/warn.ts
 

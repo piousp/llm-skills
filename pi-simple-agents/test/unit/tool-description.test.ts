@@ -27,15 +27,18 @@ test("SUBAGENT_BASE_DESCRIPTION: tells the model to call once per task for concu
 });
 
 // Interventions moved from the /subagents command line to the subagent_job
-// tool: the base description names that tool, allows one intervention per job
-// on the model's own initiative, and keeps a settled job unreachable.
-test("SUBAGENT_BASE_DESCRIPTION: interventions go through subagent_job, once per job, with settled jobs unreachable", () => {
+// tool: the base description names that tool, allows interventions with no
+// per-job cap, and keeps a settled job unreachable.
+test("SUBAGENT_BASE_DESCRIPTION: interventions go through subagent_job with no per-job cap, with settled jobs unreachable", () => {
   assert.match(SUBAGENT_BASE_DESCRIPTION, /`subagent_job` tool/);
-  assert.match(SUBAGENT_BASE_DESCRIPTION, /once per job/i);
+  assert.match(SUBAGENT_BASE_DESCRIPTION, /no per-job cap/i);
   assert.match(SUBAGENT_BASE_DESCRIPTION, /read-only and always allowed/i);
   assert.match(SUBAGENT_BASE_DESCRIPTION, /already settled can no longer be messaged/i);
   // The old self-imposed restriction is gone.
   assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /only when the user explicitly asks/i);
+  // The retired one-intervention cap and the tool's refusal are gone with it.
+  assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /once per job/i);
+  assert.doesNotMatch(SUBAGENT_BASE_DESCRIPTION, /refuses/i);
 });
 
 // Pins the retry/continue nuance to its current wording: recorded params
@@ -56,13 +59,16 @@ test("SUBAGENT_BASE_DESCRIPTION: retry/continue relaunch recorded params when pe
 
 // The job tool's own description is what the model reads when it decides
 // between a read-only look and an intervention.
-test("SUBAGENT_JOB_DESCRIPTION: names all seven actions and the once-per-job rule", () => {
+test("SUBAGENT_JOB_DESCRIPTION: names all seven actions and the unlimited-intervention rule", () => {
   for (const action of ["status", "list", "cancel", "steer", "followUp", "retry", "continue"]) {
     assert.ok(SUBAGENT_JOB_DESCRIPTION.includes(action), `expected the action ${action} in the description`);
   }
-  assert.match(SUBAGENT_JOB_DESCRIPTION, /once per job/i);
+  assert.match(SUBAGENT_JOB_DESCRIPTION, /no per-job cap/i);
   assert.match(SUBAGENT_JOB_DESCRIPTION, /read-only and always allowed/i);
   assert.match(SUBAGENT_JOB_DESCRIPTION, /subagent tool/);
+  // The retired cap and the refusal sentence are gone.
+  assert.doesNotMatch(SUBAGENT_JOB_DESCRIPTION, /once per job/i);
+  assert.doesNotMatch(SUBAGENT_JOB_DESCRIPTION, /refused/i);
 });
 
 test("buildSubagentToolDescription: single agent appends an available-agents section", () => {

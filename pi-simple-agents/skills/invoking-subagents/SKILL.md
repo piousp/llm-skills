@@ -1,6 +1,6 @@
 ---
 name: invoking-subagents
-description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}) and the six per-call overrides (model, tools, skills, thinking, maxTurns, timeoutMs), plus the subagent_job tool that acts on the background jobs each call starts (status, list, cancel, steer, followUp, retry, continue). Each call returns a job id immediately and the result arrives later as a message. Interventions are once per job on the model's own initiative; the tool refuses a second one, and the model then asks the user. Use when delegating work to a subagent, running several concurrently, overriding model/tools/skills/thinking/maxTurns/timeoutMs for one run, recovering a failed or interrupted run, or redirecting, stopping, or checking on a running job. [DO NOT] use for defining new agents or configuring persistent overrides."
+description: "How to invoke the subagent tool that runs pre-defined agents: single mode ({agent, task}) and the six per-call overrides (model, tools, skills, thinking, maxTurns, timeoutMs), plus the subagent_job tool that acts on the background jobs each call starts (status, list, cancel, steer, followUp, retry, continue). Each call returns a job id immediately and the result arrives later as a message. Interventions are on the model's own initiative, with no per-job limit; when a second attempt fails the same way, the model stops and reports. Use when delegating work to a subagent, running several concurrently, overriding model/tools/skills/thinking/maxTurns/timeoutMs for one run, recovering a failed or interrupted run, or redirecting, stopping, or checking on a running job. [DO NOT] use for defining new agents or configuring persistent overrides."
 ---
 
 # Invoking subagents
@@ -61,7 +61,7 @@ is by design.
 
 What each one does:
 
-- `status` and `list` are read-only, always allowed, and spend nothing. Bare `status` picks the
+- `status` and `list` are read-only, always allowed, and change nothing. Bare `status` picks the
   single active job, or the newest settled one.
 - `cancel` stops a running job. Files already written and commands already fired stay as they
   are.
@@ -77,14 +77,14 @@ Without an `id`, `cancel`, `steer` and `followUp` target the single active job a
 ids to pick from when several are active. `retry` and `continue` resolve their target from
 settled runs on disk. [ALWAYS] prefer the explicit id from the launch acknowledgment.
 
-### One intervention per job
+### Interventions on your own initiative
 
 `cancel`, `steer`, `followUp`, `retry` and `continue` are interventions. [ALWAYS] act on your own
-initiative the first time: a run that failed with a network error, hit `maxTurns`, or is heading
-the wrong way gets one recovery without waiting to be asked. The tool then refuses the next
-intervention on the same job with a message that says so, and at that point [ALWAYS] tell the
-user what is left and let them decide. A refused attempt costs nothing, and a guard failure
-(unknown id, settled job, no live session yet) does not spend the intervention either.
+initiative: a run that failed with a network error, hit `maxTurns`, or is heading the wrong way
+gets a recovery without waiting to be asked, and there is no per-job limit on how many
+interventions you make. A guard failure (unknown id, settled job, no live session yet) means
+nothing happened. When the job needs something only the user can judge, [ALWAYS] tell them what
+is left and let them decide.
 
 The case that matters most: a job comes back `failed` with `ECONNRESET`, or with `reached
 maxTurns limit of 5` while half its files are already written. Do not start a new `subagent`
@@ -92,9 +92,9 @@ call and do not hand the user a shell command. Make the tool call yourself
 (`{"action": "continue", "id": "S1001"}`), then say what was relaunched and why. The relaunched
 run keeps the id in its own acknowledgment, which is the id the next intervention would use.
 
-`retry` and `continue` mint a new job id, so a relaunched run starts with its own intervention.
-That is not licence to loop: when the second attempt fails the same way, stop and report instead
-of relaunching again.
+`retry` and `continue` mint a new job id, so the relaunched run is a fresh target. That is not
+licence to loop: when the second attempt fails the same way, stop and report instead of
+relaunching again.
 
 ### Retry or continue
 
@@ -133,7 +133,8 @@ default.
 - Missing or empty `agent`/`task`: validation error naming the field.
 - `model` without `provider/`, or `tools`/`skills` that are not string arrays.
 - Unknown `action`, or `steer`/`followUp` without a non-empty `message`: tool error.
-- Intervention already spent: the refusal text names the command the user can run by hand.
+- A guard stops an intervention before it reaches the job (unknown id, settled job, no live
+  session yet): the warning names the state, and nothing happened.
 
 ## Out of scope
 

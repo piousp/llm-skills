@@ -549,20 +549,6 @@ export function describeInjectResult(kind: InjectKind, result: InjectResult): { 
   }
 }
 
-/**
- * The tool's one-intervention-per-job refusal: names the spent target, states
- * the rule, and routes the model to ask the user (who runs /subagents unbudgeted).
- */
-export function budgetExhaustedText(
-  action: "cancel" | "steer" | "followUp" | "retry" | "continue",
-  jobId: string | undefined,
-  runId: string,
-): string {
-  const id = jobId ?? runId;
-  const target = jobId ? `Job ${jobId} (run ${runId})` : `Run ${runId}`;
-  return `${target} was already acted on once by a tool in this session — the one-intervention-per-job limit is spent. Tell the user what you intended, and ask them to run \`/subagents ${action} ${id}\` themselves if it should happen again.`;
-}
-
 // --- /subagents session ---
 
 // The per-agent rows render exactly like the totals' cost rows; the optional
