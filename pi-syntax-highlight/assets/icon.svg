@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750">
+  <rect width="1200" height="750" fill="#0E1726"/>
+  <circle cx="600" cy="375" r="420" fill="#12202F"/>
+  <!-- terminal window -->
+  <rect x="286" y="146" width="628" height="458" rx="28" fill="#0B1220" stroke="#2F7C93" stroke-width="14"/>
+  <line x1="286" y1="222" x2="914" y2="222" stroke="#2F7C93" stroke-width="12"/>
+  <g fill="#19C7D4">
+    <circle cx="340" cy="184" r="14"/>
+    <circle cx="388" cy="184" r="14" fill="#2F7C93"/>
+    <circle cx="436" cy="184" r="14" fill="#2F7C93"/>
+  </g>
+  <!-- one highlighted line -->
+  <rect x="308" y="356" width="584" height="52" rx="10" fill="#19C7D4" opacity="0.16"/>
+  <rect x="308" y="356" width="6" height="52" rx="3" fill="#19C7D4"/>
+  <!-- code, one bar per token -->
+  <g rx="8">
+    <rect x="340" y="264" width="104" height="26" rx="13" fill="#C792EA"/>
+    <rect x="458" y="264" width="196" height="26" rx="13" fill="#82AAFF"/>
+    <rect x="668" y="264" width="164" height="26" rx="13" fill="#A5E075"/>
+    <rect x="392" y="312" width="86" height="26" rx="13" fill="#F78C6C"/>
+    <rect x="492" y="312" width="238" height="26" rx="13" fill="#D6DEEB"/>
+    <rect x="340" y="370" width="72" height="26" rx="13" fill="#82AAFF"/>
+    <rect x="426" y="370" width="150" height="26" rx="13" fill="#A5E075"/>
+    <rect x="590" y="370" width="112" height="26" rx="13" fill="#C792EA"/>
+    <rect x="392" y="426" width="196" height="26" rx="13" fill="#D6DEEB"/>
+    <rect x="602" y="426" width="84" height="26" rx="13" fill="#F78C6C"/>
+    <rect x="340" y="484" width="58" height="26" rx="13" fill="#19C7D4"/>
+    <rect x="412" y="484" width="148" height="26" rx="13" fill="#D6DEEB"/>
+    <rect x="574" y="484" width="96" height="26" rx="13" fill="#A5E075"/>
+    <rect x="684" y="484" width="120" height="26" rx="13" fill="#2F7C93"/>
+    <rect x="340" y="542" width="96" height="26" rx="13" fill="#2F7C93"/>
+    <rect x="450" y="542" width="64" height="26" rx="13" fill="#C792EA"/>
+  </g>
+  <!-- caret at the end of the last line -->
+  <rect x="530" y="532" width="16" height="46" fill="#19C7D4"/>
+</svg>

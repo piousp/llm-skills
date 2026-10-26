@@ -3,6 +3,32 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [0.1.1] - 2026-10-26
+
+### Added
+
+- `assets/icon.svg` (source) and `assets/icon.png` (1200x750, the same canvas
+  `pi-simple-agents` uses) as the gallery preview. The detail thumbnail crops the
+  height to 16/9, so the terminal window sits inside the central area and no edge
+  of it is cut.
+- `DEVELOPER.md`: module map, theme handling and cache invalidation, the rules
+  the markdown transformer follows, what the hook cannot reach, and the tests.
+
+### Changed
+
+- Package metadata. `license: "MIT"` added: without the field npm published the
+  package as Proprietary while the README claimed MIT. `description` rewritten
+  for npm search, `keywords` grown from `pi-package` alone to also cover
+  `pi-extension`, `syntax-highlighting`, `markdown`, `code-fences`,
+  `language-detection`, `tui`, `diff` and `tool-output`, and `pi.image` points at
+  the raw icon.
+- README rewritten for the pi.dev audience: install first, one or two sentences
+  per renderer, the limits in user terms, and links to `DEVELOPER.md` and
+  `CHANGELOG.md`. The tagline now opens the file with the badges under it,
+  because the gallery builds its description from the first README paragraph,
+  and the `pi -e` example no longer carries an absolute path from the author's
+  machine.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added
