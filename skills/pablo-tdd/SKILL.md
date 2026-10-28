@@ -1,15 +1,7 @@
 ---
 name: pablo-tdd
-description: >
-  Test-driven development: the red → green loop that produces tests worth
-  keeping. Use when writing or planning unit tests and test plans
-  for code changes: what a good test is, where tests go (seams), test
-  anti-patterns, mocking at system boundaries, and how Pablo's principles
-  (KISS, DRY, YAGNI, FP, GoF, UNX) apply to test writing. Trigger when: the
-  task involves tests or a test plan for a code change. [ALWAYS] plan unit
-  tests for every code change, unless the bare-snippet exception applies
-  ("Tests are part of the deliverable" in pablo-code-philosophy). [DO NOT]
-  trigger to review a PR's tests (use pablo-test-review), for non-code prose, documentation, general questions, or web research.
+description: >-
+  Test-driven development: the red-green loop, where tests go, test anti-patterns, mocking at boundaries. Use when writing or planning tests for a code change. [DO NOT] use for reviewing tests (use pablo-test-review).
 ---
 
 <!-- Attribution: adapted from mattpocock/skills -->

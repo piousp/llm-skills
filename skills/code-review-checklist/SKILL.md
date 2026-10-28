@@ -1,15 +1,7 @@
 ---
 name: code-review-checklist
-description: >
-  Code-review lens: validates the current changes against Pablo's
-  coding-philosophy checklist (Red Flags through Naming clarity,
-  severity-tiered). Never modifies code. Apply it directly, or
-  hand it to a read-only analysis agent (e.g. `analyst`) as its lens. Use
-  before creating a PR, when asking 'checklist', 'review my changes', 'am I
-  ready to merge'. [DO NOT] trigger to modify code directly (this lens never
-  writes), or when the ask is about correctness/regression bugs rather than
-  quality/style; use `qa-adversary` for that, or when the ask is about test
-  quality or missing tests (use `pablo-test-review`).
+description: >-
+  Read-only quality review of the current changes against Pablo's checklist. Use for "checklist", "review my changes" or "ready to merge". [DO NOT] use for bugs (use qa-adversary) or test quality (use pablo-test-review).
 ---
 
 Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist. You do NOT modify code.

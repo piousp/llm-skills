@@ -1,15 +1,7 @@
 ---
 name: refactor-identification
-description: >
-  Evidence-based detection of structural refactor candidates within the current branch's diff
-  (Java, Scala, JavaScript, TypeScript). Four categories: (A1) missing or misplaced
-  abstractions, (A2) weak encapsulation, (A3) poor data types, (A4) flag/enum-modeled
-  variants. Findings need file:line evidence and pass a When-NOT-to-report (YAGNI/KISS) gate.
-  Identifies direction only, defers how to `pablo-code-philosophy`'s `references/gof/` and
-  `references/fp/` mechanics. TRIGGER: deciding if a refactor belongs in this branch,
-  "refactor candidates" requests, or as the deep-dive behind a broader code-review pass.
-  SKIP: renames, trivial extraction, executing fixes, whole-repo scans, merge gating, and
-  judging whether to apply or how risky a specific reviewer suggestion is.
+description: >-
+  Finds refactor candidates in the current branch diff (Java, Scala, JS, TS): missing abstractions, weak encapsulation, poor data types, flags or enums that model variants. Every finding needs file:line evidence. Use for "refactor candidates". [DO NOT] use for renames, applying fixes, or whole-repo scans.
 ---
 
 # Refactor Identification: Branch-Scoped Structural Candidates

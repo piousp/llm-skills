@@ -1,19 +1,7 @@
 ---
 name: pablo-code-planning
-description: >
-  Strict code planning: analyze the code to be touched, name reuse
-  opportunities and abstraction candidates, decide scope through the
-  decision pipeline, and specify the public API and the test plan.
-  Trigger when: the task is to plan code before implementation -
-  analyzing current code, reuse and abstraction opportunities, public
-  API and data shapes, and the test plan at seams; user phrasing like
-  "plan this", "design the API", or "before we code" also triggers.
-  [DO NOT] use for implementing: the plan never writes or edits code;
-  writing tests lives in `pablo-tdd`, refactor methodology in
-  `refactor-identification`, principles in `pablo-code-philosophy`.
-  [DO NOT] trigger when the ask is vague or under-specified and no
-  confirmed goal.md exists for this work; the goal-interview lives in
-  `pablo-goal-discovery`.
+description: >-
+  Plans code before it is written: what to reuse, which abstractions, scope, public API and test plan. Use for "plan this", "design the API" or "before we code". [NEVER] edit code. Needs a confirmed goal.md first, otherwise use pablo-goal-discovery.
 ---
 
 # Code Planning

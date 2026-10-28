@@ -1,5 +1,6 @@
 ---
 name: evaluating-agent-skills
+disable-model-invocation: true
 description: >
   Use when building an eval suite for an existing agent Skill: defining success
   criteria, building a prompt set, and running layered checks (offline code

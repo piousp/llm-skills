@@ -1,18 +1,7 @@
 ---
 name: pablo-code-philosophy
-description: >
-  Pablo's opinionated code philosophy: the YAGNI → KISS → DRY → SOLID decision
-  pipeline, conflict resolutions with precedence KISS > DRY > SOLID, code style
-  rules (data structures first, thin entry points, composition over inheritance,
-  FP principles, GoF patterns with judgment, Unix philosophy), and the surgical
-  change contract. Trigger when: writing, editing, or refactoring code, or
-  deciding scope, simplicity, duplication, or architecture for a code change.
-  [DO NOT] trigger for non-code prose, documentation, general questions, web
-  research, configuration files, planning code before implementation, or test
-  planning; vague requests without a confirmed goal go to `pablo-goal-discovery`;
-  the mechanical how-to lives in `pablo-code-planning`, `pablo-tdd`, and
-  `refactor-identification`, with FP/GoF mechanics in this skill's `references/fp/` and
-  `references/gof/`.
+description: >-
+  Pablo's rules for writing code: YAGNI, then KISS, then DRY, then SOLID, plus FP, GoF and small surgical changes. Use when writing, editing or refactoring code. [DO NOT] use for prose, docs, planning, test planning, or vague requests (use pablo-goal-discovery).
 ---
 
 # Code Philosophy

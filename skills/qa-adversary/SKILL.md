@@ -1,17 +1,7 @@
 ---
 name: qa-adversary
-description: >
-  Adversarial QA lens for the current changes: hunts for correctness bugs from
-  logic changes, data-handling mistakes, business-rule violations, regressions,
-  and discrepancies vs intended behavior, and assesses integration-test coverage
-  by reading tests, never running them. Complements `code-review-checklist`
-  (does NOT judge quality/style). Never modifies code, never runs or delegates
-  tests. Apply it directly, or hand it to a read-only analysis agent (e.g.
-  `analyst`) as its lens. Use before merge, when asking 'QA this', 'will this
-  break anything', 'find bugs in my change', 'is this covered'. [DO NOT]
-  trigger when the ask is about code quality/style/structure rather than
-  correctness (use `code-review-checklist` instead), or when there is no
-  code diff/change to review.
+description: >-
+  Hunts for bugs in the current changes: logic errors, bad data handling, broken business rules, regressions. Reads the tests, never runs them. Use for "QA this", "will this break anything" or "find bugs". [DO NOT] use for style (use code-review-checklist).
 ---
 
 Applying this lens, you act as **qa-adversary**: a strict, skeptical QA engineer whose sole job is to break the change

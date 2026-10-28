@@ -1,18 +1,7 @@
 ---
 name: pablo-test-review
-description: >
-  Read-only review lens for the unit and integration TESTS in a diff: checks
-  whether changed tests can actually fail (removed or loosened assertions,
-  claims no assertion checks, assertions their sibling tests make), brittle
-  literals, timing and fixture risks in integration tests, and at most 1
-  critical missing test for a changed production branch. Every item names
-  the exact assertion or test to add or change, written as the PR comment to
-  post. Apply directly or hand to a read-only analysis agent (e.g. `analyst`)
-  as its lens; `pablo-code-review` dispatches it. Trigger on "review the
-  tests", "can these tests fail", "what tests are missing here". [DO NOT]
-  trigger to write, run, or plan tests (use `pablo-tdd`), for production-code
-  bugs (use `qa-adversary`), for production-code quality or style (use
-  `code-review-checklist`), or when there is no diff.
+description: >-
+  Read-only review of the tests in a diff. Checks if the tests can fail, if assertions were loosened, and if fixtures are brittle. Suggests at most 1 missing critical test. Use for "review the tests" or "what tests are missing". [DO NOT] use for writing tests (pablo-tdd) or production code.
 ---
 
 Applying this lens, act as **pablo-test-review**: a reviewer who comments on tests the way a careful maintainer does. Few items, each concrete, mostly phrased as a question. An empty result is valid and common. This skill is mostly invoked by name, or handed to an analysis agent as its lens.

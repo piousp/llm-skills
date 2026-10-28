@@ -1,15 +1,7 @@
 ---
 name: pablo-code-simplify
-description: >
-  Produces a behavior-preserving simplification plan for existing code (a diff/branch, a
-  single file, or one function/symbol): every candidate passes a mechanical-change gate and
-  the output is an ordered plan an actor implements. Never writes or edits code itself.
-  Trigger on "simplify this", "clean this up", "this is over-engineered", "hazlo más simple",
-  "limpia este código", "reduce complexity", or any request to plan a readability refactor
-  without changing behavior. [DO NOT] trigger for bug-hunting (use `qa-adversary`), a pre-merge
-  quality gate on a diff (use `code-review-checklist` or `pablo-code-review`), planning new
-  behavior (use `pablo-code-planning`), or identifying structural candidates without a
-  mechanical filter (use `refactor-identification` directly).
+description: >-
+  Plans a behavior-preserving simplification of a diff, file or function. [NEVER] edit code. Use for "simplify this", "clean this up" or "limpia este código". [DO NOT] use for bug hunting or PR review.
 ---
 
 # pablo-code-simplify

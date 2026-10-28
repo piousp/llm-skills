@@ -1,20 +1,7 @@
 ---
 name: pablo-code-review
-description: >
-  Unifies four read-only review lenses on a single diff: `qa-adversary`
-  (correctness/regression bugs), `code-review-checklist` (Pablo's quality
-  checklist), `refactor-identification` (structural refactor candidates,
-  recommendations scoped to code the branch added or modified), and
-  `pablo-test-review` (test strength and missing tests), into one
-  narrative report the reader can follow end to end. Analyzes ONLY the
-  changed lines of the current PR/branch for findings and recommendations;
-  pre-existing, untouched code may only surface as 1-hop context, never as
-  a standalone finding. Trigger on "review this PR", "review my PR", "will
-  this break anything and is the code good", or any request that combines
-  correctness + quality + structural review in one pass. [DO NOT] trigger
-  for a single-lens request (use `qa-adversary` or `code-review-checklist`
-  directly) or to review unchanged/whole-repo code. Also "harvest PR <url>":
-  learns from the user's posted PR comments.
+description: >-
+  Reviews a diff in one pass and writes one report: bugs (qa-adversary), quality (code-review-checklist), refactors (refactor-identification) and tests (pablo-test-review). Looks at changed lines only. Use for "review this PR" or "review my PR". Also "harvest PR <url>". [DO NOT] use for a single-lens request or a whole-repo review.
 ---
 
 # pablo-code-review
