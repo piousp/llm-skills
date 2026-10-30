@@ -115,6 +115,19 @@ function fallbackToInMemory<S>(cwd: string, factory: SessionManagerFactory<S>, w
   return { manager: factory.inMemory(cwd), warnings: [warning] };
 }
 
+function buildOrFallback<S>(
+  cwd: string,
+  factory: SessionManagerFactory<S>,
+  build: () => S,
+  failureWarning: string,
+): SubagentSessionResult<S> {
+  try {
+    return { manager: build(), warnings: [] };
+  } catch (error) {
+    return fallbackToInMemory(cwd, factory, `${failureWarning}: ${toErrorMessage(error)}`);
+  }
+}
+
 export function createSubagentSessionManager<S>(
   agent: Pick<AgentConfig, "name" | "defaultContext">,
   callerSessionFile: string | undefined,
@@ -130,50 +143,40 @@ export function createSubagentSessionManager<S>(
   // persists.
   seedFile?: string,
 ): SubagentSessionResult<S> {
+  const notPersistedWarning = `${agent.name}: caller session is not persisted — falling back to fresh`;
+
   if (seedFile) {
     if (!childDir) {
-      return fallbackToInMemory(cwd, factory, `${agent.name}: caller session is not persisted — falling back to fresh`);
+      return fallbackToInMemory(cwd, factory, notPersistedWarning);
     }
-    try {
-      const manager = factory.forkFrom(seedFile, cwd, childDir);
-      return { manager, warnings: [] };
-    } catch (error) {
-      return fallbackToInMemory(
-        cwd,
-        factory,
-        `${agent.name}: failed to seed the new session from the interrupted run's session — falling back to fresh: ${toErrorMessage(error)}`,
-      );
-    }
+    return buildOrFallback(
+      cwd,
+      factory,
+      () => factory.forkFrom(seedFile, cwd, childDir),
+      `${agent.name}: failed to seed the new session from the interrupted run's session — falling back to fresh`,
+    );
   }
 
   if (agent.defaultContext === "forked") {
     if (!callerSessionFile) {
-      return fallbackToInMemory(cwd, factory, `${agent.name}: caller session is not persisted — falling back to fresh`);
+      return fallbackToInMemory(cwd, factory, notPersistedWarning);
     }
-    try {
-      const manager = factory.forkFrom(callerSessionFile, cwd, childDir ?? "");
-      return { manager, warnings: [] };
-    } catch (error) {
-      return fallbackToInMemory(
-        cwd,
-        factory,
-        `${agent.name}: failed to fork caller session — falling back to fresh: ${toErrorMessage(error)}`,
-      );
-    }
+    return buildOrFallback(
+      cwd,
+      factory,
+      () => factory.forkFrom(callerSessionFile, cwd, childDir ?? ""),
+      `${agent.name}: failed to fork caller session — falling back to fresh`,
+    );
   }
 
   if (!childDir) {
     return { manager: factory.inMemory(cwd), warnings: [] };
   }
 
-  try {
-    const manager = factory.atPath(join(childDir, "session.jsonl"), cwd);
-    return { manager, warnings: [] };
-  } catch (error) {
-    return fallbackToInMemory(
-      cwd,
-      factory,
-      `${agent.name}: failed to persist subagent session — falling back to in-memory: ${toErrorMessage(error)}`,
-    );
-  }
+  return buildOrFallback(
+    cwd,
+    factory,
+    () => factory.atPath(join(childDir, "session.jsonl"), cwd),
+    `${agent.name}: failed to persist subagent session — falling back to in-memory`,
+  );
 }
