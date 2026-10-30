@@ -217,44 +217,19 @@ test("computeCacheWaste: zero-cache turns before any cache activity are not miss
   assert.deepEqual(computeCacheWaste(entries), { missedTokens: 0, missedCost: 0, missCount: 0 });
 });
 
-test("computeCacheWaste: cacheRead === 0 after cache activity prices the read via the injected fallback", () => {
+test("computeCacheWaste: cacheRead === 0 after cache activity prices the read side at 0", () => {
   const entries = parseSessionEntries(jsonl(
     HEADER,
     assistantMessage({ provider: "p", model: "m", timestamp: 1_000, usage: { input: 0, cacheRead: 0, cacheWrite: 2000, cost: { input: 0.002, cacheWrite: 0.006 } } }),
     assistantMessage({ provider: "p", model: "m", timestamp: 2_000, usage: { input: 2000, cacheRead: 0, cacheWrite: 0, cost: { input: 0.004 } } }),
   ));
 
-  const calls: Array<{ provider: string | undefined; model: string | undefined }> = [];
-  const waste = computeCacheWaste(entries, (provider, model) => {
-    calls.push({ provider, model });
-    return 0.000001;
-  });
+  // No cache-read price on the message: the read side is priced at 0, so the
+  // full paid rate is the miss cost — the upper bound of the extra cost.
+  const waste = computeCacheWaste(entries);
   assert.equal(waste.missCount, 1);
   assert.equal(waste.missedTokens, 2000); // min(2000, 2000) - 0
-  // paid: 0.004 / 2000 = 0.000002; read: fallback 0.000001
-  approx(waste.missedCost, 0.002, "missedCost");
-  assert.deepEqual(calls, [{ provider: "p", model: "m" }]);
-
-  // A resolver returning undefined behaves like no catalog: read price 0,
-  // so the full paid rate is the underestimate's miss cost.
-  const wasteNoCatalog = computeCacheWaste(entries, () => undefined);
-  approx(wasteNoCatalog.missedCost, 0.004, "missedCost without catalog");
-
-  // The fallback is never consulted when the message itself reports a
-  // cache-read price.
-  const callsWhenReadReported: unknown[] = [];
-  computeCacheWaste(
-    parseSessionEntries(jsonl(
-      HEADER,
-      assistantMessage({ timestamp: 1_000, usage: { input: 0, cacheRead: 0, cacheWrite: 2000, cost: { input: 0.002, cacheWrite: 0.006 } } }),
-      assistantMessage({ timestamp: 2_000, usage: { input: 2000, cacheRead: 500, cost: { input: 0.004, cacheRead: 0.0004 } } }),
-    )),
-    () => {
-      callsWhenReadReported.push("called");
-      return 999;
-    },
-  );
-  assert.deepEqual(callsWhenReadReported, []);
+  approx(waste.missedCost, 0.004, "missedCost");
 });
 
 test("computeCacheWaste: an empty session wastes nothing", () => {
@@ -601,7 +576,7 @@ const mainFixtureEntries = (): ReturnType<typeof parseSessionEntries> =>
   ));
 
 test("buildSubagentSessionReport: mainEntries yield exact main/combined/combinedBreakdown fields", () => {
-  const report = buildSubagentSessionReport("/r/session.jsonl", memFs(filesOfRoundFixture()), undefined, undefined, mainFixtureEntries());
+  const report = buildSubagentSessionReport("/r/session.jsonl", memFs(filesOfRoundFixture()), undefined, mainFixtureEntries());
 
   // MAIN mirrors getSessionStats on the parent entries alone.
   assert.deepEqual(report.main!.totals, { input: 110, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.75 });
@@ -668,7 +643,7 @@ function filesOfRoundFixture(): Record<string, string> {
 // regardless of what the session has launched.
 test("buildSubagentSessionReport: mainEntries with no child runs still expose main and combined", () => {
   const files = { "/empty/session.jsonl": jsonl(HEADER) };
-  const report = buildSubagentSessionReport("/empty/session.jsonl", memFs(files), undefined, undefined, mainFixtureEntries());
+  const report = buildSubagentSessionReport("/empty/session.jsonl", memFs(files), undefined, mainFixtureEntries());
   assert.deepEqual(report.runs, []);
   assert.deepEqual(report.main!.totals, { input: 110, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.75 });
   assert.deepEqual(report.combined, report.main!.totals);

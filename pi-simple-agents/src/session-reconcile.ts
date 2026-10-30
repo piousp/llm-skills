@@ -8,7 +8,9 @@
 // getSessionStats, dist/core/usage-totals.js getUsageCostBreakdown,
 // dist/core/cache-stats.js computeCacheWaste), so this report's totals stay
 // comparable with pi's output; the same structural-shape tolerance applies
-// (unknown/extra fields pass through untouched).
+// (unknown/extra fields pass through untouched). One deliberate divergence:
+// cache-waste pricing does NOT consult the model catalog, so a turn with no
+// cache-read price on the message is priced at 0 (see computeCacheWaste).
 //
 // No filesystem access here: the caller injects a ReconcileFs seam, which
 // keeps the whole module pure and unit-testable in memory.
@@ -254,12 +256,6 @@ export interface ReconcileFs {
   listDir(path: string): string[] | undefined;
 }
 
-// Optional injected read-price resolver for cache-waste pricing (D8): when a
-// message reports cacheRead === 0, pi falls back to the model catalog's read
-// price. Without a catalog, this resolver (defaulting to 0) keeps the
-// missedCost an underestimate — it can never overestimate the re-billed cost.
-export type ReadPerTokenResolver = (provider: string | undefined, model: string | undefined) => number | undefined;
-
 // --- parsing / per-message algorithms (ports of pi) ---
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
@@ -419,7 +415,6 @@ interface MissCandidate {
 function detectMiss(
   prev: PreviousRequest | undefined,
   candidate: MissCandidate,
-  readPerTokenFallback: ReadPerTokenResolver | undefined,
 ): { missedTokens: number; missedCost: number } | undefined {
   // A zero-cache turn only counts when cache activity was reported before:
   // on cache-read-only providers that is a total miss, while on providers
@@ -442,7 +437,7 @@ function detectMiss(
   const readPerToken =
     candidate.cacheRead > 0
       ? num(candidate.cost?.cacheRead) / candidate.cacheRead
-      : (readPerTokenFallback?.(candidate.provider, candidate.model) ?? 0);
+      : 0;
   return {
     missedTokens,
     missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken),
@@ -464,13 +459,13 @@ function asPreviousRequest(candidate: MissCandidate, reportedCache: boolean): Pr
  * (detectMiss/scan). Misses below the noise floor and turns without prior
  * cache activity count nothing; compaction and branch_summary entries reset
  * the previous-request state (the next turn's prompt is new content, not
- * re-billed). Without a cache-read price on the message itself, the
- * injected fallback (default 0) prices the read side — an underestimate,
- * never an overestimate.
+ * re-billed). Without a cache-read price on the message itself, the read
+ * side is priced at 0 — pi would consult the model catalog here instead
+ * (dist/core/cache-stats.js), so missedCost is the upper bound of the extra
+ * cost: the assumed read price is the underestimate, never the overestimate.
  */
 export function computeCacheWaste(
   entries: readonly SessionEntry[],
-  readPerTokenFallback?: ReadPerTokenResolver,
 ): CacheWaste {
   let prev: PreviousRequest | undefined;
   const totals: CacheWaste = { missedTokens: 0, missedCost: 0, missCount: 0 };
@@ -496,7 +491,7 @@ export function computeCacheWaste(
       model: message.model,
       timestamp: num(message.timestamp),
     };
-    const miss = detectMiss(prev, candidate, readPerTokenFallback);
+    const miss = detectMiss(prev, candidate);
     if (miss) {
       totals.missedTokens += miss.missedTokens;
       totals.missedCost += miss.missedCost;
@@ -566,7 +561,6 @@ export interface SessionUsageStats {
  */
 export function buildSessionUsageStats(
   entries: readonly SessionEntry[],
-  readPerTokenFallback?: ReadPerTokenResolver,
 ): SessionUsageStats {
   return {
     turns: assistantTurnCount(entries),
@@ -574,7 +568,7 @@ export function buildSessionUsageStats(
     toolResults: countMessages(entries, "toolResult"),
     totals: sumUsageTotals(entries),
     breakdown: usageCostBreakdown(entries),
-    cacheWaste: computeCacheWaste(entries, readPerTokenFallback),
+    cacheWaste: computeCacheWaste(entries),
   };
 }
 
@@ -712,7 +706,6 @@ export function buildSubagentSessionReport(
   rootSessionFile: string,
   fs: ReconcileFs,
   activeRunIds?: ReadonlySet<string>,
-  readPerTokenFallback?: ReadPerTokenResolver,
   /** The parent session's own entries (in-memory, host-validated); a report without them has no main/combined fields. */
   mainEntries?: readonly SessionEntry[],
 ): SubagentSessionReport {
@@ -759,7 +752,7 @@ export function buildSubagentSessionReport(
           visited.add(resolvedChild);
           matchedSegments.add(childName);
           runs.push(
-            makeRun(childFile, childName, depth, resultBySegment.get(childName), activeSegments, readPerTokenFallback, fs),
+            makeRun(childFile, childName, depth, resultBySegment.get(childName), activeSegments, fs),
           );
           reconcile(childFile, depth + 1);
         }
@@ -845,11 +838,10 @@ function makeRun(
   depth: number,
   matched: SubagentResultEntry | undefined,
   activeSegments: ReadonlySet<string>,
-  readPerTokenFallback: ReadPerTokenResolver | undefined,
   fs: ReconcileFs,
 ): ReconciledRun {
   const childEntries = parseOrEmpty(fs.readTextFile(childFile));
-  const stats = childEntries.length > 0 ? buildSessionUsageStats(childEntries, readPerTokenFallback) : undefined;
+  const stats = childEntries.length > 0 ? buildSessionUsageStats(childEntries) : undefined;
 
   if (matched) {
     const details = matched.details ?? {};

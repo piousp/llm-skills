@@ -771,7 +771,6 @@ export default async function (
           sessionFile,
           nodeReconcileFs(),
           activeRunIds,
-          undefined,
           toReconcileEntries(ctx.sessionManager.getEntries()),
         );
         ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
