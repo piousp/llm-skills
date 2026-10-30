@@ -128,8 +128,10 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
 - `timeoutMs` — optional wall-clock bound (ms) on a run's prompt execution, now parsed from
   frontmatter too (previously settings-only). Resolvable from frontmatter, settings-level
   `agentOverrides`, or a per-invocation override, in that ascending precedence. Range/ceiling is
-  enforced solely at the `resolveTimeoutMs` use site in `src/run.ts` (see below), not during
-  frontmatter parsing or override merging — both of those layers just pass the raw value through.
+  enforced only at the two chokepoints below: `resolveTimeoutMs` (which clamps) and
+  `isValidTimeoutMs` (which only accepts values within the ceiling, and is what drops an
+  out-of-range recorded parameter on relaunch). It is not enforced during frontmatter parsing or
+  override merging — both of those layers just pass the raw value through.
 
 ## InvocationOverride and applyInvocationOverride
 
@@ -232,7 +234,7 @@ data and helpers used by `parseFrontmatter` and `discoverAgents`:
 - `CLAUDE_INERT_FIELDS` — Claude Code frontmatter fields with no functional effect in pi.
 - `mapClaudeTools(names): { tools, inert }` — maps a tool-name list through `CLAUDE_TOOL_MAP`,
   dedupes the result, and separately reports which input names were inert.
-- `normalizeClaudeModel(model): { model? }` — turns `"inherit"` into `undefined`; everything else
+- `normalizeClaudeModel(model): string | undefined` — turns `"inherit"` into `undefined`; everything else
   passes through verbatim. No model aliases exist (removed with the strict-model change, 1.2.0):
   form and resolvability are enforced strictly at `resolveModel` (`src/run.ts`), where a malformed
   or unresolvable model FAILS the run instead of falling back.
@@ -635,8 +637,22 @@ field by the time this runs). `undefined` → `DEFAULT_TIMEOUT_MS`. A finite num
 → **clamped** to `MAX_TIMEOUT_MS` with a `console.warn` (not dropped to the default — the caller's
 intent to run long is honored up to the ceiling). Anything else (non-number, `<= 0`, `NaN`,
 `Infinity`) → `console.warn` naming the invalid value, then `DEFAULT_TIMEOUT_MS`. `MAX_TIMEOUT_MS`
-is enforced only here, so every layer that can set `timeoutMs` (frontmatter, settings, invocation)
+is enforced here and by `isValidTimeoutMs` (the relaunch-time predicate documented below), which
+share `isPositiveFiniteNumber` so the shape rule has one definition; every layer that can set
+`timeoutMs` (frontmatter, settings, invocation)
 inherits the same 2-hour ceiling for free.
+
+## isValidTimeoutMs
+
+```typescript
+export function isValidTimeoutMs(value: unknown): value is number;
+```
+
+Whether a `timeoutMs` passes through untouched: finite, `> 0`, at most `MAX_TIMEOUT_MS`. It is
+what `outOfRangeRelaunchFields` (`src/job-view.ts`) uses to drop — and report — a recorded
+parameter that no longer fits the ceiling when a run is retried or continued. `resolveTimeoutMs`
+deliberately does not use it for the clamp decision: a value above the ceiling is still runnable
+(clamped, not dropped), so "too big" and "invalid" keep two distinct warnings.
 
 ## resolveMaxTurns
 
@@ -1220,12 +1236,10 @@ export function addUsageToTotals(totals: UsageTotals,
 export function danglingToolCalls(entries: readonly SessionEntry[]): DanglingToolCall[];
 // DanglingToolCall { toolCallId: string; toolName: string }
 export function usageCostBreakdown(entries: readonly SessionEntry[]): UsageBreakdownRow[];
-export function computeCacheWaste(entries: readonly SessionEntry[],
-  readPerTokenFallback?: (provider: string, model: string) => number | undefined): CacheWaste;
+export function computeCacheWaste(entries: readonly SessionEntry[]): CacheWaste;
 export function assistantTurnCount(entries: readonly SessionEntry[]): number;
 export function buildSubagentSessionReport(rootSessionFile: string, fs: ReconcileFs,
-  activeRunIds?: ReadonlySet<string>, readPerTokenFallback?: ReadPerTokenResolver,
-  mainEntries?: readonly SessionEntry[]): SubagentSessionReport;
+  activeRunIds?: ReadonlySet<string>, mainEntries?: readonly SessionEntry[]): SubagentSessionReport;
 
 export interface ReconcileFs {
   readTextFile(path: string): string | undefined; // undefined = missing/unreadable
@@ -1282,7 +1296,7 @@ The report shape is `SubagentSessionReport { runs, totals, breakdown, cacheWaste
 `ReconcileFs` built from `node:fs` with per-call try/catch (throwing never crashes the command;
 an unreadable child is just skipped).
 
-A fifth optional parameter, `mainEntries`, adds the Main/Combined fields (1.5.0): when supplied,
+A fourth optional parameter, `mainEntries`, adds the Main/Combined fields (1.5.0): when supplied,
 the report gains `main` (the parent session's own stats — the same `buildSessionUsageStats` port
 of pi's `getSessionStats` used for every child file, called on the parent's entries), `combined`
 (`main.totals + totals`, folded field by field through the shared `addUsageToTotals` export), and `combinedBreakdown` (main's rows merged with the
@@ -1299,7 +1313,7 @@ entries in memory via `sessionManager.getEntries()`; the persisted-session guard
 a session that never reached disk gets no report (and no MAIN) at all.
 
 `buildRelaunchCandidates` (1.5.0) is the disk-side provider for `/subagents retry|continue`:
-`SubagentRelaunchCandidate { runId, jobId?, agent, task?, status, sessionFile?, usage?, params? }`,
+`SubagentRelaunchCandidate { runId, jobId?, agent, task?, status, sessionFile?, params? }`,
 one entry per settled/orphaned run (`params` is the ack's recorded copy of the original call's
 invocation override, present only when the candidate's launch ack recorded one — the key is
 omitted, never undefined-valued, because candidates are pinned by full deepEqual). It reuses the SAME `buildSubagentSessionReport` walk (one
