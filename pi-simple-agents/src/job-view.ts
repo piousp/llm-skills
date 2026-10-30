@@ -551,6 +551,19 @@ export function describeInjectResult(kind: InjectKind, result: InjectResult): { 
 
 // --- /subagents session ---
 
+// The text helpers every section renderer shares. `bold` mirrors pi's
+// section headers (theme.bold exists on the real TUI theme; ProgressTheme
+// keeps it optional so plain-text fakes still work). `counter` pins the
+// locale so report text is byte-identical across machines (bare
+// toLocaleString() follows the host locale: some render a narrow space).
+function themeHelpers(theme: ProgressTheme) {
+  return {
+    bold: theme.bold ? (text: string) => theme.bold!(text) : (text: string) => text,
+    dim: (text: string) => theme.fg("dim", text),
+    counter: (n: number) => n.toLocaleString("en-US"),
+  };
+}
+
 // The per-agent rows render exactly like the totals' cost rows; the optional
 // bold emphasis mirrors pi's section headers (theme.bold on the real TUI
 // theme; ProgressTheme keeps it optional so plain-text fakes still work).
@@ -563,11 +576,7 @@ function renderUsageBlock(
   theme: ProgressTheme,
   header: string,
 ): string[] {
-  const bold = theme.bold ? (text: string) => theme.bold!(text) : (text: string) => text;
-  const dim = (text: string) => theme.fg("dim", text);
-  // Locale pinned so report text is byte-identical across machines (bare
-  // toLocaleString() follows the host locale: some render a narrow space).
-  const counter = (n: number) => n.toLocaleString("en-US");
+  const { bold, dim, counter } = themeHelpers(theme);
 
   const lines: string[] = [bold(header)];
   lines.push(dim("Tokens:"));
@@ -611,9 +620,7 @@ function renderUsageBlock(
 }
 
 function buildSubagentSessionSections(report: SubagentSessionReport, theme: ProgressTheme): string {
-  const bold = theme.bold ? (text: string) => theme.bold!(text) : (text: string) => text;
-  const dim = (text: string) => theme.fg("dim", text);
-  const counter = (n: number) => n.toLocaleString("en-US");
+  const { bold, dim, counter } = themeHelpers(theme);
 
   const lines: string[] = [];
   lines.push(bold("Subagent Session Report"));
