@@ -34,7 +34,21 @@ verdes antes del commit.
 | 12 | `7a44348` | aplicado |
 | 13 | — | **descartado**: el typecheck lo rechaza (ver abajo) |
 | 14 | `0075818` | aplicado |
+| 15 | `1fe07da` | aplicado (contrato `string | undefined`) |
+| 16 | `a863c8f` | aplicado (dos predicados: `isPositiveFiniteNumber` privado, `isValidTimeoutMs` exportado) |
+| 17 | `1c3ce57` | aplicado (`isPlainObject` en `overrides.ts`) |
+| 18 | `60ef207` | aplicado (seam eliminado; divergencia con el catálogo de pi declarada en el módulo) |
+| 19 | `77913af` | aplicado (`candidate.usage` + `displayUsageOf`) |
+| — | `219cdc1` | `DEVELOPER.md` al día tras los pasos 15-19 |
 | 20 | — | nuevo, pendiente: ver "Paso 20" |
+
+Revisión: cada paso `internal-signature` pasó por tres lentes (`qa-adversary`, `code-review-checklist`,
+`refactor-identification`; `pablo-test-review` no está instalado) y por un smoke independiente en
+herdr con `pi -ne -e ./extensions`.
+
+Fallos de typecheck atrapados por el protocolo: el paso 13 fusionaba la rama `failed` de
+`job-messages.ts` y los 938 tests pasaban, pero `tsc` rechazaba el objeto fusionado porque la unión
+discriminada exige `isError: true` literal.
 
 Smoke con `pi -ne -e ./extensions` en herdr, dos hitos: carga de la extensión con `/subagents`
 y `/subagents session` sin errores; y tras el paso 14, un run real de `scout` con el reporte
@@ -156,6 +170,22 @@ renderizando Main, Subagents, By Agent y Total con split cached/uncached y costo
     "string no vacío" dentro de `danglingToolCalls`, fuera del alcance del paso 2. Mismo predicado
     `isNonEmptyString` ya extraído. Tier: mechanical.
     - Verify: `test/unit/session-reconcile.test.ts` (`danglingToolCalls`).
+
+## Pendientes propuestos por las revisiones
+
+- **21** `isNonEmptyString` vive dos veces: `src/session-reconcile.ts:263` y `src/validate.ts:28`
+  (idénticos). Hogar natural: `src/overrides.ts`, junto a `isStringArray`/`isPlainObject`
+  (`DEVELOPER.md` lo declara "single home for the shared field guards"). Tier: internal-signature.
+- **22** `src/session-reconcile.ts` `detectMiss`: `paidPerToken` y `readPerToken` son la misma
+  operación "coste ÷ tokens con denominador protegido" (`refactor-identification` P1 en la revisión
+  del paso 18). Tier: mechanical.
+- **23** `PreviousRequest.modelKey` y `.timestamp` son estado de sólo escritura (nadie los lee), al
+  igual que `MissCandidate.provider`/`.model` tras el paso 18. Código muerto dentro del radio.
+  Tier: mechanical.
+- **24** `validate.ts:24` `isRecord` acepta arrays (`typeof [] === "object"` sin `!Array.isArray`),
+  a diferencia de `isPlainObject`: defecto preexistente que `qa-adversary` marcó como cambio de
+  comportamiento (`validateSubagentParams([])` devuelve el error de `agent` en vez del de forma).
+  No es simplificación: requiere decisión de producto.
 
 ## Not mechanical (follow-up)
 
