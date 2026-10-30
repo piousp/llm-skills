@@ -156,7 +156,7 @@ export const SETTINGS_OVERRIDABLE_FIELDS = [
   "defaultContext",
 ] as const;
 
-function isPlainObject(raw: unknown): raw is Record<string, unknown> {
+export function isPlainObject(raw: unknown): raw is Record<string, unknown> {
   return typeof raw === "object" && raw !== null && !Array.isArray(raw);
 }
 

@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseFrontmatter, type FrontmatterResult } from "./frontmatter.ts";
 import { claimUnwarned, reportInertUsage } from "./claude-compat.ts";
 import { WARN_PREFIX, toErrorMessage } from "./warn.ts";
-import { validateAgentOverridesEntry } from "./overrides.ts";
+import { isPlainObject, validateAgentOverridesEntry } from "./overrides.ts";
 
 export interface AgentConfig {
   name: string;
@@ -268,10 +268,6 @@ function mergeOverrides(base: AgentOverrides, top: AgentOverrides): AgentOverrid
 
 export interface SubagentSettings {
   agentOverrides: AgentOverrides;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function readSettingsFile(settingsPath: string): Promise<SubagentSettings> {
