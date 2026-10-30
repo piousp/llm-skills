@@ -3,8 +3,6 @@ import { applyInvocationOverride } from "./agents.ts";
 import { invocationOverrideOf } from "./validate.ts";
 import { firstLine, truncate } from "./text-utils.ts";
 
-export { firstLine, truncate } from "./text-utils.ts";
-
 const MAX_ITEMS_SHOWN = 5;
 
 function formatList(items: string[] | undefined): string {
