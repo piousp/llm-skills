@@ -806,6 +806,28 @@ function parseOrEmpty(text: string | undefined): SessionEntry[] {
   return text !== undefined ? parseSessionEntries(text) : [];
 }
 
+function completedRun(
+  details: SubagentResultDetails,
+  segment: string,
+  depth: number,
+  timestamp: ReconciledRun["timestamp"],
+  stats: ReconciledRun["stats"],
+  sessionFile: ReconciledRun["sessionFile"],
+): ReconciledRun {
+  return {
+    runId: isNonEmptyString(details.runId) ? details.runId : segment,
+    depth,
+    agent: details.task?.agent ?? "unknown",
+    status: normalizeStatus(details.status),
+    task: details.task?.task,
+    timestamp,
+    stats,
+    messageUsage: details.usage,
+    sessionFile,
+    orphaned: false,
+  };
+}
+
 // A completion message whose child directory does not exist on disk at its
 // own level: no per-message stats are possible, so the run rides on the
 // message's own aggregated usage (which lands in the "unattributed" cost
@@ -814,18 +836,7 @@ function parseOrEmpty(text: string | undefined): SessionEntry[] {
 // message did reach the parent's session file.
 function dirlessRun(entry: SubagentResultEntry, segment: string, depth: number): ReconciledRun {
   const details = entry.details ?? {};
-  return {
-    runId: isNonEmptyString(details.runId) ? details.runId : segment,
-    depth,
-    agent: details.task?.agent ?? "unknown",
-    status: normalizeStatus(details.status),
-    task: details.task?.task,
-    timestamp: entry.timestamp,
-    stats: undefined,
-    messageUsage: details.usage,
-    sessionFile: undefined,
-    orphaned: false,
-  };
+  return completedRun(details, segment, depth, entry.timestamp, undefined, undefined);
 }
 
 function makeRun(
@@ -842,18 +853,7 @@ function makeRun(
 
   if (matched) {
     const details = matched.details ?? {};
-    return {
-      runId: isNonEmptyString(details.runId) ? details.runId : segment,
-      depth,
-      agent: details.task?.agent ?? "unknown",
-      status: normalizeStatus(details.status),
-      task: details.task?.task,
-      timestamp: matched.timestamp,
-      stats,
-      messageUsage: details.usage,
-      sessionFile: stats ? childFile : undefined,
-      orphaned: false,
-    };
+    return completedRun(details, segment, depth, matched.timestamp, stats, stats ? childFile : undefined);
   }
   // Orphan: the child dir is on disk but its completion message never made
   // it into the parent (the process died mid-run).
