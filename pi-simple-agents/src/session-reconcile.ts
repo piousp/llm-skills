@@ -191,8 +191,8 @@ export function subagentAckEntryOf(entry: SessionEntry): SubagentAckDetails | un
   const task = record.task;
   const params = ackParamsOf(record);
   return {
-    jobId: typeof record.jobId === "string" && record.jobId ? record.jobId : undefined,
-    runId: typeof record.runId === "string" && record.runId ? record.runId : undefined,
+    jobId: isNonEmptyString(record.jobId) ? record.jobId : undefined,
+    runId: isNonEmptyString(record.runId) ? record.runId : undefined,
     task:
       task !== null && typeof task === "object"
         ? {
@@ -263,6 +263,10 @@ export type ReadPerTokenResolver = (provider: string | undefined, model: string 
 // --- parsing / per-message algorithms (ports of pi) ---
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
 
 function messageOf(entry: SessionEntry): SessionMessageShape | undefined {
   if (entry.type !== "message") return undefined;
@@ -811,7 +815,7 @@ function parseOrEmpty(text: string | undefined): SessionEntry[] {
 function dirlessRun(entry: SubagentResultEntry, segment: string, depth: number): ReconciledRun {
   const details = entry.details ?? {};
   return {
-    runId: typeof details.runId === "string" && details.runId ? details.runId : segment,
+    runId: isNonEmptyString(details.runId) ? details.runId : segment,
     depth,
     agent: details.task?.agent ?? "unknown",
     status: normalizeStatus(details.status),
@@ -839,7 +843,7 @@ function makeRun(
   if (matched) {
     const details = matched.details ?? {};
     return {
-      runId: typeof details.runId === "string" && details.runId ? details.runId : segment,
+      runId: isNonEmptyString(details.runId) ? details.runId : segment,
       depth,
       agent: details.task?.agent ?? "unknown",
       status: normalizeStatus(details.status),
@@ -1024,7 +1028,7 @@ export function buildRelaunchCandidates(
     const result = subagentResultEntryOf(entry);
     const runId = result?.details?.runId;
     const jobId = result?.details?.jobId;
-    if (result && typeof runId === "string" && runId && typeof jobId === "string" && jobId) {
+    if (result && isNonEmptyString(runId) && isNonEmptyString(jobId)) {
       if (!jobIdBySegment.has(runIdDirName(runId))) jobIdBySegment.set(runIdDirName(runId), jobId);
     }
   }
