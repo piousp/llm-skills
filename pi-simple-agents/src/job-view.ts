@@ -2,7 +2,7 @@ import { buildProgressLine, activityWord, type ProgressTheme } from "./progress.
 import { firstLine, truncate } from "./text-utils.ts";
 import { formatRunUsage, formatTokens } from "./usage.ts";
 import type { AgentRunResult } from "./run.ts";
-import { MAX_TIMEOUT_MS } from "./run.ts";
+import { isValidTimeoutMs } from "./run.ts";
 import { isValidMaxTurns } from "./overrides.ts";
 import { runIdDirName } from "./subagent-session.ts";
 import { isActive, type CancelResult, type InjectKind, type InjectResult, type JobSnapshot } from "./background-jobs.ts";
@@ -334,11 +334,7 @@ export function outOfRangeRelaunchFields(
   if (!params) return [];
   const dropped: OutOfRangeRelaunchField[] = [];
   if (params.maxTurns !== undefined && !isValidMaxTurns(params.maxTurns)) dropped.push("maxTurns");
-  if (
-    params.timeoutMs !== undefined
-    && !(typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      && params.timeoutMs > 0 && params.timeoutMs <= MAX_TIMEOUT_MS)
-  ) dropped.push("timeoutMs");
+  if (params.timeoutMs !== undefined && !isValidTimeoutMs(params.timeoutMs)) dropped.push("timeoutMs");
   return dropped;
 }
 

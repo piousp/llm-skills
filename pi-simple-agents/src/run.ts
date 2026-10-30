@@ -104,15 +104,25 @@ export function awaitAtMost(
 export const DEFAULT_TIMEOUT_MS = 600_000; // 10 min.
 export const MAX_TIMEOUT_MS = 7_200_000; // 2h ceiling, enforced here for every layer (frontmatter/settings/param).
 
+/** Finite and strictly positive: the shape every timeout layer agrees on. */
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** Whether `value` passes through untouched: positive, finite, at most MAX_TIMEOUT_MS. */
+export function isValidTimeoutMs(value: unknown): value is number {
+  return isPositiveFiniteNumber(value) && value <= MAX_TIMEOUT_MS;
+}
+
 export function resolveTimeoutMs(value: unknown): number {
   if (value === undefined) return DEFAULT_TIMEOUT_MS;
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    if (value <= MAX_TIMEOUT_MS) return value;
-    console.warn(`${WARN_PREFIX}timeoutMs ${value} exceeds the maximum of ${MAX_TIMEOUT_MS}ms, clamping`);
-    return MAX_TIMEOUT_MS;
+  if (!isPositiveFiniteNumber(value)) {
+    console.warn(`${WARN_PREFIX}invalid timeoutMs ${value}, falling back to default`);
+    return DEFAULT_TIMEOUT_MS;
   }
-  console.warn(`${WARN_PREFIX}invalid timeoutMs ${value}, falling back to default`);
-  return DEFAULT_TIMEOUT_MS;
+  if (value <= MAX_TIMEOUT_MS) return value;
+  console.warn(`${WARN_PREFIX}timeoutMs ${value} exceeds the maximum of ${MAX_TIMEOUT_MS}ms, clamping`);
+  return MAX_TIMEOUT_MS;
 }
 
 // (MAX_TURNS_LIMIT/isValidMaxTurns live in src/overrides.ts, the single home
