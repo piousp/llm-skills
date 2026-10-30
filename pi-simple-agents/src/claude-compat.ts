@@ -61,11 +61,8 @@ export function mapClaudeTools(names: string[]): { tools: string[]; inert: strin
 // default); everything else passes through verbatim. Form and resolvability
 // are enforced strictly at resolveModel (run.ts): a malformed or unresolvable
 // model FAILS the run instead of falling back.
-export function normalizeClaudeModel(model: string): { model?: string } {
-  if (model === "inherit") {
-    return { model: undefined };
-  }
-  return { model };
+export function normalizeClaudeModel(model: string): string | undefined {
+  return model === "inherit" ? undefined : model;
 }
 
 export function claimUnwarned(

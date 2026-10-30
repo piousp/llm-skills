@@ -247,7 +247,7 @@ export function validateAgentOverridesEntry(
       }
       // "inherit" → undefined via normalizeClaudeModel's inherit mapping;
       // any other string is kept verbatim (no alias semantics hard-coded).
-      result.model = value === "inherit" ? normalizeClaudeModel(value).model : value;
+      result.model = normalizeClaudeModel(value);
       continue;
     }
     if (!isWellTypedSettingsValue(field, value)) {

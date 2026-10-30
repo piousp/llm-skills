@@ -179,7 +179,7 @@ export function normalizeFrontmatterFields(
   }
 
   if (typeof normalized.model === "string") {
-    normalized.model = normalizeClaudeModel(normalized.model).model;
+    normalized.model = normalizeClaudeModel(normalized.model);
   }
 
   for (const { key, allowed } of ENUM_FIELDS) {

@@ -47,19 +47,19 @@ test("mapClaudeTools deduplicates inert tools preserving first-occurrence order"
 test("normalizeClaudeModel('inherit') yields undefined model", () => {
   const result = normalizeClaudeModel("inherit");
 
-  assert.deepEqual(result, { model: undefined });
+  assert.equal(result, undefined);
 });
 
 test("normalizeClaudeModel passes bare words through untouched (no alias metadata)", () => {
   const result = normalizeClaudeModel("sonnet");
 
-  assert.deepEqual(result, { model: "sonnet" });
+  assert.equal(result, "sonnet");
 });
 
 test("normalizeClaudeModel passes through a full model id", () => {
   const result = normalizeClaudeModel("claude-opus-5");
 
-  assert.deepEqual(result, { model: "claude-opus-5" });
+  assert.equal(result, "claude-opus-5");
 });
 
 // S11 — claimUnwarned
