@@ -705,11 +705,6 @@ test("buildRelaunchCandidates: a depth-1 failed run from its completion message,
     task: "do the thing",
     status: "failed",
     sessionFile: childFileFor("call-a"),
-    usage: {
-      input: 700, output: 80, cacheRead: 0, cacheWrite: 0,
-      totalTokens: 780,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0041 },
-    },
   });
 });
 

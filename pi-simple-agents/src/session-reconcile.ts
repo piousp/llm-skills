@@ -942,8 +942,7 @@ function mergeReport(runs: ReconciledRun[]): SubagentSessionReport {
 // --- relaunch candidates (retry/continue) ---
 
 // One settled or orphaned run of THIS session that retry/continue could
-// re-dispatch. `usage` is display-only; it feeds neither the command's
-// behavior nor any accounting.
+// re-dispatch.
 export interface SubagentRelaunchCandidate {
   /** Raw runId (the completion message's, or the ack's for enriched orphans); the dir segment for an un-enriched orphan. */
   readonly runId: string;
@@ -957,34 +956,8 @@ export interface SubagentRelaunchCandidate {
   readonly status: "failed" | "errored" | "cancelled" | "interrupted";
   /** The child's session.jsonl path — present means `continue` can branch from it. */
   readonly sessionFile?: string;
-  /** Disk stats when the child file exists, else the completion message's aggregated usage. Display only. */
-  readonly usage?: AggregatedUsage;
   /** The launch ack's recorded copy of the original call's invocation override, when one was recorded; relaunch wiring re-validates it. Absent (the key is omitted, never undefined-valued) for legacy acks. */
   readonly params?: InvocationOverride;
-}
-
-// A child run's display usage: its own disk stats converted to the
-// AggregatedUsage shape when they exist on disk (disk-first, like
-// effectiveTotals), else the parent's message usage, else nothing.
-function displayUsageOf(run: ReconciledRun): AggregatedUsage | undefined {
-  if (run.stats) {
-    const totals = run.stats.totals;
-    return {
-      input: totals.input,
-      output: totals.output,
-      cacheRead: totals.cacheRead,
-      cacheWrite: totals.cacheWrite,
-      totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: totals.cost,
-      },
-    };
-  }
-  return run.messageUsage;
 }
 
 /**
@@ -1049,7 +1022,6 @@ export function buildRelaunchCandidates(
           task: run.task,
           status: run.status as "failed" | "errored" | "cancelled",
           sessionFile: run.sessionFile,
-          usage: displayUsageOf(run),
           // Key omitted, never undefined-valued: candidates are pinned by
           // full deepEqual, and a present-but-undefined key would break the
           // legacy (pre-params) fixtures.
@@ -1065,7 +1037,6 @@ export function buildRelaunchCandidates(
         task: ack?.task?.task ?? run.task,
         status: "interrupted",
         sessionFile: run.sessionFile,
-        usage: displayUsageOf(run),
         ...(ack?.params !== undefined ? { params: ack.params } : {}),
       };
     });
