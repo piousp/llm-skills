@@ -260,11 +260,12 @@ function detectCommentTruncation(
     const value = frontmatter[field];
     if (typeof value !== "string") continue;
 
-    const linePattern = new RegExp(`^${field}:[ \\t]+(.+)$`);
-    const line = lines.find((candidate) => linePattern.test(candidate));
-    if (!line) continue;
+    const lineMatch = lines
+      .map((line) => PLAIN_TOP_LEVEL_KEY_LINE.exec(line))
+      .find((match) => match?.[1] === field);
+    if (!lineMatch) continue;
 
-    const rawValuePart = line.match(linePattern)![1];
+    const rawValuePart = lineMatch[2];
     if (YAML_SYNTAX_PREFIXES.some((prefix) => rawValuePart.startsWith(prefix))) continue;
     if (!rawValuePart.includes(" #")) continue;
 
