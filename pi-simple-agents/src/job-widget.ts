@@ -58,16 +58,21 @@ export function createJobWidget(deps: JobWidgetDeps): JobWidget {
     if (tickHandle === undefined) tickHandle = deps.schedule(tick, TICK_MS);
   }
 
-  function tick(): void {
-    tickHandle = undefined; // this invocation already consumed the scheduled handle
+  // Renders into the widget when a UI is attached; with none, stops the
+  // pulse instead of scheduling more work.
+  function renderOrStop(): void {
     const ui = deps.getUi();
     scheduleOrStop(ui ? render(ui) : undefined);
   }
 
+  function tick(): void {
+    tickHandle = undefined; // this invocation already consumed the scheduled handle
+    renderOrStop();
+  }
+
   function refresh(jobs: readonly JobSnapshot[]): void {
     lastJobs = jobs;
-    const ui = deps.getUi();
-    scheduleOrStop(ui ? render(ui) : undefined);
+    renderOrStop();
   }
 
   function dispose(): void {
