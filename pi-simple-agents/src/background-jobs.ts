@@ -187,12 +187,13 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
     for (const resolve of waiters) resolve();
   }
 
+  function finishedIds(newestFirst: boolean): string[] {
+    const ids = [...jobs.values()].filter((r) => isSettled(r.state)).map((r) => r.id);
+    return newestFirst ? ids.reverse() : ids;
+  }
+
   function pruneFinished(): void {
-    const finishedIdsNewestFirst = [...jobs.values()]
-      .filter((r) => isSettled(r.state))
-      .reverse()
-      .map((r) => r.id);
-    for (const id of finishedIdsNewestFirst.slice(maxRecent)) {
+    for (const id of finishedIds(true).slice(maxRecent)) {
       jobs.delete(id);
     }
   }
@@ -348,10 +349,10 @@ export function createJobRegistry(deps: JobRegistryDeps): JobRegistry {
   }
 
   function clearFinished(): number {
-    const finishedIds = [...jobs.values()].filter((r) => isSettled(r.state)).map((r) => r.id);
-    for (const id of finishedIds) jobs.delete(id);
-    if (finishedIds.length > 0) emitChange();
-    return finishedIds.length;
+    const settled = finishedIds(false);
+    for (const id of settled) jobs.delete(id);
+    if (settled.length > 0) emitChange();
+    return settled.length;
   }
 
   function whenIdle(): Promise<void> {
