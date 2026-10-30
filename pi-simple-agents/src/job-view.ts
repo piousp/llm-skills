@@ -269,14 +269,14 @@ export function buildRelaunchResultText(
   droppedFields: readonly ("maxTurns" | "timeoutMs")[] = [],
 ): string {
   const paramsRecorded = candidate.params !== undefined;
-  const dropClauses = !paramsRecorded || droppedFields.length === 0
-    ? ""
-    : droppedFields
+  const dropClauses = paramsRecorded && droppedFields.length > 0
+    ? droppedFields
         .map((field) => {
-          const value = paramsRecorded ? candidate.params?.[field] : undefined;
+          const value = candidate.params?.[field];
           return `the recorded ${field}${value !== undefined ? ` ${value}` : ""} is out of range`;
         })
-        .join("; ") + "; the agent's own value applies";
+        .join("; ") + "; the agent's own value applies"
+    : "";
   // Explicit id on a cancelled run: the same note both verbs show (the run
   // is not a bare-candidate — user intent, so only an explicit request
   // targets it).
