@@ -332,7 +332,7 @@ export function addUsageToTotals(
  * at the entry level.
  */
 export function sumUsageTotals(entries: readonly SessionEntry[]): UsageTotals {
-  const totals: UsageTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  const totals: UsageTotals = emptyUsageTotals();
   for (const entry of entries) {
     const usage = usageSourceOf(entry);
     if (usage) {
