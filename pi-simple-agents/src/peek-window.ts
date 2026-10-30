@@ -442,8 +442,7 @@ export class PeekOverlayComponent {
     // fullscreen "jump to latest message") out of the way while the pointer
     // is over the window. Any other mouse event passes through untouched.
     if (event.type !== "wheel") return undefined;
-    this.scrollOffset = this.clampScroll(this.scrollOffset - (event.wheelDelta ?? 0), this.scrollCap);
-    this.deps.onScroll?.(this.scrollOffset);
+    this.stepScroll(-(event.wheelDelta ?? 0));
     return { handled: true };
   }
 
