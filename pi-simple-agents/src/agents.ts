@@ -91,6 +91,14 @@ interface AgentSource {
   fallbackName?: string;
 }
 
+async function statFile(filePath: string): Promise<fs.Stats | undefined> {
+  try {
+    return await fsPromises.stat(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveAgentSource(
   agentsDir: string,
   entry: fs.Dirent,
@@ -99,12 +107,8 @@ async function resolveAgentSource(
     return { filePath: path.join(agentsDir, entry.name) };
   }
   const manifestPath = path.join(agentsDir, entry.name, MANIFEST_FILENAME);
-  try {
-    const stat = await fsPromises.stat(manifestPath);
-    if (!stat.isFile()) return undefined;
-  } catch {
-    return undefined;
-  }
+  const manifestStat = await statFile(manifestPath);
+  if (!manifestStat?.isFile()) return undefined;
   return { filePath: manifestPath, fallbackName: entry.name };
 }
 
@@ -150,10 +154,8 @@ async function discoverAgentFile(
   filePath: string,
   fallbackName?: string,
 ): Promise<DiscoveredFileResult> {
-  let stat: fs.Stats;
-  try {
-    stat = await fsPromises.stat(filePath);
-  } catch {
+  const stat = await statFile(filePath);
+  if (!stat) {
     return { warnings: [`${WARN_PREFIX}skipping unreadable file ${filePath}`] };
   }
   if (!stat.isFile()) {
