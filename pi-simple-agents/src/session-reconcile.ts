@@ -232,13 +232,13 @@ export function danglingToolCalls(entries: readonly SessionEntry[]): DanglingToo
     if (!message) continue;
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const block of message.content) {
-        if (block?.type === "toolCall" && typeof block.id === "string" && block.id && !called.has(block.id)) {
+        if (block?.type === "toolCall" && isNonEmptyString(block.id) && !called.has(block.id)) {
           const name = (block as { name?: unknown }).name;
-          called.set(block.id, typeof name === "string" && name ? name : "unknown");
+          called.set(block.id, isNonEmptyString(name) ? name : "unknown");
         }
       }
     }
-    if (typeof message.toolCallId === "string" && message.toolCallId) {
+    if (isNonEmptyString(message.toolCallId)) {
       answered.add(message.toolCallId);
     }
   }
