@@ -40,7 +40,10 @@ verdes antes del commit.
 | 18 | `60ef207` | aplicado (seam eliminado; divergencia con el catálogo de pi declarada en el módulo) |
 | 19 | `77913af` | aplicado (`candidate.usage` + `displayUsageOf`) |
 | — | `219cdc1` | `DEVELOPER.md` al día tras los pasos 15-19 |
-| 20 | — | nuevo, pendiente: ver "Paso 20" |
+| 20 | `8d223a9` | aplicado (`danglingToolCalls` usa `isNonEmptyString`) |
+| 22 | `10e211c` | aplicado (helper `perToken`) |
+| 23 | `ec7eb94` | aplicado (campos de sólo escritura del cache waste) |
+| 21 | — | pendiente (ver "Pendientes propuestos") |
 
 Revisión: cada paso `internal-signature` pasó por tres lentes (`qa-adversary`, `code-review-checklist`,
 `refactor-identification`; `pablo-test-review` no está instalado) y por un smoke independiente en
@@ -173,15 +176,12 @@ renderizando Main, Subagents, By Agent y Total con split cached/uncached y costo
 
 ## Pendientes propuestos por las revisiones
 
-- **21** `isNonEmptyString` vive dos veces: `src/session-reconcile.ts:263` y `src/validate.ts:28`
+- **21** `isNonEmptyString` vive dos veces: `src/session-reconcile.ts:265` y `src/validate.ts:28`
   (idénticos). Hogar natural: `src/overrides.ts`, junto a `isStringArray`/`isPlainObject`
   (`DEVELOPER.md` lo declara "single home for the shared field guards"). Tier: internal-signature.
-- **22** `src/session-reconcile.ts` `detectMiss`: `paidPerToken` y `readPerToken` son la misma
-  operación "coste ÷ tokens con denominador protegido" (`refactor-identification` P1 en la revisión
-  del paso 18). Tier: mechanical.
-- **23** `PreviousRequest.modelKey` y `.timestamp` son estado de sólo escritura (nadie los lee), al
-  igual que `MissCandidate.provider`/`.model` tras el paso 18. Código muerto dentro del radio.
-  Tier: mechanical.
+- **22** aplicado en `10e211c` (helper `perToken` en `detectMiss`).
+- **23** aplicado en `ec7eb94` (`PreviousRequest.modelKey`/`.timestamp`, `MissCandidate.provider`/
+  `.model`/`.timestamp` y sus cinco asignaciones).
 - **24** `validate.ts:24` `isRecord` acepta arrays (`typeof [] === "object"` sin `!Array.isArray`),
   a diferencia de `isPlainObject`: defecto preexistente que `qa-adversary` marcó como cambio de
   comportamiento (`validateSubagentParams([])` devuelve el error de `agent` en vez del de forma).

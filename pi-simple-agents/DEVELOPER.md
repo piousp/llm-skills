@@ -1261,8 +1261,10 @@ closes that gap entirely from already-persisted data — nothing new is written:
   (grouping by `provider/responseModel ?? model`, toolResult/compaction under `Tools/summaries`,
   `tokens = input + output + cacheRead + cacheWrite`); `computeCacheWaste` reproduces
   `detectMiss`/`scan` (`min(prev.promptTokens, promptTokens) - cacheRead`, 1024-token noise floor,
-  compaction reset, Unix-ms message timestamps). The only asset not derivable is contextUsage —
-  it needs the live model registry, so the report omits it.
+  compaction reset). It does not carry pi's `idleMs`/`modelChanged` (neither is in the report
+  shape), nor the model-catalog lookup for the read price: a turn with no cache-read price on the
+  message is priced at 0, so `missedCost` is the upper bound of the extra cost. The only asset
+  not derivable is contextUsage — it needs the live model registry, so the report omits it.
 - **Attribution**: the whole descendant tree is walked under the `childSessionDir` path convention
   (`<parent-without-ext>/<runId>/run-N/`, deep-nesting collapse included), each resolved child
   path visited once (dedupe also neutralizes the `deep-<hash16>` collision case). A child dir is
