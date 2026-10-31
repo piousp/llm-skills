@@ -713,7 +713,7 @@ export function buildSubagentSessionReport(
     for (const entry of parentEntries) {
       const resultEntry = subagentResultEntryOf(entry);
       const runId = resultEntry?.details?.runId;
-      if (!resultEntry || typeof runId !== "string" || !runId) continue;
+      if (!resultEntry || !isNonEmptyString(runId)) continue;
       const segment = runIdDirName(runId);
       if (!resultBySegment.has(segment)) resultBySegment.set(segment, resultEntry);
     }
