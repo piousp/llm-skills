@@ -398,8 +398,6 @@ const NOISE_FLOOR_TOKENS = 1024;
 
 interface PreviousRequest {
   promptTokens: number;
-  modelKey: string;
-  timestamp: number;
   reportedCache: boolean;
 }
 
@@ -409,9 +407,6 @@ interface MissCandidate {
   cacheWrite: number;
   promptTokens: number;
   cost: SessionUsageShape["cost"];
-  provider: string | undefined;
-  model: string | undefined;
-  timestamp: number;
 }
 
 function detectMiss(
@@ -447,8 +442,6 @@ function asPreviousRequest(candidate: MissCandidate, reportedCache: boolean): Pr
   if (candidate.promptTokens <= 0) return undefined;
   return {
     promptTokens: candidate.promptTokens,
-    modelKey: `${candidate.provider}/${candidate.model}`,
-    timestamp: candidate.timestamp,
     reportedCache,
   };
 }
@@ -486,9 +479,6 @@ export function computeCacheWaste(
       promptTokens:
         num(message.usage.input) + num(message.usage.cacheRead) + num(message.usage.cacheWrite),
       cost: message.usage.cost,
-      provider: message.provider,
-      model: message.model,
-      timestamp: num(message.timestamp),
     };
     const miss = detectMiss(prev, candidate);
     if (miss) {
