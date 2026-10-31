@@ -43,7 +43,8 @@ verdes antes del commit.
 | 20 | `8d223a9` | aplicado (`danglingToolCalls` usa `isNonEmptyString`) |
 | 22 | `10e211c` | aplicado (helper `perToken`) |
 | 23 | `ec7eb94` | aplicado (campos de sólo escritura del cache waste) |
-| 21 | — | pendiente (ver "Pendientes propuestos") |
+| 21 | `7c4c207` | aplicado (`isNonEmptyString` en `overrides.ts`) |
+| 25 | `26e72da` | aplicado (guarda de `runId` en `buildSubagentSessionReport`) |
 
 Revisión: cada paso `internal-signature` pasó por tres lentes (`qa-adversary`, `code-review-checklist`,
 `refactor-identification`; `pablo-test-review` no está instalado) y por un smoke independiente en
@@ -176,9 +177,10 @@ renderizando Main, Subagents, By Agent y Total con split cached/uncached y costo
 
 ## Pendientes propuestos por las revisiones
 
-- **21** `isNonEmptyString` vive dos veces: `src/session-reconcile.ts:265` y `src/validate.ts:28`
-  (idénticos). Hogar natural: `src/overrides.ts`, junto a `isStringArray`/`isPlainObject`
-  (`DEVELOPER.md` lo declara "single home for the shared field guards"). Tier: internal-signature.
+- **21** aplicado en `7c4c207` (`isNonEmptyString` vive sólo en `src/overrides.ts`).
+- **25** aplicado en `26e72da`: la guarda negada `typeof runId !== "string" || !runId` en
+  `buildSubagentSessionReport` pasó a `!isNonEmptyString(runId)`. La forma negada no estaba en el
+  inventario original del paso 2; la levantó `refactor-identification` al revisar el paso 20.
 - **22** aplicado en `10e211c` (helper `perToken` en `detectMiss`).
 - **23** aplicado en `ec7eb94` (`PreviousRequest.modelKey`/`.timestamp`, `MissCandidate.provider`/
   `.model`/`.timestamp` y sus cinco asignaciones).
