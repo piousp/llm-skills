@@ -260,6 +260,8 @@ export interface ReconcileFs {
 
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
 
+const perToken = (cost: number, tokens: number): number => (tokens > 0 ? cost / tokens : 0);
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
@@ -433,11 +435,8 @@ function detectMiss(
   // only land in the input or cacheWrite buckets, so the paid rate comes
   // straight from this message's own cost breakdown.
   const paidTokens = candidate.input + candidate.cacheWrite;
-  const paidPerToken = paidTokens > 0 ? (num(candidate.cost?.input) + num(candidate.cost?.cacheWrite)) / paidTokens : 0;
-  const readPerToken =
-    candidate.cacheRead > 0
-      ? num(candidate.cost?.cacheRead) / candidate.cacheRead
-      : 0;
+  const paidPerToken = perToken(num(candidate.cost?.input) + num(candidate.cost?.cacheWrite), paidTokens);
+  const readPerToken = perToken(num(candidate.cost?.cacheRead), candidate.cacheRead);
   return {
     missedTokens,
     missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken),
