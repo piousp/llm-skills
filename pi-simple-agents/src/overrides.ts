@@ -75,6 +75,12 @@ export function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
+// The one shared "non-empty string" guard (validate.ts's agent/task check and
+// session-reconcile.ts's id/name extraction both use it).
+export function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
 // Whether `value` has the type the spec names for an override field — the
 // sole structural judgment the two consumers share (range and value-form
 // checks stay at each field's own use-site chokepoint).

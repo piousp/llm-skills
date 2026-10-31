@@ -19,6 +19,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { runIdDirName } from "./subagent-session.ts";
 import type { AggregatedUsage } from "./usage.ts";
 import {
+  isNonEmptyString,
   overrideValueMatches,
   OVERRIDE_KEYS,
   OVERRIDE_TYPE_SPEC,
@@ -261,10 +262,6 @@ export interface ReconcileFs {
 const num = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
 
 const perToken = (cost: number, tokens: number): number => (tokens > 0 ? cost / tokens : 0);
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
 
 function messageOf(entry: SessionEntry): SessionMessageShape | undefined {
   if (entry.type !== "message") return undefined;

@@ -1,6 +1,7 @@
 import type { AgentConfig } from "./agents.ts";
 import {
   invocationOverrideOf,
+  isNonEmptyString,
   isValidModelRef,
   isStringArray,
   overrideValueMatches,
@@ -25,11 +26,7 @@ function isRecord(raw: unknown): raw is Record<string, unknown> {
   return typeof raw === "object" && raw !== null;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-// isStringArray/isValidModelRef come from src/overrides.ts — their single home.
+// isNonEmptyString/isStringArray/isValidModelRef come from src/overrides.ts — their single home.
 function validateModelRef(value: unknown, label: string): string | undefined {
   if (value === undefined || isValidModelRef(value)) return undefined;
   return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
