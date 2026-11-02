@@ -86,6 +86,9 @@ The caller may supply additional domain-context lens paths (e.g. a team wiki-usa
    environment config, a consumer you did not read, an unfetched dependency, generated code,
    a library), it is an Open Question that states the impact in its first clause and names
    the exact lookup that would confirm it, never a Finding, whatever its severity would be.
+   Before routing to Open Questions, if the other repo is on the changed call path and readable
+   (local clone or `gh`), read it read-only first; the question stays only if the lookup could
+   not be run, and then it names it.
    A config file or snapshot in the local checkout is not evidence of deployed state.
 4. **Run every lens against the diff** (see "The conglomerate" below). For each suspected
    defect, construct a **concrete failure scenario**: specific inputs / state → the wrong output

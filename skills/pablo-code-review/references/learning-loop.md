@@ -10,9 +10,9 @@ command from this skill's directory.
 re-review writes a new file (the round is derived), it never overwrites.
 
 **Steps**
-1. Tag each printed item (`references/taxonomy.md`): `category`, `code_kind`, `premise`,
-   `kind`. Ids are the printed ones: B1, M1, Q1, I1, G1, T1, O1; a counted-nothing FYI line
-   may be tier `F`.
+1. Tags (`category`, `code_kind`, `premise`, `kind`; `references/taxonomy.md`) and the lesson
+   fields come from SKILL.md step 5b. Ids are the printed ones: B1, M1, Q1, I1, G1, T1, O1; a
+   counted-nothing FYI line may be tier `F`.
 2. Save the report exactly as printed (the final assistant message, the complete report, no
    recap) to a `mktemp` markdown file: the body. `write-report` stores it verbatim.
 3. Build the JSON below and run
@@ -26,7 +26,10 @@ re-review writes a new file (the round is derived), it never overwrites.
 **Meta JSON** (host and org come from the PR URL or the user, never from a default):
 `host`, `org`, `repo`, `pr` (integer, or null when reviewing a branch), `branch`, `base_sha`,
 `head_sha`, `date` (UTC `YYYY-MM-DDTHH:MM:SSZ`, defaults to now), `context_prs` (list of
-URLs), `diff_stats` {files, additions, deletions}, `verdict`, `findings[]`. Each finding:
+URLs), `diff_stats` {files, additions, deletions}, `verdict`, `findings[]`, and the lesson
+fields copied from the `select_lessons.py` output (§ Merge-time application): `lessons_applied`,
+`lessons_shadow` (both default `[]`) and `lessons_mode` (`shadow` | `live`; omit it on a report
+written without the lesson step, old reports stay valid). Each finding:
 `id`, `lens[]` (any of `qa-adversary`, `code-review-checklist`, `refactor-identification`,
 `pablo-test-review`), `lens_sev[]` (one entry per lens, as the lens labelled it), `tier`,
 `category`, `code_kind`, `premise`, `kind`, `location` {path, lines}, `title`, `rank`
@@ -42,15 +45,19 @@ existing round for that PR or branch in `reviews/<repo>/`), `skill_sha` and `len
 of the 4 lenses. A lens directory that is missing gets `null` plus a reason in
 `lens_versions_missing: {<lens>: <reason>}`; older reports have only the first three keys), `tally`
 {B,M,Q,I,G} counted from the findings, `items_shown_full` (B/M shown as `normal` or
-`explore`), `items_shown_total` (every finding), `lessons_applied` and `lessons_shadow`
-(empty lists for now). File name: `pr<N>-r<round>-<YYYY-MM-DD>.md`, or
+`explore`), `items_shown_total` (every finding). `lessons_applied` and `lessons_shadow` are not derived: they
+come from the meta JSON, which takes them from the select output. File name: `pr<N>-r<round>-<YYYY-MM-DD>.md`, or
 `<branch-slug>-r<round>-<date>.md` without a PR.
 
 **Checks `validate` enforces:** every key present and typed; tier, code_kind, premise, kind
 and shown_as in their enums; category in the taxonomy; ids unique, prefixed by their tier and
 present in the body (FYI lines excepted); `tally` equals the findings; verdict is BLOCK iff
 B>0, NEEDS WORK iff B=0 and M>0, else PASS; `lens` entries are among the 4 lenses; `lens_versions`
-has all 4 keys (or the legacy first 3), null only with a `lens_versions_missing` reason.
+has all 4 keys (or the legacy first 3), null only with a `lens_versions_missing` reason;
+`lessons_mode`, when present, is `shadow` or `live`; a `shadow` report has `lessons_applied: []` and no
+finding with `shown_as: demoted` or non-empty `lessons`; every `lessons_shadow` entry is a record
+`{lesson, status: approved|candidate, finding: <finding id>, action: demote|promote|rank_first|question_form|cap_full:<n>, from: <tier>, to: <tier>|collapsed}`
+(in a `shadow` report `from` is that finding's tier); `[]` is valid, a bare string is not.
 
 **Example frontmatter** (abridged; synthetic):
 
@@ -71,6 +78,7 @@ lens_versions: {qa-adversary: 1a2b3c4d, code-review-checklist: 5e6f7a8b, refacto
                 pablo-test-review: 3a4b5c6d}
 lessons_applied: []
 lessons_shadow: []
+lessons_mode: shadow
 diff_stats: {files: 2, additions: 40, deletions: 6}
 items_shown_full: 1
 items_shown_total: 2
@@ -86,6 +94,33 @@ findings:
 ```
 
 The body after the closing `---` is the printed report, verbatim.
+
+## Merge-time application
+
+`scripts/select_lessons.py` decides, deterministically, which merged items a lesson may move; SKILL.md
+step 5b runs it and it writes nothing.
+
+- **Inputs:** every item tagged (`references/taxonomy.md`) plus `protect[]` from the coordinator
+  (`security`, `data-loss`, `credentials`, `asked`, `static`) and `assertion_loosened` on R1 or
+  removed-oracle items.
+- **Which lessons run:** `approved` only, precedence repo → `_org` → ml, caps 10/10/15. Candidates are only
+  recorded in `lessons_shadow`; codified, retired and recall lessons are never applied.
+- **Ladder:** B → M → I → collapsed; Q, G and T go straight to collapsed. One step at most, however many
+  lessons match. A collapsed item stays in the ledger; nothing is ever deleted.
+- **Never suppressed:** a qa-adversary Blocking item, `duplication-reuse`, `type-modelling` with premise
+  in-diff, `assertion_loosened`, the five `protect` values, and anything in `repo-lessons/_protect.json`.
+- **Exploration:** every 4th trigger of a demote lesson shows the item at its original tier (`explore`, no
+  marker). Only `normal` and `explore` outcomes count as evidence. A category never loses its last visible
+  item (floor): the highest-ranked one stays.
+- **Alert:** `no-full-format` fires only when a lesson moved a category (shown_as `demoted`, or a shadow record from B/M) and it then shows no full-format item for 5 consecutive reviews; a drought with no lesson involved stays silent.
+- **Collapsed line** (live mode only): `Demoted by lessons: I4, I7 (<lesson ids>)`.
+
+**SHADOW MODE until CP4b.** Run with `--shadow`: the report renders static (`lessons_mode: shadow`,
+`lessons_applied: []`, every finding `normal`), and the would-be effects of every lesson, approved ones
+included, go to `lessons_shadow` as records. Candidate records come from the composed pipeline (candidates
+treated as approved, floor on), not from raw triggers. The would-be verdict can be computed from the
+records (no field stores it). After the live flip, shadow-period harvests are the only unconfounded
+evidence for `scenario-boost`: once it reorders items, its own outcomes are no longer independent.
 
 ## Harvest
 

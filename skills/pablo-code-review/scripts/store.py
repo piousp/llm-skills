@@ -31,6 +31,10 @@ CODE_KINDS = ("prod", "test", "build", "script", "dev-tool")
 PREMISES = ("in-diff", "1-hop", "external-unverified")
 KINDS = ("finding", "question", "gap", "nit")
 SHOWN_AS = ("normal", "explore", "demoted")
+LESSONS_MODES = ("shadow", "live")
+SHADOW_STATUSES = ("approved", "candidate")
+SHADOW_ACTIONS = ("demote", "promote", "rank_first", "question_form")
+CAP_FULL_RE = re.compile(r"cap_full:\d+")
 VERDICTS = ("BLOCK", "NEEDS WORK", "PASS")
 KEY_ORDER = (
     "review_id host org repo pr round branch base_sha head_sha date context_prs skill_sha "
@@ -142,8 +146,9 @@ def build_frontmatter(meta, round_, skill_sha, lens_versions, lens_missing=None)
         "skill_sha": skill_sha,
         "lens_versions": lens_versions,
         **({"lens_versions_missing": lens_missing} if lens_missing else {}),
-        "lessons_applied": [],
-        "lessons_shadow": [],
+        "lessons_applied": meta.get("lessons_applied") or [],
+        "lessons_shadow": meta.get("lessons_shadow") or [],
+        **({"lessons_mode": meta["lessons_mode"]} if "lessons_mode" in meta else {}),
         "diff_stats": meta.get("diff_stats"),
         "items_shown_full": len(full),
         "items_shown_total": len(shown),
@@ -197,6 +202,47 @@ def _validate_finding(f, i, slugs, body, errs):
         errs.append(f"{where}.rank: must be an integer >= 1")
     if not isinstance(f.get("lessons"), list):
         errs.append(f"{where}.lessons: must be a list")
+
+
+def _validate_shadow_record(rec, i, tiers_by_id, shadow_mode, errs):
+    where = f"lessons_shadow[{i}]"
+    if not isinstance(rec, dict):
+        errs.append(f"{where}: must be a record {{lesson, status, finding, action, from, to}}")
+        return
+    if not (isinstance(rec.get("lesson"), str) and rec["lesson"].strip()):
+        errs.append(f"{where}.lesson: must be a non-empty string")
+    if rec.get("status") not in SHADOW_STATUSES:
+        errs.append(f"{where}.status: {rec.get('status')!r} not in {'|'.join(SHADOW_STATUSES)}")
+    if rec.get("finding") not in tiers_by_id:
+        errs.append(f"{where}.finding: {rec.get('finding')!r} is not a finding of this report")
+    action = rec.get("action")
+    if not (action in SHADOW_ACTIONS or (isinstance(action, str) and CAP_FULL_RE.fullmatch(action))):
+        errs.append(f"{where}.action: {action!r} is not demote|promote|rank_first|question_form|cap_full:<n>")
+    if rec.get("from") not in TIERS:
+        errs.append(f"{where}.from: {rec.get('from')!r} not in {'|'.join(TIERS)}")
+    elif shadow_mode and rec.get("finding") in tiers_by_id and rec["from"] != tiers_by_id[rec["finding"]]:
+        errs.append(f"{where}.from: {rec['from']!r} but finding {rec['finding']} has tier "
+                    f"{tiers_by_id[rec['finding']]!r} (shadow mode)")
+    if not (rec.get("to") in TIERS or rec.get("to") == "collapsed"):
+        errs.append(f"{where}.to: {rec.get('to')!r} must be a tier or 'collapsed'")
+
+
+def _validate_lessons(fm, findings, errs):
+    """lessons_mode (optional), shadow-mode invariants and the lessons_shadow records."""
+    mode = fm.get("lessons_mode")
+    if "lessons_mode" in fm and mode not in LESSONS_MODES:
+        errs.append(f"lessons_mode: {mode!r} not in {'|'.join(LESSONS_MODES)}")
+    shadow_mode = mode == "shadow"
+    if shadow_mode:
+        if fm["lessons_applied"] != []:
+            errs.append("lessons_applied: must be [] in shadow mode")
+        for i, f in enumerate(findings):
+            if isinstance(f, dict) and (f.get("shown_as") == "demoted" or f.get("lessons")):
+                errs.append(f"findings[{i}]: shadow mode forbids shown_as demoted and non-empty lessons")
+    tiers = {f.get("id"): f.get("tier") for f in findings if isinstance(f, dict)}
+    if isinstance(fm["lessons_shadow"], list):
+        for i, rec in enumerate(fm["lessons_shadow"]):
+            _validate_shadow_record(rec, i, tiers, shadow_mode, errs)
 
 
 def validate_report(fm, body, slugs):
@@ -269,6 +315,7 @@ def validate_report(fm, body, slugs):
         errs.append(f"items_shown_full: {fm['items_shown_full']} but findings give {len(full)}")
     if fm["items_shown_total"] != len(shown):
         errs.append(f"items_shown_total: {fm['items_shown_total']} but findings give {len(shown)}")
+    _validate_lessons(fm, findings, errs)
     if "feedback" in fm:
         errs += validate_feedback(fm["feedback"], ids)
     return errs

@@ -67,6 +67,10 @@ step to a subagent.
    Question resolved by lookup is removed from the report and printed as one Summary line,
    `Resolved by lookup: <id> <one-line answer>` (max 3); if the answer creates a finding, it
    becomes a finding.
+   [ALWAYS] when a lens Question's lookup is reading another repo's code on the diff's call path,
+   the coordinator runs it (a local clone of that repo or `gh api`) before printing; resolved
+   ones go to the `Resolved by lookup` line (cap 3 stays; overflow is dropped, not printed as a
+   Question); only unreadable ones stay Questions naming the lookup.
 
 5. **Sort by issue tier:** blocking, major, question, minor, coverage gap.
   Give each issue a unique identifier: B1, M1, Q1, I1, G1, etc.
@@ -75,16 +79,25 @@ step to a subagent.
   with the tier map in `references/merge-rules.md`; Nits get T1, T2… and observations O1, O2…,
   so every printed item has an id, and the id and tier open its head (Output format).
 
+5b. **Apply lessons** (shadow mode until CP4b). Finalise titles first; tag every item
+   (`references/taxonomy.md`); set `protect[]` and `assertion_loosened`; write the items to a `mktemp` JSON; run
+   `python3 scripts/select_lessons.py --shadow --repo <repo> --in <items.json>`. Render the static report; reuse
+   select's findings verbatim as the step-7 meta findings and put `lessons_mode`, `lessons_applied` and
+   `lessons_shadow` into the meta. [NEVER] drop an item; in live mode demoted items appear as `Demoted by lessons: ...`.
+
 6. **Add corrections yourself.** Once the merge is done, the coordinator,
    not a subagent, drafts the ≥2 corrections/alternatives per Blocking/Major finding
    required by the Output format below, using its own judgment plus the
    subagents' problem descriptions as input. [NEVER] send a fifth
    subagent call, or re-invoke any of the four, to ask for fixes.
-7. **Print, then persist.** The final assistant message of a run is the COMPLETE report: never
-   a recap, never preceded by a preamble or followed by a closing note such as "Report saved
-   to ...", nothing outside the template. Then tag every item (`references/taxonomy.md`) and
-   persist (`references/learning-loop.md` § Report file): write that exact text to a `mktemp`
-   file and pass it via `--body`; `write-report` stores it verbatim as the body. Temp files MUST be
+7. **Persist, then print.** Persisting is MANDATORY and the review is not done until
+   `write-report` has returned the stored file path. Persist FIRST, with tool calls, before the
+   final message (`references/learning-loop.md` § Report file): write the exact report text to a `mktemp`
+   file and pass it via `--body`; `write-report` stores it verbatim as the body. Then the
+   final assistant message of a run is the COMPLETE report: never a recap, never preceded by a preamble or
+   followed by a closing note such as "Report saved to ...", nothing outside the template.
+   "Nothing after the report" refers to text, not to tool calls: run no tool call after the
+   final message begins. Temp files MUST be
    created with `mktemp` (never fixed paths such as `/tmp/<name>.diff`) and deleted at the end:
    delete every temp file (body, meta, diff files given to subagents). Paths are relative to this
    skill's directory.
@@ -208,6 +221,8 @@ On "harvest PR <url>" (or when offered at a re-review) follow `references/learni
   tier, re-review.
 - [ALWAYS] derive the verdict from tiers only: BLOCK iff ≥1 blocking, NEEDS WORK iff ≥1
   major, else PASS. Questions, minor items and coverage gaps never change it.
+- [NEVER] let a lesson delete an item, move it more than one tier, or touch a never-suppress item
+  (`references/learning-loop.md` § Merge-time application).
 - [ALWAYS] verify, while merging, that every finding's cited file:line
   falls inside the diff and that every premise of its failure scenario is
   visible in the diff or 1 hop away in the same repo. A finding anchored in

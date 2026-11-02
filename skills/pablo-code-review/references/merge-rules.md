@@ -26,7 +26,7 @@ Major (M) means "a comment worth posting"; its title is that comment.
 | pablo-test-review Minor | Minor (I) |
 | pablo-test-review Nit | Nits line (T) |
 | pablo-test-review Coverage gap | Coverage gap (G); never Blocking |
-| refactor-identification P1 | Minor (I); Major (M) only merged with a qa/checklist Major on the same root cause |
+| refactor-identification P1 raised by refactor-identification alone | Minor (I); Major (M) only when merged with a qa/checklist Major on the same root cause. A structural item raised only by code-review-checklist follows the checklist rows, never this one |
 | refactor-identification P2/P3 | Observations line (O) |
 | refactor-identification Unresolved | Question (Q) if the answer could make it P1; else dropped |
 | any lens Filtered out | never printed |
@@ -64,7 +64,8 @@ two items.
   artifacts, CI files): at most one `**FYI (not counted):**` line in the Summary; never
   B/M/Q/I. Consistency check: when context or sibling PRs are known, a MISMATCH of the
   snapshot version across them is a concrete Major; otherwise only the FYI line.
-- Test strength: owned by `pablo-test-review`; take its tier as given (Tier map). Naming the
+- Test strength: owned by `pablo-test-review`; take its tier as given (Tier map); an R1 item
+  (removed or loosened oracle) stays Major and no codified demotion applies to it. Naming the
   missing assertion/test is part of its finding, not a correction.
 - Scope: an element outside the declared objective(s) is one Minor item, phrased as a
   question and anchored on its first added line ("Why X in this PR?"); never lead with

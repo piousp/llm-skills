@@ -30,24 +30,42 @@ format and the order.
 
 ## Decision rules
 
-Tie-breakers for categories taggers confused. Ask what the item is mainly about.
+Taggers confused five categories. Tag by the fix and by what the item asks or asserts, not
+by its topic. Questions follow the same rules: tag the thing the answer would settle.
 
-- `domain-assumption`: the premise is a business or data fact only the owner or producer
-  knows (which values or formats production sends, which services exist or consume X).
-  Example: "assumes upstream never sends an empty region code".
-- `contract-compat`: mainly a changed public, wire, or API shape or its consumers, even if
-  the consumers are unknown. Example: "renames a JSON field that clients read".
-- `ops-runtime`: mainly deploy order, environment config, infrastructure that must exist,
-  timeouts or retries. Example: "reads a new env var that is not set in staging".
-- `error-handling`: mainly how a failure is handled, propagated, or classified.
-  Example: "catches the exception and returns an empty list, hiding the outage".
-- `correctness-scenario`: a concrete input gives a wrong output in the changed code, even
-  when a data assumption is involved. Example: "input 0 divides by zero in the new ratio".
+Tie-break order (first match wins; apply it only when two or more rules fit):
+
+1. `correctness-scenario`, 2. `error-handling`, 3. `contract-compat`, 4. `ops-runtime`,
+5. `domain-assumption` (the residual: use it only when no earlier rule fits).
+
+- `correctness-scenario`: you can write the failing input from the diff alone (an input, a
+  state, or a null/empty/boundary value, plus the wrong result), and the fix is a logic
+  change. A data assumption inside the scenario does not move it. Example: "an empty list
+  makes the new average divide by zero".
+- `error-handling`: the subject is what happens when something fails: catching, rethrowing,
+  classifying, retrying, timing out, or reporting a failure, including the question "is a
+  retry safe". The fix is in the failure path. Example: "the new catch returns an empty
+  list and hides a failed lookup".
+- `contract-compat`: the diff changes or newly enforces a shape that code on the other side
+  of a boundary reads or writes (field, type, signature, status code, message or event
+  format, accepted values), and the item states who breaks or what they now see. Naming the
+  consumers is optional. Example: "a renamed JSON field that clients read".
+- `ops-runtime`: it works only if something outside the code is true when it runs: a config
+  key or env var is set, a resource or pool exists, deploy order, a limit, window, size, or
+  timeout value, log or metric behavior. Tunable numbers and missing infrastructure go here
+  even if only the owner knows the answer. Example: "reads a new env var that staging does
+  not define".
+- `domain-assumption`: the item asks for, or rests on, a fact about the business, the data,
+  or another team's system that nobody can confirm from the diff or the repo (which values
+  production sends, whether a state occurs, what the rule is meant to be). Example: "assumes
+  the upstream never sends an empty region code". An item that asks "which values does the
+  producer send?" is this category; an item that states "the new check rejects values the
+  producer sends today" is `contract-compat`.
 
 ## Tags
 
 - `code_kind`: `prod` | `test` | `build` | `script` | `dev-tool`. By path: `src/test`,
-  `*Test`/`*Spec`, an integration-test module → test; pom/sbt/CI files → build;
+  `*Test`/`*Spec`, an integration-test module → test; pom/sbt/CI files, and `.tf` files → build;
   `*.py`/`*.sh` → script; QA or developer tooling → dev-tool; everything else prod.
 - `premise`: `in-diff` | `1-hop` | `external-unverified` (where the evidence for the item lives).
 - `kind`: `finding` | `question` | `gap` | `nit`.

@@ -171,7 +171,7 @@ def check_harvest_section(text: str) -> bool:
         and "## Harvest\n" in loop
         and all(k in loop for k in ("fetch_comments.py", "set-feedback", "pre_skill", "recall_misses",
                                     "Praise", "0.5", "unseen", "this_pr_only"))
-        and len(text.splitlines()) <= 252
+        and len(text.splitlines()) <= 258
     )
 
 
@@ -309,6 +309,19 @@ def check_coordinator_lookups(text: str) -> bool:
     )
 
 
+def check_cross_repo_lookup(text: str, qa_text: str | None = None) -> bool:
+    """Cross-repo Questions are resolved by reading that repo first (coordinator + qa-adversary)."""
+    if qa_text is None:
+        qa_text = (LENS_SKILLS[0]).read_text(encoding="utf-8")
+    t, q = _norm(text), _norm(qa_text)
+    return (
+        "reading another repo's code on the diff's call path, the coordinator runs it" in t
+        and "overflow is dropped, not printed as a Question" in t
+        and "on the changed call path and readable" in q
+        and "read it read-only first" in q
+    )
+
+
 def check_other_files_one_line(text: str) -> bool:
     """A file with no findings is one line under 'Other files'."""
     return "### Other files" in text and "one line per file with no findings" in _norm(text)
@@ -354,6 +367,67 @@ def check_mktemp_rule(text: str) -> bool:
     )
 
 
+def _loop_section() -> str:
+    """The '## Merge-time application' section of learning-loop.md ('' when absent)."""
+    loop = _read(LEARNING_LOOP)
+    if "## Merge-time application" not in loop:
+        return ""
+    return _norm(loop.split("## Merge-time application", 1)[1].split("\n## ", 1)[0])
+
+
+def _no_spanish_collapsed_label(text: str) -> bool:
+    root = SKILL_MD.parent
+    files = [root / "references" / n for n in ("learning-loop.md", "merge-rules.md", "taxonomy.md", "lessons-learned.md")]
+    files += sorted((root / "scripts").glob("*.py")) + sorted((root / "ml-lessons").glob("*.md"))
+    return "Bajado por lecciones" not in text and not any("Bajado por lecciones" in _read(f) for f in files)
+
+
+def check_lessons_never_delete(text: str) -> bool:
+    """Lessons only demote: SKILL.md pins step 5b, the shadow run, the collapsed line and the never-delete rule;
+    select_lessons.py keeps the English collapsed prefix and the one-step ladder."""
+    t = _norm(text)
+    sys.path.insert(0, str(SKILL_MD.parent / "scripts"))
+    try:
+        import select_lessons
+        code_ok = (select_lessons.COLLAPSED_PREFIX == "Demoted by lessons: "
+                   and select_lessons.STEP_DOWN == {"B": "M", "M": "I"})
+    except Exception:
+        return False
+    return (
+        all(k in t for k in ("Apply lessons", "scripts/select_lessons.py", "--shadow", "Demoted by lessons:",
+                             "[NEVER] drop an item", "[NEVER] let a lesson delete an item",
+                             "more than one tier", "never-suppress"))
+        and "## Merge-time application" in _read(LEARNING_LOOP)
+        and code_ok
+        and _no_spanish_collapsed_label(text)
+    )
+
+
+def check_never_suppress_list(text: str) -> bool:
+    """The never-suppress list is documented in learning-loop.md and enforced by select_lessons.never_suppress."""
+    section = _loop_section()
+    terms = ("duplication-reuse", "type-modelling", "assertion_loosened", "security", "data-loss", "credentials",
+             "asked", "static", "qa-adversary", "protect")
+    if not all(k in section for k in terms):
+        return False
+    sys.path.insert(0, str(SKILL_MD.parent / "scripts"))
+    try:
+        import select_lessons
+        def hit(**kw):
+            item = {"id": "X1", "tier": "I", "category": "naming-docs-style", "premise": "in-diff",
+                    "lens": ["code-review-checklist"], **kw}
+            return select_lessons.never_suppress(item, "r", None, None, {})
+        protected = [
+            hit(id="B1", tier="B", lens=["qa-adversary"], category="correctness-scenario"),
+            hit(id="M1", tier="M", category="duplication-reuse"),
+            hit(id="M2", tier="M", category="type-modelling", premise="in-diff"),
+            hit(id="M3", tier="M", assertion_loosened=True),
+        ] + [hit(id="M4", tier="M", protect=[v]) for v in ("security", "data-loss", "credentials", "asked", "static")]
+        return all(r is not None for r in protected) and hit() is None
+    except Exception:
+        return False
+
+
 CHECKS = [
     ("merge_by_file_line", check_merge_by_file_line),
     ("file_line_inside_diff", check_file_line_inside_diff),
@@ -381,11 +455,14 @@ CHECKS = [
     ("no_change_rule", check_no_change_rule),
     ("test_lens_na_line", check_test_lens_na_line),
     ("coordinator_lookups", check_coordinator_lookups),
+    ("cross_repo_lookup", check_cross_repo_lookup),
     ("other_files_one_line", check_other_files_one_line),
     ("four_lens_store", check_four_lens_store),
     ("status_table_columns", check_status_table_columns),
     ("no_trailing_after_table", check_no_trailing_after_table),
     ("mktemp_rule", check_mktemp_rule),
+    ("lessons_never_delete", check_lessons_never_delete),
+    ("never_suppress_list", check_never_suppress_list),
 ]
 
 

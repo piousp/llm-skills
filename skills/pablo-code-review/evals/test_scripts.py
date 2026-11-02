@@ -189,6 +189,97 @@ class FourLenses(unittest.TestCase):
             self.assertEqual(list(fm["lens_versions"]), list(store.LENSES))
 
 
+REC = {"lesson": "d1", "status": "candidate", "finding": "M1", "action": "demote", "from": "M", "to": "I"}
+
+
+def shadow_fm(records=None, mode="shadow"):
+    fm, body = load("report_valid.md")
+    if mode:
+        fm["lessons_mode"] = mode
+    fm["lessons_shadow"] = records if records is not None else [dict(REC)]
+    return fm, body
+
+
+class LessonsShadow(unittest.TestCase):
+    def errs(self, fm, body):
+        return store.validate_report(fm, body, SLUGS)
+
+    def test_build_frontmatter_passes_lessons_through(self):
+        meta = dict(META, lessons_mode="shadow", lessons_applied=[], lessons_shadow=[dict(REC)])
+        fm = store.build_frontmatter(meta, 1, "0123abcd", {n: "11111111" for n in store.LENSES})
+        self.assertEqual((fm["lessons_mode"], fm["lessons_applied"], fm["lessons_shadow"]), ("shadow", [], [REC]))
+        self.assertEqual(list(fm).index("lessons_mode"), list(fm).index("lessons_shadow") + 1)
+
+    def test_build_frontmatter_defaults_and_omits_mode(self):
+        fm = store.build_frontmatter(META, 1, "0123abcd", {n: "11111111" for n in store.LENSES})
+        self.assertEqual((fm["lessons_applied"], fm["lessons_shadow"]), ([], []))
+        self.assertNotIn("lessons_mode", fm)
+        self.assertNotIn("lessons_mode", store.KEY_ORDER)
+
+    def test_legacy_reports_without_mode_pass(self):
+        fm, body = load("report_valid.md")
+        self.assertNotIn("lessons_mode", fm)
+        self.assertEqual(self.errs(fm, body), [])
+
+    def test_valid_shadow_record_passes(self):
+        self.assertEqual(self.errs(*shadow_fm()), [])
+
+    def test_every_action_form_passes(self):
+        for action in ("demote", "promote", "rank_first", "question_form", "cap_full:3"):
+            with self.subTest(action=action):
+                self.assertEqual(self.errs(*shadow_fm([dict(REC, action=action)])), [])
+
+    def test_collapsed_target_passes(self):
+        self.assertEqual(self.errs(*shadow_fm([dict(REC, finding="I1", **{"from": "I", "to": "collapsed"})])), [])
+
+    def test_mode_must_be_shadow_or_live(self):
+        errs = self.errs(*shadow_fm([], mode="dry"))
+        self.assertEqual(errs, ["lessons_mode: 'dry' not in shadow|live"])
+        self.assertEqual(self.errs(*shadow_fm([], mode="live")), [])
+
+    def test_shadow_mode_rejects_applied_lessons(self):
+        fm, body = shadow_fm()
+        fm["lessons_applied"] = ["d1"]
+        self.assertEqual(self.errs(fm, body), ["lessons_applied: must be [] in shadow mode"])
+
+    def test_shadow_mode_rejects_demoted_or_lesson_tagged_findings(self):
+        fm, body = shadow_fm()
+        fm["findings"][1]["shown_as"] = "demoted"
+        self.assertEqual(self.errs(fm, body), ["findings[1]: shadow mode forbids shown_as demoted and non-empty lessons"])
+        fm, body = shadow_fm()
+        fm["findings"][2]["lessons"] = ["d1"]
+        self.assertEqual(self.errs(fm, body), ["findings[2]: shadow mode forbids shown_as demoted and non-empty lessons"])
+
+    def test_string_entries_fail(self):
+        errs = self.errs(*shadow_fm(["d1"]))
+        self.assertEqual(errs, ["lessons_shadow[0]: must be a record {lesson, status, finding, action, from, to}"])
+
+    def test_bad_fields_fail(self):
+        cases = {
+            "lesson": ("lesson", "", "lessons_shadow[0].lesson: must be a non-empty string"),
+            "status": ("status", "retired", "lessons_shadow[0].status: 'retired' not in approved|candidate"),
+            "finding": ("finding", "M9", "lessons_shadow[0].finding: 'M9' is not a finding of this report"),
+            "action": ("action", "cap_full", "lessons_shadow[0].action: 'cap_full' is not demote|promote|rank_first|question_form|cap_full:<n>"),
+            "from": ("from", "X", "lessons_shadow[0].from: 'X' not in B|M|Q|I|G|T|O|F"),
+            "to": ("to", "nowhere", "lessons_shadow[0].to: 'nowhere' must be a tier or 'collapsed'"),
+        }
+        for name, (key, bad, want) in cases.items():
+            with self.subTest(field=name):
+                self.assertEqual(self.errs(*shadow_fm([dict(REC, **{key: bad})])), [want])
+
+    def test_missing_field_fails(self):
+        rec = dict(REC)
+        del rec["to"]
+        self.assertEqual(self.errs(*shadow_fm([rec])), ["lessons_shadow[0].to: None must be a tier or 'collapsed'"])
+
+    def test_shadow_mode_from_must_equal_finding_tier(self):
+        errs = self.errs(*shadow_fm([dict(REC, **{"from": "I", "to": "collapsed"})]))
+        self.assertEqual(errs, ["lessons_shadow[0].from: 'I' but finding M1 has tier 'M' (shadow mode)"])
+
+    def test_from_equality_is_not_enforced_outside_shadow_mode(self):
+        self.assertEqual(self.errs(*shadow_fm([dict(REC, **{"from": "I", "to": "collapsed"})], mode="live")), [])
+
+
 class RoundTrip(unittest.TestCase):
     def test_render_then_split_keeps_frontmatter_and_body(self):
         fm, body = load("report_valid.md")
