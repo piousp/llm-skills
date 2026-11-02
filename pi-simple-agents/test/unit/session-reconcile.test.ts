@@ -741,6 +741,33 @@ test("buildRelaunchCandidates: an orphan enriches from its launch ack (raw runId
   assert.equal(candidates[0].sessionFile, childFileFor("raw-orph"));
 });
 
+// An ack whose details.runId is not a string is discarded at extraction
+// (subagentAckEntryOf normalizes it to undefined), so the orphan stays
+// unknown and un-enriched even though the ack sits in the parent file.
+test("buildRelaunchCandidates: an ack with a non-string runId does not enrich the orphan", () => {
+  const nonStringAck = {
+    type: "message",
+    id: "ack",
+    timestamp: "2026-01-01T00:00:04.000Z",
+    message: {
+      role: "toolResult",
+      toolCallId: "tc-1",
+      toolName: "subagent",
+      content: [{ type: "text", text: "Started background subagent job S9" }],
+      isError: false,
+      details: { jobId: "S9", runId: 42, task: { agent: "scout", task: "x" } },
+    },
+  };
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, nonStringAck),
+    [childFileFor("call-orph")]: jsonl(HEADER, messageUserMessage),
+  });
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].runId, "call-orph");
+  assert.equal(candidates[0].jobId, undefined);
+  assert.equal(candidates[0].agent, "unknown");
+});
+
 // Orphan without ack: only the child dir speaks — agent "unknown", task
 // recovered from the child's first user message, runId falls back to the
 // dir segment, status is the interrupted display label.
