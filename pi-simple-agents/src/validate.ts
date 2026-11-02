@@ -3,6 +3,7 @@ import {
   invocationOverrideOf,
   isNonEmptyString,
   isValidModelRef,
+  isPlainObject,
   isStringArray,
   overrideValueMatches,
   OVERRIDE_KEYS,
@@ -22,11 +23,7 @@ export type SubagentParams = { agent: string; task: string } & InvocationOverrid
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
-function isRecord(raw: unknown): raw is Record<string, unknown> {
-  return typeof raw === "object" && raw !== null;
-}
-
-// isNonEmptyString/isStringArray/isValidModelRef come from src/overrides.ts — their single home.
+// isNonEmptyString/isPlainObject/isStringArray/isValidModelRef come from src/overrides.ts — their single home.
 function validateModelRef(value: unknown, label: string): string | undefined {
   if (value === undefined || isValidModelRef(value)) return undefined;
   return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
@@ -65,7 +62,7 @@ function warnAndDropIllTypedOverrides(
 }
 
 export function validateSubagentParams(raw: unknown): ValidationResult<SubagentParams> {
-  if (!isRecord(raw)) {
+  if (!isPlainObject(raw)) {
     return { ok: false, error: 'Provide an object with "agent" and "task".' };
   }
 

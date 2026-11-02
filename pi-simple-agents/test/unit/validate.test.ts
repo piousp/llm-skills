@@ -407,7 +407,7 @@ test("invocationOverrideOf: an explicit undefined timeoutMs is treated the same 
 });
 
 test("validateSubagentParams: a non-object raw value is rejected", () => {
-  for (const raw of [null, "x", 42, undefined]) {
+  for (const raw of [null, "x", 42, undefined, [], ["x"]]) {
     const result = validateSubagentParams(raw);
     assert.deepStrictEqual(result, { ok: false, error: 'Provide an object with "agent" and "task".' });
   }
