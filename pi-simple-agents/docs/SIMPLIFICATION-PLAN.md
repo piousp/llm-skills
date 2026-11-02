@@ -40,10 +40,13 @@ verdes antes del commit.
 | 18 | `60ef207` | aplicado (seam eliminado; divergencia con el catálogo de pi declarada en el módulo) |
 | 19 | `77913af` | aplicado (`candidate.usage` + `displayUsageOf`) |
 | — | `219cdc1` | `DEVELOPER.md` al día tras los pasos 15-19 |
-| 20 | `8d223a9` | aplicado (`danglingToolCalls` usa `isNonEmptyString`) |
+| 20 | `8d223a9` | aplicado (`danglingToolCalls` usa el predicado compartido) |
 | 22 | `10e211c` | aplicado (helper `perToken`) |
 | 23 | `ec7eb94` | aplicado (campos de sólo escritura del cache waste) |
-| 21 | `7c4c207` | aplicado (`isNonEmptyString` en `overrides.ts`) |
+| 21 | `7c4c207` | aplicado (`isNotBlank` en `overrides.ts`) |
+| 24 | `e3360b0` | aplicado (los arrays reciben el error de forma) |
+| 26 | `35bc2dc` | aplicado (`agent`/`task` en blanco rechazados; rename a `isNotBlank`) |
+| 27 | `163b5fd` | aplicado (test que fija la frontera del ack) |
 | 25 | `26e72da` | aplicado (guarda de `runId` en `buildSubagentSessionReport`) |
 
 Revisión: cada paso `internal-signature` pasó por tres lentes (`qa-adversary`, `code-review-checklist`,
@@ -65,7 +68,7 @@ renderizando Main, Subagents, By Agent y Total con split cached/uncached y costo
    - Behavior-preservation: `emptyUsageTotals` devuelve ese literal exacto; ya se usa así en `:790` y `:888`.
    - Verify: `test/unit/session-reconcile.test.ts` (totales de `mergeReport`, `usageCostBreakdown`).
 
-2. `src/session-reconcile.ts:194-195, 814, 842, 1027`: extraer `isNonEmptyString(value): value is string` y usarlo en los cinco sitios que hoy escriben `typeof X === "string" && X`.
+2. `src/session-reconcile.ts:194-195, 814, 842, 1027`: extraer un predicado de "string no vacío" y usarlo en los cinco sitios que hoy escriben `typeof X === "string" && X`.
    - Lens: refactor-identification | Principle: DRY, regla repetida cinco veces y ya divergente (RF-3) | Tier: mechanical
    - Behavior-preservation: conjunción literal de las dos condiciones; mismo conjunto aceptado. `:203-204` queda intacto: ahí la regla acepta `""` y unificarla cambiaría comportamiento.
    - Verify: `test/unit/session-reconcile.test.ts` (acks y `buildRelaunchCandidates`).
@@ -172,22 +175,38 @@ renderizando Main, Subagents, By Agent y Total con split cached/uncached y costo
 
 20. **Nuevo (pendiente)**: `src/session-reconcile.ts:233, 235, 239` — tres copias más de la regla
     "string no vacío" dentro de `danglingToolCalls`, fuera del alcance del paso 2. Mismo predicado
-    `isNonEmptyString` ya extraído. Tier: mechanical.
+    predicado compartido ya extraído. Tier: mechanical.
     - Verify: `test/unit/session-reconcile.test.ts` (`danglingToolCalls`).
 
 ## Pendientes propuestos por las revisiones
 
-- **21** aplicado en `7c4c207` (`isNonEmptyString` vive sólo en `src/overrides.ts`).
+- **21** aplicado en `7c4c207`, renombrado a `isNotBlank` en `35bc2dc` (`src/overrides.ts` es su único hogar).
 - **25** aplicado en `26e72da`: la guarda negada `typeof runId !== "string" || !runId` en
-  `buildSubagentSessionReport` pasó a `!isNonEmptyString(runId)`. La forma negada no estaba en el
+  `buildSubagentSessionReport` pasó a `!isNotBlank(runId)`. La forma negada no estaba en el
   inventario original del paso 2; la levantó `refactor-identification` al revisar el paso 20.
 - **22** aplicado en `10e211c` (helper `perToken` en `detectMiss`).
 - **23** aplicado en `ec7eb94` (`PreviousRequest.modelKey`/`.timestamp`, `MissCandidate.provider`/
   `.model`/`.timestamp` y sus cinco asignaciones).
-- **24** `validate.ts:24` `isRecord` acepta arrays (`typeof [] === "object"` sin `!Array.isArray`),
-  a diferencia de `isPlainObject`: defecto preexistente que `qa-adversary` marcó como cambio de
-  comportamiento (`validateSubagentParams([])` devuelve el error de `agent` en vez del de forma).
-  No es simplificación: requiere decisión de producto.
+- **24** aplicado en `e3360b0` (`isPlainObject` en `validateSubagentParams`: un array recibe
+  `Provide an object with "agent" and "task".` en vez del error de `agent`).
+- **26** aplicado en `35bc2dc`: `agent`/`task` deben ser no-blancos, no sólo no-vacíos. Un
+  `task: "   "` lanzaba un job real, y un `runId` en blanco colapsaba al segmento compartido
+  `"run"` dentro de `runIdDirName`. El predicado pasó a `trim().length > 0`, se renombró a
+  `isNotBlank` y los dos mensajes dicen `must be a non-blank string`. Aceptado como trade-off: un
+  `toolCallId` de sólo espacios ya no se repara en `danglingToolCalls` (inalcanzable con ids del
+  proveedor), y los caracteres de ancho cero (U+200B) siguen pasando porque el chequeo usa `trim()`.
+- **27** aplicado en `163b5fd`: test que fija la frontera de `subagentAckEntryOf` — un ack con
+  `details.runId` no-string se descarta al extraerlo. Verificado por mutación: sin esa guarda el
+  test falla con `TypeError: rawRunId.replace is not a function`.
+
+## U1 del planner: guarda `ack?.runId` — no arreglar
+
+El defecto que se reportó al cerrar la ronda anterior (un `runId` no-string llegaría a
+`runIdDirName`) **no es alcanzable**: `subagentAckEntryOf` normaliza el campo con `isNotBlank`
+(`src/session-reconcile.ts:198`), así que en `:975` el valor es siempre `undefined` o un string no
+vacío. La asimetría con la guarda de `:716` es aparente: `subagentResultEntryOf` devuelve el
+`details` crudo, y ahí la guarda sí carga el peso. Endurecer `runIdDirName` sería un check muerto.
+La guarda es load-bearing y ahora está fijada por el test del paso 27.
 
 ## Not mechanical (follow-up)
 
