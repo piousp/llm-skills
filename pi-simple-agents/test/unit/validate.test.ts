@@ -40,10 +40,10 @@ test("validateSubagentParams: single mode with a valid model string carries it t
 
 test("validateSubagentParams: single mode empty agent/task — exact current wording", () => {
   const emptyAgent = validateSubagentParams({ agent: "", task: "find things" });
-  assert.deepStrictEqual(emptyAgent, { ok: false, error: '"agent" must be a non-empty string.' });
+  assert.deepStrictEqual(emptyAgent, { ok: false, error: '"agent" must be a non-blank string.' });
 
   const emptyTask = validateSubagentParams({ agent: "scout", task: "" });
-  assert.deepStrictEqual(emptyTask, { ok: false, error: '"task" must be a non-empty string.' });
+  assert.deepStrictEqual(emptyTask, { ok: false, error: '"task" must be a non-blank string.' });
 });
 
 test("validateSubagentParams: single mode rejects malformed model strings, keeping multi-slash valid", () => {
@@ -411,6 +411,20 @@ test("validateSubagentParams: a non-object raw value is rejected", () => {
     const result = validateSubagentParams(raw);
     assert.deepStrictEqual(result, { ok: false, error: 'Provide an object with "agent" and "task".' });
   }
+});
+
+test("validateSubagentParams: whitespace-only agent or task is rejected", () => {
+  for (const raw of [
+    { agent: "   ", task: "x" },
+    { agent: "x", task: "\t \n" },
+  ]) {
+    const result = validateSubagentParams(raw);
+    assert.equal(result.ok, false);
+  }
+  const agent = validateSubagentParams({ agent: "   ", task: "x" });
+  assert.deepStrictEqual(agent, { ok: false, error: '"agent" must be a non-blank string.' });
+  const task = validateSubagentParams({ agent: "x", task: "   " });
+  assert.deepStrictEqual(task, { ok: false, error: '"task" must be a non-blank string.' });
 });
 
 test("validateSubagentParams: a stray \"tasks\" key alongside agent/task is silently ignored", () => {

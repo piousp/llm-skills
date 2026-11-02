@@ -130,7 +130,7 @@ default.
 ## Errors
 
 - Unknown `agent`: the error lists the available agents.
-- Missing or empty `agent`/`task`: validation error naming the field.
+- Missing or blank `agent`/`task`: validation error naming the field.
 - `model` without `provider/`, or `tools`/`skills` that are not string arrays.
 - Unknown `action`, or `steer`/`followUp` without a non-empty `message`: tool error.
 - A guard stops an intervention before it reaches the job (unknown id, settled job, no live

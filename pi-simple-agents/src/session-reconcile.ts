@@ -19,7 +19,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { runIdDirName } from "./subagent-session.ts";
 import type { AggregatedUsage } from "./usage.ts";
 import {
-  isNonEmptyString,
+  isNotBlank,
   overrideValueMatches,
   OVERRIDE_KEYS,
   OVERRIDE_TYPE_SPEC,
@@ -194,8 +194,8 @@ export function subagentAckEntryOf(entry: SessionEntry): SubagentAckDetails | un
   const task = record.task;
   const params = ackParamsOf(record);
   return {
-    jobId: isNonEmptyString(record.jobId) ? record.jobId : undefined,
-    runId: isNonEmptyString(record.runId) ? record.runId : undefined,
+    jobId: isNotBlank(record.jobId) ? record.jobId : undefined,
+    runId: isNotBlank(record.runId) ? record.runId : undefined,
     task:
       task !== null && typeof task === "object"
         ? {
@@ -233,13 +233,13 @@ export function danglingToolCalls(entries: readonly SessionEntry[]): DanglingToo
     if (!message) continue;
     if (message.role === "assistant" && Array.isArray(message.content)) {
       for (const block of message.content) {
-        if (block?.type === "toolCall" && isNonEmptyString(block.id) && !called.has(block.id)) {
+        if (block?.type === "toolCall" && isNotBlank(block.id) && !called.has(block.id)) {
           const name = (block as { name?: unknown }).name;
-          called.set(block.id, isNonEmptyString(name) ? name : "unknown");
+          called.set(block.id, isNotBlank(name) ? name : "unknown");
         }
       }
     }
-    if (isNonEmptyString(message.toolCallId)) {
+    if (isNotBlank(message.toolCallId)) {
       answered.add(message.toolCallId);
     }
   }
@@ -713,7 +713,7 @@ export function buildSubagentSessionReport(
     for (const entry of parentEntries) {
       const resultEntry = subagentResultEntryOf(entry);
       const runId = resultEntry?.details?.runId;
-      if (!resultEntry || !isNonEmptyString(runId)) continue;
+      if (!resultEntry || !isNotBlank(runId)) continue;
       const segment = runIdDirName(runId);
       if (!resultBySegment.has(segment)) resultBySegment.set(segment, resultEntry);
     }
@@ -794,7 +794,7 @@ function completedRun(
   sessionFile: ReconciledRun["sessionFile"],
 ): ReconciledRun {
   return {
-    runId: isNonEmptyString(details.runId) ? details.runId : segment,
+    runId: isNotBlank(details.runId) ? details.runId : segment,
     depth,
     agent: details.task?.agent ?? "unknown",
     status: normalizeStatus(details.status),
@@ -979,7 +979,7 @@ export function buildRelaunchCandidates(
     const result = subagentResultEntryOf(entry);
     const runId = result?.details?.runId;
     const jobId = result?.details?.jobId;
-    if (result && isNonEmptyString(runId) && isNonEmptyString(jobId)) {
+    if (result && isNotBlank(runId) && isNotBlank(jobId)) {
       if (!jobIdBySegment.has(runIdDirName(runId))) jobIdBySegment.set(runIdDirName(runId), jobId);
     }
   }

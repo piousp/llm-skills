@@ -1,7 +1,7 @@
 import type { AgentConfig } from "./agents.ts";
 import {
   invocationOverrideOf,
-  isNonEmptyString,
+  isNotBlank,
   isValidModelRef,
   isPlainObject,
   isStringArray,
@@ -23,7 +23,7 @@ export type SubagentParams = { agent: string; task: string } & InvocationOverrid
 
 export type ValidationResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
-// isNonEmptyString/isPlainObject/isStringArray/isValidModelRef come from src/overrides.ts — their single home.
+// isNotBlank/isPlainObject/isStringArray/isValidModelRef come from src/overrides.ts — their single home.
 function validateModelRef(value: unknown, label: string): string | undefined {
   if (value === undefined || isValidModelRef(value)) return undefined;
   return `${label} must be a string in "provider/modelId" form, e.g. "anthropic/claude-opus-4-8".`;
@@ -66,11 +66,11 @@ export function validateSubagentParams(raw: unknown): ValidationResult<SubagentP
     return { ok: false, error: 'Provide an object with "agent" and "task".' };
   }
 
-  if (!isNonEmptyString(raw.agent)) {
-    return { ok: false, error: '"agent" must be a non-empty string.' };
+  if (!isNotBlank(raw.agent)) {
+    return { ok: false, error: '"agent" must be a non-blank string.' };
   }
-  if (!isNonEmptyString(raw.task)) {
-    return { ok: false, error: '"task" must be a non-empty string.' };
+  if (!isNotBlank(raw.task)) {
+    return { ok: false, error: '"task" must be a non-blank string.' };
   }
   const modelError = validateModelRef(raw.model, '"model"');
   if (modelError) return { ok: false, error: modelError };

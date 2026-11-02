@@ -703,7 +703,7 @@ extracts just the present override fields off the validated args into a plain
 `InvocationOverride`, for feeding to `applyInvocationOverride`.
 
 Validation rules:
-- `agent` and `task` are both required, non-empty strings.
+- `agent` and `task` are both required, non-blank strings.
 - `model` must be a `"provider/modelId"` string (rejected otherwise with a message naming the
   required format); `tools`/`skills` must each be an array of strings. `[]` is a valid value for
   `tools`/`skills` and is distinct from omitting the field: omitted means "inherit the agent's

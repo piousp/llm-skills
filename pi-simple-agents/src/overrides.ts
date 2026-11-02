@@ -75,10 +75,12 @@ export function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
-// The one shared "non-empty string" guard (validate.ts's agent/task check and
-// session-reconcile.ts's id/name extraction both use it).
-export function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+// The one shared "not blank" guard (validate.ts's agent/task check and
+// session-reconcile.ts's id/name extraction both use it). Whitespace-only
+// strings do not count: the check trims before measuring, but the value
+// itself is never rewritten.
+export function isNotBlank(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 // Whether `value` has the type the spec names for an override field — the

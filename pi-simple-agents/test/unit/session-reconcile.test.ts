@@ -878,6 +878,18 @@ test("buildRelaunchCandidates: an old-format ack without a runId is ignored for 
   assert.equal(candidates[0].jobId, undefined);
 });
 
+// A whitespace-only runId names no run: the completion message contributes
+// no segment (it would otherwise collapse to the shared "run" dir segment),
+// the ack enriches nothing, and no candidate is offered.
+test("buildRelaunchCandidates: a whitespace-only runId enriches nothing and yields no candidate", () => {
+  const candidates = relaunchFixture({
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentAck("S9", "   ", "scout", "x"), subagentResult({
+      jobId: "S9", runId: "   ", status: "failed", task: { agent: "scout", task: "x" },
+    })),
+  });
+  assert.deepEqual(candidates, []);
+});
+
 // --- danglingToolCalls ---
 
 function assistantToolCall(toolCallId: string, name = "read"): unknown {
