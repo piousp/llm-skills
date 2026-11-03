@@ -308,7 +308,7 @@ function flowContext(branch: readonly SessionEntry[]): ImproveFlowContext {
         throw new Error("this test injects the proposer and never reaches the session model");
       },
     },
-    sessionManager: { getBranch: () => [...branch] },
+    sessionManager: { getBranch: () => [...branch], getSessionId: () => "session-test" },
   };
 }
 

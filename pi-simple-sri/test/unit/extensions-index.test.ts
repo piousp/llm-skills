@@ -334,7 +334,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     cwd: CWD,
     hasUI: options.hasUI ?? true,
     model: undefined,
-    sessionManager: { getBranch: () => [...(options.branch ?? failingBranch())] },
+    sessionManager: {
+      getBranch: () => [...(options.branch ?? failingBranch())],
+      getSessionId: () => "session-test",
+    },
     // A model registry that fails loudly: the proposer is a seam in every test here, so a call
     // through the registry means the wiring lost the seam it injected.
     modelRegistry: {

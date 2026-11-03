@@ -75,6 +75,9 @@ const MODEL: Model<Api> = {
 
 const BASE_MS = Date.parse("2026-11-02T14:00:00.000Z");
 
+// The identifier of the session the harness fakes: the model request has to carry it.
+const SESSION_ID = "session-01a1a2ec-7c43-7417-903d-02543f0b9fab";
+
 const SKILL: SkillRef = {
   name: "pdf-tools",
   description: "Extract tables from PDFs",
@@ -198,6 +201,7 @@ interface CompletedCall {
   model: Model<Api>;
   context: Context;
   maxTokens: number | undefined;
+  sessionId: string | undefined;
 }
 
 interface HarnessOptions {
@@ -265,7 +269,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
   const modelRegistry: SkillImproveModelRegistry = {
     complete: async (model, context, request) => {
-      completed.push({ model, context, maxTokens: request?.maxTokens });
+      completed.push({ model, context, maxTokens: request?.maxTokens, sessionId: request?.sessionId });
       return assistantMessage(options.reply ?? REPLY);
     },
   };
@@ -274,7 +278,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     cwd: CWD,
     hasUI: options.hasUI ?? true,
     model: options.model,
-    sessionManager: { getBranch: () => [...(options.branch ?? failingBranch())] },
+    sessionManager: { getBranch: () => [...(options.branch ?? failingBranch())], getSessionId: () => SESSION_ID },
     modelRegistry,
     ui: {
       notify: (message, type) => {
@@ -618,7 +622,9 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
 });
 
 // Rule 4: the single generation goes through the session model, with the token budget of the
-// proposer and the model of the session pinned on the diagnosis (Q13).
+// proposer, the model of the session pinned on the diagnosis (Q13) and the session identifier the
+// provider routes by. A request without the identifier is refused by a session-affine provider
+// before the model sees it, so the call has to carry it like the agent loop's own requests do.
 test("runSkillImprove: the real proposer calls the session model with the token budget", async () => {
   const harness = createHarness({ model: MODEL, useRealProposer: true });
 
@@ -627,6 +633,7 @@ test("runSkillImprove: the real proposer calls the session model with the token 
   assert.equal(harness.completed.length, 1);
   assert.deepEqual(harness.completed[0].model, MODEL);
   assert.equal(harness.completed[0].maxTokens, PROPOSAL_MAX_TOKENS);
+  assert.equal(harness.completed[0].sessionId, SESSION_ID);
 
   assert.equal(harness.writes.length, 1);
   assert.equal(harness.writes[0].decision.diagnosis.replayItems[0].model, MODEL.id);

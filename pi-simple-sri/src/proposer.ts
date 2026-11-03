@@ -159,7 +159,14 @@ export function createProposer(complete: CompleteFn): Proposer {
       // reply cut by the token budget, aborted, or ended by a tool call is not a lesson, and
       // nothing is returned that a caller could write.
       if (message.stopReason !== "stop") {
-        return fail(`the model stopped with ${quote(message.stopReason)} instead of finishing the lesson`);
+        // A failed request carries the provider's own message, and nothing else explains it: a
+        // stopReason of "error" is usually a routing or authentication refusal that the operator
+        // cannot see anywhere else in the session. It is quoted like every value that did not come
+        // from this module.
+        const detail = message.errorMessage === undefined ? "" : ` (${quote(message.errorMessage)})`;
+        return fail(
+          `the model stopped with ${quote(message.stopReason)} instead of finishing the lesson${detail}`,
+        );
       }
 
       const reply = parseReply(textOf(message));

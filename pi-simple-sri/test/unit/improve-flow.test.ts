@@ -167,7 +167,7 @@ function flowContext(branch: readonly SessionEntry[]): ImproveFlowContext {
         throw new Error("the flow must not reach the registry while a proposer is injected");
       },
     },
-    sessionManager: { getBranch: () => [...branch] },
+    sessionManager: { getBranch: () => [...branch], getSessionId: () => "session-test" },
   };
 }
 

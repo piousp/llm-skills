@@ -96,6 +96,7 @@ interface Call {
 interface FakeReply {
   text?: string;
   stopReason?: AssistantMessage["stopReason"];
+  errorMessage?: string;
   failure?: Error;
 }
 
@@ -104,7 +105,11 @@ interface Fake {
   calls: Call[];
 }
 
-function assistantMessage(text: string, stopReason: AssistantMessage["stopReason"]): AssistantMessage {
+function assistantMessage(
+  text: string,
+  stopReason: AssistantMessage["stopReason"],
+  errorMessage?: string,
+): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -113,6 +118,7 @@ function assistantMessage(text: string, stopReason: AssistantMessage["stopReason
     model: MODEL,
     usage: USAGE,
     stopReason,
+    ...(errorMessage === undefined ? {} : { errorMessage }),
     timestamp: NOW.getTime(),
   };
 }
@@ -122,7 +128,7 @@ function fakeComplete(reply: FakeReply = {}): Fake {
   const complete: CompleteFn = async (context, options) => {
     calls.push({ context, options });
     if (reply.failure !== undefined) throw reply.failure;
-    return assistantMessage(reply.text ?? "", reply.stopReason ?? "stop");
+    return assistantMessage(reply.text ?? "", reply.stopReason ?? "stop", reply.errorMessage);
   };
   return { complete, calls };
 }
@@ -387,6 +393,24 @@ for (const stopReason of STOP_REASONS) {
     );
   });
 }
+
+// A stopReason of "error" is a failed request, not a finished answer: the provider's own message
+// is the only thing that tells an operator which failure it was, so it travels with the refusal.
+test("propose: a failed request carries the provider message in the refusal", async () => {
+  const fake = fakeComplete({
+    text: "",
+    stopReason: "error",
+    errorMessage: '400: {"type":"MissingSessionID"}',
+  });
+
+  const error = await rejectionOf(fake, proposeInput());
+
+  assert.equal(
+    error.message.includes("MissingSessionID"),
+    true,
+    `error drops the provider message: ${error.message}`,
+  );
+});
 
 test("propose: a failing model call is refused with its cause", async () => {
   const fake = fakeComplete({ failure: new Error("socket hang up") });

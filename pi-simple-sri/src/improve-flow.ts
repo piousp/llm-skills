@@ -117,10 +117,15 @@ export interface ImprovementEntry {
 }
 
 // What the loop reads from the session: the branch of entries the failure evidence is derived
-// from. ReadonlySessionManager.getBranch() answers SessionEntry[], so the entries of other kinds
-// are filtered out at the call site (see messageEntries).
+// from, and the identifier of the session itself. ReadonlySessionManager.getBranch() answers
+// SessionEntry[], so the entries of other kinds are filtered out at the call site (see
+// messageEntries). getSessionId() is not evidence: it is what the single model call has to send
+// as `sessionId`, because a provider that routes by session refuses a request without it (the
+// opencode-go provider answers 400 MissingSessionID). pi's own agent loop passes it on every
+// request; a call made outside that loop has to pass it too.
 export interface ImproveFlowSession {
   getBranch(): readonly SessionEntry[];
+  getSessionId(): string;
 }
 
 // The one model call this package makes, typed exactly after the registry method it forwards to:
@@ -611,7 +616,14 @@ function resolvePropose(seams: FlowSeams, ctx: ImproveFlowContext): ProposeFn | 
   const model = ctx.model;
   if (model === undefined) return undefined;
 
-  const complete: CompleteFn = (context, options) => ctx.modelRegistry.complete(model, context, options);
+  // sessionId travels with every request, not only with the session's own turns: the registry
+  // resolves credentials and forwards the options untouched, and the routing header of a
+  // session-affine provider is built from this field alone.
+  const complete: CompleteFn = (context, options) =>
+    ctx.modelRegistry.complete(model, context, {
+      ...options,
+      sessionId: ctx.sessionManager.getSessionId(),
+    });
   const proposer = createProposer(complete);
   return (input) => proposer.propose(input);
 }

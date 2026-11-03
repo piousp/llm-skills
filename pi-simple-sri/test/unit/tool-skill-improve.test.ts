@@ -252,7 +252,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
     cwd: CWD,
     model: options.model,
     modelRegistry,
-    sessionManager: { getBranch: () => [...(options.branch ?? failingBranch())] },
+    sessionManager: {
+      getBranch: () => [...(options.branch ?? failingBranch())],
+      getSessionId: () => "session-test",
+    },
   };
 
   const write = async (input: StagingWriteInput): Promise<StagingWriteResult> => {
