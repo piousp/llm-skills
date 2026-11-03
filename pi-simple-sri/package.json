@@ -30,7 +30,8 @@
     "src",
     "schemas",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "REFERENCES.md"
   ],
   "type": "module",
   "scripts": {

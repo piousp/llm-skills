@@ -13,6 +13,9 @@ shows the lesson helps, and that gate arrives in the next milestone. Call it gat
 self-improvement; the recursive step, where the generator itself is versioned and evaluated, is not
 built.
 
+The design follows the 2026 literature on skill self-improvement. [REFERENCES.md](REFERENCES.md)
+lists the papers behind each rule, with their identifiers and what each one supports.
+
 ## Install
 
 ```bash
@@ -156,6 +159,7 @@ directory name, because pi accepts that the two differ. The file is only read.
 ## More
 
 - [DEVELOPER.md](DEVELOPER.md): layout, tests and the rules that came out of the design.
+- [REFERENCES.md](REFERENCES.md): the papers the design draws on.
 - [CHANGELOG.md](CHANGELOG.md).
 - [schemas/decision.schema.json](schemas/decision.schema.json).
 
