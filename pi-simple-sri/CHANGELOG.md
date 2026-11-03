@@ -14,7 +14,8 @@ follows Keep a Changelog, and this project uses semantic versioning.
   error names itself instead of being indistinguishable from a truncated answer.
 - Candidates, the audit index and both answers live under `<agent dir>/sri` instead of the package
   root. With `pi install npm:pi-simple-sri` the package root is inside `node_modules`, so an upgrade
-  took staging and state away. Records name paths relative to that base.
+  took staging and state away. Records name paths relative to that base, and the answers print the
+  absolute one. State staged before this release is not migrated and stays where it was.
 
 ## [0.0.1] - 2026-11-03
 

@@ -90,13 +90,15 @@ export type SkillImproveOutcome =
   | "error";
 
 // The documented shape of `details` (rule 6). `reason` is the vocabulary of the refusal for the
-// predictable ones and the refusal message for "error"; the two paths are present exactly when a
-// candidate was staged.
+// predictable ones and the refusal message for "error"; the two paths and the base are present exactly
+// when a candidate was staged. The paths are relative to that base, the way the records name them, so a
+// consumer opens the candidate by joining the two fields instead of guessing a prefix.
 export interface ToolDetails {
   action: SkillImproveAction;
   skill: string;
   outcome: SkillImproveOutcome;
   reason?: string;
+  base?: string;
   stagingPath?: string;
   decisionPath?: string;
   usage?: GenerationUsage;
@@ -274,7 +276,7 @@ async function runPropose(
           {
             type: "text",
             text: withWarning(
-              proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath),
+              proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath, result.base),
               warning,
             ),
           },
@@ -283,6 +285,7 @@ async function runPropose(
           action,
           skill: result.skill.name,
           outcome: "proposed",
+          base: result.base,
           stagingPath: result.staged.stagingPath,
           decisionPath: result.staged.decisionPath,
           usage: result.usage,

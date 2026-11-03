@@ -105,10 +105,11 @@ package never removes a candidate, and nothing is written inside the installed p
 └── state/attempts.jsonl     one event per line, append only
 ```
 
-The index line, the session entry and both answers name those paths relative to the write base
-(`staging/<timestamp>/<skill>/...`), so a record stays readable after the agent directory moves.
-`candidate.lessonPath` in `decision.json` is relative to the candidate directory itself
-(`lessons/<slug>.md`).
+The index line, the session entry and the `details` of the tool name those paths relative to the write
+base (`staging/<timestamp>/<skill>/...`), so a record stays readable after the agent directory moves,
+and `details` carries the base next to them. The answers print the absolute path, because a relative
+one cannot be opened from the session's working directory. `candidate.lessonPath` in `decision.json` is
+relative to the candidate directory itself (`lessons/<slug>.md`).
 
 `decision.json` follows [schemas/decision.schema.json](schemas/decision.schema.json). The index
 events today are `proposed`, `no-evidence`, `not-eligible` and `no-model`; M1 adds `accepted`,
@@ -140,7 +141,8 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 - The loop writes only under the write base, `<agent dir>/sri`, in `staging/` and `state/`. In this
   release it never writes inside a skill, and a base that falls inside a skill directory is refused
-  before anything is written.
+  before anything is written: both sides are compared through the existing part of their paths, so a
+  symlink pointing into a skill is caught too.
 - Every write goes through one chokepoint: the target is checked against the write perimeter with
   resolved paths, written to a temporary file, renamed, then read back and compared byte by byte.
 - Writes to the same file are serialized inside the process, and a file that is a symlink is written

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { SriPerimeterError } from "./errors.ts";
-import { isInsideOrEqual } from "./perimeter.ts";
+import { isInsideOrEqual, resolveExistingAncestor } from "./perimeter.ts";
 import { quote } from "./values.ts";
 
 // Where a run writes: `<agentDir>/sri`, with staging/ and state/ under it.
@@ -16,10 +16,10 @@ import { quote } from "./values.ts";
 // one creates it, so asking where things go never has a side effect, and a base that cannot be
 // written fails at the write, not here.
 
-const PACKAGE_DIR = "sri";
+const BASE_DIR = "sri";
 
 export function writeBase(agentDir: string): string {
-  return path.join(agentDir, PACKAGE_DIR);
+  return path.join(agentDir, BASE_DIR);
 }
 
 export function stagingDir(base: string): string {
@@ -51,16 +51,20 @@ export function relativeToBase(base: string, target: string): string {
 // both of its writes land under the base.
 //
 // Every spelling of the skill is compared because the inventory keeps the linked path and the real one
-// (F5), and a skill reached through a symlink is the usual case here. Both sides are the resolved
-// spellings the caller already has: this is a placement check on where the base was pointed, and the
-// perimeter of the writes below is what proves containment.
+// (F5), and a skill reached through a symlink is the usual case here.
+//
+// Both sides are resolved through the existing part of the path before they are compared: a declared
+// string comparison accepts a base that reaches the skill through a symlink, and the write perimeter
+// cannot catch that afterwards because its root is <base>/staging, which is already inside the link.
+// A base that does not exist yet resolves to its resolved prefix plus the missing tail, so a guard that
+// runs before the first write still compares what the filesystem will do.
 export function assertBaseOutsideSkill(base: string, skillDirs: readonly string[]): void {
-  const resolvedBase = path.resolve(base);
+  const resolvedBase = resolveExistingAncestor(base);
   for (const skillDir of skillDirs) {
-    const resolvedSkillDir = path.resolve(skillDir);
+    const resolvedSkillDir = resolveExistingAncestor(skillDir);
     if (isInsideOrEqual(resolvedBase, resolvedSkillDir)) {
       throw new SriPerimeterError(
-        `refusing to run: the write base ${quote(resolvedBase)} is inside the skill directory ${quote(resolvedSkillDir)}`,
+        `refusing to run: the write base ${quote(base)} resolves to ${quote(resolvedBase)}, inside the skill directory ${quote(resolvedSkillDir)}`,
         resolvedBase,
       );
     }

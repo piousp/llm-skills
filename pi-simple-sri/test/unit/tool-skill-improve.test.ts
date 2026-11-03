@@ -45,7 +45,7 @@ const NOW = new Date("2026-11-02T14:03:22.481Z");
 const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
 // The base of the run: the bytes land under <base>/staging and every record names them relative to it.
-const PKG_ROOT = "/pkg";
+const BASE = "/pkg";
 const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
 const DECISION_PATH = `${STAGING_PATH}/decision.json`;
 const STAGING_RELATIVE = "staging/20261102T140322481Z/pdf-tools";
@@ -205,7 +205,7 @@ interface HarnessOptions {
 interface Harness {
   entries: EntryCall[];
   attempts: AttemptLine[];
-  attemptRoots: string[];
+  attemptBases: string[];
   writes: StagingWriteInput[];
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
@@ -239,7 +239,7 @@ function successfulProposer(proposals: Harness["proposals"]): ProposeFn {
 function createHarness(options: HarnessOptions = {}): Harness {
   const entries: EntryCall[] = [];
   const attempts: AttemptLine[] = [];
-  const attemptRoots: string[] = [];
+  const attemptBases: string[] = [];
   const writes: StagingWriteInput[] = [];
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
@@ -279,11 +279,11 @@ function createHarness(options: HarnessOptions = {}): Harness {
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
     write,
-    appendAttempt: async (root, line) => {
-      attemptRoots.push(root);
+    appendAttempt: async (base, line) => {
+      attemptBases.push(base);
       attempts.push(line);
     },
-    base: PKG_ROOT,
+    base: BASE,
     appendEntry: (customType: string, data: ImprovementEntry) => {
       if (options.entryFailure !== undefined) throw options.entryFailure;
       entries.push({ customType, data });
@@ -296,7 +296,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   return {
     entries,
     attempts,
-    attemptRoots,
+    attemptBases,
     writes,
     proposals,
     completed,
@@ -336,7 +336,7 @@ test("skillImproveParams: the focus is optional and both actions are accepted", 
 // Rule 3: the description travels in every session that loads the tool, so it has to say that the
 // tool neither edits the skill nor accepts a candidate.
 test("createSkillImproveTool: the definition carries the schema and the promise of not editing the skill", () => {
-  const tool = createSkillImproveTool({ base: PKG_ROOT });
+  const tool = createSkillImproveTool({ base: BASE });
 
   assert.equal(tool.name, SKILL_IMPROVE_TOOL_NAME);
   assert.equal(SKILL_IMPROVE_TOOL_NAME, "skill_improve");
@@ -430,12 +430,12 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
 
   assert.equal(harness.writes.length, 1);
   const [write] = harness.writes;
-  assert.equal(write.base, PKG_ROOT);
+  assert.equal(write.base, BASE);
   assert.equal(write.slug, LESSON_SLUG);
   // The record says which surface asked: a candidate the tool staged never claims to be a command.
   assert.deepEqual(write.decision.trigger, { surface: "tool", focus: "merged cells" });
 
-  assert.deepEqual(harness.attemptRoots, [PKG_ROOT]);
+  assert.deepEqual(harness.attemptBases, [BASE]);
   assert.deepEqual(harness.attempts, [
     {
       ts: NOW_ISO,
@@ -470,11 +470,12 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
     action: "propose",
     skill: "pdf-tools",
     outcome: "proposed",
+    base: BASE,
     stagingPath: STAGING_RELATIVE,
     decisionPath: DECISION_RELATIVE,
     usage: { input: 412, output: 137 },
   });
-  assert.equal(textOf(result).includes(STAGING_RELATIVE), true);
+  assert.equal(textOf(result).includes(STAGING_PATH), true);
 });
 
 // Q17: eligibility is checked before the model is called, so an ineligible skill spends no
@@ -626,13 +627,14 @@ test("propose: an entry channel that throws does not turn a staged candidate int
     action: "propose",
     skill: "pdf-tools",
     outcome: "proposed",
+    base: BASE,
     stagingPath: STAGING_RELATIVE,
     decisionPath: DECISION_RELATIVE,
     usage: { input: 412, output: 137 },
   });
 
   const text = textOf(result);
-  assert.equal(text.includes(STAGING_RELATIVE), true);
+  assert.equal(text.includes(STAGING_PATH), true);
   assert.equal(text.includes("the session entry was not recorded"), true);
   assert.equal(text.includes("EACCES"), true);
 

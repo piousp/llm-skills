@@ -102,3 +102,37 @@ test("assertBaseOutsideSkill: every spelling of the skill is compared", () => {
     (error: unknown) => error instanceof SriPerimeterError,
   );
 });
+
+// A symlink is the case a declared-string comparison cannot see. Both shapes are covered because both
+// happen in practice: the base itself is a link into the skill, or a directory above it is.
+test("assertBaseOutsideSkill: a base that reaches the skill through a symlink is refused", (t) => {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-link-"));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(root, "skills", "pdf-tools");
+  fs.mkdirSync(path.join(skillDir, "state"), { recursive: true });
+  const agentDir = path.join(root, "agent");
+  fs.mkdirSync(agentDir);
+
+  // (a) the base is the link: <agent>/sri -> <skill>/state
+  const linkedBase = path.join(agentDir, "sri");
+  fs.symlinkSync(path.join(skillDir, "state"), linkedBase);
+  assert.throws(
+    () => assertBaseOutsideSkill(linkedBase, [skillDir]),
+    (error: unknown) => error instanceof SriPerimeterError && error.message.includes("inside the skill directory"),
+  );
+
+  // (b) the base does not exist yet but a directory above it is the link: <linked>/sri
+  const linkedParent = path.join(root, "agent-link");
+  fs.symlinkSync(skillDir, linkedParent);
+  assert.throws(
+    () => assertBaseOutsideSkill(path.join(linkedParent, "state", "sri"), [skillDir]),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+
+  // The same base spelled through the real path is refused too, and a sibling outside the skill is not.
+  assert.throws(() => assertBaseOutsideSkill(path.join(skillDir, "state"), [skillDir]), (error: unknown) => error instanceof SriPerimeterError);
+  assert.doesNotThrow(() => assertBaseOutsideSkill(path.join(agentDir, "sri-outside"), [skillDir]));
+});

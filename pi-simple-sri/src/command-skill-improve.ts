@@ -191,7 +191,7 @@ async function improve(args: string, run: Run): Promise<void> {
       return;
     case "proposed":
       recordEntry(run, result.entry);
-      notify(proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath), "info");
+      notify(proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath, result.base), "info");
       return;
     default:
       // The six outcomes of the flow are the whole switch: a variant added to ProposeFlowResult makes

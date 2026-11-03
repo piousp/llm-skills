@@ -85,6 +85,18 @@ function resolveWritableRoot(root: string, target: string): WritableRoot {
   return { declared, real: resolveRealPath(declared, target) };
 }
 
+// The resolved form of `target`, including the part of it that does not exist yet: the symlinks of the
+// prefix that is on disk are resolved and the missing tail is appended to the result. Exported because
+// src/write-base.ts has to compare a base that may not exist yet against a skill directory: two declared
+// spellings can look unrelated while a symlink on the path makes the filesystem say otherwise.
+export function resolveExistingAncestor(target: string): string {
+  const resolved = path.resolve(target);
+  const ancestor = deepestExistingAncestor(resolved, target);
+  const resolvedAncestor = resolveRealPath(ancestor, target);
+  const tail = path.relative(ancestor, resolved);
+  return tail === "" ? resolvedAncestor : path.join(resolvedAncestor, tail);
+}
+
 function resolveRealPath(targetPath: string, reportedTarget: string): string {
   try {
     return fs.realpathSync(targetPath);

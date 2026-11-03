@@ -37,7 +37,7 @@ const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
 // The base of the run: the package root before the write-base slice, and now the base a test injects.
 // The bytes land under <base>/staging; the records and the answers name them relative to the base.
-const PKG_ROOT = "/pkg";
+const BASE = "/pkg";
 const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
 const DECISION_PATH = `${STAGING_PATH}/decision.json`;
 const STAGING_RELATIVE = "staging/20261102T140322481Z/pdf-tools";
@@ -230,7 +230,7 @@ interface Harness {
   sent: SentMessage[];
   entries: EntryCall[];
   attempts: AttemptLine[];
-  attemptRoots: string[];
+  attemptBases: string[];
   writes: StagingWriteInput[];
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
@@ -266,7 +266,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const sent: SentMessage[] = [];
   const entries: EntryCall[] = [];
   const attempts: AttemptLine[] = [];
-  const attemptRoots: string[] = [];
+  const attemptBases: string[] = [];
   const writes: StagingWriteInput[] = [];
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
@@ -309,11 +309,11 @@ function createHarness(options: HarnessOptions = {}): Harness {
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
     write,
-    appendAttempt: async (root, line) => {
-      attemptRoots.push(root);
+    appendAttempt: async (base, line) => {
+      attemptBases.push(base);
       attempts.push(line);
     },
-    base: PKG_ROOT,
+    base: BASE,
     // The message channel is a seam of the dependencies and not a member of the context: pi's command
     // context carries no sendMessage, so the wiring connects it here and a run without it degrades to
     // stderr.
@@ -342,7 +342,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     sent,
     entries,
     attempts,
-    attemptRoots,
+    attemptBases,
     writes,
     proposals,
     completed,
@@ -547,7 +547,7 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
   // The staging write: the base of the run, the skill, and a lesson file the writer can parse.
   assert.equal(harness.writes.length, 1);
   const [write] = harness.writes;
-  assert.equal(write.base, PKG_ROOT);
+  assert.equal(write.base, BASE);
   assert.deepEqual(write.skill, SKILL);
   assert.equal(write.slug, LESSON_SLUG);
   assert.equal(write.now, NOW);
@@ -589,7 +589,7 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
 
   // The index line carries the hashes the writer answered with, and names the candidate relative to
   // the base of the run.
-  assert.deepEqual(harness.attemptRoots, [PKG_ROOT]);
+  assert.deepEqual(harness.attemptBases, [BASE]);
   assert.deepEqual(harness.attempts, [
     {
       ts: NOW_ISO,
@@ -622,7 +622,7 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
 
   assert.equal(harness.notified.length, 1);
   assert.equal(harness.notified[0].type, "info");
-  assert.equal(harness.notified[0].message.includes(STAGING_RELATIVE), true);
+  assert.equal(harness.notified[0].message.includes(STAGING_PATH), true);
   assert.equal(harness.notified[0].message.includes(LESSON_SLUG), true);
 });
 
@@ -713,7 +713,7 @@ test("runSkillImprove: a run without an entry channel reports the entry was not 
   assert.equal(harness.notified[0].type, "warning");
   assert.equal(harness.notified[0].message.includes("not recorded"), true);
   assert.equal(harness.notified[1].type, "info");
-  assert.equal(harness.notified[1].message.includes(STAGING_RELATIVE), true);
+  assert.equal(harness.notified[1].message.includes(STAGING_PATH), true);
 });
 
 // F2: an entry channel that throws is the same degradation as an absent one. The candidate is staged,
@@ -738,7 +738,7 @@ test("runSkillImprove: an entry channel that throws does not degrade a staged ca
 
   // The success notification is the real outcome, with the path of the candidate it staged.
   assert.equal(harness.notified[1].type, "info");
-  assert.equal(harness.notified[1].message.includes(STAGING_RELATIVE), true);
+  assert.equal(harness.notified[1].message.includes(STAGING_PATH), true);
   assert.equal(harness.notified[1].message.includes(LESSON_SLUG), true);
 });
 
@@ -784,7 +784,7 @@ test("runSkillImprove: an allow that names the frontmatter name admits the skill
   assert.equal(harness.writes.length, 1);
   assert.equal(harness.notified.length, 1);
   assert.equal(harness.notified[0].type, "info");
-  assert.equal(harness.notified[0].message.includes(STAGING_RELATIVE), true);
+  assert.equal(harness.notified[0].message.includes(STAGING_PATH), true);
 });
 
 // F6: a standalone .md is a skill that exists and is not a directory of its own, so "no such skill"

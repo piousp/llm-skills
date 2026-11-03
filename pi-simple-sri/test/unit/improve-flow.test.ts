@@ -264,6 +264,9 @@ test("proposeSkill: a candidate whose attempt line fails is retired and named in
       // refused are both in the message, and so is whether the removal worked.
       return (
         error.message.includes(path.relative(fixture.pkg, candidatePath(fixture.pkg))) &&
+        // The relative spelling is a suffix of the absolute one, so the positive assertion alone passes
+        // for both: the base has to be absent from the sentence for this to prove what it claims.
+        !error.message.includes(fixture.pkg) &&
         error.message.includes("ENOSPC") &&
         error.message.includes("removed: true")
       );
@@ -710,4 +713,31 @@ test("proposeSkill: a blank focus is no focus in the record, the entry and the h
   assert.equal(absentRefusal.entry.focus, null);
   assert.equal(blankAttempts[0].candidateHash, absentAttempts[0].candidateHash);
   assert.equal(blankAttempts[0].bodyHash, absentAttempts[0].bodyHash);
+});
+
+// The guard takes both spellings of the skill from the inventory (F5), so a skill reached through a
+// symlink is refused on the linked path as well. Without this case, dropping `skill.dir` from the call
+// leaves every other refusal test green.
+test("proposeSkill: a base inside the linked path of a skill is refused", async (t) => {
+  const fixture = createFixture(t);
+  const linkedSkill: SkillRef = { ...SKILL, dir: "/skills/pdf-tools", realDir: "/home/me/skills/pdf-tools" };
+  const attempts: AttemptLine[] = [];
+
+  const deps: ImproveFlowDeps = {
+    ...flowDeps(fixture),
+    base: "/skills/pdf-tools/state",
+    listSkills: async () => [linkedSkill],
+    appendAttempt: async (_base, line) => {
+      attempts.push(line);
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      proposeSkill({ surface: "command", skillName: SKILL.name }, flowContext(failingBranch()), deps),
+    (error: unknown) =>
+      error instanceof SriPerimeterError && error.message.includes("/skills/pdf-tools/state"),
+  );
+
+  assert.deepEqual(attempts, []);
 });

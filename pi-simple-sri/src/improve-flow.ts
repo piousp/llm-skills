@@ -243,6 +243,10 @@ export interface ProposedFlowResult {
   diagnosis: Diagnosis;
   draft: LessonDraft;
   usage: GenerationUsage;
+  // The base every relative path of this result is named against. It travels with the answer because a
+  // relative path alone cannot be opened: the human answer renders it absolute and `details` hands the
+  // base to whoever consumes the machine fields.
+  base: string;
   staged: StagedCandidate;
   entry: ImprovementEntry;
 }
@@ -448,6 +452,9 @@ export async function proposeSkill(
   // absolute spellings stay local: they are what the removal below needs.
   const stagingPath = relativeToBase(seams.base, staged.stagingPath);
   const decisionPath = relativeToBase(seams.base, staged.decisionPath);
+  // One value for the result and the entry: two literals of the same three fields can drift apart, and
+  // the session entry and the answer would then describe two different candidates.
+  const candidate: StagedCandidate = { slug: draft.slug, stagingPath, decisionPath };
 
   // F1: the candidate and its index line are one unit. The line is attempted immediately, and a
   // failure retires the candidate instead of leaving a directory no line names -- a run that reports
@@ -479,7 +486,8 @@ export async function proposeSkill(
     diagnosis,
     draft,
     usage: proposal.value.usage,
-    staged: { slug: draft.slug, stagingPath, decisionPath },
+    base: seams.base,
+    staged: candidate,
     entry: attemptEntry(
       request,
       skill,
@@ -487,7 +495,7 @@ export async function proposeSkill(
       "proposed",
       null,
       { candidateHash: staged.contentHash, bodyHash: staged.bodyHash },
-      { slug: draft.slug, stagingPath, decisionPath },
+      candidate,
     ),
   };
 }

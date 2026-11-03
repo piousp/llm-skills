@@ -622,11 +622,14 @@ test("the tool's execute stages a candidate under the base of the run", async ()
   assert.equal(result.details.action, "propose");
   assert.equal(result.details.skill, "pdf-tools");
   assert.equal(result.details.outcome, "proposed");
+  // The machine fields name the candidate relative to the base, and the base travels with them: joined,
+  // they are the path a consumer opens.
+  assert.equal(result.details.base, BASE);
   assert.equal(result.details.stagingPath, STAGING_RELATIVE);
   assert.equal(result.details.decisionPath, DECISION_RELATIVE);
   // Rule 5 of P9: the usage of the one generation travels in details.
   assert.deepEqual(result.details.usage, { input: 412, output: 137 });
-  assert.equal(textOf(result).includes(STAGING_RELATIVE), true);
+  assert.equal(textOf(result).includes(STAGING_PATH), true);
 
   // Both writes of the run -- staging and the index -- land under the base the loop derived from the
   // agent directory, and nowhere else.

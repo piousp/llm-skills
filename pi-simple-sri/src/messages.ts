@@ -1,3 +1,4 @@
+import path from "node:path";
 import { COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import type { DecisionSurface, SkillRef } from "./types.ts";
@@ -57,15 +58,21 @@ export function proposedText(
   skill: SkillRef,
   slug: string,
   stagingPath: string,
+  base: string,
 ): string {
   // The path of the lesson is the one src/skill-reference.ts owns: the same one the reference line of
   // SKILL.md uses, so the answer and the acceptance cannot name two different files.
-  const base = `staged ${lessonReferencePath(slug)} for skill ${quote(skill.name)} at ${quote(stagingPath)}`;
+  //
+  // The answer names the candidate by its absolute path: the records keep the base-relative spelling
+  // (a record stays readable after the agent directory moves), but a human who reads the answer opens
+  // the file from the session's working directory, and a relative path there points at nothing.
+  const candidatePath = path.join(base, stagingPath);
+  const sentence = `staged ${lessonReferencePath(slug)} for skill ${quote(skill.name)} at ${quote(candidatePath)}`;
   // The tool never accepts, and it says so where the candidate is: acceptance edits a skill and
   // belongs to the command alone (Q12).
   return surface === "tool"
-    ? `${base}; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`
-    : base;
+    ? `${sentence}; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`
+    : sentence;
 }
 
 export function unknownSkillText(
