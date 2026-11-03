@@ -12,7 +12,6 @@ import {
 } from "../src/command-skill-improve.ts";
 import type { ImproveFlowContext, ImproveFlowDeps } from "../src/improve-flow.ts";
 import { COMMAND_NAME } from "../src/names.ts";
-import { packageRoot } from "../src/package-paths.ts";
 import {
   createSkillImproveTool,
   skillImproveParams,
@@ -45,10 +44,9 @@ import {
 // must know before running it: the skill is staged, never edited and never accepted.
 const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill from the failures of this session: /${COMMAND_NAME} <skill> [focus]. It never edits the skill and never accepts a candidate.`;
 
-// The seams a test may replace: everything the loop resolves for itself. The package root is
-// deliberately absent, because it is not a seam: it is the anchor of this package and it comes from
-// import.meta.url in the factory below. Production passes nothing.
-export type SriSeams = Omit<ImproveFlowDeps, "root">;
+// The seams a test may replace: everything the loop resolves for itself. No path travels through the
+// wiring: the write base follows the agent directory, so the factory passes nothing of its own.
+export type SriSeams = ImproveFlowDeps;
 
 // The command registration as this factory writes it, with the handler's context narrowed to the
 // fields the command reads (SkillImproveContext, src/command-skill-improve.ts). pi's own
@@ -105,14 +103,11 @@ export default function sriExtension(pi: ExtensionAPI, seams: SriSeams = {}): vo
 // with a four-member fake, and the assignment in sriExtension above is what keeps the slice honest.
 export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): void {
   // The dependencies both surfaces share, resolved once per extension instance: the flow's seams
-  // (absent in production, where the loop resolves each one), the package root every write of a run
-  // lands under, and the entry channel.
+  // (absent in production, where the loop resolves each one) and the entry channel. Where a run writes
+  // is not here: the base follows the agent directory the loop resolves itself, so the wiring holds no
+  // path of the package's own.
   const deps: SkillImproveToolDeps = {
     ...seams,
-    // Computed here and not at module level: importing the package must not touch the disk, and
-    // packageRoot is called with this module's own URL because src/package-paths.ts walks two levels
-    // up from a module that sits directly in extensions/.
-    root: packageRoot(import.meta.url),
     // The entry channel is the session record of an attempt and lives on the extension API, not on
     // the context a handler receives, so the wiring is the only place that can connect it.
     appendEntry: (customType, data) => {

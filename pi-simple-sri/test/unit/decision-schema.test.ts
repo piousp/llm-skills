@@ -332,7 +332,7 @@ function proposerForTest(): ProposeFn {
 
 function flowDeps(fixture: Fixture, skill: SkillRef): ImproveFlowDeps {
   return {
-    root: fixture.pkg,
+    base: fixture.pkg,
     now: () => new Date(CREATED_AT),
     readConfig: () => ({ allow: [], deny: [] }),
     listSkills: async () => [skill],
@@ -427,7 +427,7 @@ test("decision.json: the record the writer publishes satisfies schemas/decision.
   const skill = makeSkillRef({ dir: fixture.skillDir, realDir: fs.realpathSync(fixture.skillDir) });
 
   const result = await writeStagingCandidate({
-    root: fixture.pkg,
+    base: fixture.pkg,
     skill,
     slug: LESSON_SLUG,
     decision: makeDecision(toDecisionSkill(skill, true)),
@@ -462,7 +462,10 @@ test("decision.json: the record a proposeSkill run publishes satisfies schemas/d
   );
 
   if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
-  const document: unknown = JSON.parse(fs.readFileSync(result.staged.decisionPath, "utf8"));
+  // The record names the candidate relative to the base of the run, so the read joins the two.
+  const document: unknown = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
 
   assert.deepEqual(validateAgainstSchema(document), []);
 });

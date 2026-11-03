@@ -42,11 +42,14 @@ Serialization is written by hand.
 - Acceptance is command-only. The tool can diagnose and propose, never write a skill.
 - Every write goes through one chokepoint wrapped in `withFileMutationQueue()`, with atomic writes and
   read-back verification.
-- The write perimeter is the realpath of an eligible skill directory plus the package's `staging/` and
-  `state/`. Nothing else.
+- The write perimeter is the realpath of an eligible skill directory plus `staging/` and `state/`
+  under the write base. Nothing else.
+- The write base is `<agent dir>/sri` (`src/write-base.ts`), derived from `getAgentDir()` and never
+  from the package root: with `pi install npm:pi-simple-sri` the package lives inside `node_modules`
+  and an upgrade would take staging and state with it. Records name paths relative to the base.
 - Skills are edited through symlinks when they point at another repository; the extension never runs
   git.
 - Acceptance reloads the runtime with `await ctx.waitForIdle()` and `await ctx.reload()` at the end of
   the command handler. Queueing `/reload` does not work: it is a TUI command, not an extension command.
-- `state/` and `staging/` are per installation. A read-only package directory is a clean failure, not
-  a fallback.
+- `state/` and `staging/` are per user, shared by every installation of the package. A base that
+  cannot be written is a clean failure, not a fallback, and a base inside a skill directory is refused.

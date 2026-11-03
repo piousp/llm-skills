@@ -21,7 +21,6 @@ import {
 } from "../../src/command-skill-improve.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { COMMAND_NAME } from "../../src/names.ts";
-import { packageRoot } from "../../src/package-paths.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
 import {
   SKILL_IMPROVE_TOOL_NAME,
@@ -51,15 +50,15 @@ const COMMAND_USAGE = /Usage: \/skill-improve <skill> \[focus\]/;
 const NOW = new Date("2026-11-02T14:03:22.481Z");
 const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
-const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
+// The base of the run: the bytes land under <base>/staging and every record names them relative to it.
+const AGENT_DIR = "/agent";
+const BASE = `${AGENT_DIR}/sri`;
+const STAGING_PATH = `${BASE}/staging/20261102T140322481Z/pdf-tools`;
 const DECISION_PATH = `${STAGING_PATH}/decision.json`;
+const STAGING_RELATIVE = "staging/20261102T140322481Z/pdf-tools";
+const DECISION_RELATIVE = `${STAGING_RELATIVE}/decision.json`;
 const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
 const BODY_HASH = `sha256:${"b".repeat(64)}`;
-
-// The root the factory must derive from its own module URL: <package>/extensions/index.ts walked two
-// levels up. It is computed here from this file's URL, which sits in the same package, so the
-// assertion is about the derivation and not about where the repository happens to live.
-const PACKAGE_ROOT = packageRoot(new URL("../../extensions/index.ts", import.meta.url).href);
 
 const DEFAULT_CONFIG: SriConfig = { allow: [], deny: [] };
 
@@ -306,6 +305,9 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   };
 
   const seams: SriSeams = {
+    // The base is not a dependency of the wiring: it follows the agent directory the loop resolves, so
+    // the test hands over the agent directory and never a path of its own.
+    agentDir: AGENT_DIR,
     now: () => NOW,
     readConfig: (settingsPath) => {
       log.settingsReads.push(settingsPath);
@@ -560,9 +562,9 @@ test("the context reaches the loop untouched: a run with UI reads its ui when it
   assert.deepEqual(harness.uiReads, ["ui"]);
 });
 
-// The root is the one part of the run the wiring owns and no seam can replace, so it is asserted
-// through the index line of a run that writes nothing else: the shortest path that reaches it.
-test("the factory derives the package root from its own module URL", async () => {
+// The wiring owns no path: the base of a run follows the agent directory, so it is asserted through the
+// index line of a run that writes nothing else, and never through a constant of the factory.
+test("the factory passes no base of its own: the run writes under the agent directory", async () => {
   const harness = makeHarness({ branch: emptyBranch() });
   registerSurfaces(harness.pi, harness.seams);
 
@@ -570,7 +572,7 @@ test("the factory derives the package root from its own module URL", async () =>
   // reaches the index with no candidate.
   await harness.command().handler("pdf-tools", harness.ctx);
 
-  assert.deepEqual(harness.log.attemptRoots, [PACKAGE_ROOT]);
+  assert.deepEqual(harness.log.attemptRoots, [BASE]);
   assert.equal(harness.log.attempts.length, 1);
   assert.equal(harness.log.attempts[0].event, "no-evidence");
   assert.equal(harness.log.attempts[0].ts, NOW_ISO);
@@ -604,7 +606,7 @@ test("the tool's execute answers a diagnosis with the wired dependencies", async
   assert.deepEqual(harness.modelCalls, []);
 });
 
-test("the tool's execute stages a candidate under the package root", async () => {
+test("the tool's execute stages a candidate under the base of the run", async () => {
   const harness = makeHarness();
   registerSurfaces(harness.pi, harness.seams);
 
@@ -620,16 +622,16 @@ test("the tool's execute stages a candidate under the package root", async () =>
   assert.equal(result.details.action, "propose");
   assert.equal(result.details.skill, "pdf-tools");
   assert.equal(result.details.outcome, "proposed");
-  assert.equal(result.details.stagingPath, STAGING_PATH);
-  assert.equal(result.details.decisionPath, DECISION_PATH);
+  assert.equal(result.details.stagingPath, STAGING_RELATIVE);
+  assert.equal(result.details.decisionPath, DECISION_RELATIVE);
   // Rule 5 of P9: the usage of the one generation travels in details.
   assert.deepEqual(result.details.usage, { input: 412, output: 137 });
-  assert.equal(textOf(result).includes(STAGING_PATH), true);
+  assert.equal(textOf(result).includes(STAGING_RELATIVE), true);
 
-  // Both writes of the run -- staging and the index -- land under the root the factory derived from
-  // extensions/index.ts and nowhere else.
-  assert.deepEqual(harness.log.writes.map((write) => write.root), [PACKAGE_ROOT]);
-  assert.deepEqual(harness.log.attemptRoots, [PACKAGE_ROOT]);
+  // Both writes of the run -- staging and the index -- land under the base the loop derived from the
+  // agent directory, and nowhere else.
+  assert.deepEqual(harness.log.writes.map((write) => write.base), [BASE]);
+  assert.deepEqual(harness.log.attemptRoots, [BASE]);
   assert.equal(harness.log.writes[0].skill.name, "pdf-tools");
   assert.equal(harness.log.writes[0].slug, LESSON_SLUG);
   assert.equal(harness.log.attempts.length, 1);

@@ -6,14 +6,14 @@ import { SriWriterError } from "./errors.ts";
 import { sha256Digest } from "./hash.ts";
 import { parseLesson } from "./lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "./names.ts";
-import { stagingDir, stateDir } from "./package-paths.ts";
+import { stagingDir, stateDir } from "./write-base.ts";
 import { assertWritable } from "./perimeter.ts";
 import * as skillReference from "./skill-reference.ts";
 import type { AttemptLine, DecisionRecord, Result, SkillRef } from "./types.ts";
 import { isAlreadyExistsError, isMissingPathError, isRegularFile, quote, toErrorMessage } from "./values.ts";
 
 // The single write chokepoint of the package. Every write here:
-//   1. runs assertWritable against the narrowest root that applies -- <root>/staging for
+//   1. runs assertWritable against the narrowest root that applies -- <base>/staging for
 //      candidates, the skill directory for the M1 writes -- so a generated skill name,
 //      slug or timestamp cannot leave the perimeter. The guard lives in the two write
 //      primitives below, which take the root and assert it as their first statement (I10):
@@ -43,7 +43,7 @@ const MAX_TIMESTAMP_ATTEMPTS = 100;
 export { SriWriterError };
 
 export interface StagingWriteInput {
-  root: string; // packageRoot(): staging/ and state/ live under it
+  base: string; // writeBase(): staging/ and state/ live under it
   skill: SkillRef;
   slug: string; // names the file: lessons/<slug>.md
   decision: DecisionRecord;
@@ -90,21 +90,21 @@ export function lessonHashes(lessonText: string): Result<LessonHashes, string> {
   };
 }
 
-// Writes <root>/staging/<ts>/<skill>/lessons/<slug>.md and decision.json next to it.
+// Writes <base>/staging/<ts>/<skill>/lessons/<slug>.md and decision.json next to it.
 // `ts` is UTC YYYYMMDDTHHMMSSfffZ; a timestamp already in use gets -2, -3, ... so two
 // candidates produced in the same millisecond never share a directory.
 export async function writeStagingCandidate(input: StagingWriteInput): Promise<StagingWriteResult> {
-  // I12: a relative root resolves against the working directory of the process, so the
+  // I12: a relative base resolves against the working directory of the process, so the
   // staging tree would land inside whatever project pi was started in before the
   // perimeter below ever ran. Refused while nothing exists yet.
-  if (!path.isAbsolute(input.root)) {
+  if (!path.isAbsolute(input.base)) {
     throw new SriWriterError(
-      `${quote(input.root)} is not absolute: refusing to create ${quote(stagingDir(input.root))}`,
-      input.root,
+      `${quote(input.base)} is not absolute: refusing to create ${quote(stagingDir(input.base))}`,
+      input.base,
     );
   }
 
-  const stagingRoot = stagingDir(input.root);
+  const stagingRoot = stagingDir(input.base);
   const lessonFileName = `${input.slug}.md`;
 
   // I6: the text is what the candidate will be, so it is read back with the parser of
@@ -175,15 +175,15 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
 // Append-only index: one JSON line per event (Q14). The existing bytes are never
 // rewritten or reordered; the new line is the only addition, so events joined by
 // candidateHash stay readable after a crash.
-export async function appendAttemptLine(root: string, line: AttemptLine): Promise<void> {
-  if (!path.isAbsolute(root)) {
-    throw new SriWriterError(`${quote(root)} is not absolute: refusing to append`, root);
+export async function appendAttemptLine(base: string, line: AttemptLine): Promise<void> {
+  if (!path.isAbsolute(base)) {
+    throw new SriWriterError(`${quote(base)} is not absolute: refusing to append`, base);
   }
 
-  // The root is known here, so the write is guarded against the whole state directory instead of
+  // The base is known here, so the write is guarded against the whole state directory instead of
   // the path the caller handed over; that check runs inside writeFileAtomic below, where the bytes
   // land, and is not repeated here.
-  const stateRoot = stateDir(root);
+  const stateRoot = stateDir(base);
   const statePath = path.join(stateRoot, ATTEMPTS_FILE);
   fs.mkdirSync(stateRoot, { recursive: true });
 
@@ -205,17 +205,17 @@ export async function appendAttemptLine(root: string, line: AttemptLine): Promis
 // removed, because a candidate no line names is an orphan -- the run would report that nothing was
 // written while the bytes sit in staging, and the next run would trip over a directory nobody can
 // explain. Removal is the one destructive operation in this module, so it is guarded by the same
-// perimeter as the writes: only a directory inside <root>/staging is discarded. The answer says
+// perimeter as the writes: only a directory inside <base>/staging is discarded. The answer says
 // whether the directory is gone; the caller reports it next to the error that caused the removal.
-export async function discardStagingCandidate(root: string, stagingPath: string): Promise<boolean> {
-  if (!path.isAbsolute(root)) {
+export async function discardStagingCandidate(base: string, stagingPath: string): Promise<boolean> {
+  if (!path.isAbsolute(base)) {
     throw new SriWriterError(
-      `${quote(root)} is not absolute: refusing to discard ${quote(stagingPath)}`,
-      root,
+      `${quote(base)} is not absolute: refusing to discard ${quote(stagingPath)}`,
+      base,
     );
   }
 
-  assertWritable(stagingPath, [stagingDir(root)]);
+  assertWritable(stagingPath, [stagingDir(base)]);
 
   try {
     await fs.promises.rm(stagingPath, { recursive: true, force: true });

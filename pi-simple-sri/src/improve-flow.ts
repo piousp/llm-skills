@@ -26,6 +26,7 @@ import type {
   SriConfig,
 } from "./types.ts";
 import { quote, toErrorMessage } from "./values.ts";
+import { assertBaseOutsideSkill, relativeToBase, writeBase } from "./write-base.ts";
 import {
   appendAttemptLine,
   discardStagingCandidate,
@@ -75,9 +76,8 @@ import {
 // leaves, so "nothing was written" is still true when the caller reads it.
 //
 // Importing this module reads nothing, registers nothing and starts nothing (rule 9 of the slice).
-// The clock, the settings file, the inventory, the model, the writer and the record channels are
-// all resolved inside the two entry points; the package root is the one dependency the caller
-// resolves, because it is the anchor of the package and not a seam.
+// The clock, the settings file, the inventory, the model, the writer, the record channels and the
+// write base are all resolved inside the two entry points, so the wiring passes no path of its own.
 
 // The custom type of the session entry the surfaces record (rule 6 of P8). It is stored through
 // appendEntry, so it is visible in /tree and never enters the model context
@@ -95,7 +95,10 @@ const SETTINGS_FILE = "settings.json";
 // may not know which skill it was working on.
 export type ImprovementOutcome = "proposed" | "not-eligible" | "no-evidence" | "error";
 
-// The staged candidate, when the run produced one.
+// The staged candidate, when the run produced one. Both paths are relative to the base of the run
+// (writeBase): a record stays readable after the agent directory moves, and no machine-specific path
+// enters the index, the session entry or an answer. The absolute spellings stay inside the flow, which
+// needs them to retire a candidate whose index line failed.
 export interface StagedCandidate {
   slug: string;
   stagingPath: string;
@@ -155,12 +158,14 @@ export type ProposeFn = (input: ProposeInput) => Promise<ProposeResult>;
 // Every dependency the loop touches, so a test can replace it. readSkillText is here for the same
 // reason as the others: the happy path must be provable without a real skill directory on disk.
 //
-// `root` is the one dependency with no default: it is the anchor of this package, not a seam, and it
-// is the caller's to resolve (extensions/index.ts derives it from its own module URL). A fallback here
-// would be a second owner of that derivation, and a run under the wrong root would write staging and
-// the index into a package nobody asked for.
+// `base` is where the run writes: staging/ and state/ live under it, and every path a record or an
+// answer carries is relative to it. It defaults to writeBase(agentDir), so the anchor follows pi's own
+// agent directory (getAgentDir, overridable with PI_CODING_AGENT_DIR) instead of the package root,
+// which under `pi install npm:pi-simple-sri` is a directory inside node_modules that an upgrade takes
+// away. It stays a seam because a test proves where the bytes went without touching a real agent
+// directory.
 export interface ImproveFlowDeps {
-  root: string;
+  base?: string;
   // The agent directory pi derives at the call (getAgentDir, dist/core/settings-manager.js:123). The
   // settings file and the skills directory are both read under it, so it is a seam and not a constant:
   // a test proves which directory a run read, and the default is pi's, resolved once per run.
@@ -171,7 +176,7 @@ export interface ImproveFlowDeps {
   readSkillText?: (skill: SkillRef) => Promise<string>;
   propose?: ProposeFn;
   write?: (input: StagingWriteInput) => Promise<StagingWriteResult>;
-  appendAttempt?: (root: string, line: AttemptLine) => Promise<void>;
+  appendAttempt?: (base: string, line: AttemptLine) => Promise<void>;
 }
 
 // Which surface asked. It is the trigger of decision.json and the surface of the session entry, so
@@ -238,7 +243,7 @@ export interface ProposedFlowResult {
   diagnosis: Diagnosis;
   draft: LessonDraft;
   usage: GenerationUsage;
-  staged: StagingWriteResult;
+  staged: StagedCandidate;
   entry: ImprovementEntry;
 }
 
@@ -334,6 +339,12 @@ export async function proposeSkill(
   if (target.kind === "unknown-skill") return target;
 
   const { skill, config } = target;
+
+  // The base of a run stays outside the skill it improves: candidates inside the skill would make
+  // staging a part of it, and the audit index would land next to its SKILL.md. Checked before any
+  // branch that writes, because every line of the index and every candidate lands under the base.
+  assertBaseOutsideSkill(seams.base, [skill.dir, skill.realDir]);
+
   const verdict = eligibilityOf(skill, config);
   if (!verdict.eligible) {
     const hashes = attemptHashes("not-eligible", skill.name, focus);
@@ -424,7 +435,7 @@ export async function proposeSkill(
   });
 
   const staged = await seams.write({
-    root: seams.root,
+    base: seams.base,
     skill,
     slug: draft.slug,
     decision,
@@ -432,25 +443,31 @@ export async function proposeSkill(
     lessonText: lesson.value,
   });
 
+  // The record, the index line and both answers name the candidate relative to the base of the run, so
+  // a record stays readable after the agent directory moves and no machine path is baked into it. The
+  // absolute spellings stay local: they are what the removal below needs.
+  const stagingPath = relativeToBase(seams.base, staged.stagingPath);
+  const decisionPath = relativeToBase(seams.base, staged.decisionPath);
+
   // F1: the candidate and its index line are one unit. The line is attempted immediately, and a
   // failure retires the candidate instead of leaving a directory no line names -- a run that reports
   // "nothing was written" while a candidate sits in staging is the lie this catch prevents. The error
   // names both halves, including whether the removal worked (I8): a message that claimed a cleanup it
   // did not manage would be the same lie one layer down.
   try {
-    await seams.appendAttempt(seams.root, {
+    await seams.appendAttempt(seams.base, {
       ts: now.toISOString(),
       event: "proposed",
       candidateHash: staged.contentHash,
       bodyHash: staged.bodyHash,
       targetSkill: skill.name,
-      stagingPath: staged.stagingPath,
-      decisionPath: staged.decisionPath,
+      stagingPath,
+      decisionPath,
     });
   } catch (error) {
-    const removed = await discardCandidate(seams.root, staged.stagingPath);
+    const removed = await discardCandidate(seams.base, staged.stagingPath);
     throw new SriWriterError(
-      `wrote the candidate ${quote(staged.stagingPath)} but its attempt line failed (${toErrorMessage(error)}): the candidate was retired (removed: ${removed})`,
+      `wrote the candidate ${quote(stagingPath)} but its attempt line failed (${toErrorMessage(error)}): the candidate was retired (removed: ${removed})`,
       staged.stagingPath,
     );
   }
@@ -462,7 +479,7 @@ export async function proposeSkill(
     diagnosis,
     draft,
     usage: proposal.value.usage,
-    staged,
+    staged: { slug: draft.slug, stagingPath, decisionPath },
     entry: attemptEntry(
       request,
       skill,
@@ -470,7 +487,7 @@ export async function proposeSkill(
       "proposed",
       null,
       { candidateHash: staged.contentHash, bodyHash: staged.bodyHash },
-      { slug: draft.slug, stagingPath: staged.stagingPath, decisionPath: staged.decisionPath },
+      { slug: draft.slug, stagingPath, decisionPath },
     ),
   };
 }
@@ -482,12 +499,15 @@ interface FlowSeams {
   readSkillText: (skill: SkillRef) => Promise<string>;
   propose: ProposeFn | undefined;
   write: (input: StagingWriteInput) => Promise<StagingWriteResult>;
-  appendAttempt: (root: string, line: AttemptLine) => Promise<void>;
-  root: string;
+  appendAttempt: (base: string, line: AttemptLine) => Promise<void>;
+  base: string;
   agentDir: string;
 }
 
 function seamsOf(deps: ImproveFlowDeps): FlowSeams {
+  // Resolved once per run and handed to the reads below and to the base, so a run cannot read the
+  // settings of one agent directory, the skills of another and write into a third place.
+  const agentDir = deps.agentDir ?? getAgentDir();
   return {
     readConfig: deps.readConfig ?? readSriConfig,
     listSkills: deps.listSkills ?? listSkills,
@@ -495,10 +515,8 @@ function seamsOf(deps: ImproveFlowDeps): FlowSeams {
     propose: deps.propose,
     write: deps.write ?? writeStagingCandidate,
     appendAttempt: deps.appendAttempt ?? appendAttemptLine,
-    root: deps.root,
-    // Resolved once per run and handed to both reads below, so a run cannot read the settings of one
-    // agent directory and the skills of another.
-    agentDir: deps.agentDir ?? getAgentDir(),
+    base: deps.base ?? writeBase(agentDir),
+    agentDir,
   };
 }
 
@@ -699,7 +717,7 @@ async function recordAttempt(
   skill: SkillRef,
   hashes: AttemptHashes,
 ): Promise<void> {
-  await seams.appendAttempt(seams.root, {
+  await seams.appendAttempt(seams.base, {
     ts: now.toISOString(),
     event,
     candidateHash: hashes.candidateHash,
@@ -711,9 +729,9 @@ async function recordAttempt(
 // The compensation of F1. The removal can itself fail -- a permission on the directory, a path the
 // perimeter refuses -- and the error the caller is about to raise already names the failed index, so
 // this function only answers what happened to the directory and never replaces the reason.
-async function discardCandidate(root: string, stagingPath: string): Promise<boolean> {
+async function discardCandidate(base: string, stagingPath: string): Promise<boolean> {
   try {
-    return await discardStagingCandidate(root, stagingPath);
+    return await discardStagingCandidate(base, stagingPath);
   } catch {
     return false;
   }

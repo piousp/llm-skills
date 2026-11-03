@@ -3,6 +3,19 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- The single model call now passes the session identifier. A session-affine provider
+  (opencode-go) answered `400 MissingSessionID` to every proposal, and the run reported it as an
+  opaque `stopped with "error"`.
+- A refusal reports the provider message when the request failed, so a routing or authentication
+  error names itself instead of being indistinguishable from a truncated answer.
+- Candidates, the audit index and both answers live under `<agent dir>/sri` instead of the package
+  root. With `pi install npm:pi-simple-sri` the package root is inside `node_modules`, so an upgrade
+  took staging and state away. Records name paths relative to that base.
+
 ## [0.0.1] - 2026-11-03
 
 First release. It stages lesson candidates and records every decision; it does

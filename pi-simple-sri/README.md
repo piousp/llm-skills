@@ -85,19 +85,30 @@ replayable and does not displace one that is.
    a value cannot close its own block.
 5. Validate the draft with the same rules used to read it back. An empty body, a bad date or a body
    over 8192 bytes is rejected before anything is written.
-6. Write the candidate to `staging/`, append a line to the audit index, and record a session entry.
+6. Write the candidate under the write base, append a line to the audit index, and record a
+   session entry.
 
 If the index cannot be written, the candidate is removed and the error names both paths. A staged
 candidate never exists without its index line.
 
 ## What lands on disk
 
+Everything lives under `<agent dir>/sri`, the write base: pi resolves the agent directory itself
+(`~/.pi/agent` by default, `PI_CODING_AGENT_DIR` when set), so an upgrade or a reinstall of the
+package never removes a candidate, and nothing is written inside the installed package.
+
 ```
-staging/<timestamp>/<skill>/
-├── lessons/<slug>.md        the candidate, with frontmatter
-└── decision.json            evidence, diagnosis, gate block, outcome
-state/attempts.jsonl         one event per line, append only
+<agent dir>/sri/
+├── staging/<timestamp>/<skill>/
+│   ├── lessons/<slug>.md    the candidate, with frontmatter
+│   └── decision.json        evidence, diagnosis, gate block, outcome
+└── state/attempts.jsonl     one event per line, append only
 ```
+
+The index line, the session entry and both answers name those paths relative to the write base
+(`staging/<timestamp>/<skill>/...`), so a record stays readable after the agent directory moves.
+`candidate.lessonPath` in `decision.json` is relative to the candidate directory itself
+(`lessons/<slug>.md`).
 
 `decision.json` follows [schemas/decision.schema.json](schemas/decision.schema.json). The index
 events today are `proposed`, `no-evidence`, `not-eligible` and `no-model`; M1 adds `accepted`,
@@ -127,8 +138,9 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 ## Safety
 
-- The loop writes inside the package's `staging/` and `state/` directories. In this release it never
-  writes inside a skill.
+- The loop writes only under the write base, `<agent dir>/sri`, in `staging/` and `state/`. In this
+  release it never writes inside a skill, and a base that falls inside a skill directory is refused
+  before anything is written.
 - Every write goes through one chokepoint: the target is checked against the write perimeter with
   resolved paths, written to a temporary file, renamed, then read back and compared byte by byte.
 - Writes to the same file are serialized inside the process, and a file that is a symlink is written

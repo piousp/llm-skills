@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, ToolCall, Usage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { ProposerError, SriWriterError } from "../../src/errors.ts";
+import { ProposerError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
 import {
   buildDecision,
   proposeSkill,
@@ -18,7 +18,7 @@ import {
 } from "../../src/improve-flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR } from "../../src/names.ts";
-import { stagingDir, stateDir } from "../../src/package-paths.ts";
+import { stagingDir, stateDir } from "../../src/write-base.ts";
 import type { AttemptLine, Diagnosis, Eligibility, EvidenceItem, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import {
   lessonHashes,
@@ -193,7 +193,7 @@ function successfulProposer(): ProposeFn {
 // the assertions below read the filesystem and not a recorder.
 function writingWriter(): (input: StagingWriteInput) => Promise<StagingWriteResult> {
   return async (input) => {
-    const candidateDir = path.join(stagingDir(input.root), BASE_TIMESTAMP, input.skill.name);
+    const candidateDir = path.join(stagingDir(input.base), BASE_TIMESTAMP, input.skill.name);
     const lessonsDir = path.join(candidateDir, LESSONS_DIR);
     fs.mkdirSync(lessonsDir, { recursive: true });
 
@@ -214,7 +214,7 @@ function flowDeps(fixture: Fixture, appendAttempt?: (root: string, line: Attempt
     readSkillText: async () => SKILL_TEXT,
     propose: successfulProposer(),
     write: writingWriter(),
-    root: fixture.pkg,
+    base: fixture.pkg,
     ...(appendAttempt === undefined ? {} : { appendAttempt }),
   };
 }
@@ -260,10 +260,10 @@ test("proposeSkill: a candidate whose attempt line fails is retired and named in
       ),
     (error: unknown) => {
       if (!(error instanceof SriWriterError)) return false;
-      // The path that was retired and the reason the index refused are both in the message, and so is
-      // whether the removal worked.
+      // The candidate that was retired, named the way the record names it, and the reason the index
+      // refused are both in the message, and so is whether the removal worked.
       return (
-        error.message.includes(candidatePath(fixture.pkg)) &&
+        error.message.includes(path.relative(fixture.pkg, candidatePath(fixture.pkg))) &&
         error.message.includes("ENOSPC") &&
         error.message.includes("removed: true")
       );
@@ -289,8 +289,13 @@ test("proposeSkill: the happy path keeps the candidate and joins the index", asy
 
   if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
 
-  assert.equal(result.staged.stagingPath, candidatePath(fixture.pkg));
-  assert.deepEqual(relativeFiles(result.staged.stagingPath), [DECISION_FILE, `${LESSONS_DIR}/${LESSON_SLUG}.md`]);
+  // The candidate is named relative to the base of the run; the bytes are where that name says.
+  assert.equal(result.staged.stagingPath, path.relative(fixture.pkg, candidatePath(fixture.pkg)));
+  assert.equal(path.isAbsolute(result.staged.stagingPath), false);
+  assert.deepEqual(relativeFiles(path.join(fixture.pkg, result.staged.stagingPath)), [
+    DECISION_FILE,
+    `${LESSONS_DIR}/${LESSON_SLUG}.md`,
+  ]);
 
   const attemptsPath = path.join(stateDir(fixture.pkg), ATTEMPTS_FILE);
   const lines = fs
@@ -379,13 +384,13 @@ test("proposeSkill: the record in memory is the record on disk", async (t) => {
   assert.equal(captured.length, 1);
   const [input] = captured;
 
-  const onDisk: unknown = JSON.parse(fs.readFileSync(result.staged.decisionPath, "utf8"));
+  const onDisk: unknown = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
   assert.deepEqual(onDisk, input.decision);
   // And the two values the run reports are the two values the record carries.
-  assert.equal(result.staged.contentHash, input.decision.candidate.contentHash);
-  assert.equal(result.staged.bodyHash, input.decision.candidate.bodyHash);
-  assert.equal(result.entry.candidateHash, result.staged.contentHash);
-  assert.equal(result.entry.bodyHash, result.staged.bodyHash);
+  assert.equal(result.entry.candidateHash, input.decision.candidate.contentHash);
+  assert.equal(result.entry.bodyHash, input.decision.candidate.bodyHash);
 });
 
 type ProposeKind = ProposeFlowResult["kind"];
@@ -471,7 +476,7 @@ const OUTCOMES: readonly Outcome[] = [
 function outcomeDeps(fixture: Fixture, outcome: Outcome, attempts: AttemptLine[]): ImproveFlowDeps {
   return {
     now: () => NOW,
-    root: fixture.pkg,
+    base: fixture.pkg,
     readConfig: () => outcome.config,
     listSkills: async () => [...outcome.skills],
     readSkillText: async () => SKILL_TEXT,
@@ -532,6 +537,127 @@ test("proposeSkill: the agent directory of the run reaches the settings and the 
   if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
   assert.deepEqual(settingsReads, ["/agent/settings.json"]);
   assert.deepEqual(inventories, ["/agent"]);
+});
+
+// The wiring owns no path: without a base handed over, the run writes under the agent directory it
+// resolved, which is the anchor that survives a reinstall of the package.
+test("proposeSkill: without a base, the run writes under the agent directory", async (t) => {
+  const fixture = createFixture(t);
+  const { base: _unused, ...withoutBase } = flowDeps(fixture);
+  const attemptBases: string[] = [];
+
+  const deps: ImproveFlowDeps = {
+    ...withoutBase,
+    agentDir: fixture.pkg,
+    appendAttempt: async (base, line) => {
+      attemptBases.push(base);
+      assert.equal(line.event, "proposed");
+    },
+  };
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(failingBranch()),
+    deps,
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+  // One base for both writes, and it is the package's directory under the agent directory.
+  assert.deepEqual(attemptBases, [path.join(fixture.pkg, "sri")]);
+  assert.equal(
+    fs.existsSync(path.join(fixture.pkg, "sri", result.staged.stagingPath)),
+    true,
+  );
+  // And nothing landed in the agent directory itself, where pi keeps its own files.
+  assert.deepEqual(fs.readdirSync(fixture.pkg), ["sri"]);
+});
+
+// The environment variable pi documents for its agent directory moves the anchor with it, because the
+// base is derived from the resolved directory and never from a constant of this package.
+test("proposeSkill: PI_CODING_AGENT_DIR moves the base", async (t) => {
+  const fixture = createFixture(t);
+  const envAgentDir = path.join(fixture.pkg, "env-agent");
+  fs.mkdirSync(envAgentDir, { recursive: true });
+
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = envAgentDir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  });
+
+  const { base: _unused, agentDir: _agentDir, ...withoutPaths } = flowDeps(fixture);
+  const attemptBases: string[] = [];
+
+  await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(failingBranch()),
+    {
+      ...withoutPaths,
+      appendAttempt: async (base) => {
+        attemptBases.push(base);
+      },
+    },
+  );
+
+  assert.deepEqual(attemptBases, [path.join(envAgentDir, "sri")]);
+});
+
+// A base inside the skill it improves is refused before the model is called and before the index is
+// touched, because both writes of the run land under the base.
+test("proposeSkill: a base inside the skill is refused before the model and the index", async (t) => {
+  const fixture = createFixture(t);
+  let proposed = 0;
+  const attempts: AttemptLine[] = [];
+
+  const deps: ImproveFlowDeps = {
+    ...flowDeps(fixture),
+    base: path.join(SKILL.realDir, "staging"),
+    propose: async (input) => {
+      proposed += 1;
+      return { ok: false, error: new ProposerError("the model must not be called") };
+    },
+    appendAttempt: async (_base, line) => {
+      attempts.push(line);
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      proposeSkill({ surface: "command", skillName: SKILL.name }, flowContext(failingBranch()), deps),
+    (error: unknown) =>
+      error instanceof SriPerimeterError &&
+      error.message.includes(path.join(SKILL.realDir, "staging")) &&
+      error.message.includes(SKILL.realDir),
+  );
+
+  assert.equal(proposed, 0);
+  assert.deepEqual(attempts, []);
+  assert.equal(fs.existsSync(stagingDir(fixture.pkg)), false);
+});
+
+// The check covers every branch that writes, not only the generation: a run that only records the attempt
+// also leaves a line under the base, so an ineligible skill is refused by the same rule.
+test("proposeSkill: a base inside the skill refuses a run that would only record the attempt", async (t) => {
+  const fixture = createFixture(t);
+  const attempts: AttemptLine[] = [];
+
+  const deps: ImproveFlowDeps = {
+    ...flowDeps(fixture),
+    base: path.join(SKILL.realDir, "state"),
+    readConfig: () => ({ allow: [], deny: [SKILL.name] }),
+    appendAttempt: async (_base, line) => {
+      attempts.push(line);
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      proposeSkill({ surface: "command", skillName: SKILL.name }, flowContext(failingBranch()), deps),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+
+  assert.deepEqual(attempts, []);
 });
 
 // One focus, three artifacts. The tool's schema accepts "focus": "   " and the command collapses its

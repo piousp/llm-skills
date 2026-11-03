@@ -123,7 +123,11 @@ function deepestExistingAncestor(absoluteTarget: string, reportedTarget: string)
   }
 }
 
-function isInsideOrEqual(candidate: string, root: string): boolean {
+// The one containment rule of the package: a candidate is inside a root when it is the root or starts
+// with the root plus a separator, never with a bare prefix. Exported because src/write-base.ts asks the
+// same question about the base and a skill directory, and a second copy of this rule is a second place
+// where /a/bc could count as inside /a/b.
+export function isInsideOrEqual(candidate: string, root: string): boolean {
   if (candidate === root) {
     return true;
   }

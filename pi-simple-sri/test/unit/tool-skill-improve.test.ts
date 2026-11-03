@@ -44,9 +44,12 @@ import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from 
 const NOW = new Date("2026-11-02T14:03:22.481Z");
 const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
+// The base of the run: the bytes land under <base>/staging and every record names them relative to it.
 const PKG_ROOT = "/pkg";
 const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
 const DECISION_PATH = `${STAGING_PATH}/decision.json`;
+const STAGING_RELATIVE = "staging/20261102T140322481Z/pdf-tools";
+const DECISION_RELATIVE = `${STAGING_RELATIVE}/decision.json`;
 const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
 const BODY_HASH = `sha256:${"b".repeat(64)}`;
 
@@ -280,7 +283,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       attemptRoots.push(root);
       attempts.push(line);
     },
-    root: PKG_ROOT,
+    base: PKG_ROOT,
     appendEntry: (customType: string, data: ImprovementEntry) => {
       if (options.entryFailure !== undefined) throw options.entryFailure;
       entries.push({ customType, data });
@@ -333,7 +336,7 @@ test("skillImproveParams: the focus is optional and both actions are accepted", 
 // Rule 3: the description travels in every session that loads the tool, so it has to say that the
 // tool neither edits the skill nor accepts a candidate.
 test("createSkillImproveTool: the definition carries the schema and the promise of not editing the skill", () => {
-  const tool = createSkillImproveTool({ root: PKG_ROOT });
+  const tool = createSkillImproveTool({ base: PKG_ROOT });
 
   assert.equal(tool.name, SKILL_IMPROVE_TOOL_NAME);
   assert.equal(SKILL_IMPROVE_TOOL_NAME, "skill_improve");
@@ -427,7 +430,7 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
 
   assert.equal(harness.writes.length, 1);
   const [write] = harness.writes;
-  assert.equal(write.root, PKG_ROOT);
+  assert.equal(write.base, PKG_ROOT);
   assert.equal(write.slug, LESSON_SLUG);
   // The record says which surface asked: a candidate the tool staged never claims to be a command.
   assert.deepEqual(write.decision.trigger, { surface: "tool", focus: "merged cells" });
@@ -440,8 +443,8 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
       candidateHash: CONTENT_HASH,
       bodyHash: BODY_HASH,
       targetSkill: "pdf-tools",
-      stagingPath: STAGING_PATH,
-      decisionPath: DECISION_PATH,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
     },
   ]);
 
@@ -457,7 +460,7 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
         evidenceCount: 1,
         candidateHash: CONTENT_HASH,
         bodyHash: BODY_HASH,
-        staged: { slug: LESSON_SLUG, stagingPath: STAGING_PATH, decisionPath: DECISION_PATH },
+        staged: { slug: LESSON_SLUG, stagingPath: STAGING_RELATIVE, decisionPath: DECISION_RELATIVE },
       },
     },
   ]);
@@ -467,11 +470,11 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
     action: "propose",
     skill: "pdf-tools",
     outcome: "proposed",
-    stagingPath: STAGING_PATH,
-    decisionPath: DECISION_PATH,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
     usage: { input: 412, output: 137 },
   });
-  assert.equal(textOf(result).includes(STAGING_PATH), true);
+  assert.equal(textOf(result).includes(STAGING_RELATIVE), true);
 });
 
 // Q17: eligibility is checked before the model is called, so an ineligible skill spends no
@@ -623,13 +626,13 @@ test("propose: an entry channel that throws does not turn a staged candidate int
     action: "propose",
     skill: "pdf-tools",
     outcome: "proposed",
-    stagingPath: STAGING_PATH,
-    decisionPath: DECISION_PATH,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
     usage: { input: 412, output: 137 },
   });
 
   const text = textOf(result);
-  assert.equal(text.includes(STAGING_PATH), true);
+  assert.equal(text.includes(STAGING_RELATIVE), true);
   assert.equal(text.includes("the session entry was not recorded"), true);
   assert.equal(text.includes("EACCES"), true);
 

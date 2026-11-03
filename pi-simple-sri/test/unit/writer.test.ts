@@ -6,7 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { stagingDir, stateDir } from "../../src/package-paths.ts";
+import { stagingDir, stateDir } from "../../src/write-base.ts";
 import { SriPerimeterError } from "../../src/perimeter.ts";
 import {
   appendAttemptLine,
@@ -151,7 +151,7 @@ function makeDecision(): DecisionRecord {
 }
 
 interface InputOverrides {
-  root?: string;
+  base?: string;
   now?: Date;
   draft?: LessonDraft;
   slug?: string;
@@ -163,7 +163,7 @@ interface InputOverrides {
 function inputFor(fixture: Fixture, overrides: InputOverrides = {}): StagingWriteInput {
   const draft = overrides.draft ?? makeDraft();
   return {
-    root: overrides.root ?? fixture.pkg,
+    base: overrides.base ?? fixture.pkg,
     skill: overrides.skill ?? makeSkill(fixture),
     slug: overrides.slug ?? draft.slug,
     decision: overrides.decision ?? makeDecision(),
@@ -418,16 +418,16 @@ for (const invalid of INVALID_LESSON_TEXTS) {
   });
 }
 
-// I12: a relative root resolves against the working directory of the process, so the staging tree
-// would appear in whatever project pi was started in, before the perimeter ever ran. The root of
+// I12: a relative base resolves against the working directory of the process, so the staging tree
+// would appear in whatever project pi was started in, before the perimeter ever ran. The base of
 // the fixture is handed over as the relative path that reaches it, so a regression creates the
 // tree where the assertions below look instead of anywhere else.
-test("writeStagingCandidate: a relative root is refused before the staging directory exists", async (t) => {
+test("writeStagingCandidate: a relative base is refused before the staging directory exists", async (t) => {
   const fixture = createFixture(t);
   const relativeRoot = path.relative(process.cwd(), fixture.pkg);
 
   await assert.rejects(
-    () => writeStagingCandidate(inputFor(fixture, { root: relativeRoot })),
+    () => writeStagingCandidate(inputFor(fixture, { base: relativeRoot })),
     (error: unknown) => error instanceof SriWriterError && error.message.includes("not absolute"),
   );
 
