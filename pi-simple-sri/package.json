@@ -1,0 +1,52 @@
+{
+  "name": "pi-simple-sri",
+  "version": "0.0.1",
+  "description": "Self-recursive improvement loop for pi skills: observe failures, propose a skill change, gate it against the incumbent, and record the decision.",
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piousp/llm-skills.git",
+    "directory": "pi-simple-sri"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "skills",
+    "self-improvement",
+    "recursive-self-improvement",
+    "sri",
+    "skill-evolution"
+  ],
+  "pi": {
+    "image": "https://raw.githubusercontent.com/piousp/llm-skills/main/pi-simple-sri/assets/icon.png",
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "schemas",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/unit/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:types": "npm run typecheck"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "typebox": "1.3.27",
+    "typescript": "^7.0.2"
+  }
+}

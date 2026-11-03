@@ -1,0 +1,8 @@
+{
+  "pi-simple-sri": {
+    "skills": {
+      "allow": ["pdf-tools", 42],
+      "deny": []
+    }
+  }
+}

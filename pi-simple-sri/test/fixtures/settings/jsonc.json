@@ -1,0 +1,9 @@
+{
+  // Comments are not JSON: readSriConfig parses the file strictly (E3).
+  "pi-simple-sri": {
+    "skills": {
+      "allow": ["pdf-tools"],
+      "deny": []
+    }
+  }
+}

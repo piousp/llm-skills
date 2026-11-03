@@ -1,0 +1,11 @@
+{
+  "theme": "dark",
+  "pi-simple-sri": {
+    "verbose": true,
+    "skills": {
+      "allow": ["pdf-tools"],
+      "deny": ["system-config"],
+      "unknownScope": "session"
+    }
+  }
+}

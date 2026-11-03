@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/decision@0.json",
+  "title": "pi-simple-sri decision record, schema 0",
+  "description": "Record written next to a staged lesson candidate during M0. M1 adds a gate block with per-item results, interval, model and tokens per arm under schema 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "createdAt", "trigger", "skill", "eligibility", "evidence", "diagnosis", "candidate", "gate", "outcome"],
+  "properties": {
+    "schema": { "const": "pi-simple-sri/decision@0" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "focus"],
+      "properties": {
+        "surface": { "enum": ["command", "tool"] },
+        "focus": { "type": ["string", "null"] }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "dir", "realDir", "wasSymlink", "eligible"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "dir": { "type": "string", "minLength": 1 },
+        "realDir": { "type": "string", "minLength": 1 },
+        "wasSymlink": { "type": "boolean" },
+        "eligible": { "type": "boolean" }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allow", "deny"],
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "timestamp", "source"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^ev-[0-9a-f]{8}$" },
+          "kind": { "enum": ["tool_error", "user_correction", "retry_loop"] },
+          "toolName": { "type": "string" },
+          "argsHash": { "type": "string" },
+          "excerpt": { "type": "string" },
+          "timestamp": { "type": "integer" },
+          "source": { "enum": ["transcript", "persisted"] }
+        }
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "failureSignature", "replayItems"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "replayItems": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["prompt", "cwd", "predicate"],
+            "properties": {
+              "prompt": { "type": "string", "minLength": 1 },
+              "cwd": { "type": "string", "minLength": 1 },
+              "model": { "type": "string" },
+              "skills": { "type": "array", "items": { "type": "string" } },
+              "assistantCycleIndex": { "type": "integer", "minimum": 0 },
+              "failingToolCall": { "type": "string" },
+              "predicate": { "type": "string", "minLength": 1 },
+              "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "slug", "title", "lessonPath", "contentHash", "bodyHash"],
+      "properties": {
+        "kind": { "const": "new-lesson" },
+        "slug": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64 },
+        "title": { "type": "string", "minLength": 1 },
+        "targetLesson": { "type": ["string", "null"] },
+        "lessonPath": { "type": "string", "minLength": 1 },
+        "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "bodyHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "threshold", "reps", "budget", "tokens", "mde"],
+      "properties": {
+        "status": { "const": "not-run" },
+        "threshold": { "type": "null" },
+        "reps": { "type": "null" },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["plannedRuns", "usedRuns", "interruptedAt"],
+          "properties": {
+            "plannedRuns": { "type": "integer", "minimum": 0 },
+            "usedRuns": { "type": "integer", "minimum": 0 },
+            "interruptedAt": { "type": ["integer", "null"] }
+          }
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "output"],
+          "properties": {
+            "input": { "type": "integer", "minimum": 0 },
+            "output": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "mde": { "type": "null" }
+      }
+    },
+    "outcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "enum": ["proposed", "not-eligible"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
