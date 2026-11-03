@@ -44,7 +44,7 @@ import { quote, toErrorMessage } from "./values.ts";
 // Rule 5: a propose that called the model reports the usage of that generation in details, so the
 // cost of the call is visible where the call was made.
 //
-// Rule 6: details has the documented shape { action, skill, outcome, reason?, stagingPath?,
+// Rule 6: details has the documented shape { action, skill, outcome, reason?, base?, stagingPath?,
 // decisionPath?, usage? } and nothing else. A caller that logs it never has to guess. The session entry
 // is not part of that shape: when it cannot be recorded the answer says so in its text and details keeps
 // the outcome of the work itself, because the entry is the /tree view of an attempt whose record is the

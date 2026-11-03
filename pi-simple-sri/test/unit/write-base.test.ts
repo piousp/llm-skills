@@ -69,6 +69,11 @@ test("relativeToBase: a target outside the base, or the base itself, stays absol
   assert.equal(relativeToBase("/agent/sri", "/agent/sri-2/staging"), "/agent/sri-2/staging");
 });
 
+// A first segment starting with two dots is not `..`: the prefix check read `..foo` as leaving the base.
+test("relativeToBase: a first segment that only starts with two dots stays inside the base", () => {
+  assert.equal(relativeToBase("/a", "/a/..foo/x"), "..foo/x");
+});
+
 // A base inside the skill would make staging a part of the skill and put the audit index next to its
 // SKILL.md. Refused with both paths named, so a PI_CODING_AGENT_DIR pointed at a skill is readable as
 // such instead of as a permission error later.

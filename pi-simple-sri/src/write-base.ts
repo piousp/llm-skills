@@ -36,12 +36,13 @@ export function stateDir(base: string): string {
 //
 // A target outside the base keeps its absolute spelling, because path.relative would answer "../..",
 // which reads as a relative path that does not exist. Nothing this package writes leaves the base, so
-// that branch is a guard and not a case.
+// that branch is a guard and not a case. What is looked at is the first segment and not the prefix: a
+// name that starts with two dots without being `..`, such as `..foo`, is inside the base.
 export function relativeToBase(base: string, target: string): string {
   const resolvedBase = path.resolve(base);
   const resolvedTarget = path.resolve(target);
   const relative = path.relative(resolvedBase, resolvedTarget);
-  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return resolvedTarget;
+  if (relative === "" || relative.split(path.sep)[0] === ".." || path.isAbsolute(relative)) return resolvedTarget;
   return relative;
 }
 

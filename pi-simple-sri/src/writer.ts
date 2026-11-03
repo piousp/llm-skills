@@ -90,19 +90,22 @@ export function lessonHashes(lessonText: string): Result<LessonHashes, string> {
   };
 }
 
+// The one absoluteness guard of the write chokepoint: a relative base resolves against the working
+// directory of the process, so the tree would land in whatever project pi was started in. `operation`
+// is the phrase that names what the caller was about to do, and `detail` the thing to quote when the
+// operation needs one.
+function requireAbsoluteBase(value: string, operation: string, detail?: string): void {
+  if (path.isAbsolute(value)) return;
+  const refused = detail === undefined ? operation : `${operation} ${quote(detail)}`;
+  throw new SriWriterError(`${quote(value)} is not absolute: refusing to ${refused}`, value);
+}
+
 // Writes <base>/staging/<ts>/<skill>/lessons/<slug>.md and decision.json next to it.
 // `ts` is UTC YYYYMMDDTHHMMSSfffZ; a timestamp already in use gets -2, -3, ... so two
 // candidates produced in the same millisecond never share a directory.
 export async function writeStagingCandidate(input: StagingWriteInput): Promise<StagingWriteResult> {
-  // I12: a relative base resolves against the working directory of the process, so the
-  // staging tree would land inside whatever project pi was started in before the
-  // perimeter below ever ran. Refused while nothing exists yet.
-  if (!path.isAbsolute(input.base)) {
-    throw new SriWriterError(
-      `${quote(input.base)} is not absolute: refusing to create ${quote(stagingDir(input.base))}`,
-      input.base,
-    );
-  }
+  // I12: refused while nothing exists yet, before the perimeter below ever runs.
+  requireAbsoluteBase(input.base, "create", stagingDir(input.base));
 
   const stagingRoot = stagingDir(input.base);
   const lessonFileName = `${input.slug}.md`;
@@ -176,9 +179,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
 // rewritten or reordered; the new line is the only addition, so events joined by
 // candidateHash stay readable after a crash.
 export async function appendAttemptLine(base: string, line: AttemptLine): Promise<void> {
-  if (!path.isAbsolute(base)) {
-    throw new SriWriterError(`${quote(base)} is not absolute: refusing to append`, base);
-  }
+  requireAbsoluteBase(base, "append");
 
   // The base is known here, so the write is guarded against the whole state directory instead of
   // the path the caller handed over; that check runs inside writeFileAtomic below, where the bytes
@@ -208,12 +209,7 @@ export async function appendAttemptLine(base: string, line: AttemptLine): Promis
 // perimeter as the writes: only a directory inside <base>/staging is discarded. The answer says
 // whether the directory is gone; the caller reports it next to the error that caused the removal.
 export async function discardStagingCandidate(base: string, stagingPath: string): Promise<boolean> {
-  if (!path.isAbsolute(base)) {
-    throw new SriWriterError(
-      `${quote(base)} is not absolute: refusing to discard ${quote(stagingPath)}`,
-      base,
-    );
-  }
+  requireAbsoluteBase(base, "discard", stagingPath);
 
   assertWritable(stagingPath, [stagingDir(base)]);
 
