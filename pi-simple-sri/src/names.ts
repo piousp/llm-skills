@@ -20,3 +20,9 @@ export const HISTORY_DIR = ".history";
 export const DECISION_FILE = "decision.json";
 // The append-only index of attempts, one JSON line per event (Q14).
 export const ATTEMPTS_FILE = "attempts.jsonl";
+
+// The environment variable a replay sets for its child (OA8), and the one the extension reads to
+// register nothing inside a replay. Two modules agree on this literal and one of them is what stops
+// the child from starting another propose or gate over itself, so it is a constant and not a string
+// written twice.
+export const REPLAY_ENV_VAR = "PI_SIMPLE_SRI_REPLAY";

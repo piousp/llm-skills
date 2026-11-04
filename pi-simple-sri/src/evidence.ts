@@ -309,7 +309,10 @@ function canonicalJson(value: unknown): string {
   return json ?? "null";
 }
 
-function hashOfArguments(args: unknown): string {
+// Exported because it is the package's one rule for "the same call": the evidence of a session and
+// the tool calls of a replay (src/gate/replay-runner.ts, OA2) hash arguments the same way, so a
+// retry loop counted over a replay and one counted over a transcript mean the same thing.
+export function hashOfArguments(args: unknown): string {
   return sha256Digest(canonicalJson(args));
 }
 

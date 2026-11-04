@@ -20,7 +20,7 @@ import {
   type NotifyType,
 } from "../../src/command-skill-improve.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { COMMAND_NAME } from "../../src/names.ts";
+import { COMMAND_NAME, REPLAY_ENV_VAR } from "../../src/names.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
 import {
   SKILL_IMPROVE_TOOL_NAME,
@@ -410,6 +410,16 @@ function textOf(result: AgentToolResult<ToolDetails>): string {
   return part.text;
 }
 
+// Puts the environment back the way a test found it: an unset variable stays unset, and assigning
+// undefined would set the string "undefined" instead of removing it.
+function restoreEnv(previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[REPLAY_ENV_VAR];
+    return;
+  }
+  process.env[REPLAY_ENV_VAR] = previous;
+}
+
 test("the factory registers the command and the tool, exactly once each", () => {
   const harness = makeHarness();
 
@@ -654,4 +664,47 @@ test("the tool's execute stages a candidate under the base of the run", async ()
   assert.equal(harness.log.inventories[0].cwd, CWD);
   // The proposer was the injected seam, so the session model was never asked for anything.
   assert.deepEqual(harness.modelCalls, []);
+});
+
+// OA8: the child of a replay runs with this extension loaded -- it is not started with
+// --no-extensions, because cutting extensions would change the environment the failure was measured
+// in -- so the factory has to register nothing there. A replay that could start another propose or
+// gate over itself would spend the gate's budget on a loop nobody asked for. The variable is read when
+// the factory is called and not when the module is imported, so the guard costs the import nothing.
+test("inside a replay the factory registers neither the command nor the tool", () => {
+  const harness = makeHarness();
+  const refusing = refusingSeams();
+  const previous = process.env[REPLAY_ENV_VAR];
+
+  assert.equal(REPLAY_ENV_VAR, "PI_SIMPLE_SRI_REPLAY");
+  process.env[REPLAY_ENV_VAR] = "1";
+  try {
+    assert.equal(registerSurfaces(harness.pi, refusing.seams), undefined);
+  } finally {
+    restoreEnv(previous);
+  }
+
+  assert.deepEqual(harness.commandNames, []);
+  assert.deepEqual(harness.toolNames, []);
+  assert.deepEqual(harness.entries, []);
+  assert.deepEqual(harness.messages, []);
+  // No seam of the loop was touched either: the guard is the registration's first statement.
+  assert.deepEqual(refusing.touched, []);
+});
+
+// The value that disables the two surfaces is exactly "1": anything else leaves them registered,
+// because an environment a caller did not mean to set must not remove them.
+test("the replay guard answers only to the value \"1\"", () => {
+  const harness = makeHarness();
+  const previous = process.env[REPLAY_ENV_VAR];
+
+  process.env[REPLAY_ENV_VAR] = "0";
+  try {
+    registerSurfaces(harness.pi, harness.seams);
+  } finally {
+    restoreEnv(previous);
+  }
+
+  assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
+  assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
 });

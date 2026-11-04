@@ -11,7 +11,7 @@ import {
   type SkillImproveMessage,
 } from "../src/command-skill-improve.ts";
 import type { ImproveFlowContext, ImproveFlowDeps } from "../src/improve-flow.ts";
-import { COMMAND_NAME } from "../src/names.ts";
+import { COMMAND_NAME, REPLAY_ENV_VAR } from "../src/names.ts";
 import {
   createSkillImproveTool,
   skillImproveParams,
@@ -39,6 +39,13 @@ import {
 //
 // Importing this module runs nothing either. The only statements at module level declare types and
 // constants, so a `pi -e` that loads the file and never calls the factory registers nothing.
+//
+// OA8: the child of a replay runs with this extension loaded, because the child is not started with
+// -ne/--no-extensions -- cutting extensions would change the environment the failure was measured
+// in. The mitigation is the other side: src/gate/replay-runner.ts puts PI_SIMPLE_SRI_REPLAY=1 in the
+// child's environment, and the factory below registers nothing when it reads that value, so a replay
+// cannot start another propose or gate over itself. The variable is read when the factory is called,
+// never when the module is imported, which keeps the import free of environment reads.
 
 // The description is what the command list shows, so it names the syntax and the one thing a user
 // must know before running it: the skill is staged, never edited and never accepted.
@@ -102,6 +109,11 @@ export default function sriExtension(pi: ExtensionAPI, seams: SriSeams = {}): vo
 // fifty members a test here would have to stub and none of which it reads: a test drives this one
 // with a four-member fake, and the assignment in sriExtension above is what keeps the slice honest.
 export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): void {
+  // OA8: a replay's child must not be able to start another loop over itself. The check is the first
+  // statement of the registration and not a wrapper around the handlers, because a surface that is
+  // never registered cannot be offered to the model either.
+  if (isReplayChild()) return;
+
   // The dependencies both surfaces share, resolved once per extension instance: the flow's seams
   // (absent in production, where the loop resolves each one) and the entry channel. Where a run writes
   // is not here: the base follows the agent directory the loop resolves itself, so the wiring holds no
@@ -138,4 +150,11 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   });
 
   api.registerTool(createSkillImproveTool(deps));
+}
+
+// The value src/gate/replay-runner.ts sets for its child (OA8). Only the exact string "1" disables
+// the registration: anything else -- absent, empty, another value -- leaves the extension working,
+// because an environment a caller did not mean to set must not silently remove the two surfaces.
+function isReplayChild(): boolean {
+  return process.env[REPLAY_ENV_VAR] === "1";
 }
