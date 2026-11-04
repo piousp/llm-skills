@@ -369,7 +369,19 @@ async function stagedRecordOf(
     );
   }
 
-  return { record, skillContentHash: record.gate.replay.overlays.skillContentHash };
+  // The hash of the SKILL.md the gate measured is read from the preregistration and not from the result of a basis:
+  // that block is the one the two bases share, and the result of the replay base -- where M1 kept it -- is null in a
+  // gate of the case-bank base. A preregistration with no hash describes a gate that measured nothing this acceptance
+  // can be compared against, so the read fails closed instead of accepting under a hash nobody recorded.
+  const skillContentHash = record.gate.preregistration.skillContentHash;
+  if (skillContentHash === undefined) {
+    throw new SriWriterError(
+      `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and its preregistration carries no skillContentHash: nothing was accepted`,
+      gate.decisionPath,
+    );
+  }
+
+  return { record, skillContentHash };
 }
 
 // The report channel. With UI the notification is the result; without it the runner hands the

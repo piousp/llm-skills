@@ -69,6 +69,11 @@ export type InvalidReason =
 // Why a gate answered nothing. It covers the plan (too few items, a broken run, an interrupted
 // gate) and the materials (no model, a skill that no longer resolves, an overlay that could not be
 // built, a candidate whose bytes moved since it was staged).
+//
+// M1c adds the two of the second base and of its second condition: `judge-unavailable` is the judge that could not
+// answer or whose reply could not be read -- an abstention, never an acceptance, because the gate cannot decide
+// without the condition it announced -- and `origin-moved` is the artifact a defect was read from no longer being the
+// bytes the evidence recorded, which the gate re-verifies before it spends a run.
 export type GateAbstentionReason =
   | "insufficient-items"
   | "no-improvement"
@@ -77,7 +82,9 @@ export type GateAbstentionReason =
   | "no-model"
   | "skill-unavailable"
   | "overlay-failed"
-  | "candidate-mismatch";
+  | "candidate-mismatch"
+  | "judge-unavailable"
+  | "origin-moved";
 
 // One run of the budget: which item and repetition it is, which arm it belongs to, and everything
 // the process needs to be started without reading anything else.
@@ -232,11 +239,13 @@ export interface GatePlanOptions {
 // decisions and the abstention, without the two states of a gate that has not concluded yet.
 export type GateVerdict = Exclude<GateStatus, "not-run" | "preregistered">;
 
-// Why a concluded gate says what it says. `below-threshold` is the only reason the rule produces; the other
-// three are the abstention vocabulary of the gate, shared with the reasons the flow abstains for without
-// spending a run.
+// Why a concluded gate says what it says. `below-threshold` is the only reason the rule produces and `judge-failed`
+// the only one the second condition produces: the mechanics accepted and the judge did not, which is a rejection and
+// not an abstention -- the runs were readable and the condition the record announced was applied. The other three are
+// the abstention vocabulary of the gate, shared with the reasons the flow abstains for without spending a run.
 export type GateVerdictReason =
   | "below-threshold"
+  | "judge-failed"
   | Extract<GateAbstentionReason, "no-improvement" | "invalid-run" | "interrupted">;
 
 // What the gate will spend, recorded before the first run: the items it chose, the design, the rule it will be

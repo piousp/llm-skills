@@ -1011,6 +1011,9 @@ function gateAcceptedRecord(input: {
         },
         design: { reps: 2, items: 2, plannedRuns: 8, arms: ["incumbent", "candidate"] },
         mde: { basis: "replay", runsPerArm: 4, resolution: 0.25, requiredDifference: 1 },
+        // M1c: the hash the acceptance compares against the SKILL.md on disk is recorded in the preregistration, the
+        // block both bases write, and not in the result of this one -- which is null in the record of the other.
+        skillContentHash: input.skillContentHash,
       },
       replay: {
         completedAt: NOW_ISO,

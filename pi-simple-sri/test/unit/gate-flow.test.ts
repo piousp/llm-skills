@@ -324,8 +324,13 @@ function concluded(result: GateFlowResult): GateConcludedResult {
 
 // The concluded gate block of a record, or a failure naming the state the gate is in instead. It is the one
 // narrowing the assertions below share: a record whose gate did not conclude has no `replay` to read.
+//
+// M1c: the block has six variants in two bases, and `status` alone no longer names one, because a gate of the case-bank
+// base concludes with the same three statuses a replay does. The basis is checked first, which is what narrows this to
+// the replay family and makes the return type below the compile error a variant this helper forgot would produce.
 function concludedGate(record: DecisionRecord): GateConcluded {
   const gate = record.gate;
+  if (gate.basis !== "replay") assert.fail(`the record of this suite holds a gate of the ${gate.basis} base`);
   if (gate.status !== "gate-accepted" && gate.status !== "gate-rejected" && gate.status !== "gate-abstained") {
     assert.fail(`the gate did not conclude: ${gate.status}`);
   }
@@ -552,6 +557,8 @@ test("resolveStagedCandidate: a record of another schema is refused and left unt
 // followed. A rule recorded after the runs would be a rule chosen with the result in hand.
 test("gateStagedCandidate: the preregistration is written before the first run", async (t) => {
   const fixture = createFixture(t);
+  // The bytes of the SKILL.md the arms will be copied from: the hash the acceptance compares later is this one.
+  const skillBefore = fs.readFileSync(fixture.skillFilePath, "utf8");
   // What every run saw on disk at the moment it was entered, which is the only place the order is observable.
   const gates: GateBlock[] = [];
 
@@ -580,6 +587,10 @@ test("gateStagedCandidate: the preregistration is written before the first run",
     assert.equal(preregistration.threshold.candidatePasses, RUNS_PER_ARM);
     assert.equal(preregistration.threshold.incumbentPassesMax, RUNS_PER_ARM - 1);
     assert.equal(preregistration.mde.runsPerArm, RUNS_PER_ARM);
+    // M1c: the hash of the SKILL.md the arms were copied from is already in the preregistration when the runs start, and
+    // it is the field neutral to the basis -- where the acceptance of either base reads it, instead of the result of one
+    // basis, which is null in the record of the other.
+    assert.equal(preregistration.skillContentHash, digestOf(skillBefore));
     // The one assertion this test exists for: the moment recorded for the rule is older than the run.
     assert.ok(
       Date.parse(preregistration.recordedAt) < Date.parse(harness.runs[index].at),
@@ -626,6 +637,9 @@ test("gateStagedCandidate: an accepted gate rewrites the record and writes no li
   // `expectedSkillContentHash`), and every acceptance of a real gate would be refused as drift.
   assert.equal(gate.replay.overlays.skillContentHash, digestOf(skillBefore));
   assert.notEqual(gate.replay.overlays.manifestHash, gate.replay.overlays.skillContentHash);
+  // The same hash in the preregistration, which is the block the two bases share: the acceptance reads it from there and
+  // not from the result of a basis.
+  assert.equal(gate.preregistration.skillContentHash, gate.replay.overlays.skillContentHash);
 
   assert.equal(gate.replay.items.length, 3);
   for (const item of gate.replay.items) {

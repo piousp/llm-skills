@@ -136,12 +136,15 @@
       }
     },
     "gate": {
-      "description": "basis is the discriminator of the block: every field that depends on how the gate decides lives under a key named after the basis (replay today), and the top-level fields -- basis, status, budget, tokens, preregistration -- are neutral to it.",
+      "description": "basis is the discriminator of the block: every field that depends on how the gate decides lives under a key named after the basis (replay, or case-bank since M1c), and the top-level fields -- basis, status, budget, tokens, preregistration -- are neutral to it.",
       "type": "object",
       "additionalProperties": false,
       "required": ["basis", "status", "budget", "tokens", "preregistration", "replay"],
       "properties": {
-        "basis": { "const": "replay" },
+        "basis": {
+          "description": "How the gate decides. Schema 1 declares two: a paired replay of the diagnosis and a case bank the user wrote. It was a const until M1c, so the change is the widening of one keyword and every record written before it still validates.",
+          "enum": ["replay", "case-bank"]
+        },
         "status": { "enum": ["not-run", "preregistered", "gate-accepted", "gate-rejected", "gate-abstained"] },
         "budget": {
           "type": "object",
@@ -185,6 +188,16 @@
                 "output": { "type": "integer", "minimum": 0 }
               }
             },
+            "judge": {
+              "description": "What the second condition spent, present exactly when a gate of the case-bank base called the judge. total is the sum of the components that are there, so the three of a replay gate still add up on their own and a record written before this key existed means the same thing it did.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer", "minimum": 0 },
+                "output": { "type": "integer", "minimum": 0 }
+              }
+            },
             "total": {
               "type": "object",
               "additionalProperties": false,
@@ -211,7 +224,17 @@
                 "rule": { "enum": ["unanimous-and-strictly-better"] },
                 "candidatePasses": { "type": "integer", "minimum": 0 },
                 "incumbentPassesMax": { "type": "integer", "minimum": 0 },
-                "version": { "const": 1 }
+                "version": { "const": 1 },
+                "judge": {
+                  "description": "The second condition, recorded with the rule so it cannot be added or removed once the result is known. Present exactly when the case bank declared a rubric, and then the gate cannot accept without the judge agreeing. rubricHash pins the rubric text, which travels inside the copy of the bank.",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["required", "rubricHash"],
+                  "properties": {
+                    "required": { "const": "pass" },
+                    "rubricHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+                  }
+                }
               }
             },
             "design": {
@@ -234,6 +257,24 @@
                 "runsPerArm": { "type": "integer", "minimum": 1 },
                 "resolution": { "type": "number", "minimum": 0 },
                 "requiredDifference": { "type": "number", "minimum": 0 }
+              }
+            },
+            "skillContentHash": {
+              "description": "The digest of the SKILL.md the gate measured. It is the one field of this block that is neutral to the basis: both bases write it, and it is where the acceptance reads the hash it compares against the skill, because the block of one basis (replay) is null in the base of the other. Optional, so every preregistration written before M1c still validates.",
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "caseBank": {
+              "description": "The materials of a gate whose basis is a case bank, as they were read before the first run: the file it was loaded from, the digest of its bytes, the copy that travels with the candidate, the number of cases and the digest of the rubric text when the bank declares one. Absent in a gate whose basis is a replay, and optional here so a preregistration written before M1c keeps validating.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "contentHash", "copy", "cases", "rubricHash"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "copy": { "type": "string", "minLength": 1 },
+                "cases": { "type": "integer", "minimum": 0 },
+                "rubricHash": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" }
               }
             }
           }
@@ -411,6 +452,215 @@
                 "properties": {
                   "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
                   "reason": { "enum": ["intrinsic-failure"] }
+                }
+              }
+            },
+            "overlays": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["incumbent", "candidate", "skillContentHash", "manifestHash"],
+              "properties": {
+                "incumbent": { "type": "string", "minLength": 1 },
+                "candidate": { "type": "string", "minLength": 1 },
+                "skillContentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+              }
+            }
+          }
+        },
+        "caseBank": {
+          "description": "The result of a gate whose basis is a case bank the user wrote: one entry per case with the runs of both arms, the tallies, the interval, the second condition of the judge and the overlays the acceptance compares against the skill. Null in the three states of a block whose basis is a replay, and the key absent from those blocks is what additionalProperties: false keeps a decision instead of a hole.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["completedAt", "verdict", "reason", "cases", "arms", "interval", "regressions", "judge", "overlays"],
+          "properties": {
+            "completedAt": { "type": "string", "format": "date-time" },
+            "verdict": { "enum": ["gate-accepted", "gate-rejected", "gate-abstained"] },
+            "reason": { "type": ["string", "null"] },
+            "cases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["index", "id", "model", "checks", "reps"],
+                "properties": {
+                  "index": { "type": "integer", "minimum": 0 },
+                  "id": { "type": "string", "minLength": 1 },
+                  "model": { "type": "string", "minLength": 1 },
+                  "checks": {
+                    "description": "The predicates the runs of the case were judged by, copied from the bank so the record of the gate stands alone. It is the same vocabulary the expectation of a quality_defect uses, and src/checks.ts is still the one place it is executed.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind"],
+                      "properties": {
+                        "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                        "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                        "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                        "flags": { "enum": ["", "i"] }
+                      }
+                    }
+                  },
+                  "reps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["arm", "rep", "outcome", "stopReason", "skillLoaded", "usage", "durationMs", "exitCode"],
+                      "properties": {
+                        "arm": { "enum": ["incumbent", "candidate"] },
+                        "rep": { "type": "integer", "minimum": 1 },
+                        "outcome": { "enum": ["pass", "fail", "invalid"] },
+                        "invalidReason": { "type": "string", "minLength": 1 },
+                        "invalidDetail": { "type": "string", "minLength": 1 },
+                        "stopReason": { "type": ["string", "null"] },
+                        "skillLoaded": { "type": "boolean" },
+                        "durationMs": { "type": "number", "minimum": 0 },
+                        "exitCode": { "type": ["integer", "null"] },
+                        "stream": { "type": "string", "minLength": 1 },
+                        "truncatedAt": { "type": "integer", "minimum": 0 },
+                        "checkFailures": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": { "type": "string", "minLength": 1 }
+                        },
+                        "usage": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["input", "output"],
+                          "properties": {
+                            "input": { "type": "integer", "minimum": 0 },
+                            "output": { "type": "integer", "minimum": 0 }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "arms": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["incumbent", "candidate"],
+              "properties": {
+                "incumbent": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["passes", "runs", "tokens"],
+                  "properties": {
+                    "passes": { "type": "integer", "minimum": 0 },
+                    "runs": { "type": "integer", "minimum": 0 },
+                    "tokens": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["input", "output"],
+                      "properties": {
+                        "input": { "type": "integer", "minimum": 0 },
+                        "output": { "type": "integer", "minimum": 0 }
+                      }
+                    }
+                  }
+                },
+                "candidate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["passes", "runs", "tokens"],
+                  "properties": {
+                    "passes": { "type": "integer", "minimum": 0 },
+                    "runs": { "type": "integer", "minimum": 0 },
+                    "tokens": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["input", "output"],
+                      "properties": {
+                        "input": { "type": "integer", "minimum": 0 },
+                        "output": { "type": "integer", "minimum": 0 }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "interval": {
+              "description": "Descriptive and not decisive: the decision is the preregistered rule, and the intervals say how little the design resolves.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "alpha", "incumbent", "candidate", "difference"],
+              "properties": {
+                "method": { "enum": ["wilson"] },
+                "alpha": { "type": "number", "minimum": 0 },
+                "incumbent": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                },
+                "candidate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                },
+                "difference": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                }
+              }
+            },
+            "regressions": { "type": "integer", "minimum": 0 },
+            "judge": {
+              "description": "The second condition as it answered: the model that judged, the digest of the rubric it applied, the verdict over the whole set -- every case has to pass -- and what it cost. verdict distinguishes the judge that spoke from the one that did not have to (not-run, because the mechanics had already refused), so a reader never guesses which happened. Null when the gate announced no second condition.",
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": ["model", "rubricHash", "verdict", "calls", "tokens"],
+              "properties": {
+                "model": { "type": "string", "minLength": 1 },
+                "rubricHash": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$" },
+                "verdict": { "enum": ["pass", "fail", "not-run"] },
+                "calls": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["caseId", "verdict", "reason", "usage"],
+                    "properties": {
+                      "caseId": { "type": "string", "minLength": 1 },
+                      "verdict": { "enum": ["pass", "fail"] },
+                      "reason": { "type": "string" },
+                      "usage": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["input", "output"],
+                        "properties": {
+                          "input": { "type": "integer", "minimum": 0 },
+                          "output": { "type": "integer", "minimum": 0 }
+                        }
+                      }
+                    }
+                  }
+                },
+                "tokens": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["input", "output"],
+                  "properties": {
+                    "input": { "type": "integer", "minimum": 0 },
+                    "output": { "type": "integer", "minimum": 0 }
+                  }
                 }
               }
             },

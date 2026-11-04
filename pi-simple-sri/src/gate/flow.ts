@@ -44,7 +44,9 @@ import type {
 //      written into the record as the preregistration BEFORE the first run. A threshold recorded after the
 //      runs would be a threshold chosen with the result in hand, and the timestamp of the preregistration is
 //      what makes "recorded before the runs" checkable from the record alone;
-//   4. the two arms are built in staging, so a replay reads a copy of the skill and never the skill;
+//   4. the two arms are built in staging, so a replay reads a copy of the skill and never the skill. The hash of the
+//      SKILL.md they were copied from is the one the acceptance compares against the skill, so it joins the
+//      preregistration here -- still before the first run -- in the field that is neutral to the basis;
 //   5. the budget is spent in the order item -> rep -> (incumbent, candidate), with the two arms of a pair
 //      adjacent in time, and the raw JSONL of every run is kept under the candidate as its audit trail;
 //   6. the verdict is the preregistered rule applied to the verdicts -- never a rule read off the numbers --
@@ -333,19 +335,11 @@ export async function gateStagedCandidate(
     design: plan.design,
     mde: plan.mde,
   };
-  const preregistered: DecisionRecord = {
-    ...record,
-    gate: {
-      basis: "replay",
-      status: "preregistered",
-      budget: { plannedRuns: plan.design.plannedRuns, usedRuns: 0, interruptedAt: null },
-      tokens: record.gate.tokens,
-      preregistration,
-      replay: null,
-    },
-    outcome: { ...record.outcome, status: outcomeStatusFor("preregistered") },
-  };
-  await seams.rewriteDecision(request.base, candidateDir, preregistered);
+  await seams.rewriteDecision(
+    request.base,
+    candidateDir,
+    preregisteredRecordOf(record, preregistration, plan.design.plannedRuns),
+  );
 
   // Step 4. The two arms, from the skill as it stands and from the skill plus the candidate lesson. The
   // overlay copies into staging and never touches the skill, so a gate that passes leaves the skill alone.
@@ -374,6 +368,21 @@ export async function gateStagedCandidate(
       detail: overlays.error.detail,
     });
   }
+
+  // Step 4, second half, and the last moment before the first run. The hash of the SKILL.md the two arms were copied
+  // from is what the acceptance compares against the skill later, so it is recorded in the preregistration -- the field
+  // neutral to the basis, which the case-bank base writes the same way -- instead of in the result of one basis, which
+  // is null in the record of the other. The record is rewritten with it before any run, so what every run saw on disk
+  // is the preregistration the concluded record carries.
+  const measured: GatePreregistration = {
+    ...preregistration,
+    skillContentHash: overlays.value.skillContentHash,
+  };
+  await seams.rewriteDecision(
+    request.base,
+    candidateDir,
+    preregisteredRecordOf(record, measured, plan.design.plannedRuns),
+  );
 
   // Steps 5 and 6. The budget, and the reading of it.
   //
@@ -427,7 +436,7 @@ export async function gateStagedCandidate(
         interruptedAt: budget.interruptedAt,
       },
       tokens: tokenTallyOf(record.gate.tokens.proposal, evaluation.arms),
-      preregistration,
+      preregistration: measured,
       replay: {
         completedAt: completedAt.toISOString(),
         verdict,
@@ -478,6 +487,28 @@ function gateSeamsOf(deps: GateDeps): GateSeams {
     appendAttempt: deps.appendAttempt ?? appendAttemptLine,
     writeStream: deps.writeStream ?? writeTextAtomically,
     listSkills: deps.listSkills ?? listSkills,
+  };
+}
+
+// The record of a gate that has recorded its rule and has run nothing. It is one literal for the two moments the
+// preregistration is written -- the moment the rule is known and the moment the hash of the SKILL.md the arms were
+// copied from is known -- so the two writes cannot describe two different gates, and both happen before the first run.
+function preregisteredRecordOf(
+  record: DecisionRecord,
+  preregistration: GatePreregistration,
+  plannedRuns: number,
+): DecisionRecord {
+  return {
+    ...record,
+    gate: {
+      basis: "replay",
+      status: "preregistered",
+      budget: { plannedRuns, usedRuns: 0, interruptedAt: null },
+      tokens: record.gate.tokens,
+      preregistration,
+      replay: null,
+    },
+    outcome: { ...record.outcome, status: outcomeStatusFor("preregistered") },
   };
 }
 

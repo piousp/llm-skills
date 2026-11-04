@@ -19,10 +19,12 @@ import type {
   Expectation,
   GateBlock,
   GateBudget,
+  GateCaseBankResult,
   GatePreregistration,
   GateReplayResult,
   GateStatus,
   GateTokenTally,
+  JudgeRecord,
   LessonDraft,
   ReplayRunRecord,
   SkillRef,
@@ -58,6 +60,10 @@ const SPENT_BUDGET: GateBudget = { plannedRuns: 12, usedRuns: 12, interruptedAt:
 // judged by, the design that rule pays for, and the floor of that design. The value of `mde.basis` is a
 // placeholder of this fixture on purpose: the schema declares it as a string because the scorer that names
 // its arithmetic is a later slice, and pinning a vocabulary here would be deciding that slice's wording.
+//
+// `skillContentHash` is the field M1c adds to the block (the hash of the SKILL.md the gate measured, the one
+// neutral to the basis), and it is optional: the negative case below proves a preregistration without it still
+// validates, which is every record written before it existed.
 const PREREGISTRATION: GatePreregistration = {
   recordedAt: "2026-11-02T14:04:00.000Z",
   threshold: {
@@ -68,6 +74,7 @@ const PREREGISTRATION: GatePreregistration = {
   },
   design: { reps: 2, items: 3, plannedRuns: 12, arms: ["incumbent", "candidate"] },
   mde: { basis: "resolution-of-the-design", runsPerArm: 6, resolution: 0.1667, requiredDifference: 1 },
+  skillContentHash: CONTENT_HASH,
 };
 
 // A concluded replay, in the shape schema 1 declares. It is typed, so the compiler proves this fixture and
@@ -128,6 +135,107 @@ const REPLAY: GateReplayResult = {
   },
 };
 
+const CASE_BANK_HASH = `sha256:${"f".repeat(64)}`;
+const RUBRIC_HASH = `sha256:${"9".repeat(64)}`;
+
+// The preregistration of the second base (M1c): the same neutral fields as the one above, the hash of the skill the two
+// bases share, the materials of the bank under the key of their basis and the judge clause inside the rule -- it is the
+// second condition and it is recorded with the rule, not after it.
+const CASE_BANK_PREREGISTRATION: GatePreregistration = {
+  recordedAt: "2026-11-02T14:04:00.000Z",
+  threshold: {
+    rule: "unanimous-and-strictly-better",
+    candidatePasses: 4,
+    incumbentPassesMax: 3,
+    version: 1,
+    judge: { required: "pass", rubricHash: RUBRIC_HASH },
+  },
+  design: { reps: 2, items: 2, plannedRuns: 8, arms: ["incumbent", "candidate"] },
+  mde: { basis: "case-bank", runsPerArm: 4, resolution: 0.25, requiredDifference: 1 },
+  skillContentHash: CONTENT_HASH,
+  caseBank: {
+    path: "/work/cases.json",
+    contentHash: CASE_BANK_HASH,
+    copy: "staging/20261102T140322481Z/pdf-tools/case-bank.json",
+    cases: 2,
+    rubricHash: RUBRIC_HASH,
+  },
+};
+
+// The second condition as it answered: one call per case of the candidate arm, the verdict over the whole set and what
+// it cost. `verdict` of the record separates the judge that spoke from the one that never had to (`not-run`).
+const CASE_BANK_JUDGE: JudgeRecord = {
+  model: "anthropic/claude-sonnet-4-5",
+  rubricHash: RUBRIC_HASH,
+  verdict: "pass",
+  calls: [
+    {
+      caseId: "no-squash-all",
+      verdict: "pass",
+      reason: "the answer names --interactive and never --squash-all",
+      usage: { input: 300, output: 20 },
+    },
+  ],
+  tokens: { input: 300, output: 20 },
+};
+
+// The result of the second base, in the shape gate.caseBank declares: one entry per case with the runs of both arms -- the
+// run that failed its checks carries them as "<index>:<kind>" -- the tallies, the interval, the judge and the overlays.
+// It is typed, so the compiler proves this fixture and the schema describe the same block.
+const CASE_BANK_RESULT: GateCaseBankResult = {
+  completedAt: "2026-11-02T14:20:00.000Z",
+  verdict: "gate-accepted",
+  reason: null,
+  cases: [
+    {
+      index: 0,
+      id: "no-squash-all",
+      model: "anthropic/claude-sonnet-4-5",
+      checks: [{ kind: "not-contains", value: "--squash-all" }],
+      reps: [
+        {
+          arm: "incumbent",
+          rep: 1,
+          outcome: "fail",
+          stopReason: "stop",
+          skillLoaded: true,
+          usage: { input: 900, output: 120 },
+          durationMs: 4200,
+          exitCode: 0,
+          checkFailures: ["0:not-contains"],
+        },
+        {
+          arm: "candidate",
+          rep: 1,
+          outcome: "pass",
+          stopReason: "stop",
+          skillLoaded: true,
+          usage: { input: 910, output: 110 },
+          durationMs: 3900,
+          exitCode: 0,
+          stream: "staging/20261102T140322481Z/pdf-tools/gate/runs/0-1-candidate.jsonl",
+        },
+      ],
+    },
+  ],
+  arms: {
+    incumbent: { passes: 1, runs: 2, tokens: { input: 900, output: 120 } },
+    candidate: { passes: 2, runs: 2, tokens: { input: 910, output: 110 } },
+  },
+  interval: REPLAY.interval,
+  regressions: 0,
+  judge: CASE_BANK_JUDGE,
+  overlays: REPLAY.overlays,
+};
+
+const CASE_BANK_TOKENS: GateTokenTally = {
+  proposal: { input: 412, output: 137 },
+  incumbent: { input: 900, output: 120 },
+  candidate: { input: 910, output: 110 },
+  judge: { input: 300, output: 20 },
+  total: { input: 2522, output: 387 },
+};
+
 // The block of a gate in a given status, field for field what the schema of that status requires: the
 // preregistration exists once the gate was preregistered, and the result exists once it concluded. The
 // switch is exhaustive over GATE_STATUSES, so a status added to the union loses its case here.
@@ -163,6 +271,51 @@ function gateWith(status: GateStatus): GateBlock {
         // The verdict of the result and the status of the block are the same value here, as they are in a
         // record the flow writes: the schema cannot tie them either, so the fixture says it once.
         replay: { ...REPLAY, verdict: status },
+      };
+    default:
+      return assertNever(status);
+  }
+}
+
+// The block of a gate of the second base, in the state its status names. It is the counterpart of gateWith and it exists
+// so the five records of this base -- two states without a result and three with one -- are one helper and not five
+// literals that could disagree with each other. The switch is exhaustive over GATE_STATUSES, so a status added to the
+// union loses its case here too.
+function caseBankWith(status: GateStatus): GateBlock {
+  switch (status) {
+    case "not-run":
+      return {
+        basis: "case-bank",
+        status: "not-run",
+        budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+        tokens: ZERO_TOKENS,
+        preregistration: null,
+        replay: null,
+        caseBank: null,
+      };
+    case "preregistered":
+      return {
+        basis: "case-bank",
+        status: "preregistered",
+        budget: { plannedRuns: 8, usedRuns: 0, interruptedAt: null },
+        tokens: ZERO_TOKENS,
+        preregistration: CASE_BANK_PREREGISTRATION,
+        replay: null,
+        caseBank: null,
+      };
+    case "gate-accepted":
+    case "gate-rejected":
+    case "gate-abstained":
+      return {
+        basis: "case-bank",
+        status,
+        budget: { plannedRuns: 8, usedRuns: 2, interruptedAt: null },
+        tokens: CASE_BANK_TOKENS,
+        preregistration: CASE_BANK_PREREGISTRATION,
+        replay: null,
+        // The verdict of the result and the status of the block are the same value here too, and the keyword that would
+        // tie them is one schema 1 does not use.
+        caseBank: { ...CASE_BANK_RESULT, verdict: status },
       };
     default:
       return assertNever(status);
@@ -500,10 +653,81 @@ test("decision.schema.json: the gate statuses of the schema are the ones src/typ
   assert.deepEqual(schemaNode("properties", "gate", "properties", "status").enum, [...GATE_STATUSES]);
 });
 
-// The block's discriminator is `basis`, and schema 1 has exactly one: the negative case below proves the
-// constant is enforced, and the keyword is the one a second basis turns into an enum.
-test("decision.schema.json: the basis of the gate block is replay", () => {
-  assert.equal(schemaNode("properties", "gate", "properties", "basis").const, "replay");
+// The block's discriminator is `basis`, and schema 1 declares two: widening it is what makes a second kind of gate a
+// record of the same schema instead of a version of its own, and it is the only change of this slice that touches a
+// keyword instead of adding a key.
+test("decision.schema.json: the bases of the gate block are the two the variants declare", () => {
+  assert.deepEqual(schemaNode("properties", "gate", "properties", "basis").enum, ["replay", "case-bank"]);
+});
+
+// M1c, the exit criterion of the slice from the other end: a record of the second base validates in every state it can be
+// written in -- not-run, preregistered, and the three a concluded gate has. The five records are built by one helper, so
+// the states the fixture names are the states GATE_STATUSES declares.
+test("decision.schema.json: a case-bank gate validates in every status it can hold", () => {
+  for (const gateStatus of GATE_STATUSES) {
+    const record: DecisionRecord = {
+      ...VALID_RECORD,
+      gate: caseBankWith(gateStatus),
+      outcome: {
+        status: outcomeStatusFor(gateStatus),
+        reason: null,
+        // A gate that has not concluded decided no moment; the three verdicts did.
+        decidedAt: gateStatus === "not-run" || gateStatus === "preregistered" ? null : "2026-11-02T14:20:00.000Z",
+      },
+    };
+
+    assert.deepEqual(validateAgainstSchema(record), [], `the record of a case-bank gate in status ${gateStatus}`);
+  }
+});
+
+// The two keys M1c adds are optional, and a record written before them keeps validating: this is the additive half of the
+// slice stated by the record itself -- the block of the second base with neither of them, and the block of the replay
+// base with no `caseBank` key at all.
+test("decision.schema.json: skillContentHash and caseBank are optional, and their absence validates", () => {
+  const { skillContentHash: _omitted, caseBank: _noBank, ...withoutMaterials } = CASE_BANK_PREREGISTRATION;
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    gate: {
+      basis: "case-bank",
+      status: "preregistered",
+      budget: { plannedRuns: 8, usedRuns: 0, interruptedAt: null },
+      tokens: ZERO_TOKENS,
+      preregistration: withoutMaterials,
+      replay: null,
+      caseBank: null,
+    },
+    outcome: { status: "proposed", reason: null, decidedAt: null },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+  // The block M1 writes keeps validating too, which is what "no record written before this slice stops validating" means
+  // for the key the second base uses.
+  assert.deepEqual(validateAgainstSchema(VALID_RECORD), []);
+});
+
+// M1c: the fourth class is judged on a list of failures, and the list is there when some check failed -- the negative
+// case of an empty list below is what pins the other half, that a run which failed names what it failed.
+test("decision.schema.json: a run that failed its checks carries the list of the checks it failed", () => {
+  const [item] = REPLAY.items;
+  const [first, ...rest] = item.reps;
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    gate: {
+      basis: "replay",
+      status: "gate-accepted",
+      budget: SPENT_BUDGET,
+      tokens: ZERO_TOKENS,
+      preregistration: PREREGISTRATION,
+      replay: {
+        ...REPLAY,
+        verdict: "gate-accepted",
+        items: [{ ...item, reps: [{ ...first, outcome: "fail", checkFailures: ["1:not-contains"] }, ...rest] }],
+      },
+    },
+    outcome: { status: "gate-accepted", reason: null, decidedAt: "2026-11-02T14:20:00.000Z" },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
 });
 
 // M2 and M3: the two fields a run gained are optional, so the schema of schema 1 accepts a run that carries
@@ -689,9 +913,10 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
   {
     name: "a basis of the gate that schema 1 does not know",
     // §TECHNICAL 5: `basis` is the discriminator, so a block of a basis this schema does not declare is
-    // refused whole instead of being read as a replay block with fields missing.
-    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, basis: "case-bank" } }),
-    expected: ['decision.gate.basis: expected the constant "replay", got "case-bank"'],
+    // refused whole instead of being read as a replay block with fields missing. M1c widened the keyword to the two
+    // bases the package writes, and the negative has to stay outside both of them.
+    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, basis: "manual" } }),
+    expected: ['decision.gate.basis: expected one of "replay", "case-bank", got "manual"'],
   },
   {
     name: "an expectation class outside the enum",
@@ -788,9 +1013,70 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
   {
     name: "a property the schema does not declare under the gate",
     // §TECHNICAL 5: a second basis is a branch of this block and a decision, not a hole. additionalProperties:
-    // false is what makes that true, so the keyword is pinned by a case of its own.
-    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, caseBank: { cases: [] } } }),
-    expected: ['decision.gate: the property "caseBank" is not declared by the schema (additionalProperties: false)'],
+    // false is what makes that true, so the keyword is pinned by a case of its own -- with a key that still
+    // belongs nowhere, because `caseBank` is declared now.
+    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, judge: { required: "pass" } } }),
+    expected: ['decision.gate: the property "judge" is not declared by the schema (additionalProperties: false)'],
+  },
+  {
+    name: "a property the schema does not declare under caseBank",
+    // M1c extends the block with a branch of its own and closes it the same way: the result of the second base is a
+    // shape and not an open bag of metadata, which is what keeps a field the package does not write from travelling
+    // in a record nobody re-reads.
+    build: () => ({
+      ...VALID_RECORD,
+      gate: { ...caseBankWith("gate-accepted"), caseBank: { ...CASE_BANK_RESULT, notes: ["the bank was fine"] } },
+    }),
+    expected: ['decision.gate.caseBank: the property "notes" is not declared by the schema (additionalProperties: false)'],
+  },
+  {
+    name: "a judge clause without the hash of the rubric it applies",
+    // The clause is a pair: `required` says what the judge has to answer and `rubricHash` pins the text it applied, so a
+    // clause that carries only the first announces a condition nobody can re-read.
+    build: () => ({
+      ...VALID_RECORD,
+      gate: {
+        ...gateWith("gate-accepted"),
+        preregistration: {
+          ...PREREGISTRATION,
+          threshold: { ...PREREGISTRATION.threshold, judge: { required: "pass" } },
+        },
+      },
+    }),
+    expected: ['decision.gate.preregistration.threshold.judge: the required property "rubricHash" is missing'],
+  },
+  {
+    name: "a judge call with a verdict outside the enum",
+    // A call answers pass or fail and nothing else: `not-run` is the verdict of the whole set when the judge was never
+    // asked, and it is not something one of its calls can say.
+    build: () => ({
+      ...VALID_RECORD,
+      gate: {
+        ...caseBankWith("gate-accepted"),
+        caseBank: {
+          ...CASE_BANK_RESULT,
+          judge: { ...CASE_BANK_JUDGE, calls: [{ ...CASE_BANK_JUDGE.calls[0], verdict: "maybe" }] },
+        },
+      },
+    }),
+    expected: ['decision.gate.caseBank.judge.calls[0].verdict: expected one of "pass", "fail", got "maybe"'],
+  },
+  {
+    name: "an empty list of check failures",
+    // The list is a reading of a run that failed some check: empty, it would say a run failed and name nothing, which is
+    // why the schema declares minItems 1 (S2) and this case pins it.
+    build: () => {
+      const [item] = REPLAY.items;
+      const [first, ...rest] = item.reps;
+      return {
+        ...VALID_RECORD,
+        gate: {
+          ...gateWith("gate-accepted"),
+          replay: { ...REPLAY, items: [{ ...item, reps: [{ ...first, outcome: "fail", checkFailures: [] }, ...rest] }] },
+        },
+      };
+    },
+    expected: ["decision.gate.replay.items[0].reps[0].checkFailures: the array has 0 items, fewer than 1"],
   },
 ];
 
