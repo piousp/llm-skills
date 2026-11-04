@@ -24,7 +24,13 @@ import {
   type SkillImproveDeps,
   type SkillImproveModelRegistry,
 } from "../../src/command-skill-improve.ts";
+import { SriFailClosedError } from "../../src/errors.ts";
 import { acceptCandidate, type AcceptDeps, type AcceptRequest } from "../../src/gate/acceptance.ts";
+import type {
+  DirectionalGateDeps,
+  DirectionalGateRequest,
+  DirectionalGateResult,
+} from "../../src/gate/directional-flow.ts";
 import type { GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
@@ -237,6 +243,9 @@ interface HarnessOptions {
   // The gate and the acceptance the chain runs. The gate defaults to an abstention that writes nothing; the
   // acceptance defaults to the real one, so a test that wants it records what it wrote instead of a double.
   gate?: (request: GateRequest) => Promise<GateFlowResult>;
+  // The second flow of M1c, with the same default shape: an answer that spends nothing, so no test of this suite starts a
+  // replay or reaches a provider.
+  gateDirectional?: (request: DirectionalGateRequest, gateDeps: DirectionalGateDeps) => Promise<DirectionalGateResult>;
   accept?: typeof acceptCandidate;
   acceptDeps?: AcceptDeps;
 }
@@ -253,6 +262,7 @@ interface Harness {
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
   gateRequests: GateRequest[];
+  directionalRequests: DirectionalGateRequest[];
   acceptRequests: AcceptRequest[];
   run: (args: string) => Promise<void>;
 }
@@ -271,9 +281,8 @@ function lessonDraftFor(input: Parameters<ProposeFn>[0]): LessonDraft {
   };
 }
 
-function successfulProposer(proposals: Harness["proposals"]): ProposeFn {
+function successfulProposer(): ProposeFn {
   return async (input) => {
-    proposals.push({ input });
     const draft = lessonDraftFor(input);
     const lesson = serializeLesson(draft);
     if (!lesson.ok) assert.fail(`the lesson of this test must serialize: ${lesson.error}`);
@@ -292,6 +301,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
   const gateRequests: GateRequest[] = [];
+  const directionalRequests: DirectionalGateRequest[] = [];
   const acceptRequests: AcceptRequest[] = [];
 
   const modelRegistry: SkillImproveModelRegistry = {
@@ -343,9 +353,36 @@ function createHarness(options: HarnessOptions = {}): Harness {
     };
   };
 
+  // The gate of the bank base: recorded before it is delegated, and an answer that spends nothing when a test does not name
+  // one -- the same shape as the abstention above, and the one the base answers with when its bank is not there.
+  const gateDirectional = async (
+    request: DirectionalGateRequest,
+    gateDeps: DirectionalGateDeps,
+  ): Promise<DirectionalGateResult> => {
+    directionalRequests.push(request);
+    if (options.gateDirectional !== undefined) return await options.gateDirectional(request, gateDeps);
+    return {
+      kind: "no-baseline",
+      reason: `bank-absent: ${request.bankPath}`,
+      stagingPath: request.stagingPath,
+      decisionPath: path.join(request.stagingPath, DECISION_FILE),
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+    };
+  };
+
   const accept: typeof acceptCandidate = async (request, acceptDeps) => {
     acceptRequests.push(request);
     return await (options.accept ?? acceptCandidate)(request, acceptDeps);
+  };
+
+  // The proposal of a run, recorded whatever answers it: `proposals` is what "the run proposed" means in this suite, so a test
+  // that replaces the proposer still counts the call instead of emptying the array by construction. The default builds the
+  // lesson the flow expects out of the input the run handed over.
+  const propose: ProposeFn = async (input) => {
+    proposals.push({ input });
+    return await (options.propose ?? successfulProposer())(input);
   };
 
   const deps: SkillImproveDeps = {
@@ -361,6 +398,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     },
     base,
     gate,
+    gateDirectional,
     accept,
     ...(options.acceptDeps === undefined ? {} : { acceptDeps: options.acceptDeps }),
     // The message channel is a seam of the dependencies and not a member of the context: pi's command
@@ -381,7 +419,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
             entries.push({ customType, data });
           },
         }),
-    ...(options.useRealProposer === true ? {} : { propose: options.propose ?? successfulProposer(proposals) }),
+    ...(options.useRealProposer === true ? {} : { propose }),
   };
 
   return {
@@ -396,6 +434,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     proposals,
     completed,
     gateRequests,
+    directionalRequests,
     acceptRequests,
     run: (args: string) => runSkillImprove(args, ctx, deps),
   };
@@ -422,6 +461,66 @@ test("parseSkillImproveArgs: surrounding and repeated whitespace is dropped", ()
 test("parseSkillImproveArgs: an empty or blank argument string names no skill", () => {
   assert.deepEqual(parseSkillImproveArgs(""), {});
   assert.deepEqual(parseSkillImproveArgs("   \n\t "), {});
+});
+
+// M1c: --flag=<value> is one token, so a bank path with spaces in it is one argument and a focus of several words is never
+// confused with a flag. The flag may come before or after the focus, and the focus keeps its own spaces.
+test("parseSkillImproveArgs: --bank=<path> is one token and the focus keeps its spaces", () => {
+  assert.deepEqual(parseSkillImproveArgs("pdf-tools merged cells --bank=/abs/x.json"), {
+    skill: "pdf-tools",
+    focus: "merged cells",
+    bankPath: "/abs/x.json",
+  });
+  assert.deepEqual(parseSkillImproveArgs("--bank=/abs/x.json pdf-tools"), {
+    skill: "pdf-tools",
+    bankPath: "/abs/x.json",
+  });
+});
+
+// The two flags of the bank base and the flag of the staged run, as themselves: the boolean one carries no value and the two
+// that name a path carry it after the equals sign.
+test("parseSkillImproveArgs: --defect and --staged are parsed as themselves", () => {
+  assert.deepEqual(
+    parseSkillImproveArgs("pdf-tools --bank=/abs/x.json --defect --staged=staging/20261102T140322481Z/pdf-tools"),
+    {
+      skill: "pdf-tools",
+      bankPath: "/abs/x.json",
+      defect: true,
+      staged: "staging/20261102T140322481Z/pdf-tools",
+    },
+  );
+});
+
+// The terminator: everything after -- is the focus as written, which is the escape for a focus that starts with a flag of its
+// own. It is the reason the parse can be strict about every other token that opens with --.
+test("parseSkillImproveArgs: -- ends the flags, so a focus may start with --", () => {
+  assert.deepEqual(parseSkillImproveArgs("pdf-tools -- --bank is not a flag here"), {
+    skill: "pdf-tools",
+    focus: "--bank is not a flag here",
+  });
+  assert.deepEqual(parseSkillImproveArgs("pdf-tools merged --"), { skill: "pdf-tools", focus: "merged" });
+});
+
+// A flag whose value is missing or empty is a usage error and not a focus: the value never arrives as the next word, so a
+// token with no value after the equals sign names nothing.
+test("parseSkillImproveArgs: a flag with no value in its token is a usage error", () => {
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --bank"), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --bank="), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --staged"), SriFailClosedError);
+});
+
+// A flag the command does not have, and a boolean flag given a value, are one answer: the sentence names the token and the
+// three flags the command understands.
+test("parseSkillImproveArgs: a flag the command does not have is a usage error", () => {
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --force"), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --defect=true"), SriFailClosedError);
+});
+
+// A defect is what a bank of the other profile describes, so the flag without the bank names no material at all: refused before
+// anything is read, spent or recorded.
+test("parseSkillImproveArgs: --defect without --bank is a usage error", () => {
+  assert.throws(() => parseSkillImproveArgs("pdf-tools --defect"), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs("pdf-tools merged cells --defect"), SriFailClosedError);
 });
 
 test("runSkillImprove: without arguments it reports the usage and the eligible skills", async () => {
@@ -1234,4 +1333,217 @@ test("runSkillImprove: a run that stages nothing never reaches the gate", async 
   await denied.run("pdf-tools");
   assert.deepEqual(denied.gateRequests, []);
   assert.deepEqual(denied.acceptRequests, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// M1c: the two bases of the gate and the staged run
+// ---------------------------------------------------------------------------------------------
+
+// The bank the tests of this section name. It never reaches the disk: the gate of the bank base is a seam here, and its own
+// suite proves what it does with a bank.
+const BANK_PATH = "/work/reports/cases.json";
+
+// The candidate a gate accepted leaves behind, on disk: the skill, the lesson the record names and the record itself. It is the
+// fixture of the three tests that reach the acceptance, and it is written the way src/writer.ts and the gate write it -- the
+// lesson inside the candidate, the record naming it relative to that candidate.
+function stageAcceptedCandidate(base: string, skillDir: string): { lessonText: string; skillText: string } {
+  const skillText = skillFile(SKILL.name);
+  fs.mkdirSync(path.join(skillDir, LESSONS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(skillDir, SKILL_FILE), skillText, "utf8");
+
+  const lessonText = fixedLessonText();
+  const stagingDirPath = path.join(base, STAGING_RELATIVE);
+  fs.mkdirSync(path.join(stagingDirPath, LESSONS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(stagingDirPath, LESSONS_DIR, `${LESSON_SLUG}.md`), lessonText, "utf8");
+  // The record of a gate that passed. Its gate block is the one of the replay base, and the acceptance reads none of it: what
+  // it compares against the skill is the preregistration, which is the block both bases write (the reason the two bases share
+  // it), plus the candidate and its hashes. The gate itself is a seam in this suite.
+  fs.writeFileSync(
+    path.join(stagingDirPath, DECISION_FILE),
+    JSON.stringify(
+      gateAcceptedRecord({
+        skillName: SKILL.name,
+        skillDir,
+        contentHash: sha256Digest(lessonText),
+        skillContentHash: sha256Digest(skillText),
+      }),
+    ),
+    "utf8",
+  );
+
+  return { lessonText, skillText };
+}
+
+// A usage error is reported before anything is read, so a run that asks for a defect and names no bank spends nothing and
+// records nothing: the sentence names the flag and the bank it needs.
+test("runSkillImprove: --defect without --bank is reported and nothing is spent", async () => {
+  const harness = createHarness();
+
+  await harness.run("pdf-tools --defect");
+
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "error");
+  assert.equal(harness.notified[0].message.includes("--bank"), true);
+
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.directionalRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// OA7: --staged skips the proposal and enters the gate of the candidate the path names. The proof is the proposer that was never
+// called and the lesson that reached the skill: it is the file the candidate held, verified against the record that declares it.
+test("runSkillImprove: --staged gates the candidate of the path without calling the proposer", async (t: TestContext) => {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-staged-"));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const { lessonText, skillText } = stageAcceptedCandidate(base, skillDir);
+
+  const harness = createHarness({
+    base,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 8,
+      usedRuns: 8,
+      overlays: null,
+    }),
+    acceptDeps: { now: () => NOW },
+  });
+
+  await harness.run(`pdf-tools --staged=${STAGING_RELATIVE}`);
+
+  // No proposal: no generation, no staging write and no attempt line of its own. The run only measures a candidate that exists.
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+
+  // The gate saw the candidate the path named, under the base and the agent directory of the run.
+  assert.equal(harness.gateRequests.length, 1);
+  assert.equal(harness.gateRequests[0].stagingPath, STAGING_RELATIVE);
+  assert.equal(harness.gateRequests[0].base, base);
+  assert.equal(harness.gateRequests[0].agentDir, AGENT_DIR);
+  assert.equal(harness.gateRequests[0].skill.name, SKILL.name);
+
+  // The acceptance wrote the bytes the candidate held, read from the lesson the record names and verified against its hashes.
+  assert.equal(harness.acceptRequests.length, 1);
+  const [request] = harness.acceptRequests;
+  assert.equal(request.candidate.lessonText, lessonText);
+  assert.equal(request.candidate.contentHash, sha256Digest(lessonText));
+  assert.equal(request.expectedSkillContentHash, sha256Digest(skillText));
+
+  const lessonPath = path.join(skillDir, LESSONS_DIR, `${LESSON_SLUG}.md`);
+  assert.equal(fs.readFileSync(lessonPath, "utf8"), lessonText);
+  const historyPath = path.join(skillDir, HISTORY_DIR, TIMESTAMP, DECISION_FILE);
+  assert.equal(fs.existsSync(historyPath), true);
+
+  const accepted = harness.notified.at(-1);
+  assert.equal(accepted?.type, "info");
+  assert.equal(accepted?.message.includes(lessonPath), true);
+  assert.equal(accepted?.message.includes(historyPath), true);
+});
+
+// The base of the bank, end to end: a run that names a bank proposes as it always does and the gate of that base measures the
+// candidate, and the command accepts it because the gate accepted it -- the same rule as the other base, and the same write.
+test("runSkillImprove: --bank gates with the bank base and accepts what the gate accepted", async (t: TestContext) => {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-bank-"));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const { lessonText } = stageAcceptedCandidate(base, skillDir);
+
+  const harness = createHarness({
+    base,
+    model: MODEL,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    propose: async () => ({
+      ok: true,
+      value: { draft: FIXED_DRAFT, lessonText, usage: { input: 412, output: 137 } },
+    }),
+    gateDirectional: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 4,
+      usedRuns: 4,
+      overlays: null,
+    }),
+    acceptDeps: { now: () => NOW },
+  });
+
+  await harness.run(`pdf-tools --bank=${BANK_PATH}`);
+
+  // The candidate was proposed and measured by the bank, and the replay flow of M1 was never asked.
+  assert.equal(harness.proposals.length, 1);
+  assert.equal(harness.writes.length, 1);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.equal(harness.directionalRequests.length, 1);
+  assert.equal(harness.directionalRequests[0].bankPath, BANK_PATH);
+  assert.equal(harness.directionalRequests[0].model, `${MODEL.provider}/${MODEL.id}`);
+  assert.equal(harness.directionalRequests[0].stagingPath, STAGING_RELATIVE);
+
+  // And the acceptance wrote the candidate into the skill, reporting both paths of the write.
+  const lessonPath = path.join(skillDir, LESSONS_DIR, `${LESSON_SLUG}.md`);
+  const historyPath = path.join(skillDir, HISTORY_DIR, TIMESTAMP, DECISION_FILE);
+  assert.equal(fs.readFileSync(lessonPath, "utf8"), lessonText);
+  assert.equal(fs.existsSync(historyPath), true);
+
+  const accepted = harness.notified.at(-1);
+  assert.equal(accepted?.type, "info");
+  assert.equal(accepted?.message.includes(historyPath), true);
+});
+
+// OA1, OA9: a bank that is not there is not a verdict of the gate and not a write. The command reports the reason of the reader
+// and the path of the candidate, which is what the retry is pointed at, and the skill is left alone.
+test("runSkillImprove: a gate with no baseline writes nothing and says what to fix", async () => {
+  const reason = `bank-absent: ${BANK_PATH}`;
+  const harness = createHarness({
+    model: MODEL,
+    gateDirectional: async () => ({
+      kind: "no-baseline",
+      reason,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+    }),
+    accept: async () => assert.fail("a gate with no baseline must not reach the acceptance"),
+  });
+
+  await harness.run(`pdf-tools --bank=${BANK_PATH}`);
+
+  assert.deepEqual(harness.acceptRequests, []);
+  const warning = harness.notified.at(-1);
+  assert.equal(warning?.type, "warning");
+  assert.equal(warning?.message.includes(reason), true);
+  assert.equal(warning?.message.includes(STAGING_RELATIVE), true);
+  assert.equal(warning?.message.includes("the skill was not edited"), true);
+});
+
+// The base of the bank spends the model twice, so a session without one cannot gate it at all: refused before the gate is
+// reached, which is the last moment at which nothing has been spent.
+test("runSkillImprove: --bank without a model is refused before the gate is reached", async () => {
+  const harness = createHarness({
+    gateDirectional: async () => assert.fail("a gate of the bank base needs the model of the session"),
+    accept: async () => assert.fail("nothing can be accepted"),
+  });
+
+  await harness.run(`pdf-tools --bank=${BANK_PATH}`);
+
+  assert.deepEqual(harness.directionalRequests, []);
+  const report = harness.notified.at(-1);
+  assert.equal(report?.type, "error");
+  assert.equal(report?.message.includes("needs the model of this session"), true);
 });

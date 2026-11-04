@@ -440,6 +440,12 @@ test("the factory registers the command and the tool, exactly once each", () => 
   assert.equal(command.description?.includes("only when the gate passes"), true);
   assert.equal(command.description?.includes("spends tokens"), true);
   assert.equal(command.description?.includes("never accepts"), false);
+  // M1c: the two branches of the gate and the staged run are named, and so is the one state that spends nothing and can be
+  // retried -- a description that promised a verdict for a bank that is not there would be a promise the flow does not keep.
+  assert.equal(command.description?.includes("--bank=<path>"), true);
+  assert.equal(command.description?.includes("--defect"), true);
+  assert.equal(command.description?.includes("--staged=<stagingPath>"), true);
+  assert.equal(command.description?.includes("retryable"), true);
 
   // The registered tool is the one src/tool-skill-improve.ts builds: the same schema object, so the
   // tool the model calls and the tool the P9 tests exercised cannot drift apart.
@@ -450,6 +456,11 @@ test("the factory registers the command and the tool, exactly once each", () => 
   // Q7: the description travels in every session that loads the tool and says what it never does.
   assert.equal(tool.description.includes("never edits the skill"), true);
   assert.equal(tool.description.includes("never accepts a candidate"), true);
+  // The same two branches from the side of the model, which is the only reader of this description, plus the state that
+  // spends nothing.
+  assert.equal(tool.description.includes("bankPath"), true);
+  assert.equal(tool.description.includes("defect"), true);
+  assert.equal(tool.description.includes("retryable"), true);
 });
 
 // The module is imported at the top of this file, before any test ran; a fake API that is never

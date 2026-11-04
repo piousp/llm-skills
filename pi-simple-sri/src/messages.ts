@@ -24,6 +24,12 @@ import { quote } from "./values.ts";
 // the gate, because a verdict over twelve runs that does not say how many it cost is a verdict a reader
 // cannot audit. The acceptance is the command's alone (Q12), so acceptedText has no per-surface variant: a
 // branch the tool can never reach would be a sentence nobody prints.
+//
+// M1c adds two more, and they are here for the same reason: the bank base that found no baseline to measure
+// against (noBaselineText), which is a state of the attempt and not a verdict, and the gate that cannot run
+// because the session has no model to replay and judge with (noModelGateText). The correction of
+// noEvidenceText belongs to the same slice: the defect branch refuses with the word `no-evidence` when its
+// bank or its artifact cannot be read, and the sentence may not claim that the session showed no failure.
 
 // The set of skills offered for improvement, one line per skill, with the description that says what
 // the skill does. Exported because the command's usage line offers the same list under a
@@ -45,8 +51,14 @@ export function refusedText(skill: SkillRef, reason: string): string {
   return `the proposal for skill ${quote(skill.name)} was refused: ${reason}`;
 }
 
-export function noEvidenceText(surface: DecisionSurface, skill: SkillRef): string {
-  const base = `skill ${quote(skill.name)}: this session shows no failure to learn from, so no candidate was generated.`;
+export function noEvidenceText(surface: DecisionSurface, skill: SkillRef, reason: string | null): string {
+  // Two facts share this outcome (M1c, S8): the session that showed nothing to learn from, and the run whose material --
+  // the bank of a defect, or the artifact it names -- could not be read. The second one is not a session without failures,
+  // and the reason the flow recorded says which problem it is, so the sentence names it instead of blaming the session.
+  const base =
+    reason === null
+      ? `skill ${quote(skill.name)}: this session shows no failure to learn from, so no candidate was generated.`
+      : `skill ${quote(skill.name)}: this run has no material to learn from -- ${reason} -- so no candidate was generated.`;
   // The command is the surface that records the attempt next to the result it reports, and it says so
   // in the same sentence; the tool's answers are read by a model, which has the details for that.
   return surface === "command" ? `${base} The attempt was recorded as "no-evidence".` : base;
@@ -109,6 +121,28 @@ export function gateAbstainedText(
   const sentence = `the gate abstained for skill ${quote(skill.name)}: ${reasonText(reason, detail)}`;
   // An abstention spent what it spent and concluded nothing, so there is no count in the sentence: the reason
   // is the whole answer, and the budget of the attempt is in decision.json.
+  return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
+}
+
+// A gate of the case-bank base that found nothing to measure against (M1c, OA9): the bank is absent, unreadable, over its
+// cap or not a bank of this version, so no case was replayed and nothing was spent. It is not a verdict of the gate and not
+// a failure of the run, so the sentence carries the two things a reader needs to act: the reason of the reader of the bank --
+// which names the file or the field to fix -- and the path of the candidate, which is where the retry is pointed at.
+export function noBaselineText(
+  surface: DecisionSurface,
+  skill: SkillRef,
+  reason: string,
+  stagingPath: string,
+): string {
+  const sentence = `the gate for skill ${quote(skill.name)} found no baseline to measure the candidate against: ${reason}. Nothing was spent and the candidate stays in staging at ${quote(stagingPath)}, so the same candidate can be gated again once the bank is there`;
+  return `${sentence}${withClause(surface, { tool: TOOL_NOT_ACCEPTED, command: COMMAND_NOT_EDITED })}`;
+}
+
+// A gate of the case-bank base in a session with no model (M1c, S10): the cases are replayed by the model of the session and
+// the candidate's answers are judged by the same one (OA5), so without it the gate has no arm to run and no condition to
+// apply. Said before anything is read, because it is the last moment at which nothing has been spent.
+export function noModelGateText(surface: DecisionSurface, skill: SkillRef): string {
+  const sentence = `the gate for skill ${quote(skill.name)} needs the model of this session -- one to run the cases of the bank and one to judge the answers -- and this session has none; nothing was read and no run was spent`;
   return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 

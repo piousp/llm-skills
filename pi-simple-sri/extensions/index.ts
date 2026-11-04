@@ -24,14 +24,14 @@ import {
 // Every decision this package makes lives in src/; this file decides only which surface is called
 // and which dependencies it is called with.
 //
-//   /skill-improve <skill> [focus]            -> runSkillImprove (src/command-skill-improve.ts)
-//   skill_improve { action, skill, focus }    -> createSkillImproveTool (src/tool-skill-improve.ts)
+//   /skill-improve <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]  -> runSkillImprove
+//   skill_improve { action, skill, focus, stagingPath, bankPath, defect }               -> createSkillImproveTool
 //
 // Both run the same loop (src/improve-flow.ts), so the command and the tool cannot disagree about
 // what is eligible, what counts as evidence or what a candidate looks like; both can gate a candidate
-// (src/gate/flow.ts), and only the command carries a gate that passes into the acceptance
-// (src/gate/acceptance.ts). The tool receives its dependencies at registration time and the command receives
-// the same ones at call time.
+// (src/gate/flow.ts, or src/gate/directional-flow.ts when the run names a bank), and only the command carries a gate
+// that passes into the acceptance (src/gate/acceptance.ts). The tool receives its dependencies at registration time and
+// the command receives the same ones at call time.
 //
 // What the factory does not do is as much part of the contract as what it does: no process, no
 // socket, no timer, no file read (docs/extensions.md:58-60). The root below is path arithmetic; the
@@ -49,18 +49,19 @@ import {
 // cannot start another propose or gate over itself. The variable is read when the factory is called,
 // never when the module is imported, which keeps the import free of environment reads.
 
-// The description is what the command list shows, so it names the syntax and the two things a user
-// must know before running it: the candidate is gated before anything is written, and the gate spends
-// tokens. This command is also the only surface that may accept a candidate (Q12), and the description
-// says so instead of promising that nothing is ever edited.
-const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill from the failures of this session, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus]. The gate spends tokens on every run, and this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
+// The description is what the command list shows, so it names the syntax and the things a user must know before running it:
+// the two materials a candidate can be written from (the failures of the session, or the cases of a bank), the flag that
+// describes a defect, the flag that gates a candidate that already exists, that the candidate is gated before anything is
+// written, and that the gate spends tokens. This command is also the only surface that may accept a candidate (Q12), and the
+// description says so instead of promising that nothing is ever edited.
+const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows instead of the cases to measure --, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]. --staged=<stagingPath> gates a candidate that is already in staging instead of proposing a second one, and a bank that is absent or unreadable spends nothing, leaves the candidate in staging and leaves the attempt retryable. The gate spends tokens on every run, and this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
 
-// The seams a test may replace: everything the loop resolves for itself, plus the gate the command chains
+// The seams a test may replace: everything the loop resolves for itself, plus the two gate flows the command chains
 // after it and the tool runs on its own. The gate's own seams are the tool's, and the acceptance's are not here
 // at all -- only the command accepts (Q12), every test of that step drives the command directly, and the
 // wiring is what keeps the tool's dependencies free of any seam that could write a skill. No path travels
 // through the wiring: the write base follows the agent directory, so the factory passes nothing of its own.
-export type SriSeams = ImproveFlowDeps & Pick<SkillImproveToolDeps, "gate" | "gateDeps">;
+export type SriSeams = ImproveFlowDeps & Pick<SkillImproveToolDeps, "gate" | "gateDirectional" | "gateDeps">;
 
 // The command registration as this factory writes it, with the handler's context narrowed to the
 // fields the command reads (SkillImproveContext, src/command-skill-improve.ts). pi's own

@@ -19,7 +19,13 @@ import {
   type ImprovementEntry,
   type ProposeFn,
 } from "../../src/improve-flow.ts";
+import type {
+  DirectionalGateDeps,
+  DirectionalGateRequest,
+  DirectionalGateResult,
+} from "../../src/gate/directional-flow.ts";
 import type { GateDeps, GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
+import { JUDGE_MAX_TOKENS } from "../../src/gate/judge.ts";
 import type { ReplayRunRequest } from "../../src/gate/types.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
@@ -194,6 +200,7 @@ interface CompletedCall {
   model: Model<Api>;
   context: Context;
   maxTokens: number | undefined;
+  sessionId: string | undefined;
   signal: AbortSignal | undefined;
 }
 
@@ -211,6 +218,11 @@ interface HarnessOptions {
   gate?: (request: GateRequest) => Promise<GateFlowResult>;
   gateDeps?: GateDeps;
   useRealGate?: boolean;
+  // The second flow of M1c, with the same shape: recorded before it is delegated, and absent unless the test names it.
+  gateDirectional?: (request: DirectionalGateRequest, gateDeps: DirectionalGateDeps) => Promise<DirectionalGateResult>;
+  // The reply the fake registry answers with, for a test that drives the judge the surface wires. The default is the JSON
+  // object a propose expects, so a test that never asks for a verdict reads the same message it always did.
+  reply?: string;
 }
 
 interface Harness {
@@ -222,6 +234,7 @@ interface Harness {
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
   gateRequests: GateRequest[];
+  directionalRequests: DirectionalGateRequest[];
   run: (params: SkillImproveParams, signal?: AbortSignal) => Promise<AgentToolResult<ToolDetails>>;
 }
 
@@ -257,11 +270,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
   const gateRequests: GateRequest[] = [];
+  const directionalRequests: DirectionalGateRequest[] = [];
 
   const modelRegistry: ImproveFlowModelRegistry = {
     complete: async (model, context, request) => {
-      completed.push({ model, context, maxTokens: request?.maxTokens, signal: request?.signal });
-      return assistantMessage(REPLY);
+      completed.push({ model, context, maxTokens: request?.maxTokens, sessionId: request?.sessionId, signal: request?.signal });
+      return assistantMessage(options.reply ?? REPLY);
     },
   };
 
@@ -286,6 +300,18 @@ function createHarness(options: HarnessOptions = {}): Harness {
       bodyHash: BODY_HASH,
     };
   };
+
+  // The gate of the bank base, captured once so the closure below narrows it: recorded before it is delegated, and absent
+  // unless the test names it, so a call that names a bank without a seam here would reach the real flow -- which is what the
+  // tests of this file never do.
+  const directionalSeam = options.gateDirectional;
+  const gateDirectional =
+    directionalSeam === undefined
+      ? undefined
+      : async (request: DirectionalGateRequest, gateDeps: DirectionalGateDeps): Promise<DirectionalGateResult> => {
+          directionalRequests.push(request);
+          return await directionalSeam(request, gateDeps);
+        };
 
   const deps: SkillImproveToolDeps = {
     now: () => NOW,
@@ -323,6 +349,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       entries.push({ customType, data });
     },
     ...(options.gateDeps === undefined ? {} : { gateDeps: options.gateDeps }),
+    ...(gateDirectional === undefined ? {} : { gateDirectional }),
     ...(options.useRealProposer === true
       ? {}
       : { propose: options.propose ?? successfulProposer(proposals) }),
@@ -337,6 +364,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     proposals,
     completed,
     gateRequests,
+    directionalRequests,
     run: (params, signal) => runSkillImproveTool(params, ctx, deps, signal),
   };
 }
@@ -1003,4 +1031,191 @@ test("gate: no action of the tool accepts a candidate", async () => {
   // And a gate that passed left the skill alone: no write of any kind happened.
   assert.deepEqual(harness.writes, []);
   assert.deepEqual(harness.attempts, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// M1c: the fields of the bank base and the dispatch of the two flows
+// ---------------------------------------------------------------------------------------------
+
+// The bank these tests name. It never reaches the disk: the flow of the bank base is a seam here, and its own suite proves what
+// it does with a bank.
+const BANK_PATH = "/work/reports/cases.json";
+
+// The two fields of the bank base are accepted by the schema on the two actions that use them, and with the types it declares: a
+// bank is a path, and the defect is the boolean that says which profile the bank carries.
+test("skillImproveParams: bankPath and defect are accepted on propose and on gate", () => {
+  assert.equal(
+    Value.Check(skillImproveParams, {
+      action: "gate",
+      skill: "pdf-tools",
+      stagingPath: STAGING_RELATIVE,
+      bankPath: BANK_PATH,
+    }),
+    true,
+  );
+  assert.equal(
+    Value.Check(skillImproveParams, { action: "propose", skill: "pdf-tools", bankPath: BANK_PATH, defect: true }),
+    true,
+  );
+  assert.equal(Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools", bankPath: 7 }), false);
+  assert.equal(Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools", defect: "yes" }), false);
+});
+
+// The second rule the schema cannot express: a defect is a bank of the other profile, so the call that names one and no bank is
+// refused before the first read, with the same stable keys as every other error of this action.
+test("gate: defect without a bankPath is refused before the gate is reached", async () => {
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE, defect: true });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "error",
+    reason: "missing-bank-path",
+  });
+  assert.equal(textOf(result).includes("bankPath"), true);
+  assert.equal(textOf(result).includes("no run was spent"), true);
+
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.directionalRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// The dispatch of the two bases: a call that names a bank is measured by the cases of that bank, and the judge the surface wires
+// is the one that flow spends -- one model call, with the session of the run and the judge's budget.
+test("gate: a call that names a bank dispatches to the flow of the bank", async () => {
+  // What the judge the surface wired answered, read outside the seam: a throw inside it would be answered by the tool as an
+  // error result instead of failing this test where the reason is.
+  let judged = "not called";
+
+  const harness = createHarness({
+    model: MODEL,
+    reply: "PASS\nThe answer names the flag.",
+    gateDirectional: async (request, gateDeps) => {
+      // The flow spends the judge the surface built, which is the only way this suite can prove the seam exists: the request
+      // the judge answers carries the model the gate pinned, and the call goes through the registry of the context.
+      const asked = await gateDeps.judge({
+        caseId: "case-01",
+        prompt: "squash the last three commits",
+        response: "PASS",
+        rubric: "the answer names the flag that avoids the interactive prompt",
+        model: request.model,
+      });
+      judged = asked.ok ? `verdict:${asked.value.verdict}` : `error:${asked.error}`;
+
+      return {
+        kind: "gate-accepted",
+        reason: null,
+        stagingPath: request.stagingPath,
+        decisionPath: DECISION_RELATIVE,
+        plannedRuns: 4,
+        usedRuns: 4,
+        overlays: null,
+      };
+    },
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE, bankPath: BANK_PATH });
+
+  // A verdict of the bank base is an answer and not an error, and the judge's word travels with it.
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "gate-accepted",
+    verdict: "gate-accepted",
+    base: BASE,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
+    gatePath: path.join(STAGING_RELATIVE, "gate"),
+    plannedRuns: 4,
+    usedRuns: 4,
+    bankPath: BANK_PATH,
+    judgeVerdict: "pass",
+  });
+
+  // The request names the bank and the model of the session (OA5), and the replay base was never asked.
+  assert.deepEqual(harness.gateRequests, []);
+  assert.equal(harness.directionalRequests.length, 1);
+  assert.equal(harness.directionalRequests[0].bankPath, BANK_PATH);
+  assert.equal(harness.directionalRequests[0].model, `${MODEL.provider}/${MODEL.id}`);
+  assert.equal(harness.directionalRequests[0].base, BASE);
+  assert.equal(harness.directionalRequests[0].skill.name, SKILL.name);
+
+  // The one call of the judge carried the session of the run and the judge's budget, and it is the only model call of the action.
+  assert.equal(judged, "verdict:pass");
+  assert.deepEqual(
+    harness.completed.map((call) => [call.sessionId, call.maxTokens]),
+    [["session-test", JUDGE_MAX_TOKENS]],
+  );
+
+  // Nothing of this action writes: no candidate, no index line, no entry.
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// OA1, OA9: a base with no baseline is an error of the call and not a verdict -- nothing concluded, so `verdict` is absent --
+// and the answer names the reason of the reader and the path the retry is pointed at.
+test("gate: a bank with no baseline is an error with no verdict", async () => {
+  const reason = `bank-absent: ${BANK_PATH}`;
+  const harness = createHarness({
+    model: MODEL,
+    gateDirectional: async (request) => ({
+      kind: "no-baseline",
+      reason,
+      stagingPath: request.stagingPath,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+    }),
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE, bankPath: BANK_PATH });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "no-baseline",
+    reason,
+    base: BASE,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
+    bankPath: BANK_PATH,
+  });
+  assert.equal(Object.hasOwn(result.details, "verdict"), false);
+  assert.equal(textOf(result).includes(reason), true);
+  assert.equal(textOf(result).includes(STAGING_RELATIVE), true);
+  assert.equal(textOf(result).includes("the candidate is not accepted"), true);
+
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// The propose of the bank base: the bank travels to the flow, which proposes from the ask instead of from the transcript, and the
+// answer carries the field so a caller can name the bank the candidate belongs to.
+test("propose: a call that names a bank stages from the ask and details carry the bank", async () => {
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "propose", skill: "pdf-tools", bankPath: BANK_PATH, defect: false });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(result.details.outcome, "proposed");
+  assert.equal(result.details.bankPath, BANK_PATH);
+  assert.equal(Object.hasOwn(result.details, "defect"), false);
+
+  // The flow saw the bank and wrote the candidate of that base: the generation was told which base measures it -- the bank path
+  // itself is read by the gate, so `basis` is what the proposer receives of it --, nothing of the transcript backed it, and the
+  // record's gate block says the bank will measure it.
+  assert.equal(harness.proposals.length, 1);
+  assert.equal(harness.proposals[0].input.basis, "case-bank");
+  assert.deepEqual(harness.proposals[0].input.evidence, []);
+  assert.equal(harness.writes.length, 1);
+  assert.equal(harness.writes[0].decision.gate.basis, "case-bank");
 });

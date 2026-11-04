@@ -12,7 +12,7 @@ import {
   type JudgeRequest,
   type JudgeVerdict,
 } from "../../src/gate/judge.ts";
-import { createModelCall, type ModelCallRegistry } from "../../src/model-call.ts";
+import { createDirectionalJudge, createModelCall, type ModelCallRegistry } from "../../src/model-call.ts";
 import { PROPOSAL_MAX_TOKENS, type CompleteFn } from "../../src/proposer.ts";
 
 // The judge is the second condition of the directional gate (M1c, S5): one model call, two blocks of data and a
@@ -441,4 +441,97 @@ test("createModelCall: the signal of the call wins over the one the construction
 
   assert.equal(signals[0], construction.signal);
   assert.equal(signals[1], call.signal);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The judge of the bank base, with the cost of its call (M1c, S10)
+// ---------------------------------------------------------------------------------------------
+
+// The seam the flow of the bank spends answers a verdict WITH the cost of the call that produced it, because the record keeps
+// the tokens of the second condition (OA10) and `JudgeVerdict` alone says nothing about the generation. The message the call
+// answered is the only place that cost exists, which is why it is read here and not in the flow.
+test("createDirectionalJudge: the verdict carries the usage of the call that produced it", async () => {
+  const registry: ModelCallRegistry = {
+    complete: async () => assistantMessage("PASS\nThe answer names the flag.", "stop"),
+  };
+
+  const result = await createDirectionalJudge(
+    createModelCall({ registry, model: CHAT_MODEL, sessionId: SESSION_ID }),
+  )(request());
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.deepEqual(result.value, {
+    verdict: "pass",
+    reason: "The answer names the flag.",
+    usage: { input: USAGE.input, output: USAGE.output },
+  });
+});
+
+// A reply nobody could read is the abstention of the second condition, and it carries no cost: the flow stops there, and the
+// record keeps the calls it made instead of a verdict it does not have.
+test("createDirectionalJudge: a reply that is not a verdict answers unparseable", async () => {
+  const registry: ModelCallRegistry = {
+    complete: async () => assistantMessage("I would say the answer is acceptable.", "stop"),
+  };
+
+  const result = await createDirectionalJudge(
+    createModelCall({ registry, model: CHAT_MODEL, sessionId: SESSION_ID }),
+  )(request());
+
+  assert.deepEqual(result, { ok: false, error: "unparseable" });
+});
+
+// The call behind the judge is the shared one: the session of the run travels on it and the budget is the judge's, so the bank
+// base cannot cost a different call than the one this package documents.
+test("createDirectionalJudge: the call keeps the session of the run and the judge's budget", async () => {
+  const seen: { sessionId: string | undefined; maxTokens: number | undefined }[] = [];
+  const registry: ModelCallRegistry = {
+    complete: async (_model, _context, options) => {
+      seen.push({ sessionId: options?.sessionId, maxTokens: options?.maxTokens });
+      return assistantMessage("FAIL\nThe answer keeps the destructive command.", "stop");
+    },
+  };
+
+  const result = await createDirectionalJudge(
+    createModelCall({ registry, model: CHAT_MODEL, sessionId: SESSION_ID }),
+  )(request());
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.verdict, "fail");
+  assert.deepEqual(seen, [{ sessionId: SESSION_ID, maxTokens: JUDGE_MAX_TOKENS }]);
+});
+
+// One judge answers one judgement's cost: two calls of the same seam cannot read each other's usage, which is what the record
+// of the bank needs to add them up case by case.
+test("createDirectionalJudge: two judgements keep the cost of their own call", async () => {
+  const usages: Usage[] = [
+    { ...USAGE, input: 10, output: 2 },
+    { ...USAGE, input: 30, output: 5 },
+  ];
+  let call = 0;
+  const registry: ModelCallRegistry = {
+    complete: async () => ({ ...assistantMessage("PASS", "stop"), usage: usages[call++] }),
+  };
+
+  const judge = createDirectionalJudge(createModelCall({ registry, model: CHAT_MODEL, sessionId: SESSION_ID }));
+  const first = await judge(request());
+  const second = await judge(request());
+
+  assert.deepEqual(first.ok ? first.value.usage : null, { input: 10, output: 2 });
+  assert.deepEqual(second.ok ? second.value.usage : null, { input: 30, output: 5 });
+});
+
+// Nobody is waiting for the verdict, so nothing is spent and the answer is the abstention: the rule the judge already follows
+// (F7), reached through the seam that adds the cost.
+test("createDirectionalJudge: an aborted call answers unavailable and spends nothing", async () => {
+  const fake = fakeComplete({ text: "PASS" });
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await createDirectionalJudge(fake.complete)(request({ signal: controller.signal }));
+
+  assert.deepEqual(result, { ok: false, error: "unavailable" });
+  assert.deepEqual(fake.calls, []);
 });

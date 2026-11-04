@@ -1,11 +1,19 @@
+import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SriFailClosedError, SriWriterError } from "./errors.ts";
+import { modelIdentity } from "./evidence.ts";
 import { acceptCandidate, type AcceptDeps } from "./gate/acceptance.ts";
+import {
+  gateDirectionalCandidate,
+  type DirectionalGateResult,
+} from "./gate/directional-flow.ts";
 import {
   gateStagedCandidate,
   resolveStagedCandidate,
+  verifiedStagedLesson,
   type GateConcludedResult,
   type GateDeps,
+  type GateFlowResult,
 } from "./gate/flow.ts";
 import {
   ENTRY_TYPE,
@@ -16,35 +24,38 @@ import {
   type ImproveFlowModelRegistry,
   type ImprovementEntry,
   type ProposeFn,
-  type ProposedFlowResult,
 } from "./improve-flow.ts";
-import { serializeLesson } from "./lesson-frontmatter.ts";
 import {
   acceptedText,
   gateAbstainedText,
   gatePassedText,
   gateRejectedText,
   listedSkills,
+  noBaselineText,
   noEvidenceText,
+  noModelGateText,
   noModelText,
   notEligibleText,
   proposedText,
   refusedText,
   unknownSkillText,
 } from "./messages.ts";
+import { createDirectionalJudge, createModelCall } from "./model-call.ts";
 import { COMMAND_NAME } from "./names.ts";
+import { findSkill, listSkills } from "./skills-inventory.ts";
 import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef } from "./types.ts";
 import { quote, toErrorMessage } from "./values.ts";
+import { writeBase } from "./write-base.ts";
 
 // The /skill-improve command: one run of the loop over one named skill (P8), and from M1 the one surface of
 // the package that may edit a skill.
 //
 // The loop itself -- settings, inventory, eligibility, evidence, diagnosis, one generation, the
 // staging write and the index line -- lives in src/improve-flow.ts, because the skill_improve tool
-// runs the same pipeline (P9) and two copies of it would drift. The gate lives in src/gate/flow.ts and the
-// acceptance in src/gate/acceptance.ts for the same reason: the tool runs the first, and what stays here is
-// what only a user command does -- parse the arguments, report every outcome as a notification, record the
-// session entry with its degradation warning, and answer through another channel when there is no UI.
+// runs the same pipeline (P9) and two copies of it would drift. The gate lives in src/gate/flow.ts -- and, for the base of
+// the bank, in src/gate/directional-flow.ts -- and the acceptance in src/gate/acceptance.ts for the same reason: the tool runs
+// the first, and what stays here is what only a user command does -- parse the arguments, report every outcome as a
+// notification, record the session entry with its degradation warning, and answer through another channel when there is no UI.
 //
 // The sentences it reports are src/messages.ts, shared with the tool: the two surfaces say the same
 // things about the same outcomes, and a surface that no longer matched the other was a bug nobody
@@ -58,6 +69,13 @@ import { quote, toErrorMessage } from "./values.ts";
 // The command never touches a skill before an acceptance: every path taken here writes inside
 // <package>/staging and <package>/state through the flow, and the acceptance that edits a skill is the one
 // step of M1, guarded by the snapshot, the drift check and the reference line of src/gate/acceptance.ts.
+//
+// M1c adds two branches and no second writer. A run that names a case bank (--bank=<path>, and --defect when that bank
+// describes the defect an artifact shows) is measured by the flow of src/gate/directional-flow.ts instead of by the replayed
+// turns of the session, and the presence of the bank is the whole dispatch. A run with --staged=<stagingPath> skips the
+// proposal and gates a candidate that already exists, so the acceptance has no draft to serialize: it reads the lesson the
+// candidate holds and verifies it against the hashes its record declares, which is the guard both gate bases run before they
+// spend a run. Both branches accept exactly where the gate accepts, which is the whole rule of this surface.
 //
 // Importing this module reads nothing, registers nothing and starts nothing (rule 9 of the slice).
 // The clock, the settings file, the inventory, the model, the writer, the gate, the acceptance and the record
@@ -122,7 +140,13 @@ export interface SkillImproveDeps extends ImproveFlowDeps {
   // proves the order of the chain without spending a replay or editing a skill. `gateDeps` and `acceptDeps`
   // are the seams of those steps, passed through untouched, so a test can also keep the real gate or the real
   // acceptance and replace one read or one write inside it.
+  //
+  // `gateDirectional` is the second flow of M1c, and it is a second seam because it is a second flow: the base of the bank
+  // resolves no inventory and spends a judge, so a test that drives the chain of that base cannot be a request of the other
+  // one. The judge it needs is built here from the session and is not a seam of its own -- the flow requires it, so a test
+  // that wants a verdict replaces the whole flow instead of the call inside it.
   gate?: typeof gateStagedCandidate;
+  gateDirectional?: typeof gateDirectionalCandidate;
   gateDeps?: GateDeps;
   accept?: typeof acceptCandidate;
   acceptDeps?: AcceptDeps;
@@ -131,18 +155,107 @@ export interface SkillImproveDeps extends ImproveFlowDeps {
 export interface SkillImproveArgs {
   skill?: string;
   focus?: string;
+  // The bank that measures the candidate (M1c): a run that names one asks for a directional improvement and its failures
+  // are the cases the file declares, and the presence of the bank is what selects the flow of the gate.
+  bankPath?: string;
+  // The bank describes the defect an artifact shows instead of the cases to measure. It is a property of the bank, and it
+  // is spelled as a flag because the file itself cannot declare it (OA3): a bank that is not there cannot say what it is.
+  defect?: boolean;
+  // The candidate to gate instead of proposing one (M1c, OA7): a run that already staged its candidate does not spend a
+  // second generation to measure it.
+  staged?: string;
 }
 
-// The first token names the skill and every following token is the focus, so a focus with spaces
-// arrives as one string. Repeated whitespace is collapsed because it carries no meaning here, and
-// an argument string of spaces is no argument at all.
+// The syntax of the command, in one place: the usage line it prints and the sentence of a usage error. The flags are
+// `--name=value` in a single token, so a focus with spaces cannot be confused with one of them, and `--` ends the flags.
+const USAGE_SYNTAX = `<skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]`;
+
+// The first token names the skill and the following ones are the focus, so a focus with spaces arrives as one string.
+// Repeated whitespace is collapsed because it carries no meaning here, and an argument string of spaces is no argument at
+// all.
+//
+// The three flags of M1c are recognized wherever they appear, and a flag is one token with its value after the equals sign
+// -- a bank path with a space in it is one token, which is why the value never arrives as the next word. `--` ends the
+// flags, and everything after it is the focus as written: that is the escape for a focus that starts with `--`, and the
+// reason the parse can be strict about every other token that does.
+//
+// A usage error is thrown and not returned: this function answers the arguments or nothing, and the command reports the
+// refusal it raises the way it reports every other refusal of the package -- nothing was read, nothing was spent and no
+// line of the index was written.
 export function parseSkillImproveArgs(args: string): SkillImproveArgs {
   const words = args.trim().split(/\s+/).filter((word) => word !== "");
-  if (words.length === 0) return {};
 
-  const [skill, ...focusWords] = words;
+  let skill: string | undefined;
+  let bankPath: string | undefined;
+  let staged: string | undefined;
+  let defect = false;
+  const focusWords: string[] = [];
+
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index];
+
+    // The terminator: the rest of the line is the focus, whatever it spells.
+    if (word === "--") {
+      focusWords.push(...words.slice(index + 1));
+      break;
+    }
+
+    if (word.startsWith("--")) {
+      const flag = flagOf(word);
+      const value = flag.value;
+      if (flag.name === "defect" && value === undefined) {
+        defect = true;
+        continue;
+      }
+      if ((flag.name === "bank" || flag.name === "staged") && value !== undefined && value !== "") {
+        if (flag.name === "bank") bankPath = value;
+        else staged = value;
+        continue;
+      }
+      // A flag this command does not have, a boolean flag given a value, and a flag whose value is missing or empty are
+      // one answer: the token is not one of the three the command understands, and the sentence names the token.
+      throw new SriFailClosedError(usageErrorText(word));
+    }
+
+    if (skill === undefined) {
+      skill = word;
+      continue;
+    }
+    focusWords.push(word);
+  }
+
+  // A defect is what a bank of the other profile describes, so the flag without the bank names no material at all: the
+  // run would propose from an ask nobody wrote and then find nothing to measure it against, one generation later.
+  if (defect && bankPath === undefined) {
+    throw new SriFailClosedError(
+      `/${COMMAND_NAME} --defect needs the bank the defect is written down in: --defect says what --bank=<path> describes, and the run named no bank. Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`,
+    );
+  }
+
+  const parsed: SkillImproveArgs = {};
+  if (skill !== undefined) parsed.skill = skill;
   const focus = focusWords.join(" ");
-  return focus === "" ? { skill } : { skill, focus };
+  if (focus !== "") parsed.focus = focus;
+  if (bankPath !== undefined) parsed.bankPath = bankPath;
+  if (defect) parsed.defect = true;
+  if (staged !== undefined) parsed.staged = staged;
+  return parsed;
+}
+
+// The two shapes a flag token can take: the boolean one, and `--name=value` in a single token.
+interface Flag {
+  name: string;
+  value?: string;
+}
+
+function flagOf(word: string): Flag {
+  const equals = word.indexOf("=");
+  if (equals === -1) return { name: word.slice(2) };
+  return { name: word.slice(2, equals), value: word.slice(equals + 1) };
+}
+
+function usageErrorText(word: string): string {
+  return `/${COMMAND_NAME} does not understand ${quote(word)}: the flags are --bank=<path>, --defect and --staged=<stagingPath>, each one token with its value after the equals sign, and -- ends the flags so that what follows is the focus. Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`;
 }
 
 export async function runSkillImprove(
@@ -184,11 +297,22 @@ async function improve(args: string, run: Run): Promise<void> {
     return;
   }
 
+  // M1c, OA7: --staged skips the proposal and enters the gate of the candidate the path names. A run that already has a
+  // candidate does not spend a second generation to measure it, and the candidate is the one the path resolves -- the same
+  // record, the same lesson and the same hashes the run that staged it wrote.
+  if (parsed.staged !== undefined) {
+    await gateStagedCandidateRun(parsed.skill, parsed.staged, parsed, run);
+    return;
+  }
+
+  const bankPath = bankOf(parsed);
   const result = await proposeSkill(
     {
       surface: SURFACE,
       skillName: parsed.skill,
       ...(parsed.focus === undefined ? {} : { focus: parsed.focus }),
+      ...(bankPath === undefined ? {} : { bankPath }),
+      ...(parsed.defect === true ? { defect: true } : {}),
     },
     ctx,
     deps,
@@ -203,8 +327,10 @@ async function improve(args: string, run: Run): Promise<void> {
       notify(notEligibleText(result.skill, result.reason), "warning");
       return;
     case "no-evidence":
+      // The reason travels with the sentence: a run of the defect branch that could not read its bank or its artifact
+      // answers with this outcome too, and the sentence may not claim the session showed nothing (M1c, S8).
       recordEntry(run, result.entry);
-      notify(noEvidenceText(SURFACE, result.skill), "warning");
+      notify(noEvidenceText(SURFACE, result.skill, result.entry.reason), "warning");
       return;
     case "no-model":
       notify(noModelText(SURFACE), "error");
@@ -220,7 +346,10 @@ async function improve(args: string, run: Run): Promise<void> {
       notify(proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath, result.base), "info");
       // M1: the candidate is gated here, and the acceptance below it is the only write into a skill this
       // package can reach.
-      await gateAndAccept(result, run);
+      await gateAndAccept(
+        { base: result.base, skill: result.skill, stagingPath: result.staged.stagingPath, ...bankFieldOf(bankPath) },
+        run,
+      );
       return;
     default:
       // The six outcomes of the flow are the whole switch: a variant added to ProposeFlowResult makes
@@ -230,85 +359,172 @@ async function improve(args: string, run: Run): Promise<void> {
   }
 }
 
-// The chain M1 adds (Q12, OA1): a candidate the loop staged is gated, and it is written into the skill only
-// when the gate passes. This function decides nothing about either step -- it reports, and it calls the
-// acceptance exactly where the gate said it may.
-async function gateAndAccept(candidate: ProposedFlowResult, run: Run): Promise<void> {
+// The bank that measures a candidate (M1c): a run that named one and did not ask for a defect is measured by a case bank,
+// and every other run -- the session's failures, and the defect an artifact shows, which the replay base measures (OA11) --
+// by a replayed budget. The presence of the bank is the whole dispatch, and the record of the candidate is what catches a
+// surface that got it wrong: each flow refuses a record of the other base with `basis-mismatch`.
+function bankOf(parsed: SkillImproveArgs): string | undefined {
+  return parsed.defect === true ? undefined : parsed.bankPath;
+}
+
+function bankFieldOf(bankPath: string | undefined): { bankPath?: string } {
+  return bankPath === undefined ? {} : { bankPath };
+}
+
+// What the gate of one run is pointed at, and the only three things both branches need: the base the candidate was written
+// under, the skill it belongs to -- resolved by the loop for a candidate it staged, by the inventory for a candidate that
+// already exists -- and the path of the candidate, in the spelling the records use (relative to that base).
+interface GateTarget {
+  base: string;
+  skill: SkillRef;
+  stagingPath: string;
+  bankPath?: string;
+}
+
+// The branch of --staged (M1c, OA7): no proposal, no staging write, no attempt line of its own -- the run only measures a
+// candidate that exists. The skill is resolved from the inventory by name, the way the tool's gate resolves it, because
+// there is no loop to resolve it here and the candidate directory is named after it.
+async function gateStagedCandidateRun(
+  skillName: string,
+  stagingPath: string,
+  parsed: SkillImproveArgs,
+  run: Run,
+): Promise<void> {
   const { ctx, deps, notify } = run;
+  const agentDir = deps.agentDir ?? getAgentDir();
+  const skills = await (deps.listSkills ?? listSkills)({ cwd: ctx.cwd, agentDir });
+  const skill = findSkill(skills, skillName);
+
+  if (skill === undefined) {
+    // A name nobody knows, answered the way the command answers it everywhere else: the standalone the name may be, and
+    // the eligible set the user can ask for instead (F6).
+    const standalone = skills.find((entry) => entry.kind === "standalone" && entry.name === skillName) ?? null;
+    notify(unknownSkillText(SURFACE, skillName, standalone, await listEligibleSkills(ctx, deps)), "warning");
+    return;
+  }
+
+  await gateAndAccept(
+    {
+      base: deps.base ?? writeBase(agentDir),
+      skill,
+      stagingPath,
+      ...bankFieldOf(bankOf(parsed)),
+    },
+    run,
+  );
+}
+
+// The chain M1 adds (Q12, OA1): a candidate is gated, and it is written into the skill only when the gate passes. This
+// function decides nothing about either step -- it reports, and it calls the acceptance exactly where the gate said it may.
+// M1c adds one branch and no second write: a gate of the bank base that found no baseline is a state of the attempt, so it is
+// reported with the path the retry needs and the skill is left alone.
+async function gateAndAccept(target: GateTarget, run: Run): Promise<void> {
+  const { notify } = run;
 
   // The gate spends tokens, and this is the last moment at which nothing has been spent. The budget itself is
   // fixed inside the gate (planGate, from the design and the items of the diagnosis), so the sentence says
   // what is about to happen instead of a count this surface would have to recompute for itself.
-  notify(gateStartedText(candidate.skill), "info");
+  notify(gateStartedText(target.skill), "info");
 
-  const result = await (deps.gate ?? gateStagedCandidate)(
-    {
-      base: candidate.base,
-      // The agent directory the loop read the settings and the inventory from, so the replay is measured against
-      // the skills this session had (OA6).
-      agentDir: deps.agentDir ?? getAgentDir(),
-      cwd: ctx.cwd,
-      stagingPath: candidate.staged.stagingPath,
-      // The skill the loop resolved and wrote the candidate for, not a second lookup by name: the two steps must
-      // be about the same directory, and the gate refuses a candidate named after another skill.
-      skill: candidate.skill,
-    },
-    deps.gateDeps,
-  );
+  const result = await runGate(target, run);
 
   switch (result.kind) {
     case "refused":
       // A candidate this version cannot gate is a refusal of the whole run: nothing was written and no run was
       // spent, so the reason has to reach the user as the error it is instead of as a verdict of the gate.
       throw new SriWriterError(
-        `the gate refused the candidate for skill ${quote(candidate.skill.name)}: ${result.rejection.detail}`,
-        candidate.staged.decisionPath,
+        `the gate refused the candidate for skill ${quote(target.skill.name)}: ${result.rejection.detail}`,
+        target.stagingPath,
       );
     case "gate-rejected":
-      notify(gateRejectedText(SURFACE, candidate.skill, result.reason, result.usedRuns), "warning");
+      notify(gateRejectedText(SURFACE, target.skill, result.reason, result.usedRuns), "warning");
       return;
     case "gate-abstained":
-      notify(gateAbstainedText(SURFACE, candidate.skill, result.reason, result.detail), "warning");
+      notify(gateAbstainedText(SURFACE, target.skill, result.reason, result.detail), "warning");
+      return;
+    case "no-baseline":
+      // Nothing was spent and the record was left in the state it was, so the attempt is retryable (OA1, OA9): the
+      // sentence carries the reason of the reader of the bank and the path the retry is pointed at.
+      notify(noBaselineText(SURFACE, target.skill, result.reason, result.stagingPath), "warning");
       return;
     case "gate-accepted":
-      notify(gatePassedText(SURFACE, candidate.skill, result.plannedRuns, result.usedRuns), "info");
-      await acceptIntoSkill(candidate, result, run);
+      notify(gatePassedText(SURFACE, target.skill, result.plannedRuns, result.usedRuns), "info");
+      await acceptIntoSkill(target, result, run);
       return;
     default:
-      // The three verdicts and the refusal are the whole GateFlowResult: a variant added there stops compiling
-      // here, instead of reaching the user as a gate that reported nothing.
+      // The three verdicts, the refusal and the answer of a base with no baseline are the whole union of the two flows: a
+      // variant added there stops compiling here, instead of reaching the user as a gate that reported nothing.
       return assertNever(result);
   }
 }
 
-// Step 7 of the protocol of §7, and the only path of this package that writes inside a skill. Everything it
-// needs comes from two places and no third one: the candidate the loop staged, and the record the gate rewrote,
-// which carries the candidate it measured and the hashes of the skill it measured it against.
-async function acceptIntoSkill(
-  candidate: ProposedFlowResult,
-  gate: GateConcludedResult,
-  run: Run,
-): Promise<void> {
-  const { deps, notify } = run;
-  const { record, skillContentHash } = await stagedRecordOf(candidate, gate);
+// The gate of one candidate, in the flow of its base. The two flows answer about the same candidate and are pointed at it the
+// same way; what differs is the material, and the material is decided by the presence of the bank.
+async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | DirectionalGateResult> {
+  const { ctx, deps } = run;
+  // The agent directory the loop read the settings and the inventory from, so the replay is measured against the skills
+  // this session had (OA6).
+  const agentDir = deps.agentDir ?? getAgentDir();
+  const request = {
+    base: target.base,
+    agentDir,
+    cwd: ctx.cwd,
+    stagingPath: target.stagingPath,
+    // The skill the loop resolved and wrote the candidate for, or the one the inventory answered for a staged candidate:
+    // the gate refuses a candidate named after another skill.
+    skill: target.skill,
+  };
 
-  // The bytes the acceptance writes are the candidate's: the draft is serialized again by the one function that
-  // produced the file in staging, so the two calls answer the same text -- the equality src/improve-flow.ts
-  // already relies on to publish the bytes it validated -- and the writer verifies the result against the hash
-  // the record declares before it writes a byte into the skill.
-  const lesson = serializeLesson(candidate.draft);
+  if (target.bankPath === undefined) {
+    return await (deps.gate ?? gateStagedCandidate)(request, deps.gateDeps);
+  }
+
+  // The base of the bank needs the model of the session twice -- one to replay the cases of the two arms, one to judge the
+  // answers of the candidate (OA5) -- so a session without one cannot gate it at all. It is said before the first read,
+  // which is the last moment at which nothing has been spent.
+  const model = ctx.model;
+  const identity = model === undefined ? undefined : modelIdentity(model.provider, model.id);
+  if (model === undefined || identity === undefined) {
+    throw new SriFailClosedError(noModelGateText(SURFACE, target.skill));
+  }
+
+  return await (deps.gateDirectional ?? gateDirectionalCandidate)(
+    { ...request, bankPath: target.bankPath, model: identity },
+    {
+      ...deps.gateDeps,
+      // The second condition, wired here and nowhere else: the one model call of this package, bounded with the judge's
+      // budget and carrying the session, plus the cost of the call the record of the bank keeps (src/model-call.ts).
+      judge: createDirectionalJudge(
+        createModelCall({ registry: ctx.modelRegistry, model, sessionId: ctx.sessionManager.getSessionId() }),
+      ),
+    },
+  );
+}
+
+// Step 7 of the protocol of §7, and the only path of this package that writes inside a skill. Everything it
+// needs comes from two places and no third one: the candidate the gate measured, and the record the gate rewrote,
+// which carries the candidate it measured and the hashes of the skill it measured it against.
+async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, run: Run): Promise<void> {
+  const { deps, notify } = run;
+  const { record, skillContentHash } = await stagedRecordOf(target, gate);
+
+  // The bytes the acceptance writes are the bytes the candidate holds, read from the lesson the record names and verified
+  // against the pair of hashes it declares (verifiedStagedLesson, the guard both gate bases run before they spend). Nothing
+  // is serialized here: a run that skipped the proposal (--staged) has no draft to serialize, and a second serialization
+  // would be a second answer to "are these the bytes the gate measured" -- the file is, and the record says which one.
+  const lesson = await verifiedStagedLesson(path.resolve(target.base, gate.stagingPath), record);
   if (!lesson.ok) {
     throw new SriWriterError(
-      `the lesson for ${quote(candidate.skill.name)} no longer serializes: ${lesson.error}`,
+      `the candidate for ${quote(target.skill.name)} no longer holds the lesson its record declares: ${lesson.error}`,
       gate.decisionPath,
     );
   }
 
   const outcome = await (deps.accept ?? acceptCandidate)(
     {
-      base: candidate.base,
+      base: target.base,
       // realDir and not dir: the acceptance writes through the real path of a skill reached by a symlink (Q11).
-      skill: { name: candidate.skill.name, realDir: candidate.skill.realDir },
+      skill: { name: target.skill.name, realDir: target.skill.realDir },
       candidate: {
         slug: record.candidate.slug,
         title: record.candidate.title,
@@ -332,7 +548,7 @@ async function acceptIntoSkill(
   }
 
   notify(
-    acceptedText(candidate.skill, record.candidate.slug, outcome.value.lessonPath, outcome.value.historyPath),
+    acceptedText(target.skill, record.candidate.slug, outcome.value.lessonPath, outcome.value.historyPath),
     "info",
   );
 
@@ -348,10 +564,10 @@ async function acceptIntoSkill(
 // first into the history of the skill and compares the second with the SKILL.md on disk, so both come from the
 // file the gate rewrote instead of from a second reading of the candidate built here.
 async function stagedRecordOf(
-  candidate: ProposedFlowResult,
+  target: GateTarget,
   gate: GateConcludedResult,
 ): Promise<{ record: DecisionRecord; skillContentHash: string }> {
-  const resolved = await resolveStagedCandidate(candidate.base, candidate.skill.name, gate.stagingPath);
+  const resolved = await resolveStagedCandidate(target.base, target.skill.name, gate.stagingPath);
   if (!resolved.ok) {
     throw new SriWriterError(
       `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and its record cannot be read: ${resolved.error.detail}`,
@@ -439,11 +655,12 @@ function gateStartedText(skill: SkillRef): string {
 }
 
 // The command's own sentence: the usage line and the offer of the eligible set, which no other
-// surface prints.
+// surface prints. The flags of M1c are in the syntax line because the parser accepts them and the usage error
+// names them; what each one is for is the description of the command and of the tool (extensions/index.ts).
 function usageText(eligible: readonly SkillRef[]): string {
   return [
-    `Usage: /${COMMAND_NAME} <skill> [focus]`,
-    "Stages a lesson candidate for one skill from the failures of this session, gates it with a paired replay and accepts it into the skill only when the gate passes; the gate spends tokens.",
+    `Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`,
+    "Stages a lesson candidate for one skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows -- gates it with a paired replay and accepts it into the skill only when the gate passes; --staged=<stagingPath> gates a candidate that is already in staging, and the gate spends tokens.",
     "Eligible skills:",
     ...listedSkills(eligible),
   ].join("\n");
