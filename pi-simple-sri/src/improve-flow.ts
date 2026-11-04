@@ -623,12 +623,15 @@ function diagnoseEvidence(
   ctx: ImproveFlowContext,
 ): Diagnosis {
   const model = ctx.model;
+  // OA5: the fallback is written in the same "provider/model" spelling the evidence carries, so a
+  // replay item never mixes one form with the other; the bare id is ambiguous between providers
+  // that serve it. It is only a fallback: the model of the failing turn wins (src/diagnosis.ts).
   return buildDiagnosis(
     items,
     contextById,
     skill,
     ctx.cwd,
-    model === undefined ? {} : { model: model.id },
+    model === undefined ? {} : { model: `${model.provider}/${model.id}` },
   );
 }
 

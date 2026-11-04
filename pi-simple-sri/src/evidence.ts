@@ -61,6 +61,10 @@ export interface EvidenceContext {
   // 0-based index of the assistant turn the failure belongs to; absent before the first
   // assistant reply. Counts assistant turns, never user messages: see the module comment.
   assistantCycleIndex?: number;
+  // "provider/model" of the assistant turn the failure belongs to (OA5): a replay pins the model
+  // that produced the failure, never the one the session that runs the diagnosis happens to use
+  // (Q13). Absent when the transcript carries no assistant reply to name it.
+  model?: string;
 }
 
 export interface DerivedEvidence {
@@ -83,6 +87,9 @@ interface Derivation {
   // first assistant reply: before it, a failure has no turn to name.
   turnsOpened: number;
   cycleIndex: number | undefined;
+  // "provider/model" of the reply that opened or continued the turn in progress. Undefined until
+  // the first assistant reply, for the same reason as cycleIndex.
+  cycleModel: string | undefined;
   // A user message no assistant reply has answered yet: the next reply opens a new turn.
   unansweredPrompt: boolean;
   lastPrompt: string | undefined;
@@ -97,6 +104,7 @@ export function deriveEvidence(entries: readonly SessionMessageEntry[]): Derived
     callArgs: new Map<string, string>(),
     turnsOpened: 0,
     cycleIndex: undefined,
+    cycleModel: undefined,
     unansweredPrompt: false,
     lastPrompt: undefined,
     pending: undefined,
@@ -137,7 +145,7 @@ function handleUserMessage(derivation: Derivation, message: UserMessage, timesta
       excerpt: truncate(text),
     };
     derivation.collected.push(correction);
-    rememberFailure(derivation.contextById, correction.id, derivation.lastPrompt, derivation.cycleIndex);
+    rememberFailure(derivation, correction.id);
     // One correction per error: a later user message belongs to the next turn.
     derivation.pending = undefined;
   }
@@ -148,8 +156,8 @@ function handleUserMessage(derivation: Derivation, message: UserMessage, timesta
 
 // A reply to a prompt opens the next turn; a reply that continues after a tool result stays in the
 // turn already open. So several assistant replies under one prompt share the index, and several
-// user messages in a row advance it at most once. The turn is opened before its tool calls are
-// read, so the failures inside it carry it.
+// user messages in a row advance it at most once. The turn is opened, and its model read, before
+// its tool calls are read, so the failures inside it carry both.
 function handleAssistantMessage(
   derivation: Derivation,
   message: AssistantMessage,
@@ -160,6 +168,12 @@ function handleAssistantMessage(
     derivation.turnsOpened += 1;
     derivation.unansweredPrompt = false;
   }
+
+  // The model travels with the turn, and it is set before the tool calls are read, so every
+  // failure this reply can produce -- the retry loop below, the tool error of its results, the
+  // correction that follows -- names the model that produced it and not the one a later reply
+  // switches to (Q13, OA5).
+  derivation.cycleModel = modelOf(message);
 
   for (const part of message.content) {
     if (part.type !== "toolCall") continue;
@@ -183,7 +197,7 @@ function handleAssistantMessage(
       argsHash,
     };
     derivation.collected.push(retryLoop);
-    rememberFailure(derivation.contextById, retryLoop.id, derivation.lastPrompt, derivation.cycleIndex);
+    rememberFailure(derivation, retryLoop.id);
   }
 }
 
@@ -210,7 +224,7 @@ function handleToolResult(
     ...(excerpt === undefined ? {} : { excerpt }),
   };
   derivation.collected.push(toolError);
-  rememberFailure(derivation.contextById, toolError.id, derivation.lastPrompt, derivation.cycleIndex);
+  rememberFailure(derivation, toolError.id);
   derivation.pending = { toolName: message.toolName, argsHash };
 }
 
@@ -233,19 +247,30 @@ function dedupeById(items: readonly EvidenceItem[]): EvidenceItem[] {
   return unique;
 }
 
-function rememberFailure(
-  contextById: Map<string, EvidenceContext>,
-  id: string,
-  prompt: string | undefined,
-  assistantCycleIndex: number | undefined,
-): void {
+// The context of one failure, copied from the state the pass has when the failure is recorded: a
+// later reply that switches prompt or model must not rewrite what the failure already said.
+function rememberFailure(derivation: Derivation, id: string): void {
+  const { contextById, lastPrompt, cycleIndex, cycleModel } = derivation;
   if (contextById.has(id)) return;
-  if (prompt === undefined && assistantCycleIndex === undefined) return;
+  if (lastPrompt === undefined && cycleIndex === undefined && cycleModel === undefined) return;
 
   const context: EvidenceContext = {};
-  if (prompt !== undefined) context.prompt = prompt;
-  if (assistantCycleIndex !== undefined) context.assistantCycleIndex = assistantCycleIndex;
+  if (lastPrompt !== undefined) context.prompt = lastPrompt;
+  if (cycleIndex !== undefined) context.assistantCycleIndex = cycleIndex;
+  if (cycleModel !== undefined) context.model = cycleModel;
   contextById.set(id, context);
+}
+
+// OA5: the identity a replay pins is "provider/model" and never the bare id, because --model
+// accepts both spellings and an id alone is ambiguous between two providers that serve it. The
+// prefix comes from the reply that produced the turn; a legacy message, written before the fields
+// were required, keeps the id it has and invents no prefix.
+function modelOf(message: AssistantMessage): string | undefined {
+  const { model } = message;
+  if (typeof model !== "string" || model === "") return undefined;
+
+  const { provider } = message;
+  return typeof provider !== "string" || provider === "" ? model : `${provider}/${model}`;
 }
 
 // "ev-" plus the first 8 hex digits of the hash over (kind, tool, arguments, timestamp), fed as

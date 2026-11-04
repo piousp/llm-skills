@@ -607,7 +607,7 @@ test("propose: the real proposer calls the session model with the token budget",
   assert.equal(harness.completed[0].maxTokens, PROPOSAL_MAX_TOKENS);
 
   assert.equal(harness.writes.length, 1);
-  assert.equal(harness.writes[0].decision.diagnosis.replayItems[0].model, MODEL.id);
+  assert.equal(harness.writes[0].decision.diagnosis.replayItems[0].model, `${MODEL.provider}/${MODEL.id}`);
   assert.equal(harness.writes[0].decision.candidate.slug, LESSON_SLUG);
   assert.deepEqual(result.details.usage, { input: 412, output: 137 });
 });

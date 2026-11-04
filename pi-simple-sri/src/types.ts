@@ -64,6 +64,10 @@ export interface ReplayItem {
   prompt: string;
   cwd: string;
   predicate: string;
+  // Q13, OA5: "provider/model" of the assistant turn the failure belongs to, never the bare id:
+  // an id alone is ambiguous between providers that serve it. Absent when the transcript carries
+  // no assistant message to name it, and then src/diagnosis.ts falls back to the model of the
+  // session that runs the diagnosis, in the same spelling.
   model?: string;
   skills?: string[];
   // M1: 0-based index of the assistant turn the failure belongs to. It counts assistant turns,

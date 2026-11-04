@@ -12,7 +12,8 @@ import { quote } from "./values.ts";
 // (see src/evidence.ts), so the caller passes the contexts derived with the evidence, keyed by
 // evidence id. An item whose prompt is unknown produces no replay item: a made-up prompt would
 // replay a task the user never asked for. That filter runs before the class priority (M5), so a
-// failure that cannot be replayed never hides one that can.
+// failure that cannot be replayed never hides one that can. The same contexts carry the model of
+// that turn, which is what a replay pins (Q13); the option below is only their fallback.
 //
 // Which class is replayable: the tool errors of the session. If the session has none, the retry
 // loops. If it has neither, the user corrections, whose predicate does not need a tool name.
@@ -67,8 +68,10 @@ interface KindCount {
 }
 
 export interface DiagnosisOptions {
-  // Model of the session the failure came from: both replay arms pin it (Q13). Omitted, the
-  // replay item carries no model and the gate falls back to the session's.
+  // Model of the session the diagnosis runs in, used only as a fallback: a replay item carries the
+  // model of the assistant turn that failed (EvidenceContext.model, Q13, OA5) and falls back to
+  // this one only when the transcript has no AssistantMessage to name it. Same spelling as the
+  // evidence: "provider/model".
   model?: string;
 }
 
@@ -163,7 +166,10 @@ function buildReplayItem(
     skills: [skill.name],
     failureSignature: signatureOf([item.id]),
   };
-  if (options.model !== undefined) replayItem.model = options.model;
+  // Q13, OA5: the model the failure came from, not the one the session runs now. The option is the
+  // fallback of a transcript that never recorded the failing turn.
+  const model = contextById.get(item.id)?.model ?? options.model;
+  if (model !== undefined) replayItem.model = model;
 
   const assistantCycleIndex = contextById.get(item.id)?.assistantCycleIndex;
   if (assistantCycleIndex !== undefined) replayItem.assistantCycleIndex = assistantCycleIndex;

@@ -42,13 +42,27 @@ function toolCall(callId: string, name: string, args: JsonObject): ToolCall {
   return { type: "toolCall", id: callId, name, arguments: args };
 }
 
-function assistantEntry(seconds: number, calls: ToolCall[]): SessionMessageEntry {
+// The model a turn ran on: the pair an AssistantMessage records, which the evidence turns into the
+// "provider/model" a replay pins (OA5).
+interface TurnModel {
+  provider: string;
+  model: string;
+}
+
+const DEFAULT_TURN: TurnModel = { provider: "anthropic", model: "claude-sonnet-4-5" };
+const OTHER_TURN: TurnModel = { provider: "anthropic", model: "claude-opus-4-1" };
+
+function assistantEntry(
+  seconds: number,
+  calls: ToolCall[],
+  turn: TurnModel = DEFAULT_TURN,
+): SessionMessageEntry {
   const message: AssistantMessage = {
     role: "assistant",
     content: calls,
     api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-sonnet-4-5",
+    provider: turn.provider,
+    model: turn.model,
     usage: {
       input: 10,
       output: 5,
@@ -355,6 +369,66 @@ test("deriveEvidence: two assistant replies under one prompt share the assistant
   );
   assert.equal(contextById.get(toolError.id)?.assistantCycleIndex, 0);
   assert.equal(contextById.get(correction.id)?.assistantCycleIndex, 0);
+});
+
+// Q13, OA5: a replay item pins the model that produced the failure. The assistant turn is the
+// unit: a later turn under another model is another attribution, and the failures already recorded
+// keep the one they had.
+test("deriveEvidence: each failure keeps the model of the assistant turn it happened in", () => {
+  const entries = [
+    userEntry(0, "extract the merged-cell table from report.pdf"),
+    assistantEntry(1, [toolCall("call-1", "bash", { command: "pdftotext report.pdf -" })]),
+    toolResultEntry(2, { callId: "call-1", toolName: "bash", text: "pdftotext: cannot open", isError: true }),
+    userEntry(3, "and now summarize report.pdf"),
+    assistantEntry(4, [toolCall("call-2", "bash", { command: "pdftotext -layout report.pdf -" })], OTHER_TURN),
+    toolResultEntry(5, { callId: "call-2", toolName: "bash", text: "pdftotext: cannot open", isError: true }),
+  ];
+
+  const { items, contextById } = deriveEvidence(entries);
+  const [firstError, secondError] = items.filter((item) => item.kind === "tool_error");
+
+  // The second turn switched model, and the first failure still names the one that produced it.
+  assert.equal(contextById.get(firstError.id)?.model, "anthropic/claude-sonnet-4-5");
+  assert.equal(contextById.get(firstError.id)?.assistantCycleIndex, 0);
+  assert.equal(contextById.get(secondError.id)?.model, "anthropic/claude-opus-4-1");
+  assert.equal(contextById.get(secondError.id)?.assistantCycleIndex, 1);
+});
+
+// A correction is evidence about the error it answers, so it inherits the model of that turn and
+// not the model of the first turn of the session.
+test("deriveEvidence: a user correction carries the model of the cycle that failed", () => {
+  const entries = [
+    userEntry(0, "extract the merged-cell table from report.pdf"),
+    assistantEntry(1, []),
+    userEntry(2, "the table is in report.pdf, not in notes.md"),
+    assistantEntry(3, [toolCall("call-1", "bash", { command: "pdftotext report.pdf -" })], OTHER_TURN),
+    toolResultEntry(4, { callId: "call-1", toolName: "bash", text: "pdftotext: cannot open", isError: true }),
+    userEntry(5, "no, the table is on page 4"),
+  ];
+
+  const { items, contextById } = deriveEvidence(entries);
+  const [toolError, correction] = items;
+
+  assert.equal(correction.kind, "user_correction");
+  assert.equal(contextById.get(correction.id)?.assistantCycleIndex, 1);
+  assert.equal(contextById.get(correction.id)?.model, "anthropic/claude-opus-4-1");
+  assert.equal(contextById.get(correction.id)?.model, contextById.get(toolError.id)?.model);
+});
+
+// Nothing is invented: a transcript with no assistant reply has no model to name, so the context
+// says so by omission instead of borrowing the model of whoever runs the diagnosis.
+test("deriveEvidence: a failure with no assistant message carries no model", () => {
+  const entries = [
+    userEntry(0, "run the export"),
+    toolResultEntry(1, { callId: "call-1", toolName: "bash", text: "boom", isError: true }),
+  ];
+
+  const { items, contextById } = deriveEvidence(entries);
+  const [toolError] = items;
+
+  assert.equal(contextById.get(toolError.id)?.prompt, "run the export");
+  assert.equal(contextById.get(toolError.id)?.model, undefined);
+  assert.equal(contextById.get(toolError.id)?.assistantCycleIndex, undefined);
 });
 
 test("mergeEvidence: keeps the first list whole and appends only the ids it does not have", () => {

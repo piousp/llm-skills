@@ -106,6 +106,31 @@ test("buildDiagnosis: a replay item without a model and without a cycle index om
   assert.equal(replayItem.failingToolCall, "bash");
 });
 
+// Q13, OA5: the model of the failing turn wins over the model of the session that runs the
+// diagnosis, because what a replay pins is the model that produced the failure.
+test("buildDiagnosis: the model of the failing turn wins over the session model", () => {
+  const error = evidenceItem("ev-3f9a1c02", "tool_error", "bash");
+  const contextById = contextsOf([
+    ["ev-3f9a1c02", { prompt: "extract the table", model: "anthropic/claude-opus-4-1" }],
+  ]);
+
+  const [replayItem] = buildDiagnosis([error], contextById, SKILL, CWD, { model: "otro/modelo" }).replayItems;
+
+  assert.equal(replayItem.model, "anthropic/claude-opus-4-1");
+});
+
+// The fallback exists for a transcript that recorded no AssistantMessage: the item still pins one
+// model, and it is the session's, in the same "provider/model" spelling the evidence uses.
+test("buildDiagnosis: the session model is the fallback when the context names no model", () => {
+  const error = evidenceItem("ev-3f9a1c02", "tool_error", "bash");
+  const contextById = contextsOf([["ev-3f9a1c02", { prompt: "extract the table", assistantCycleIndex: 0 }]]);
+
+  const [replayItem] = buildDiagnosis([error], contextById, SKILL, CWD, { model: "openai/gpt-5" }).replayItems;
+
+  assert.equal(replayItem.model, "openai/gpt-5");
+  assert.equal(replayItem.assistantCycleIndex, 0);
+});
+
 test("buildDiagnosis: a failure without a prompt produces no replay item", () => {
   const withPrompt = evidenceItem("ev-00000001", "tool_error", "bash");
   const withoutPrompt = evidenceItem("ev-00000002", "tool_error", "bash");

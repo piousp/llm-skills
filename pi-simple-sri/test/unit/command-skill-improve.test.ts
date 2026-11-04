@@ -641,7 +641,7 @@ test("runSkillImprove: the real proposer calls the session model with the token 
   assert.equal(harness.completed[0].sessionId, SESSION_ID);
 
   assert.equal(harness.writes.length, 1);
-  assert.equal(harness.writes[0].decision.diagnosis.replayItems[0].model, MODEL.id);
+  assert.equal(harness.writes[0].decision.diagnosis.replayItems[0].model, `${MODEL.provider}/${MODEL.id}`);
   assert.equal(harness.writes[0].decision.candidate.slug, LESSON_SLUG);
   assert.equal(harness.notified[0].type, "info");
 });
