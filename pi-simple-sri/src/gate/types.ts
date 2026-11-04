@@ -128,6 +128,11 @@ export interface ReplayToolCall {
 // `stopReason` is the last assistant message's stop reason, `null` when the stream has none.
 // `usage` is the sum over every assistant message of the run.
 //
+// `finalText` is the answer of the turn (M1c): the text blocks of the last assistant message, joined in the order
+// the stream wrote them and cut to MAX_FINAL_TEXT_CODE_POINTS. It is the one text the fourth class is judged on, and
+// it travels on the run for the same reason the calls and the stream do: the record has to be re-readable without
+// the process that produced it.
+//
 // `rawStream` is the JSONL the child wrote, verbatim, truncated to MAX_REPLAY_STREAM_BYTES: prefix
 // kept, cut at the last complete newline, and `truncatedAt` then holds the original byte length
 // (OA10). The flow persists it under gate/runs/, which is why it travels on the run and not in a
@@ -144,6 +149,7 @@ export interface ReplayRun {
   invalidDetail?: string;
   stopReason: string | null;
   toolCalls: readonly ReplayToolCall[];
+  finalText: string;
   usage: { input: number; output: number };
   durationMs: number;
   exitCode: number | null;
@@ -165,6 +171,10 @@ export interface ReplayInvocation {
 // runner needs to tell an empty stream from a stream whose turns are there but unreadable;
 // `unparsedLines` counts the lines this parser could not use, which is how an event vocabulary of
 // another version shows up as a number instead of as silence.
+//
+// `finalText` is the answer of the last assistant message and never the concatenation of the whole turn: a run that
+// answered twice answered with its second answer, and adding the two would let a check match text no answer holds.
+// A stream with no assistant message answers with "", which is the reading the evaluator refuses to judge.
 export interface ParsedStream {
   toolCalls: readonly ReplayToolCall[];
   lastStopReason: string | null;
@@ -172,6 +182,7 @@ export interface ParsedStream {
   skillLoaded: boolean;
   assistantMessages: number;
   unparsedLines: number;
+  finalText: string;
 }
 
 // The reading of one run against the expectation of its item, and the unit the gate decides on
@@ -185,6 +196,11 @@ export interface ParsedStream {
 // broke: a broken run proved nothing about the skill, so the gate abstains instead of counting it either
 // way (OA3). `invalidReason` is present exactly when the run is invalid, and it is the runner's reason,
 // never a second reading of it.
+//
+// `checkFailures` is the reading of the fourth class and of no other (M1c): the checks of the item that did not pass,
+// as "<index>:<kind>", plus the one coordinate the evaluator gives a turn that answered with no text. It is the
+// evaluator's own field: the record of a run declares its own list and src/gate/budget.ts copies this one into it,
+// which is why a verdict is never written into a record as it stands.
 export interface RunVerdict {
   item: number;
   rep: number;
@@ -192,6 +208,7 @@ export interface RunVerdict {
   outcome: RunOutcome;
   invalidReason?: InvalidReason;
   usage: { input: number; output: number };
+  checkFailures?: readonly string[];
 }
 
 // One replay item of the diagnosis with the excerpt of the evidence it was built from, which is the only

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateGate, planGate, wilsonInterval } from "../../src/gate/scorer.ts";
+import { evaluateGate, planDesign, planGate, wilsonInterval } from "../../src/gate/scorer.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import type {
   GateArm,
@@ -174,6 +174,37 @@ test("planGate: the failures it excludes are named by a real digest, and an anon
   };
   assert.deepEqual(planGate([planItem(0), anonymous]).excluded, []);
   assert.deepEqual(planGate([planItem(0), { item: intrinsicItem(1).item }]).excluded, []);
+});
+
+test("planDesign: the design of n items, and the basis of its floor", () => {
+  // The design is a function of the count alone, so a caller with no list of replay items to prefix asks for the
+  // same arithmetic of §8 instead of spelling it out again.
+  assert.deepEqual(planDesign(2, "replay").design, {
+    reps: 2,
+    items: 2,
+    plannedRuns: 8,
+    arms: ["incumbent", "candidate"],
+  });
+
+  // The ceiling is the prefix of three: five items are three, and twelve runs.
+  assert.equal(planDesign(3, "replay").design.plannedRuns, 12);
+  assert.equal(planDesign(5, "replay").design.plannedRuns, 12);
+
+  // The rule that comes with the design: every run of the candidate, one run fewer of the incumbent.
+  assert.deepEqual(planDesign(3, "replay").threshold, {
+    rule: "unanimous-and-strictly-better",
+    candidatePasses: 6,
+    incumbentPassesMax: 5,
+    version: 1,
+  });
+
+  // `basis` reaches the floor as given, and the floor resolves one run of each arm.
+  assert.deepEqual(planDesign(2, "case-bank").mde, {
+    basis: "case-bank",
+    runsPerArm: 4,
+    resolution: 1 / 4,
+    requiredDifference: 1,
+  });
 });
 
 test("evaluateGate: accepts a candidate that passed every run against an incumbent that missed one", () => {

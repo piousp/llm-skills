@@ -20,15 +20,22 @@ import { quote } from "./values.ts";
 // loops. If it has neither, the user corrections, whose expectation needs no tool name.
 // One replay item per selected failure, so the gate measures the failure that produced the
 // diagnosis and not a different one.
+//
+// The fourth class, quality_defect (M1c), is never selected here and that is the point: its evidence does not come
+// from a turn of the session but from an artifact, and what a replayed answer must satisfy is the list of checks
+// the case bank gives it. A defect whose predicate does not travel with the evidence is not replayable from the
+// transcript, so this module answers no expectation for the class instead of inventing one (see expectationFor);
+// the constructor that has the bank in hand builds that item, and it is the only one that attaches checks.
 
 const ID_SEPARATOR = "\n";
 
 interface KindRule {
   // Fallback order of the classes: the lower the number, the stronger the class.
   priority: number;
-  // What the replayed turn must stop doing, as the gate reads it. The tool name is not in the table: a
-  // tool class is one row for every tool, and expectationFor adds the name the evidence item carries.
-  expectation: Expectation;
+  // What the replayed turn must stop doing, as the gate reads it, or null for a class whose condition cannot be
+  // derived from the evidence alone. The tool name is not in the table: a tool class is one row for every tool,
+  // and expectationFor adds the name the evidence item carries.
+  expectation: Expectation | null;
   // Whether the expectation has to carry the name of the failing tool to say anything.
   needsTool: boolean;
   // Singular form the summary uses; every label pluralizes with "s".
@@ -57,6 +64,15 @@ const KIND_RULES: Record<EvidenceKind, KindRule> = {
     expectation: { class: "user_correction", version: 1 },
     needsTool: false,
     label: "user correction",
+  },
+  // M1c: the weakest class, and the only one whose expectation is not derivable from the evidence alone. It never
+  // displaces a class of M1 -- a defect is evidence read from an artifact, so the class the transcript can prove is
+  // the one the replay measures -- and it has no tool to watch.
+  quality_defect: {
+    priority: 3,
+    expectation: null,
+    needsTool: false,
+    label: "quality defect",
   },
 };
 
@@ -191,8 +207,15 @@ function promptOf(
 // failing; a correction does not, because what must stop is the user objecting. A fresh object every
 // time: the row of the table is shared by every item of its class, and a caller that edited what it was
 // handed would edit the class.
+//
+// A quality_defect yields no expectation here. What its replayed answer must satisfy is the list of checks the case
+// bank carries, and that list travels with the evidence and not with the class, so an expectation built from the
+// class alone would be a condition nobody wrote. The constructor that holds the bank builds that item and attaches
+// the checks (M1c, buildDefectDiagnosis); this function answers undefined so no caller mistakes the class for one a
+// transcript can replay.
 function expectationFor(item: EvidenceItem): Expectation | undefined {
   const rule = KIND_RULES[item.kind];
+  if (rule.expectation === null) return undefined;
   if (!rule.needsTool) return { ...rule.expectation };
   if (item.toolName === undefined) return undefined;
   return { ...rule.expectation, tool: item.toolName };
@@ -213,9 +236,43 @@ export function describeExpectation(expectation: Expectation): string {
       return expectation.tool === undefined
         ? "the failing tool does not return an error again"
         : `the tool ${expectation.tool} does not return an error again`;
+    case "quality_defect":
+      // The sentence names the class and not the checks: what the user reads is what the answer must satisfy, and
+      // the list itself is data the gate runs. It is worded for a record written elsewhere too, so a defect whose
+      // checks are missing still has a sentence.
+      return "the answer passes every check the defect carries";
     default:
       return assertNever(expectation.class);
   }
+}
+
+// The two relations between an expectation and its class that JSON Schema cannot state, because it ties no property
+// to another: `tool` is present exactly on the two tool classes, and `checks` is present and non-empty exactly on
+// quality_defect. One function owns both, so a record written by a later slice and a record read from disk are
+// judged by the same rule, and test/unit/diagnosis.test.ts walks the whole product of the three dimensions (class,
+// tool, checks) instead of a sample of it.
+//
+// "Owner" is literal: describeExpectation is defined over any Expectation, because a sentence has to be derivable
+// from a record this package did not write, and that is a different question from whether the record is well formed.
+// `undefined` is the expectation that satisfies both relations.
+export function expectationViolation(expectation: Expectation): string | undefined {
+  const toolClass = expectation.class === "tool_error" || expectation.class === "retry_loop";
+  if (toolClass && expectation.tool === undefined) {
+    return `a ${quote(expectation.class)} expectation needs the name of the failing tool`;
+  }
+  if (!toolClass && expectation.tool !== undefined) {
+    return `a ${quote(expectation.class)} expectation names no tool, got ${quote(expectation.tool)}`;
+  }
+
+  const checks = expectation.checks;
+  if (expectation.class === "quality_defect") {
+    return checks === undefined || checks.length === 0
+      ? `a ${quote(expectation.class)} expectation needs at least one check`
+      : undefined;
+  }
+  return checks === undefined || checks.length === 0
+    ? undefined
+    : `a ${quote(expectation.class)} expectation carries no checks, got ${checks.length}`;
 }
 
 // Ids are sorted before hashing: the signature names the set of failures, so the same evidence

@@ -6,6 +6,7 @@ import type {
   GateBounds,
   GateDesign,
   GateEvaluation,
+  GateMde,
   GatePlanItem,
   GatePlanOptions,
   GatePlanResult,
@@ -25,6 +26,10 @@ import type {
 // most three items, which is twelve runs and the hard ceiling of the budget. The prefix of three is the
 // plan's answer to a cost that grows with the evidence (OA13): the items keep the order the evidence gave
 // them, so the same diagnosis always plans the same runs.
+//
+// The arithmetic of that design is computed in one place (planDesign): the prefix chooses which items are
+// spent, and what the design over them costs follows from their count alone, so no other module -- and no
+// second base of the gate -- has to spell the repetitions, the rule or the floor out again.
 //
 // Two numbers are preregistered with the design and neither is the other: `threshold` is the rule the gate is
 // judged by, and `mde` is the floor of the design -- the smallest difference this many runs can tell apart.
@@ -70,13 +75,30 @@ export function planGate(items: readonly GatePlanItem[], options: GatePlanOption
   const selected = eligible.slice(0, maxItems);
   if (selected.length < MIN_ITEMS) return { abstain: "insufficient-items", excluded };
 
-  const runsPerArm = REPS * selected.length;
-
   return {
     // The list the plan chose and not only its count: the flow runs these items, and the count below is their
     // length, so the two cannot describe different plans.
     items: selected,
-    design: { reps: REPS, items: selected.length, plannedRuns: runsPerArm * ARMS.length, arms: [...ARMS] },
+    ...planDesign(selected.length, MDE_BASIS),
+    excluded,
+  };
+}
+
+// The design of a count of items, and nothing else. The count is the one fact the design needs, and `basis`
+// travels into the MDE as given: it names what the floor was computed from, which is the only thing a second
+// basis changes about it. A caller with no list of replay items to prefix -- or with a prefix of its own --
+// spends the same design, the same rule and the same floor through this function.
+export function planDesign(
+  itemCount: number,
+  basis: string,
+): { design: GateDesign; threshold: GateThreshold; mde: GateMde } {
+  // The ceiling survives a count the caller did not clamp: more items than the design pays for are still
+  // twelve runs, never a longer budget.
+  const items = Math.min(itemCount, MAX_ITEMS);
+  const runsPerArm = REPS * items;
+
+  return {
+    design: { reps: REPS, items, plannedRuns: runsPerArm * ARMS.length, arms: [...ARMS] },
     threshold: {
       rule: "unanimous-and-strictly-better",
       candidatePasses: runsPerArm,
@@ -84,7 +106,7 @@ export function planGate(items: readonly GatePlanItem[], options: GatePlanOption
       version: 1,
     },
     mde: {
-      basis: MDE_BASIS,
+      basis,
       runsPerArm,
       // The smallest non-zero difference of a pass rate over `runsPerArm` runs: one run.
       resolution: 1 / runsPerArm,
@@ -92,7 +114,6 @@ export function planGate(items: readonly GatePlanItem[], options: GatePlanOption
       // how a reader sees that the rule asks for far more than the floor resolves.
       requiredDifference: 1,
     },
-    excluded,
   };
 }
 

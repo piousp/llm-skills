@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { CASE_CHECK_KINDS } from "../../src/checks.ts";
 import { hashOfArguments } from "../../src/evidence.ts";
 import { evaluateExpectation, isIntrinsicFailure } from "../../src/gate/expectation.ts";
 import { sha256Digest } from "../../src/hash.ts";
+import type { CaseCheck } from "../../src/checks.ts";
 import type { Expectation, ReplayItem } from "../../src/types.ts";
 import type { ReplayRun, ReplayRunRequest, ReplayToolCall } from "../../src/gate/types.ts";
 
@@ -29,6 +31,25 @@ const TOOL_ERROR: Expectation = { class: "tool_error", version: 1, tool: "read" 
 const RETRY_LOOP: Expectation = { class: "retry_loop", version: 1, tool: "read" };
 const CORRECTION: Expectation = { class: "user_correction", version: 1 };
 
+// M1c: the fourth class. Its condition is a list of predicates over the final answer of the turn, so a test of it
+// writes the checks it is about and the answer they are read against.
+const DEFECT: Expectation = {
+  class: "quality_defect",
+  version: 1,
+  checks: [
+    { kind: "contains", value: "PROBE-OK" },
+    { kind: "not-contains", value: "--squash-all" },
+  ],
+};
+
+// The answer a replayed turn ended with. Only the fourth class reads it, and its tests are the ones that write it; the
+// default is a non-empty answer, so a turn that said nothing is a case a test has to ask for.
+const ANSWER = "PROBE-OK";
+
+function defect(checks: readonly CaseCheck[]): Expectation {
+  return { class: "quality_defect", version: 1, checks };
+}
+
 function request(overrides: Partial<ReplayRunRequest> = {}): ReplayRunRequest {
   return {
     item: 0,
@@ -53,6 +74,7 @@ function run(overrides: Partial<ReplayRun> = {}): ReplayRun {
     outcome: "pass",
     stopReason: "stop",
     toolCalls: [],
+    finalText: ANSWER,
     usage: { input: 10, output: 2 },
     durationMs: 0,
     exitCode: 0,
@@ -184,6 +206,84 @@ test("evaluateExpectation: a retry loop is counted by argsHash and a call withou
   assert.equal(differentCalls.outcome, "pass");
 });
 
+test("evaluateExpectation: a quality_defect passes when every check passes over the answer", () => {
+  // M1c: the truth of the case is a text, so the run is judged on the final answer of the turn and nothing else.
+  const verdict = evaluateExpectation(DEFECT, run({ finalText: `El archivo no existe. ${ANSWER}` }));
+
+  assert.equal(verdict.outcome, "pass");
+  // Nothing failed, so the verdict names no failure at all: an empty list and an absent one are two readings, and the
+  // record shows the absent one.
+  assert.equal(verdict.checkFailures, undefined);
+});
+
+test("evaluateExpectation: a check that does not pass fails the run with its own coordinates", () => {
+  // The answer carries the token and also the flag the case forbids: the second check is the one that failed, and it
+  // names the position and the kind the bank gave it.
+  const verdict = evaluateExpectation(DEFECT, run({ finalText: `${ANSWER} --squash-all` }));
+
+  assert.equal(verdict.outcome, "fail");
+  assert.deepEqual(verdict.checkFailures, ["1:not-contains"]);
+
+  // A regex that does not match and a substring that must not be there are read the same way: the list is every check
+  // that did not pass, in the order of the item.
+  const both = evaluateExpectation(
+    defect([
+      { kind: "regex", pattern: "^PROBE-OK$" },
+      { kind: "not-contains", value: ANSWER },
+    ]),
+    run({ finalText: `${ANSWER} de mas` }),
+  );
+
+  assert.equal(both.outcome, "fail");
+  assert.deepEqual(both.checkFailures, ["0:regex", "1:not-contains"]);
+});
+
+test("evaluateExpectation: an isError in any tool fails a quality_defect whatever the answer says", () => {
+  // The predicate is the condition of the case and not a pardon: a turn that broke a tool did not answer, so a check
+  // that matches its text must never count it as evidence that the defect is gone.
+  const verdict = evaluateExpectation(DEFECT, run({ finalText: ANSWER, toolCalls: [call("bash", true)] }));
+
+  assert.equal(verdict.outcome, "fail");
+  // The class watches no tool, so every call of the turn counts, not only the ones of a named tool.
+  assert.equal(verdict.checkFailures, undefined);
+
+  // And an error of a call whose arguments are unknown counts the same: the mark is the error, never the digest.
+  const unknownArguments = evaluateExpectation(
+    DEFECT,
+    run({ finalText: ANSWER, toolCalls: [call("read", true, UNKNOWN_ARGS)] }),
+  );
+  assert.equal(unknownArguments.outcome, "fail");
+});
+
+test("evaluateExpectation: a turn with no answer fails with its own coordinate (M1c)", () => {
+  // The vacuous pass this closes: `not-contains` over "" passes because "" does not contain the needle, so a turn
+  // nobody answered would have counted as a corrected defect.
+  const vacuous = defect([{ kind: "not-contains", value: "--squash-all" }]);
+
+  const empty = evaluateExpectation(vacuous, run({ finalText: "" }));
+  assert.equal(empty.outcome, "fail");
+  assert.deepEqual(empty.checkFailures, ["0:no-text"]);
+
+  // Whitespace is not an answer either: a blank line says as little as nothing.
+  const blank = evaluateExpectation(vacuous, run({ finalText: " \n\t " }));
+  assert.equal(blank.outcome, "fail");
+  assert.deepEqual(blank.checkFailures, ["0:no-text"]);
+
+  // The coordinate is not one of the four kinds src/checks.ts executes, so a reader can never read the turn that said
+  // nothing as a check that failed.
+  const kinds: readonly string[] = CASE_CHECK_KINDS;
+  assert.equal(kinds.includes("no-text"), false);
+});
+
+test("evaluateExpectation: a defect that carries no predicate cannot pass", () => {
+  // src/diagnosis.ts refuses to build such an item, so this is the guard that keeps a hand-written record from reading
+  // as a pass: asserting nothing is not asserting a pass.
+  const verdict = evaluateExpectation({ class: "quality_defect", version: 1 }, run({ finalText: ANSWER }));
+
+  assert.equal(verdict.outcome, "fail");
+  assert.equal(verdict.checkFailures, undefined);
+});
+
 test("evaluateExpectation: an invalid run wins over any other reading", () => {
   // OA3: the runner already decided the run proved nothing, and its reason is the one the record keeps. The
   // calls below would read as a pass; a killed run is not a pass.
@@ -202,6 +302,15 @@ test("evaluateExpectation: an invalid run wins over any other reading", () => {
 
   // And an invalid run of a correction is invalid too: the class never upgrades a broken run.
   assert.equal(evaluateExpectation(CORRECTION, run({ outcome: "invalid", invalidReason: "exit-code" })).outcome, "invalid");
+
+  // The fourth class neither: a run nobody can read has no answer to read, so it produces no check failure at all.
+  const defectInvalid = evaluateExpectation(
+    DEFECT,
+    run({ outcome: "invalid", invalidReason: "stream-unparseable", finalText: ANSWER }),
+  );
+  assert.equal(defectInvalid.outcome, "invalid");
+  assert.equal(defectInvalid.invalidReason, "stream-unparseable");
+  assert.equal(defectInvalid.checkFailures, undefined);
 });
 
 test("evaluateExpectation: the verdict carries the coordinates and the cost of the run", () => {

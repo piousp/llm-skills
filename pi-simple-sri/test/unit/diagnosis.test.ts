@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildDiagnosis, describeExpectation, SriDiagnosisError } from "../../src/diagnosis.ts";
+import type { CaseCheck } from "../../src/checks.ts";
+import { buildDiagnosis, describeExpectation, expectationViolation, SriDiagnosisError } from "../../src/diagnosis.ts";
 import type { EvidenceContext } from "../../src/evidence.ts";
-import type { EvidenceItem, EvidenceKind, SkillRef } from "../../src/types.ts";
+import type { EvidenceItem, EvidenceKind, Expectation, SkillRef } from "../../src/types.ts";
 
 const SKILL: SkillRef = {
   name: "pdf-tools",
@@ -325,4 +326,170 @@ test("describeExpectation: a tool class without a tool name still describes its 
     describeExpectation({ class: "tool_error", version: 1 }),
     "the failing tool does not return an error again",
   );
+});
+
+// M1c: the fourth class is a row of the table like the other three, which is what "the table is the only place this
+// module names a class" means. EVERY_KIND is the totality device of the block below: a class added to EvidenceKind
+// loses a member here and this suite stops compiling, so no test here can go on covering three of four.
+const EVERY_KIND: { readonly [K in EvidenceKind]: K } = {
+  tool_error: "tool_error",
+  retry_loop: "retry_loop",
+  user_correction: "user_correction",
+  quality_defect: "quality_defect",
+};
+
+test("buildDiagnosis: the class table names the fourth class last in the summary", () => {
+  const items = [
+    evidenceItem("ev-00000041", "quality_defect"),
+    evidenceItem("ev-00000042", "user_correction"),
+    evidenceItem("ev-00000043", "retry_loop", "bash"),
+    evidenceItem("ev-00000044", "tool_error", "bash"),
+  ];
+  const contextById = contextsOf([
+    ["ev-00000041", { prompt: "which flags does git rebase accept" }],
+    ["ev-00000042", { prompt: "no, use the interactive mode" }],
+    ["ev-00000043", { prompt: "list the flags" }],
+    ["ev-00000044", { prompt: "list the flags" }],
+  ]);
+
+  const diagnosis = buildDiagnosis(items, contextById, SKILL, CWD);
+
+  assert.equal(
+    diagnosis.summary,
+    'Observed 1 tool error, 1 retry loop, 1 user correction and 1 quality defect in this session for tool "bash".',
+  );
+  // The tool error is the strongest class present, and the defect is not replayable from a transcript at all.
+  assert.deepEqual(
+    diagnosis.replayItems.map((item) => item.expectation.class),
+    ["tool_error"],
+  );
+});
+
+// The predicate of a defect is the list of checks its bank carries, and that list travels with the evidence: an
+// expectation built from the class alone would be a condition nobody wrote. The class therefore yields no replay item,
+// and a diagnosis over it alone is refused like a diagnosis with nothing replayable.
+test("buildDiagnosis: a quality_defect alone yields no replay item", () => {
+  const defect = evidenceItem("ev-00000051", "quality_defect");
+  const contextById = contextsOf([["ev-00000051", { prompt: "which flags does git rebase accept" }]]);
+
+  assert.throws(
+    () => buildDiagnosis([defect], contextById, SKILL, CWD),
+    (error: unknown) => error instanceof SriDiagnosisError,
+  );
+});
+
+// The same reading a tool class without a tool name gets: a class that yields no expectation is unreplayable, and
+// being unreplayable does not let it displace a weaker class that can be replayed.
+test("buildDiagnosis: a quality_defect does not shadow a replayable correction", () => {
+  const defect = evidenceItem("ev-00000052", "quality_defect");
+  const correction = evidenceItem("ev-00000053", "user_correction");
+  const contextById = contextsOf([
+    ["ev-00000052", { prompt: "which flags does git rebase accept" }],
+    ["ev-00000053", { prompt: "no, use the interactive mode", assistantCycleIndex: 0 }],
+  ]);
+
+  const diagnosis = buildDiagnosis([defect, correction], contextById, SKILL, CWD);
+
+  assert.deepEqual(
+    diagnosis.replayItems.map((item) => item.expectation),
+    [{ class: "user_correction", version: 1 }],
+  );
+});
+
+test("describeExpectation: a quality_defect names the condition of its class", () => {
+  assert.equal(
+    describeExpectation({
+      class: "quality_defect",
+      version: 1,
+      checks: [{ kind: "not-contains", value: "--squash-all" }],
+    }),
+    "the answer passes every check the defect carries",
+  );
+  // The sentence does not read the checks: it says what the answer must satisfy, and the list is data the gate runs.
+  // As with the tool class without a tool name above, this package never writes the shape below -- the invariant at the
+  // end of this file refuses it -- so the sentence exists for a record written by something else.
+  assert.equal(
+    describeExpectation({ class: "quality_defect", version: 1 }),
+    "the answer passes every check the defect carries",
+  );
+});
+
+// The two relations between an expectation and its class that the schema cannot state: `tool` is present exactly on
+// the two tool classes, and `checks` is present and non-empty exactly on quality_defect. The product is small enough
+// to walk whole -- four classes, a tool or none, three shapes of checks -- and walking it whole is the difference
+// between a rule and a sample of one.
+const TOOLS: readonly (string | undefined)[] = [undefined, "bash"];
+const CHECK_SHAPES: readonly (readonly CaseCheck[] | undefined)[] = [
+  undefined,
+  [],
+  [{ kind: "not-contains", value: "--squash-all" }],
+];
+
+test("expectationViolation: tool is present exactly on the tool classes and checks exactly on the defect", () => {
+  let walked = 0;
+
+  for (const kind of Object.values(EVERY_KIND)) {
+    for (const tool of TOOLS) {
+      for (const checks of CHECK_SHAPES) {
+        const expectation: Expectation = {
+          class: kind,
+          version: 1,
+          ...(tool === undefined ? {} : { tool }),
+          ...(checks === undefined ? {} : { checks }),
+        };
+        const toolClass = kind === "tool_error" || kind === "retry_loop";
+        const wantsChecks = kind === "quality_defect";
+        const consistent =
+          (tool !== undefined) === toolClass && wantsChecks === (checks !== undefined && checks.length > 0);
+        const caseName = `${kind}, ${tool === undefined ? "no tool" : "with a tool"}, ${
+          checks === undefined ? "no checks" : `${checks.length} checks`
+        }`;
+
+        assert.equal(expectationViolation(expectation) === undefined, consistent, caseName);
+        walked += 1;
+      }
+    }
+  }
+
+  // Four classes by two tools by three shapes: the walk covered the whole product and not a prefix of it.
+  assert.equal(walked, Object.keys(EVERY_KIND).length * TOOLS.length * CHECK_SHAPES.length);
+});
+
+test("expectationViolation: names the class and what is missing or extra", () => {
+  const check: CaseCheck = { kind: "contains", value: "--interactive" };
+
+  assert.equal(
+    expectationViolation({ class: "tool_error", version: 1 }),
+    'a "tool_error" expectation needs the name of the failing tool',
+  );
+  assert.equal(
+    expectationViolation({ class: "retry_loop", version: 1 }),
+    'a "retry_loop" expectation needs the name of the failing tool',
+  );
+  assert.equal(
+    expectationViolation({ class: "user_correction", version: 1, tool: "bash" }),
+    'a "user_correction" expectation names no tool, got "bash"',
+  );
+  assert.equal(
+    expectationViolation({ class: "quality_defect", version: 1, tool: "bash", checks: [check] }),
+    'a "quality_defect" expectation names no tool, got "bash"',
+  );
+  assert.equal(
+    expectationViolation({ class: "quality_defect", version: 1 }),
+    'a "quality_defect" expectation needs at least one check',
+  );
+  assert.equal(
+    expectationViolation({ class: "quality_defect", version: 1, checks: [] }),
+    'a "quality_defect" expectation needs at least one check',
+  );
+  assert.equal(
+    expectationViolation({ class: "tool_error", version: 1, tool: "bash", checks: [check] }),
+    'a "tool_error" expectation carries no checks, got 1',
+  );
+
+  // The four well-formed shapes, one per class: nothing to report.
+  assert.equal(expectationViolation({ class: "tool_error", version: 1, tool: "bash" }), undefined);
+  assert.equal(expectationViolation({ class: "retry_loop", version: 1, tool: "bash" }), undefined);
+  assert.equal(expectationViolation({ class: "user_correction", version: 1 }), undefined);
+  assert.equal(expectationViolation({ class: "quality_defect", version: 1, checks: [check] }), undefined);
 });

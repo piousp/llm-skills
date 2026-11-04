@@ -7,6 +7,10 @@
 // line it names. The import is type-only, so this module -- the contract root of the package -- keeps no run
 // time dependency on the module that reads and writes the lines.
 import type { KnownAttemptEvent } from "./attempts.ts";
+// The predicate of the fourth evidence class lives in src/checks.ts, next to the evaluator and the validator that
+// are its only producers and consumers. Type-only for the same reason: the contract names the shape, and the
+// module that executes it is the one that compiles its regexes.
+import type { CaseCheck } from "./checks.ts";
 import { describe } from "./values.ts";
 
 // Settings read from the `pi-simple-sri` key of settings.json (Q16). Both lists
@@ -50,9 +54,24 @@ export interface SkillRef {
   kind: SkillKind;
 }
 
-// Q1: what counts as an observed failure.
-export type EvidenceKind = "tool_error" | "user_correction" | "retry_loop";
+// Q1: what counts as an observed failure. M1c adds the fourth class: a defect whose truth is observable in an
+// artifact -- a review finding, a draft that was rejected -- and not in the transcript of a session. It is the
+// weakest class, because it is the one the replay cannot read from the branch itself: src/diagnosis.ts orders it
+// last and never lets it displace a class the transcript can prove.
+export type EvidenceKind = "tool_error" | "user_correction" | "retry_loop" | "quality_defect";
 
+// Where the evidence of a class that did not happen in this session came from: the artifact it was read from and
+// the digest of its bytes, so the record can be re-read against the file that produced it and a moved file is a
+// fact and not a surprise. `kind` names how the defect was found and is a closed vocabulary of its own.
+export interface EvidenceOrigin {
+  kind: "review-finding" | "rejected-draft";
+  path: string;
+  contentHash: string; // "sha256:" + 64 hex
+}
+
+// `source` deliberately does not grow a third value for the fourth class: a defect read from a file is
+// "persisted", which is what the field already said -- the evidence came from a file and not from a turn of the
+// transcript -- so no record written before that class existed changes meaning.
 export interface EvidenceItem {
   id: string; // "ev-" + 8 hex
   kind: EvidenceKind;
@@ -61,6 +80,7 @@ export interface EvidenceItem {
   toolName?: string;
   argsHash?: string;
   excerpt?: string;
+  origin?: EvidenceOrigin;
 }
 
 // Q18: what a replayed turn has to stop doing, as data the gate executes instead of prose it would have
@@ -72,10 +92,16 @@ export interface EvidenceItem {
 // implement refuses the item instead of guessing what the class meant one version ago. src/diagnosis.ts
 // derives the text a human reads from this descriptor (describeExpectation), so the prose never becomes
 // the contract again.
+//
+// `checks` is the condition of the class whose truth is a text and not a run: the predicates of a
+// quality_defect, which src/checks.ts executes and src/diagnosis.ts relates to the class. It travels with the
+// evidence and not with the class, because a defect whose predicate is not recorded is not replayable from the
+// record alone.
 export interface Expectation {
   class: EvidenceKind;
   version: 1;
   tool?: string;
+  checks?: readonly CaseCheck[];
 }
 
 // Q2, Q13: one replayable failing turn, re-run as-is in both arms.
@@ -295,6 +321,11 @@ export interface ReplayRunRecord {
   // stderr, cut at 500 characters. Present on an invalid run that had something to say, so an ENOENT stops
   // looking like an EACCES.
   invalidDetail?: string;
+  // M1c: the checks of the item that did not pass, each as "<index>:<kind>" of the expectation the run was judged
+  // by, plus the one coordinate the evaluator gives a turn that answered with no text ("0:no-text"). Optional,
+  // because the three classes of M1 watch a run and have no such list, and a record written before this field
+  // existed still reads.
+  checkFailures?: string[];
   stopReason: string | null;
   skillLoaded: boolean;
   usage: GateTokens;

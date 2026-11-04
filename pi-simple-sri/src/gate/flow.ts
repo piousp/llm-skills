@@ -12,32 +12,23 @@ import type {
   GateOverlays,
   GatePreregistration,
   GateReplayResult,
-  GateTokenTally,
-  GateTokens,
   ReplayItem,
-  ReplayItemRecord,
-  ReplayRunRecord,
   Result,
   SkillRef,
 } from "../types.ts";
 import { currentTime, describe, isDirectory, isPlainObject, isRegularFile, quote, toErrorMessage } from "../values.ts";
 import { relativeToBase, stagingDir } from "../write-base.ts";
 import { appendAttemptLine, lessonHashes, rewriteStagingDecision, writeTextAtomically } from "../writer.ts";
-import { evaluateExpectation } from "./expectation.ts";
-import { buildArmOverlays, type OverlayArms, type OverlayRequest, type OverlayResult } from "./overlay.ts";
+import { spendBudget, tokenTallyOf, type PlannedItem } from "./budget.ts";
+import { buildArmOverlays, type OverlayRequest, type OverlayResult } from "./overlay.ts";
 import { createReplayRunner } from "./replay-runner.ts";
 import { evaluateGate, planGate } from "./scorer.ts";
 import type {
   GateAbstentionReason,
-  GateArm,
-  GateArmTally,
-  GatePlan,
   GatePlanItem,
   GateVerdict,
   GateVerdictReason,
-  ReplayRun,
   ReplayRunFn,
-  RunVerdict,
 } from "./types.ts";
 
 // The flow of the gate (M1, S8): one staged candidate, the rule preregistered before the first run, the
@@ -79,19 +70,6 @@ import type {
 // fail halfway through its own sequence. The type of the constant is DecisionSchema, so a @2 in src/types.ts
 // breaks this comparison at compile time instead of leaving a guard that silently never fires.
 const DECISION_SCHEMA: DecisionSchema = "pi-simple-sri/decision@1";
-
-// OA9: the two caps of the plan, and neither is a setting. 180 s is the life of one run -- the runner stops
-// the child at the deadline and insists five seconds later -- and 20 min is the life of the whole gate, which
-// is checked between runs here because the flow is what owns the budget.
-const RUN_TIMEOUT_MS = 180_000;
-const GATE_TIMEOUT_MS = 20 * 60 * 1000;
-
-// Where the raw stream of every run is kept, inside the candidate directory of staging:
-// <candidate>/gate/runs/<item>-<rep>-<arm>.jsonl. The coordinates are the ones the run carried, so a reader
-// of the record can find the bytes of any row without a second index.
-const GATE_DIR = "gate";
-const RUNS_DIR = "runs";
-const RUN_STREAM_EXT = ".jsonl";
 
 // Why a staged candidate cannot be gated. Each reason names a different answer for the caller, and none of
 // them is an error the run should crash on: `detail` carries the refusal with the path in it, so the record
@@ -483,12 +461,13 @@ export async function gateStagedCandidate(
 }
 
 // The seams with their production default, resolved once per call. `runReplay` is the one that matters: the
-// default opens a runner, and a runner starts nothing until a run is asked for.
+// default opens a runner, and a runner starts nothing until a run is asked for. The budget spends them, so
+// the type of this resolver is what names everything a budget is allowed to touch (./budget.ts).
 //
 // The type of a resolved seam is derived from the deps and not declared again: every field of GateDeps is one
 // this resolver fills, so `Required<>` is exactly what a resolved seam is, and a new dependency means editing
 // GateDeps and this resolver instead of a third list that could fall behind them.
-type GateSeams = Required<GateDeps>;
+export type GateSeams = Required<GateDeps>;
 
 function gateSeamsOf(deps: GateDeps): GateSeams {
   return {
@@ -500,100 +479,6 @@ function gateSeamsOf(deps: GateDeps): GateSeams {
     writeStream: deps.writeStream ?? writeTextAtomically,
     listSkills: deps.listSkills ?? listSkills,
   };
-}
-
-// What the budget of one gate produced: the verdicts the scorer reads, the items as the record shows them,
-// how many runs were started, and the moment the gate gave up (null when it did not).
-interface BudgetResult {
-  runs: RunVerdict[];
-  items: ReplayItemRecord[];
-  usedRuns: number;
-  interruptedAt: number | null;
-}
-
-// One planned item, before its runs: the coordinates of the item and the expectation it is judged by, which are the
-// fields the flow knows before the first run. The repetitions are what the budget adds.
-type PlannedItem = Omit<ReplayItemRecord, "reps">;
-
-interface BudgetInput {
-  request: GateRequest;
-  seams: GateSeams;
-  plan: GatePlan;
-  selected: readonly GatePlanItem[];
-  models: readonly string[];
-  sharedDirs: readonly (readonly string[])[];
-  items: readonly PlannedItem[];
-  candidateDir: string;
-  arms: OverlayArms;
-}
-
-// Step 5 of the sequence: item -> rep -> (incumbent, candidate), which keeps the two arms of one pair
-// adjacent in time, so a difference between them is about the section and not about the hour.
-//
-// The budget stops at the first run nobody can read (OA3): the arm it broke in is the baseline the other arm
-// is compared against, so the rest of the twelve would be spent on a comparison the scorer has already
-// refused. It stops the same way for an interruption, before starting a child.
-async function spendBudget(input: BudgetInput): Promise<BudgetResult> {
-  const runsDir = prepareRunsDir(input.candidateDir);
-  const arms: Record<GateArm, string> = {
-    incumbent: input.arms.incumbentDir,
-    candidate: input.arms.candidateDir,
-  };
-  const startedAt = input.seams.now().getTime();
-  const runs: RunVerdict[] = [];
-  // The records this function answers with: the item as the flow planned it, with the runs started here appended
-  // to it in the order they were asked for. The array of the caller is read and never written.
-  const items: ReplayItemRecord[] = input.items.map((planned) => ({ ...planned, reps: [] }));
-  let usedRuns = 0;
-
-  for (const [index, entry] of input.selected.entries()) {
-    const item = items[index];
-
-    for (let rep = 1; rep <= input.plan.design.reps; rep += 1) {
-      for (const arm of input.plan.design.arms) {
-        // OA9: the twenty minutes of the gate are checked between runs, so an interruption costs at most the
-        // run that is in flight, and a caller that already gave up starts no child at all.
-        const interruptedAt = interruptionOf(input.request.signal, startedAt, input.seams.now);
-        if (interruptedAt !== null) return { runs, items, usedRuns, interruptedAt };
-
-        // The order of `skillDirs` is the order pi loads them in: the arm first, then the rest of the set the
-        // session had, so the skill under test is the copy and the others are the skills themselves (OA6).
-        const run: ReplayRun = await input.seams.runReplay({
-          item: index,
-          rep,
-          arm,
-          prompt: entry.item.prompt,
-          skillName: input.request.skill.name,
-          skillDirs: [arms[arm], ...input.sharedDirs[index]],
-          cwd: entry.item.cwd,
-          model: input.models[index],
-          timeoutMs: RUN_TIMEOUT_MS,
-          ...(input.request.signal === undefined ? {} : { signal: input.request.signal }),
-        });
-
-        usedRuns += 1;
-        const verdict = evaluateExpectation(entry.item.expectation, run);
-        runs.push(verdict);
-
-        // OA10: the raw stream is persisted before the next run starts, so an interruption leaves the bytes of
-        // the run it cut on disk, and the record points at them.
-        const stream = await persistStream({
-          seams: input.seams,
-          base: input.request.base,
-          runsDir,
-          run,
-        });
-        item.reps.push(runRecordOf(verdict, run, stream));
-
-        if (run.outcome === "invalid") {
-          const interrupted = run.invalidReason === "interrupted" ? input.seams.now().getTime() : null;
-          return { runs, items, usedRuns, interruptedAt: interrupted };
-        }
-      }
-    }
-  }
-
-  return { runs, items, usedRuns, interruptedAt: null };
 }
 
 // The verdict of the gate and the one line of the index it gains. The record is the caller's and can be older
@@ -755,83 +640,6 @@ function sharedSkillDirs(
   }
 
   return { ok: true, value: dirs };
-}
-
-// The gate's own directory inside the candidate: created here, so it is checked before it exists (I10), and
-// guarded by the candidate directory, which is the narrowest root a run stream belongs to.
-function prepareRunsDir(candidateDir: string): string {
-  const runsDir = path.join(candidateDir, GATE_DIR, RUNS_DIR);
-  assertWritable(runsDir, [candidateDir]);
-  fs.mkdirSync(runsDir, { recursive: true });
-  return runsDir;
-}
-
-// OA10: the bytes of one run, under the coordinates it carried. A run that wrote nothing has no file -- there
-// are no bytes to keep and no path to point at -- and the record then carries no `stream` for it.
-async function persistStream(input: {
-  seams: GateSeams;
-  base: string;
-  runsDir: string;
-  run: ReplayRun;
-}): Promise<string | undefined> {
-  const { request, rawStream } = input.run;
-  if (rawStream === "") return undefined;
-
-  const target = path.join(input.runsDir, `${request.item}-${request.rep}-${request.arm}${RUN_STREAM_EXT}`);
-  await input.seams.writeStream(target, rawStream, input.runsDir);
-  return relativeToBase(input.base, target);
-}
-
-// One run as the record shows it. The outcome is the verdict's and not the runner's: the runner can only say
-// the process answered, and whether that answer passes is the reading of the expectation. The two fields the
-// runner added are copied when it has them: the bytes the cap cut (OA10) and the cause the process gave.
-function runRecordOf(verdict: RunVerdict, run: ReplayRun, stream: string | undefined): ReplayRunRecord {
-  return {
-    arm: run.request.arm,
-    rep: run.request.rep,
-    outcome: verdict.outcome,
-    ...(verdict.invalidReason === undefined ? {} : { invalidReason: verdict.invalidReason }),
-    ...(run.invalidDetail === undefined ? {} : { invalidDetail: run.invalidDetail }),
-    stopReason: run.stopReason,
-    skillLoaded: run.skillLoaded,
-    usage: run.usage,
-    durationMs: run.durationMs,
-    exitCode: run.exitCode,
-    ...(stream === undefined ? {} : { stream }),
-    ...(run.truncatedAt === undefined ? {} : { truncatedAt: run.truncatedAt }),
-  };
-}
-
-// The moment the gate has to stop, or null while it may keep spending. A caller that gave up outranks the
-// clock: both are the same answer, and the run that was in flight is the interruption.
-function interruptionOf(
-  signal: AbortSignal | undefined,
-  startedAt: number,
-  now: () => Date,
-): number | null {
-  const at = now().getTime();
-  if (signal?.aborted === true) return at;
-  return at - startedAt >= GATE_TIMEOUT_MS ? at : null;
-}
-
-// What the whole decision spent, split by where it went. `total` is the sum of the three (Q6): a reader never
-// adds them again, and the proposal is the number the record already carried before the gate ran.
-function tokenTallyOf(
-  proposal: GateTokens,
-  arms: { incumbent: GateArmTally; candidate: GateArmTally },
-): GateTokenTally {
-  const incumbent = arms.incumbent.tokens;
-  const candidate = arms.candidate.tokens;
-
-  return {
-    proposal,
-    incumbent,
-    candidate,
-    total: {
-      input: proposal.input + incumbent.input + candidate.input,
-      output: proposal.output + incumbent.output + candidate.output,
-    },
-  };
 }
 
 // The lesson of the candidate, read from the path the record names. The path is data from a file, so it is

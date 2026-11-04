@@ -57,6 +57,12 @@ const MAX_REPLAY_STREAM_BYTES = 2 * 1024 * 1024;
 // OA9: SIGTERM asks, SIGKILL insists. Five seconds is the grace the plan fixed, not a setting.
 const SIGKILL_DELAY_MS = 5000;
 
+// M1c: the cap of the answer a check reads. A check is a substring or a pattern, so a prefix of sixteen thousand code
+// points carries every condition a case bank can express and keeps twelve answers of a budget inside one decision.
+// Code points and never UTF-16 units: a surrogate pair cut in two is a character nobody can compare, which is the
+// same reading src/checks.ts uses to count the characters a check may look for.
+const MAX_FINAL_TEXT_CODE_POINTS = 16_000;
+
 // Why a run nobody can read broke, when the process said it. 500 characters is far more than an errno
 // message needs and small enough that the details of twelve runs travel in one decision next to their
 // streams: the point is to tell one failure from another, not to keep a log.
@@ -138,6 +144,9 @@ export function buildReplayArgs(request: ReplayRunRequest): ReplayInvocation {
 // -- an event of another version, a line that is not JSON, a role this parser does not read -- which
 // is a number a reader can see instead of silence. `unparsedLines` is not a verdict: a run is
 // unreadable when it has no assistant message at all, and that is what `assistantMessages` says.
+//
+// `finalText` is the answer of the turn and not of the stream (M1c): each assistant message replaces it, so a run
+// that answered twice answers with its second answer, and the text of the turn before it never joins the reading.
 export function parseReplayStream(stream: string, skillName: string): ParsedStream {
   const toolCalls: ReplayToolCall[] = [];
   const indexByCallId = new Map<string, number>();
@@ -146,6 +155,7 @@ export function parseReplayStream(stream: string, skillName: string): ParsedStre
   let skillLoaded = false;
   let assistantMessages = 0;
   let unparsedLines = 0;
+  let finalText = "";
 
   for (const line of stream.split("\n")) {
     const text = line.trim();
@@ -171,6 +181,9 @@ export function parseReplayStream(stream: string, skillName: string): ParsedStre
       usage = addUsage(usage, usageOf(message["usage"]));
       const stopReason = message["stopReason"];
       if (typeof stopReason === "string") lastStopReason = stopReason;
+      // The answer of this message, which replaces the answer of the one before it: the turn is over when the last
+      // assistant message ends, and that message is what the user reads.
+      finalText = finalTextOf(message["content"]);
       unparsedLines += takeToolCalls(message["content"], toolCalls, indexByCallId);
     } else if (role === "toolResult") {
       unparsedLines += markToolResult(message, toolCalls, indexByCallId);
@@ -181,7 +194,7 @@ export function parseReplayStream(stream: string, skillName: string): ParsedStre
     }
   }
 
-  return { toolCalls, lastStopReason, usage, skillLoaded, assistantMessages, unparsedLines };
+  return { toolCalls, lastStopReason, usage, skillLoaded, assistantMessages, unparsedLines, finalText };
 }
 
 // The runner the gate injects: `spawnFn` and `now` are the only things a test replaces, and in
@@ -391,6 +404,7 @@ function finish(record: {
     ...(invalidDetail === undefined ? {} : { invalidDetail }),
     stopReason: parsed.lastStopReason,
     toolCalls: parsed.toolCalls,
+    finalText: parsed.finalText,
     usage: parsed.usage,
     durationMs: record.elapsed,
     exitCode: record.exitCode,
@@ -484,6 +498,20 @@ function carriesSkillBlock(content: unknown, skillName: string): boolean {
   if (skillName === "") return false;
   const opening = `<skill name="${skillName}"`;
   return textsOf(content).some((text) => text.includes(opening));
+}
+
+// The answer of one assistant message: its text blocks, joined in the order the stream wrote them, cut to the cap.
+// A thinking block is not part of it -- the reasoning of the model is not what the user reads -- and neither is a
+// tool call: an answer split into parts is one text, so the parts are joined without a separator of their own.
+function finalTextOf(content: unknown): string {
+  return truncateCodePoints(textsOf(content).join(""));
+}
+
+// The cap, counted in code points: Array.from walks code points instead of UTF-16 units, so an answer of emoji is cut
+// between characters and never inside one.
+function truncateCodePoints(text: string): string {
+  const points = Array.from(text);
+  return points.length <= MAX_FINAL_TEXT_CODE_POINTS ? text : points.slice(0, MAX_FINAL_TEXT_CODE_POINTS).join("");
 }
 
 // A message holds either a bare string or parts; only text parts carry the injected block, and an

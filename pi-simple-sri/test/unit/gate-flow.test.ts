@@ -382,6 +382,9 @@ function completedRun(request: ReplayRunRequest, toolFails: boolean): ReplayRun 
     durationMs: 5,
     exitCode: 0,
     skillLoaded: true,
+    // M1c: the answer of the turn. The item of this fixture is a tool class, which is judged on its calls and never on
+    // the text, so the value is empty and the record's own `checkFailures` stays absent.
+    finalText: "",
     rawStream: `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } })}\n`,
   };
 }

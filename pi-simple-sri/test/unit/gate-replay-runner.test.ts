@@ -28,6 +28,9 @@ const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 // OA10, spelled out here instead of imported: a test that read the cap from the module would agree
 // with any cap, and the number is part of the contract.
 const MAX_STREAM_BYTES = 2 * 1024 * 1024;
+// M1c, spelled out for the same reason: the cap of the answer a check reads, counted in code points and not in UTF-16
+// units.
+const MAX_FINAL_TEXT_CODE_POINTS = 16_000;
 const SKILL_NAME = "demo-skill";
 const PROMPT = "read the file missing-probe.txt and tell me what it says";
 const INCUMBENT_DIR = "/staging/arms/incumbent/demo-skill";
@@ -83,6 +86,27 @@ function callLine(args: unknown): string {
       role: "assistant",
       content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: args }],
       stopReason: "toolUse",
+    },
+  });
+}
+
+// One text block of an answer: pi splits an answer into parts, and a test that wants two of them builds them.
+function textPart(text: string): unknown {
+  return { type: "text", text };
+}
+
+// One assistant message made of the parts a test names, for the shapes `assistantLine` does not cover: an answer of two
+// text blocks, or a message that carries a thinking block and no answer at all.
+function assistantWith(parts: readonly unknown[], stopReason = "stop"): string {
+  return JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: parts,
+      usage: { input: 10, output: 2 },
+      stopReason,
+      model: "deepseek-v4.1-flash",
+      provider: "opencode-go",
     },
   });
 }
@@ -284,6 +308,75 @@ test("parseReplayStream counts only the block of the skill it was asked about", 
   assert.equal(parseReplayStream(lines(userLine()), SKILL_NAME).skillLoaded, true);
 });
 
+test("parseReplayStream takes the answer of the turn: the text of the last assistant message", () => {
+  const parsed = parseReplayStream(fixture("turn-ok.jsonl"), SKILL_NAME);
+
+  // The answer the recorded turn ended with, not the reasoning that produced it and not the tool call: a check of a
+  // case reads what the user read.
+  assert.equal(parsed.finalText.startsWith("El archivo no existe"), true);
+  assert.equal(parsed.finalText.includes("PROBE-OK"), true);
+  assert.equal(parsed.finalText.includes("The user asks"), false);
+  assert.equal(parsed.finalText.includes("ls -la"), false);
+
+  // The two fixtures recorded the same answer and differ in the result of the call, which is what makes their pair a
+  // controlled comparison: the reading of the answer agrees while the reading of the run does not.
+  assert.equal(parsed.finalText, parseReplayStream(fixture("turn-error.jsonl"), SKILL_NAME).finalText);
+});
+
+test("parseReplayStream takes the last assistant message, never the sum of the turn", () => {
+  // A turn that answered twice answered with its second answer. Adding the two would let a check of a case match text
+  // no single answer holds.
+  const stream = lines(userLine(), assistantLine("PRIMERA-RESPUESTA"), assistantLine("SEGUNDA-RESPUESTA"));
+
+  assert.equal(parseReplayStream(stream, SKILL_NAME).finalText, "SEGUNDA-RESPUESTA");
+});
+
+test("parseReplayStream joins the text blocks of one message and drops the ones that are not text", () => {
+  const stream = lines(
+    userLine(),
+    assistantWith([
+      { type: "thinking", thinking: "razonamiento que no es la respuesta" },
+      textPart("PROBE-"),
+      textPart("OK"),
+      { type: "toolCall", id: "call-1", name: "bash", arguments: { command: "ls" } },
+    ]),
+  );
+
+  assert.equal(parseReplayStream(stream, SKILL_NAME).finalText, "PROBE-OK");
+});
+
+test("parseReplayStream answers with no text when the turn wrote none", () => {
+  // The injected skill block and nothing else: no message answered.
+  assert.equal(parseReplayStream(lines(userLine()), SKILL_NAME).finalText, "");
+  // A turn cut in the middle of a round trip: a call and the reasoning that asked for it, no answer yet.
+  const pending = lines(
+    userLine(),
+    callLine({ command: "ls" }),
+    assistantWith([{ type: "thinking", thinking: "todavia no respondi" }]),
+  );
+  assert.equal(parseReplayStream(pending, SKILL_NAME).finalText, "");
+  // And a stream nobody can parse: an answer is never invented from a line this parser does not read.
+  assert.equal(parseReplayStream(lines("{not json"), SKILL_NAME).finalText, "");
+});
+
+test("parseReplayStream cuts the answer at 16000 code points without splitting one", () => {
+  // Over the cap: the cut keeps the head, which is what a check reads, and the answer under it travels whole because a
+  // cap is not a normal form.
+  const long = parseReplayStream(lines(assistantLine("a".repeat(MAX_FINAL_TEXT_CODE_POINTS + 500))), SKILL_NAME).finalText;
+  assert.equal(long, "a".repeat(MAX_FINAL_TEXT_CODE_POINTS));
+  assert.equal(parseReplayStream(lines(assistantLine("PROBE-OK")), SKILL_NAME).finalText, "PROBE-OK");
+
+  // An emoji is one code point and two UTF-16 units, and it straddles the boundary: a cut of sixteen thousand units
+  // would leave half of it behind, which is a character nobody can compare and no check can match.
+  const straddled = parseReplayStream(
+    lines(assistantLine(`${"a".repeat(MAX_FINAL_TEXT_CODE_POINTS - 1)}😀${"b".repeat(10)}`)),
+    SKILL_NAME,
+  ).finalText;
+  assert.equal(Array.from(straddled).length, MAX_FINAL_TEXT_CODE_POINTS);
+  assert.equal(straddled, `${"a".repeat(MAX_FINAL_TEXT_CODE_POINTS - 1)}😀`);
+  assert.equal(/[\uD800-\uDBFF]$/.test(straddled), false);
+});
+
 test("the runner records a completed run: the stream, the cost, the exit and the child's options", async (t) => {
   const base = createFixture(t);
   const fake = createFakeChild();
@@ -309,8 +402,9 @@ test("the runner records a completed run: the stream, the cost, the exit and the
   assert.equal(spawned.options.env["PATH"], process.env["PATH"]);
 
   // The whole record is asserted field by field, minus the digest, which no test can recompute by
-  // hand: a new field in ReplayRun breaks this test instead of passing unnoticed.
-  const { toolCalls, ...rest } = result;
+  // hand: a new field in ReplayRun breaks this test instead of passing unnoticed. The answer of the turn is taken out
+  // with the calls because its text is long and it is asserted below against the bytes it came from.
+  const { toolCalls, finalText, ...rest } = result;
   assert.deepEqual(rest, {
     request: request({ cwd: base }),
     outcome: "pass",
@@ -325,6 +419,9 @@ test("the runner records a completed run: the stream, the cost, the exit and the
   assert.equal(toolCalls[0].toolName, "bash");
   assert.equal(toolCalls[0].isError, false);
   assert.match(toolCalls[0].argsHash, HASH_PATTERN);
+  // M1c: the answer of the turn travels on the run, read from the same bytes the rest of the record came from.
+  assert.equal(finalText, parseReplayStream(okStream, SKILL_NAME).finalText);
+  assert.equal(finalText.startsWith("El archivo no existe"), true);
 });
 
 test("a stream with no assistant message is unreadable, even when the skill block is there", async (t) => {
@@ -358,6 +455,8 @@ test("a stream with no skill block did not load the skill, whatever the answer s
   assert.equal(result.skillLoaded, false);
   assert.equal(result.stopReason, "stop");
   assert.deepEqual(result.usage, { input: 10, output: 2 });
+  // The answer too: a refused run keeps the text it answered with, and the evaluator is the one that refuses to judge it.
+  assert.equal(result.finalText, "PROBE-OK");
 });
 
 test("a child that never closes times out and is killed", async (t) => {

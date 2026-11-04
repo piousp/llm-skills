@@ -6,12 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolCall, Usage } from "@earendil-works/pi-ai";
+import { CASE_CHECK_KINDS } from "../../src/checks.ts";
+import type { CaseCheck } from "../../src/checks.ts";
+import { expectationViolation } from "../../src/diagnosis.ts";
 import { proposeSkill, type ImproveFlowContext, type ImproveFlowDeps, type ProposeFn } from "../../src/improve-flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { assertNever, GATE_STATUSES, outcomeStatusFor, toDecisionSkill } from "../../src/types.ts";
 import type {
   DecisionRecord,
   DecisionSkill,
+  EvidenceItem,
+  Expectation,
   GateBlock,
   GateBudget,
   GatePreregistration,
@@ -541,6 +546,88 @@ test("decision.schema.json: truncatedAt and invalidDetail are optional and valid
   assert.deepEqual(validateAgainstSchema({ ...VALID_RECORD, gate: gateWith("gate-abstained") }), []);
 });
 
+// M1c: the fourth class exists as data, and so does the artifact that originated it. `kind` and `origin` are
+// independent keys of the schema -- tying them would be a condition on another property -- so each is pinned on its
+// own here, and a record written before the class existed keeps validating: both changes are additive.
+test("decision.schema.json: an evidence item of the fourth class carries the origin of its artifact", () => {
+  const [item] = VALID_RECORD.evidence;
+  const defect: EvidenceItem = {
+    ...item,
+    kind: "quality_defect",
+    excerpt: "the skill says git rebase --squash-all is how an interactive rebase is done",
+    origin: { kind: "review-finding", path: "/work/reports/review.md", contentHash: CONTENT_HASH },
+  };
+
+  assert.deepEqual(validateAgainstSchema({ ...VALID_RECORD, evidence: [defect] }), []);
+  // `origin` is optional for every class, including the new one: the relation between the two keys is a property of
+  // the code and not of the validator, which is why the negative cases below inject one key at a time.
+  assert.deepEqual(validateAgainstSchema({ ...VALID_RECORD, evidence: [{ ...item, kind: "quality_defect" }] }), []);
+});
+
+// The predicate of the class travels with the evidence and not with the class: an expectation of a defect carries the
+// checks its case bank declared.
+test("decision.schema.json: a quality_defect expectation validates with and without its checks", () => {
+  const checks: readonly CaseCheck[] = [
+    { kind: "contains", value: "--interactive" },
+    { kind: "not-contains", value: "--squash-all" },
+    { kind: "not-regex", pattern: "no (existe|soportado)", flags: "i" },
+  ];
+  const recordWith = (expectation: Expectation): DecisionRecord => ({
+    ...VALID_RECORD,
+    diagnosis: {
+      ...VALID_RECORD.diagnosis,
+      replayItems: [{ prompt: "which flags does git rebase accept", cwd: "/work", expectation }],
+    },
+  });
+
+  assert.deepEqual(validateAgainstSchema(recordWith({ class: "quality_defect", version: 1, checks })), []);
+  // An expectation of the class without checks validates too: the keyword that would relate the two is a condition on
+  // `class`, and schema 1 stays additive. The relation has one owner in the code, and the two assertions below are the
+  // proof that it is closed there and not here.
+  assert.deepEqual(validateAgainstSchema(recordWith({ class: "quality_defect", version: 1 })), []);
+
+  assert.equal(expectationViolation({ class: "quality_defect", version: 1, checks }), undefined);
+  assert.notEqual(expectationViolation({ class: "quality_defect", version: 1 }), undefined);
+});
+
+// One vocabulary of a check, two files: the array src/checks.ts exports and the enum of the schema. Both appearances of
+// the expectation carry it, and the comparison runs over both, for the same reason the statuses are compared above.
+test("decision.schema.json: the check kinds of the schema are the ones src/checks.ts declares", () => {
+  const inDiagnosis = schemaNode(
+    "properties",
+    "diagnosis",
+    "properties",
+    "replayItems",
+    "items",
+    "properties",
+    "expectation",
+    "properties",
+    "checks",
+    "items",
+    "properties",
+    "kind",
+  );
+  const inReplay = schemaNode(
+    "properties",
+    "gate",
+    "properties",
+    "replay",
+    "properties",
+    "items",
+    "items",
+    "properties",
+    "expectation",
+    "properties",
+    "checks",
+    "items",
+    "properties",
+    "kind",
+  );
+
+  assert.deepEqual(inDiagnosis.enum, [...CASE_CHECK_KINDS]);
+  assert.deepEqual(inReplay.enum, [...CASE_CHECK_KINDS]);
+});
+
 interface NegativeCase {
   name: string;
   build: () => unknown;
@@ -621,8 +708,77 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
       },
     }),
     expected: [
-      'decision.diagnosis.replayItems[0].expectation.class: expected one of "tool_error", "retry_loop", "user_correction", got "latency"',
+      'decision.diagnosis.replayItems[0].expectation.class: expected one of "tool_error", "retry_loop", "user_correction", "quality_defect", got "latency"',
     ],
+  },
+  {
+    name: "an origin kind outside the enum",
+    // The two kinds of an origin are the closed vocabulary of how a defect was found, and the one negative case that
+    // pins it: a value outside the enum is a record nobody can classify.
+    build: () => ({
+      ...VALID_RECORD,
+      evidence: [
+        {
+          ...VALID_RECORD.evidence[0],
+          kind: "quality_defect",
+          origin: { kind: "reported", path: "/work/reports/review.md", contentHash: CONTENT_HASH },
+        },
+      ],
+    }),
+    expected: [
+      'decision.evidence[0].origin.kind: expected one of "review-finding", "rejected-draft", got "reported"',
+    ],
+  },
+  {
+    name: "an origin with a property the schema does not declare",
+    // additionalProperties: false is what keeps the origin a three-field record instead of an open bag of metadata, and
+    // the keyword needs its own case like any other.
+    build: () => ({
+      ...VALID_RECORD,
+      evidence: [
+        {
+          ...VALID_RECORD.evidence[0],
+          origin: { kind: "review-finding", path: "/work/reports/review.md", contentHash: CONTENT_HASH, line: 12 },
+        },
+      ],
+    }),
+    expected: [
+      'decision.evidence[0].origin: the property "line" is not declared by the schema (additionalProperties: false)',
+    ],
+  },
+  {
+    name: "a check whose kind is outside the vocabulary",
+    // The four kinds are the whole predicate the gate can execute (M1c): a fifth name here would be a check nobody can
+    // run, which is worse than a case with no check at all.
+    build: () => ({
+      ...VALID_RECORD,
+      diagnosis: {
+        ...VALID_RECORD.diagnosis,
+        replayItems: VALID_RECORD.diagnosis.replayItems.map((item) => ({
+          ...item,
+          expectation: { class: "quality_defect", version: 1, checks: [{ kind: "equals", value: "--interactive" }] },
+        })),
+      },
+    }),
+    expected: [
+      'decision.diagnosis.replayItems[0].expectation.checks[0].kind: expected one of "contains", "not-contains", "regex", "not-regex", got "equals"',
+    ],
+  },
+  {
+    name: "an empty list of checks",
+    // A defect with no check is a defect with no condition: minItems is the only part of the rule the schema can state,
+    // because which field a check needs depends on its kind and that relation is src/checks.ts's.
+    build: () => ({
+      ...VALID_RECORD,
+      diagnosis: {
+        ...VALID_RECORD.diagnosis,
+        replayItems: VALID_RECORD.diagnosis.replayItems.map((item) => ({
+          ...item,
+          expectation: { class: "quality_defect", version: 1, checks: [] },
+        })),
+      },
+    }),
+    expected: ["decision.diagnosis.replayItems[0].expectation.checks: the array has 0 items, fewer than 1"],
   },
   {
     name: "a replay result with a negative number of regressions",

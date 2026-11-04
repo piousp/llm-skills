@@ -47,12 +47,23 @@
         "required": ["id", "kind", "timestamp", "source"],
         "properties": {
           "id": { "type": "string", "pattern": "^ev-[0-9a-f]{8}$" },
-          "kind": { "enum": ["tool_error", "user_correction", "retry_loop"] },
+          "kind": { "enum": ["tool_error", "user_correction", "retry_loop", "quality_defect"] },
           "toolName": { "type": "string" },
           "argsHash": { "type": "string" },
           "excerpt": { "type": "string" },
           "timestamp": { "type": "integer" },
-          "source": { "enum": ["transcript", "persisted"] }
+          "source": { "enum": ["transcript", "persisted"] },
+          "origin": {
+            "description": "Where the evidence of a failure that this session did not witness came from: the artifact it was read from and the digest of its bytes. Optional, so every record written before M1c still validates; the keyword that would tie its presence to evidence.kind is a condition on another property, and schema 1 stays additive.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "path", "contentHash"],
+            "properties": {
+              "kind": { "enum": ["review-finding", "rejected-draft"] },
+              "path": { "type": "string", "minLength": 1 },
+              "contentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            }
+          }
         }
       }
     },
@@ -84,9 +95,25 @@
                 "additionalProperties": false,
                 "required": ["class", "version"],
                 "properties": {
-                  "class": { "enum": ["tool_error", "retry_loop", "user_correction"] },
+                  "class": { "enum": ["tool_error", "retry_loop", "user_correction", "quality_defect"] },
                   "version": { "const": 1 },
-                  "tool": { "type": "string", "minLength": 1 }
+                  "tool": { "type": "string", "minLength": 1 },
+                  "checks": {
+                    "description": "The mechanical predicates of a quality_defect: every check has to pass on the final answer of the replayed turn. Which of value and pattern a check needs follows from its kind, and JSON Schema ties no property to another, so src/checks.ts validates that pair and is the one place a check is executed.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind"],
+                      "properties": {
+                        "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                        "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                        "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                        "flags": { "enum": ["", "i"] }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -235,9 +262,24 @@
                     "additionalProperties": false,
                     "required": ["class", "version"],
                     "properties": {
-                      "class": { "enum": ["tool_error", "retry_loop", "user_correction"] },
+                      "class": { "enum": ["tool_error", "retry_loop", "user_correction", "quality_defect"] },
                       "version": { "const": 1 },
-                      "tool": { "type": "string", "minLength": 1 }
+                      "tool": { "type": "string", "minLength": 1 },
+                      "checks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind"],
+                          "properties": {
+                            "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                            "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "flags": { "enum": ["", "i"] }
+                          }
+                        }
+                      }
                     }
                   },
                   "reps": {
@@ -258,6 +300,11 @@
                         "exitCode": { "type": ["integer", "null"] },
                         "stream": { "type": "string", "minLength": 1 },
                         "truncatedAt": { "type": "integer", "minimum": 0 },
+                        "checkFailures": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": { "type": "string", "minLength": 1 }
+                        },
                         "usage": {
                           "type": "object",
                           "additionalProperties": false,
