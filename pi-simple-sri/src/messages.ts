@@ -44,12 +44,13 @@ export function feedbackNoticeText(): string {
   return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from a tool failure of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows, and the ${SKILL_IMPROVE_TOOL_NAME} tool registers a correction; the gate spends tokens before a skill is edited.`;
 }
 
-// The set of skills offered for improvement, one line per skill, with the description that says what
-// the skill does. Exported because the command's usage line offers the same list under a
-// different first sentence.
-export function listedSkills(skills: readonly SkillRef[]): string[] {
-  if (skills.length === 0) return ["  (none)"];
-  return skills.map((skill) => `  ${skill.name}: ${skill.description}`);
+// The set of skills offered for improvement, as the names of the eligible ones in one comma-separated
+// list. Exported because the command's usage line offers the same list under a different first
+// sentence. The description is not part of it: the help names what can be asked for, and the
+// inventory already carries what each skill does.
+export function listedNames(skills: readonly SkillRef[]): string {
+  const names = skills.map((skill) => skill.name);
+  return names.length === 0 ? "(none)" : names.join(", ");
 }
 
 // Unchanged in both surfaces: the refusal is the same fact whoever asked, and the settings that
@@ -211,11 +212,9 @@ export function unknownSkillText(
   eligible: readonly SkillRef[],
 ): string {
   const opening = standalone === null ? notInstalledText(name) : standaloneSkillText(surface, name);
-  // The offer is the eligible set, and each surface lists it the way its reader reads it: a user gets
-  // one skill per line with its description, a model gets the names in one sentence.
-  return surface === "command"
-    ? [opening, "Eligible skills:", ...listedSkills(eligible)].join("\n")
-    : `${opening} Eligible skills: ${listedNames(eligible)}.`;
+  // The offer is the eligible set, listed the same way in both surfaces: the names in one sentence and no
+  // descriptions, because what is being offered is the name to type.
+  return `${opening} Eligible skills: ${listedNames(eligible)}.`;
 }
 
 // A name nobody knows. Both surfaces open with the same sentence.
@@ -231,9 +230,4 @@ function standaloneSkillText(surface: DecisionSurface, name: string): string {
   return surface === "command"
     ? `${lead} so its lessons would have nowhere to live and it cannot be improved.`
     : `${lead} so it cannot be improved.`;
-}
-
-function listedNames(skills: readonly SkillRef[]): string {
-  const names = skills.map((skill) => skill.name);
-  return names.length === 0 ? "(none)" : names.join(", ");
 }

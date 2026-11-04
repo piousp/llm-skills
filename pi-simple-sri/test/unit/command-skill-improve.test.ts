@@ -536,7 +536,10 @@ test("runSkillImprove: without arguments it reports the usage and the eligible s
   assert.equal(harness.notified.length, 1);
   assert.equal(harness.notified[0].type, "info");
   assert.match(harness.notified[0].message, /Usage: \/skill-improve <skill> \[focus\]/);
-  assert.equal(harness.notified[0].message.includes("pdf-tools: Extract tables from PDFs"), true);
+  // The offer is one line of names and no descriptions: what the reader needs from the help is the name to
+  // type, and the description stays in the inventory it belongs to.
+  assert.equal(harness.notified[0].message.includes("Eligible skills: pdf-tools."), true);
+  assert.equal(harness.notified[0].message.includes("Extract tables from PDFs"), false);
   // The list is the eligible one: the deny list removes a skill from the offer, not just from
   // generation.
   assert.equal(harness.notified[0].message.includes("system-config"), false);
@@ -991,7 +994,8 @@ test("runSkillImprove: a standalone skill is reported as existing but not improv
   // Not the message for a name nobody knows.
   assert.equal(message.includes("No skill named"), false);
   // The offer is still the eligible set, which never includes a standalone skill.
-  assert.equal(message.includes("pdf-tools: Extract tables from PDFs"), true);
+  assert.equal(message.includes("Eligible skills: pdf-tools."), true);
+  assert.equal(message.includes("Extract tables from PDFs"), false);
   assert.equal(message.includes("standalone-notes: Loose notes"), false);
 
   assert.deepEqual(harness.proposals, []);
@@ -1006,6 +1010,20 @@ test("runSkillImprove: a name nobody knows still gets the not-installed message"
 
   assert.equal(harness.notified[0].type, "warning");
   assert.match(harness.notified[0].message, /No skill named "ghost-skill"/);
+});
+
+// The offer is the names in one comma-separated line, the same sentence the tool answers with: the reader types a
+// name, and a description in the middle of the list would make the sentence the inventory it is not.
+test("runSkillImprove: the offered skills are the names in one comma-separated line", async () => {
+  const second = makeSkill({ name: "sri-second", description: "A second skill to offer" });
+  const harness = createHarness({ skills: [SKILL, second] });
+
+  await harness.run("ghost-skill");
+
+  const { message } = harness.notified[0];
+  assert.equal(message.includes("Eligible skills: pdf-tools, sri-second."), true);
+  assert.equal(message.includes("A second skill to offer"), false);
+  assert.equal(message.includes("Extract tables from PDFs"), false);
 });
 
 // --- the chain of M1: propose, gate, accept ---

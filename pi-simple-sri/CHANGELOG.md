@@ -130,6 +130,11 @@ this section is folded into a release when the milestone is published.
   `const` to an enum, `gate.caseBank` and `gate.preregistration.caseBank` added,
   `threshold.judge` and `tokens.judge` added, `checkFailures` on a run of a bank,
   and the fourth evidence class with its `origin`.
+- The usage line of `/skill-improve` offers the eligible skills as one
+  comma-separated line of names instead of one line per skill with its
+  description. The help answers which name to type, and the description stays in
+  the inventory that already carries it; the tool's sentence about an unknown
+  name was already the list of names.
 - `diagnosis.replayItems.minItems` relaxed from 1 to 0. No record written before
   stops validating, and the guard that refuses an empty diagnosis of the
   transcript became a property of each basis instead of a keyword of the schema.

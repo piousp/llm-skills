@@ -29,7 +29,7 @@ import {
   gateAbstainedText,
   gatePassedText,
   gateRejectedText,
-  listedSkills,
+  listedNames,
   noBaselineText,
   noEvidenceText,
   noModelGateText,
@@ -680,7 +680,6 @@ function usageText(eligible: readonly SkillRef[]): string {
     `  - a directional improvement, measured against the cases a bank declares: /${COMMAND_NAME} <skill> --bank=<path>`,
     `  - a defect an artifact shows, measured against the truth that bank declares: /${COMMAND_NAME} <skill> --bank=<path> --defect`,
     `  - a correction or a rejection the model registers before anything is spent: the ${SKILL_IMPROVE_TOOL_NAME} tool`,
-    "Eligible skills:",
-    ...listedSkills(eligible),
+    `Eligible skills: ${listedNames(eligible)}.`,
   ].join("\n");
 }

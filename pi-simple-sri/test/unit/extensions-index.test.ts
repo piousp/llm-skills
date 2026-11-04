@@ -613,7 +613,8 @@ test("the command handler delegates to the loop: no arguments report the usage a
   assert.equal(harness.notified.length, 1);
   assert.equal(harness.notified[0].type, "info");
   assert.match(harness.notified[0].message, COMMAND_USAGE);
-  assert.equal(harness.notified[0].message.includes("pdf-tools: Extract tables from PDFs"), true);
+  assert.equal(harness.notified[0].message.includes("Eligible skills: pdf-tools."), true);
+  assert.equal(harness.notified[0].message.includes("Extract tables from PDFs"), false);
   // The offer is the eligible set, which is a settings decision the flow made behind the wiring.
   assert.equal(harness.notified[0].message.includes("system-config"), false);
 
