@@ -16,6 +16,7 @@
 // scorer trade, and every module of src/gate/ that fills one of them is another file.
 
 import type {
+  GateArm,
   GateArmTally,
   GateBounds,
   GateDesign,
@@ -32,6 +33,7 @@ import type {
 // them, and this module re-exports them so every module of src/gate/ trades one import path. A second
 // declaration here would be a contract that can disagree with the record it is written into.
 export type {
+  GateArm,
   GateArmTally,
   GateBounds,
   GateDesign,
@@ -40,8 +42,6 @@ export type {
   GateReplayExclusion,
   GateThreshold,
 };
-
-export type GateArm = "incumbent" | "candidate";
 
 // What one run proved. `pass` and `fail` are the reading of a completed run against the expectation
 // of its item; `invalid` means the run proved nothing about the skill -- a kill, a timeout, a

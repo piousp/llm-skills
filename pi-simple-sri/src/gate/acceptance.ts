@@ -43,9 +43,10 @@ import { HISTORY_DIR, SKILL_FILE } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { countReferenceLines, lessonReferencePath } from "../skill-reference.ts";
 import type { AttemptLine, DecisionRecord, Result } from "../types.ts";
-import { quote, toErrorMessage } from "../values.ts";
+import { currentTime, quote, toErrorMessage } from "../values.ts";
 import {
   appendAttemptLine,
+  formatTimestamp,
   removeLessonFile,
   snapshotForHistory,
   SriWriterError,
@@ -138,7 +139,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
   const now = seams.now();
   const skillDir = path.resolve(request.skill.realDir);
   const skillFilePath = path.join(skillDir, SKILL_FILE);
-  const timestamp = request.timestamp ?? timestampOf(now);
+  const timestamp = request.timestamp ?? formatTimestamp(now, "history snapshot");
   const { slug, title, lessonText, contentHash } = request.candidate;
 
   // The SKILL.md is read once: the reference count of step 0 and the hash of step 1 come from the same
@@ -277,17 +278,4 @@ async function withdrawLesson(seams: AcceptSeams, skillDir: string, slug: string
   } catch {
     return false;
   }
-}
-
-// 2026-11-02T15:04:05.123Z -> 20261102T150405123Z, the spelling src/writer.ts gives a staging directory:
-// UTC, no separators, sortable and portable. The default of `timestamp` is the only thing this numbers.
-function timestampOf(now: Date): string {
-  if (Number.isNaN(now.getTime())) {
-    throw new SriWriterError("cannot name a history snapshot after an invalid date");
-  }
-  return now.toISOString().replace(/[-:.]/g, "");
-}
-
-function currentTime(): Date {
-  return new Date();
 }

@@ -60,6 +60,24 @@ export function noModelText(surface: DecisionSurface): string {
     : `no model is available in this session: ${SKILL_IMPROVE_TOOL_NAME} needs one to write the lesson, so no candidate was generated.`;
 }
 
+// The tool never accepts: acceptance edits a skill and belongs to the command alone (Q12), so every answer it
+// gives about a candidate says the skill is untouched. Two wordings, because a verdict the gate concluded on
+// and a path waiting in staging are different facts about it: the first is a candidate nobody accepted, the
+// second is a candidate where the gate will read it.
+const TOOL_NOT_ACCEPTED = `; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`;
+const TOOL_IN_STAGING = "; the skill is untouched and the candidate stays in staging.";
+
+// What the command appends instead is the ending of its own sentence, so it stays at the call site: the period
+// that closes a verdict, the line that says the skill was left alone -- a rejection is not a failure of the run,
+// and an abstention concluded nothing, so the skill is the one thing the answer has to report about -- or
+// nothing at all where the sentence is already done.
+const COMMAND_NOT_EDITED = "; the skill was not edited.";
+
+// The clause each surface appends to the sentence it built.
+function withClause(surface: DecisionSurface, clause: { tool: string; command: string }): string {
+  return surface === "tool" ? clause.tool : clause.command;
+}
+
 export function gatePassedText(
   surface: DecisionSurface,
   skill: SkillRef,
@@ -69,11 +87,7 @@ export function gatePassedText(
   // Both numbers, because they are two different facts: what the preregistered design promised to spend and
   // what the budget actually cost. The rule itself stays in decision.json, which is where a reader checks it.
   const sentence = `the gate for skill ${quote(skill.name)} passed after ${runsText(usedRuns)} of the ${plannedRuns} it planned`;
-  // The tool never accepts, and it says so where the verdict is: acceptance edits a skill and belongs to the
-  // command alone (Q12).
-  return surface === "tool"
-    ? `${sentence}; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`
-    : `${sentence}.`;
+  return `${sentence}${withClause(surface, { tool: TOOL_NOT_ACCEPTED, command: "." })}`;
 }
 
 export function gateRejectedText(
@@ -83,11 +97,7 @@ export function gateRejectedText(
   usedRuns: number,
 ): string {
   const sentence = `the gate rejected the candidate for skill ${quote(skill.name)} after ${runsText(usedRuns)}: ${reasonText(reason)}`;
-  // A rejection is not a failure of the run: the candidate lost to the skill as it stands, and the skill is
-  // the one thing the answer has to report about.
-  return surface === "tool"
-    ? `${sentence}; the skill is untouched and the candidate stays in staging.`
-    : `${sentence}; the skill was not edited.`;
+  return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 
 export function gateAbstainedText(
@@ -96,12 +106,10 @@ export function gateAbstainedText(
   reason: string | null,
   detail?: string,
 ): string {
-  const sentence = `the gate abstained for skill ${quote(skill.name)}: ${abstentionReasonText(reason, detail)}`;
+  const sentence = `the gate abstained for skill ${quote(skill.name)}: ${reasonText(reason, detail)}`;
   // An abstention spent what it spent and concluded nothing, so there is no count in the sentence: the reason
   // is the whole answer, and the budget of the attempt is in decision.json.
-  return surface === "tool"
-    ? `${sentence}; the skill is untouched and the candidate stays in staging.`
-    : `${sentence}; the skill was not edited.`;
+  return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 
 // The one sentence of the acceptance, and the only builder here without a per-surface variant: the tool never
@@ -113,17 +121,13 @@ export function acceptedText(skill: SkillRef, slug: string, lessonPath: string, 
 }
 
 // A concluded gate always has a reason, except on an acceptance, where there was nothing to explain. The
-// absence is stated instead of rendered as an empty colon.
-function reasonText(reason: string | null): string {
-  return reason ?? "no reason was recorded";
-}
-
-// M4: an abstention that cost no run is often a fact about a file -- an overlay that could not copy it, a
-// lesson whose bytes moved -- and the reason alone leaves the reader without it. The detail is the flow's
-// `detail`, in the same wording the line of the index keeps. Absent, the sentence is the one it always was.
-function abstentionReasonText(reason: string | null, detail: string | undefined): string {
-  if (detail === undefined) return reasonText(reason);
-  return `${reasonText(reason)}: ${detail}`;
+// absence is stated instead of rendered as an empty colon. M4: an abstention that cost no run is often a fact
+// about a file -- an overlay that could not copy it, a lesson whose bytes moved -- and the reason alone leaves
+// the reader without it; the detail is the flow's `detail`, in the same wording the line of the index keeps,
+// and without it the sentence is the one it always was.
+function reasonText(reason: string | null, detail?: string): string {
+  const base = reason ?? "no reason was recorded";
+  return detail === undefined ? base : `${base}: ${detail}`;
 }
 
 function runsText(runs: number): string {
@@ -145,11 +149,7 @@ export function proposedText(
   // the file from the session's working directory, and a relative path there points at nothing.
   const candidatePath = path.join(base, stagingPath);
   const sentence = `staged ${lessonReferencePath(slug)} for skill ${quote(skill.name)} at ${quote(candidatePath)}`;
-  // The tool never accepts, and it says so where the candidate is: acceptance edits a skill and
-  // belongs to the command alone (Q12).
-  return surface === "tool"
-    ? `${sentence}; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`
-    : sentence;
+  return `${sentence}${withClause(surface, { tool: TOOL_NOT_ACCEPTED, command: "" })}`;
 }
 
 export function unknownSkillText(

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
 import { hashOfArguments } from "../evidence.ts";
 import { REPLAY_ENV_VAR } from "../names.ts";
-import { isPlainObject, toErrorMessage } from "../values.ts";
+import { isDirectory, isPlainObject, toErrorMessage } from "../values.ts";
 import type {
   InvalidReason,
   ParsedStream,
@@ -463,16 +462,6 @@ function lastNonEmptyLine(text: string): string | undefined {
     .map((line) => line.trim())
     .filter((line) => line !== "");
   return lines.at(-1);
-}
-
-// A cwd that does not resolve to a directory is refused before a process exists. `statSync` follows
-// symlinks, so a linked directory is a directory: what the child gets is the path the caller named.
-function isDirectory(target: string): boolean {
-  try {
-    return fs.statSync(target).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 function toBuffer(chunk: string | Buffer): Buffer {

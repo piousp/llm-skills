@@ -141,7 +141,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
 
   fs.mkdirSync(stagingRoot, { recursive: true });
 
-  const baseTimestamp = formatTimestamp(input.now);
+  const baseTimestamp = formatTimestamp(input.now, "staging directory");
 
   // Probe before the timestamp directory exists: the skill name and the slug become path
   // segments, so a name such as "../../etc" must be rejected while staging is still
@@ -175,11 +175,16 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
   const lessonBytes = Buffer.from(input.lessonText, "utf8");
 
   await writeFileQueued(lessonPath, lessonBytes, lessonsDir);
+
+  const { contentHash, bodyHash } = hashes.value;
   // decision.json lands last and already stamped: a record on disk means the lesson it names
   // is on disk too, and carries the hashes of those exact bytes.
   await writeFileQueued(
     decisionPath,
-    Buffer.from(serializeDecision(input.decision, hashes.value.contentHash, hashes.value.bodyHash), "utf8"),
+    Buffer.from(
+      decisionText({ ...input.decision, candidate: { ...input.decision.candidate, contentHash, bodyHash } }),
+      "utf8",
+    ),
     candidateDir,
   );
 
@@ -187,8 +192,8 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
     stagingPath: candidateDir,
     lessonPath,
     decisionPath,
-    contentHash: hashes.value.contentHash,
-    bodyHash: hashes.value.bodyHash,
+    contentHash,
+    bodyHash,
   };
 }
 
@@ -462,13 +467,17 @@ export async function rewriteStagingDecision(
 
     // The verified pair is what the new record carries, the same way writeStagingCandidate stamps the
     // bytes it publishes: the record and the file it names cannot disagree.
+    const { contentHash, bodyHash } = hashes.value;
     await writeFileAtomic(
       decisionPath,
-      Buffer.from(serializeDecision(decision, hashes.value.contentHash, hashes.value.bodyHash), "utf8"),
+      Buffer.from(
+        decisionText({ ...decision, candidate: { ...decision.candidate, contentHash, bodyHash } }),
+        "utf8",
+      ),
       stagingRoot,
     );
 
-    return { decisionPath, contentHash: hashes.value.contentHash, bodyHash: hashes.value.bodyHash };
+    return { decisionPath, contentHash, bodyHash };
   });
 }
 
@@ -612,10 +621,12 @@ async function readStagedCandidate(decisionPath: string): Promise<StagedCandidat
 }
 
 // 2026-11-02T14:03:22.481Z -> 20261102T140322481Z. UTC (toISOString always is), no
-// colons, so the staging tree stays sortable and portable.
-function formatTimestamp(now: Date): string {
+// colons, so the staging tree stays sortable and portable. `named` is what the caller numbers with it --
+// the staging directory of a candidate, the history snapshot of an acceptance -- so the refusal of an
+// invalid date says which of the two it could not name.
+export function formatTimestamp(now: Date, named: string): string {
   if (Number.isNaN(now.getTime())) {
-    throw new SriWriterError("cannot name a staging directory after an invalid date");
+    throw new SriWriterError(`cannot name a ${named} after an invalid date`);
   }
   return now.toISOString().replace(/[-:.]/g, "");
 }
@@ -642,18 +653,14 @@ function allocateCandidateDir(stagingRoot: string, baseTimestamp: string): strin
   );
 }
 
-// D4: the candidate hashes go into decision.json next to contentHash. The writer is the
-// one that hashes the bytes that actually reached the disk, so it stamps them into the
-// record it writes instead of trusting values computed elsewhere; the caller's object is
-// not mutated.
-function serializeDecision(record: DecisionRecord, contentHash: string, bodyHash: string): string {
-  return decisionText({ ...record, candidate: { ...record.candidate, contentHash, bodyHash } });
-}
-
 // The one serialization of a decision record: two-space JSON and one trailing newline, so appending to a
 // record stays a line operation and two records of the same shape compare byte for byte. The staging
 // writer stamps the candidate hashes it computed; the history writer stores the record as the acceptance
 // built it.
+//
+// D4: the candidate hashes go into decision.json next to contentHash. The writer is the one that hashes
+// the bytes that actually reached the disk, so the two call sites that stamp them spread a copy into the
+// record instead of trusting values computed elsewhere -- and the caller's object is not mutated.
 function decisionText(record: DecisionRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }

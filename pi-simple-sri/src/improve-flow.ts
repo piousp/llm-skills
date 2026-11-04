@@ -6,7 +6,7 @@ import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes 
 import { readSriConfig } from "./config.ts";
 import { buildDiagnosis } from "./diagnosis.ts";
 import { isEligibleUnderAnySpelling } from "./eligibility.ts";
-import { deriveEvidence, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
+import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { SKILL_FILE } from "./names.ts";
@@ -25,7 +25,7 @@ import type {
   SkillRef,
   SriConfig,
 } from "./types.ts";
-import { quote, toErrorMessage } from "./values.ts";
+import { currentTime, quote, toErrorMessage } from "./values.ts";
 import { assertBaseOutsideSkill, relativeToBase, writeBase } from "./write-base.ts";
 import {
   appendAttemptLine,
@@ -633,13 +633,14 @@ function diagnoseEvidence(
   const model = ctx.model;
   // OA5: the fallback is written in the same "provider/model" spelling the evidence carries, so a
   // replay item never mixes one form with the other; the bare id is ambiguous between providers
-  // that serve it. It is only a fallback: the model of the failing turn wins (src/diagnosis.ts).
+  // that serve it. The spelling itself belongs to src/evidence.ts (modelIdentity), the module that owns
+  // it. This is only a fallback: the model of the failing turn wins (src/diagnosis.ts).
   return buildDiagnosis(
     items,
     contextById,
     skill,
     ctx.cwd,
-    model === undefined ? {} : { model: `${model.provider}/${model.id}` },
+    model === undefined ? {} : { model: modelIdentity(model.provider, model.id) },
   );
 }
 
@@ -809,10 +810,6 @@ function candidateHashes(skill: SkillRef, lessonText: string): LessonHashes {
     throw new ProposerError(`the lesson for ${quote(skill.name)} does not validate: ${hashes.error}`);
   }
   return hashes.value;
-}
-
-function currentTime(): Date {
-  return new Date();
 }
 
 // deriveEvidence walks message entries; the branch also carries model changes, labels, compaction

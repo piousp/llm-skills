@@ -1,8 +1,9 @@
 import fs from "node:fs";
 
 // Value helpers shared by the modules that read settings, check the write perimeter, move
-// bytes and read lessons back (I15). Each of them existed as a byte-identical private copy in
-// two to four modules; there is one definition now so a change cannot land in only one path.
+// bytes, read lessons back and date a run (I15). Each of them existed as a byte-identical private
+// copy in two to four modules; there is one definition now so a change cannot land in only one
+// path.
 
 export function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -59,4 +60,22 @@ export function isRegularFile(target: string): boolean {
   } catch {
     return false;
   }
+}
+
+// The directory counterpart of the check above, for the two places this package asks it: the entries of the
+// staging layout, whose absence and whose failed stat are both "not a directory" to the guards, and the cwd of
+// a replay, refused before a process exists. `statSync` follows symlinks, so a linked directory is a directory:
+// what the caller gets is the path it named.
+export function isDirectory(target: string): boolean {
+  try {
+    return fs.statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// The one clock: the acceptance, the gate and the improve flow all fall back to it when a caller injects no
+// clock of its own, so a run that is not under test reads the time the same way in all three.
+export function currentTime(): Date {
+  return new Date();
 }

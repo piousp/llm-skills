@@ -20,7 +20,7 @@ import type {
   Result,
   SkillRef,
 } from "../types.ts";
-import { describe, isPlainObject, isRegularFile, quote, toErrorMessage } from "../values.ts";
+import { currentTime, describe, isDirectory, isPlainObject, isRegularFile, quote, toErrorMessage } from "../values.ts";
 import { relativeToBase, stagingDir } from "../write-base.ts";
 import { appendAttemptLine, lessonHashes, rewriteStagingDecision, writeTextAtomically } from "../writer.ts";
 import { evaluateExpectation, isIntrinsicFailure } from "./expectation.ts";
@@ -504,10 +504,6 @@ function gateSeamsOf(deps: GateDeps): GateSeams {
   };
 }
 
-function currentTime(): Date {
-  return new Date();
-}
-
 // What the budget of one gate produced: the verdicts the scorer reads, the items as the record shows them,
 // how many runs were started, and the moment the gate gave up (null when it did not).
 interface BudgetResult {
@@ -901,30 +897,15 @@ async function readStagedDecision(decisionPath: string): Promise<StagedCandidate
     );
   }
 
-  return { ok: true, value: declaredRecord(parsed) };
-}
-
-// The record as the contract it declares. The assertion is the price of not carrying a second implementation
-// of schemas/decision.schema.json in src/: the version guard above proves the file was written by this
-// package, and the fields the gate reads are checked where they are used -- the pair of hashes of the
-// candidate against the lesson on disk (undeclaredBytes, and the same guard inside the rewrite), the
-// failureSignature of the diagnosis where the index line is built. A full runtime validation would be the
-// schema itself, in a package that has no validator and wants none.
-function declaredRecord(record: Record<string, unknown>): DecisionRecord {
-  return record as unknown as DecisionRecord;
+  // The record as the contract it declares. The assertion is the price of not carrying a second
+  // implementation of schemas/decision.schema.json in src/: the version guard above proves the file was
+  // written by this package, and the fields the gate reads are checked where they are used -- the pair of
+  // hashes of the candidate against the lesson on disk (undeclaredBytes, and the same guard inside the
+  // rewrite), the failureSignature of the diagnosis where the index line is built. A full runtime
+  // validation would be the schema itself, in a package that has no validator and wants none.
+  return { ok: true, value: parsed as unknown as DecisionRecord };
 }
 
 function reject(reason: CandidateRejectionReason, detail: string): StagedCandidateResult {
   return { ok: false, error: { reason, detail } };
-}
-
-// An unreadable path and an absent one are the same answer for the guards above: neither of them is a
-// candidate. src/values.ts owns the file counterpart of this check (isRegularFile); the two entries of the
-// staging layout are the only place this package needs the directory one, so it stays here.
-function isDirectory(target: string): boolean {
-  try {
-    return fs.statSync(target).isDirectory();
-  } catch {
-    return false;
-  }
 }

@@ -173,7 +173,7 @@ function handleAssistantMessage(
   // failure this reply can produce -- the retry loop below, the tool error of its results, the
   // correction that follows -- names the model that produced it and not the one a later reply
   // switches to (Q13, OA5).
-  derivation.cycleModel = modelOf(message);
+  derivation.cycleModel = modelIdentity(message.provider, message.model);
 
   for (const part of message.content) {
     if (part.type !== "toolCall") continue;
@@ -262,14 +262,12 @@ function rememberFailure(derivation: Derivation, id: string): void {
 }
 
 // OA5: the identity a replay pins is "provider/model" and never the bare id, because --model
-// accepts both spellings and an id alone is ambiguous between two providers that serve it. The
-// prefix comes from the reply that produced the turn; a legacy message, written before the fields
-// were required, keeps the id it has and invents no prefix.
-function modelOf(message: AssistantMessage): string | undefined {
-  const { model } = message;
+// accepts both spellings and an id alone is ambiguous between two providers that serve it. The two
+// callers compose it from what they hold -- the reply that produced the turn, the model of the session
+// that runs the diagnosis -- so the spelling lives here and not in either of them; a legacy message,
+// written before the fields were required, keeps the id it has and invents no prefix.
+export function modelIdentity(provider: string | undefined, model: string | undefined): string | undefined {
   if (typeof model !== "string" || model === "") return undefined;
-
-  const { provider } = message;
   return typeof provider !== "string" || provider === "" ? model : `${provider}/${model}`;
 }
 
