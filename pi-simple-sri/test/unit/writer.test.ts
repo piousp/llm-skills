@@ -25,6 +25,10 @@ import {
 } from "../../src/writer.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef } from "../../src/types.ts";
 
+// The real fs.promises.open, captured before any test replaces the property: a stub that has to let the real
+// call through has no other way back to it once the property is gone.
+const openFile = fs.promises.open.bind(fs.promises);
+
 const FIXED_NOW = new Date("2026-11-02T14:03:22.481Z");
 const BASE_TIMESTAMP = "20261102T140322481Z";
 const LESSON_SLUG = "pdf-tables-merged-cells";
@@ -461,7 +465,7 @@ test("writeStagingCandidate: a relative base is refused before the staging direc
 // the fs method that produces the bytes read. The original property descriptor goes back in a
 // t.after hook: the writer is not loosened for the benefit of a test, and no permission of the
 // machine is touched.
-function stubPromise(t: TestContext, name: "readFile" | "rm", stub: (target: unknown) => Promise<unknown>): void {
+function stubPromise(t: TestContext, name: "readFile" | "rm" | "open", stub: (target: unknown) => Promise<unknown>): void {
   const original = Object.getOwnPropertyDescriptor(fs.promises, name);
   t.after(() => {
     if (original) {
@@ -564,6 +568,46 @@ test("appendAttemptLine: two appends of one process leave two lines and lose non
   assert.deepEqual(new Set(lines), new Set([JSON.stringify(first), JSON.stringify(second)]));
 });
 
+// The interleaving of two processes of pi, without a second process: `text` is written to the index right
+// before this one opens it to verify, that is, after the append of this process and before the read of the tail.
+// The stub replaces the fs method the read goes through and delegates to the real one, so the append and the read
+// are still the ones the module makes; only the moment of the other line is chosen by the test. Nothing of the
+// writer is loosened for it, and the original property goes back in a t.after hook (stubPromise).
+function appendFromAnotherProcessAfter(t: TestContext, target: string, text: string): void {
+  let appended = false;
+  stubPromise(t, "open", async (opened: unknown, flags?: string | number) => {
+    if (String(opened) === target) {
+      if (flags === "a") {
+        appended = true;
+      } else if (appended && flags === "r") {
+        appended = false;
+        fs.appendFileSync(target, text, "utf8");
+      }
+    }
+    return openFile(String(opened), flags);
+  });
+}
+
+// OA11: O_APPEND keeps two processes from losing each other's line and there is no lock, so the line of the other
+// process can land between the append of this one and the verification that follows it. The verification asks
+// whether the line is in the tail of the index, not whether it is the last line: the append succeeded, and a
+// caller told otherwise would discard a candidate whose line is on disk (F1) or withdraw a lesson already
+// published (§S9).
+test("appendAttemptLine: a line that another process appended in between is not a failure", async (t) => {
+  const fixture = createFixture(t);
+  const attemptsPath = path.join(stateDir(fixture.pkg), "attempts.jsonl");
+  const ours = attemptLine({ event: "proposed" });
+  const other = attemptLine({ event: "gate-rejected", candidateHash: `sha256:${"e".repeat(64)}` });
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(attemptsPath, "", "utf8");
+  appendFromAnotherProcessAfter(t, attemptsPath, `${JSON.stringify(other)}\n`);
+
+  await appendAttemptLine(fixture.pkg, ours);
+
+  const lines = fs.readFileSync(attemptsPath, "utf8").split("\n").filter((line) => line !== "");
+  assert.deepEqual(lines, [JSON.stringify(ours), JSON.stringify(other)]);
+});
+
 // The one precondition of an append: the file ends where a line ends. A line glued onto a truncated one would
 // make the index unparseable from that point on, so the append refuses and leaves the bytes as they were.
 test("appendAttemptLine: refuses to append after a line that was truncated", async (t) => {
@@ -579,6 +623,31 @@ test("appendAttemptLine: refuses to append after a line that was truncated", asy
   );
 
   assert.equal(fs.readFileSync(attemptsPath, "utf8"), truncated);
+});
+
+// The other half of the verification: a window that does not end where a line ends is refused even when the
+// line of this call is in it. An index a reader cannot parse past the partial line of the other process is not
+// one this writer reports as written, and the refusal names the file.
+test("appendAttemptLine: refuses a tail that does not end with a newline after the append", async (t) => {
+  const fixture = createFixture(t);
+  const attemptsPath = path.join(stateDir(fixture.pkg), "attempts.jsonl");
+  const ours = attemptLine({ event: "proposed" });
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(attemptsPath, "", "utf8");
+  const partial = '{"ts":"2026-11-02T14:03:22.490Z"';
+  appendFromAnotherProcessAfter(t, attemptsPath, partial);
+
+  await assert.rejects(
+    () => appendAttemptLine(fixture.pkg, ours),
+    (error: unknown) =>
+      error instanceof SriWriterError &&
+      error.message.includes("does not appear in the tail of the index") &&
+      error.message.includes(attemptsPath),
+  );
+
+  // Fail closed: the line of this call did land and is kept. What failed is the state of the index, not the
+  // write, and nothing here rewrites the bytes that were already there.
+  assert.equal(fs.readFileSync(attemptsPath, "utf8"), `${JSON.stringify(ours)}\n${partial}`);
 });
 
 // The append opens the index through a handle instead of writing a temporary file and renaming it, so the

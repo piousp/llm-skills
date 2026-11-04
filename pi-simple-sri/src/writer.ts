@@ -45,6 +45,12 @@ import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile,
 const TEMP_PREFIX = ".sri-write-";
 const MAX_TIMESTAMP_ATTEMPTS = 100;
 
+// How much wider than its own line the verification of an append reads the tail of the index. The queue
+// serializes this process only (OA11), so a line another process of pi appended between the write of this one
+// and the read that follows it can be the last line of the file, and the line of this call then sits one or
+// more lines back. A line of the index is a few hundred bytes, so this slack holds a whole cluster of them.
+const TAIL_SLACK_BYTES = 8 * 1024;
+
 // What a copy of a skill tree never receives: the skill's own history and its version control directory.
 // Both live inside the skill directory and neither is part of what pi loads from it (Q9).
 const EXCLUDED_COPY_ENTRIES: readonly string[] = [HISTORY_DIR, ".git"];
@@ -220,10 +226,17 @@ export async function appendAttemptLine(base: string, line: AttemptLine): Promis
 
     // Verified by its tail: the question is whether the line landed, and the last bytes of the file answer
     // it without reading -- and certainly without rewriting -- the lines that were already there.
-    const tail = await readTail(statePath, bytes.length);
-    if (tail !== jsonLine) {
+    //
+    // The question is not whether the line is the last one. Two processes of pi appending to the same index is
+    // the ordinary case (OA11), and one of them can land its line between the append above and this read: the
+    // tail then ends with a line this call did not write, while the line of this call is one or more lines
+    // back, still in the window TAIL_SLACK_BYTES makes wide enough to hold it. What the window proves is what
+    // the append promised: the index ends where a line ends, and this event is in it. A substring cannot be
+    // some other event -- buildAttemptLine makes the line unique through `ts` and the candidate hashes.
+    const tail = await readTail(statePath, bytes.length + TAIL_SLACK_BYTES);
+    if (!tail.endsWith("\n") || !tail.includes(jsonLine)) {
       throw new SriWriterError(
-        `${quote(statePath)}: the last bytes after the append are not the event that was written`,
+        `${quote(statePath)}: the event that was written does not appear in the tail of the index after the append`,
         statePath,
       );
     }
@@ -834,7 +847,9 @@ async function appendToFile(target: string, bytes: Buffer): Promise<number> {
 
 // The last `length` bytes of a file, as text. The append verifies itself with this and never with a read of
 // the whole file: reading everything to compare one line is the read-modify-write this module stopped doing
-// (OA11).
+// (OA11). A file shorter than the window answers the window with everything it holds: the append asks for more
+// bytes than its own line, so the index of a single event is shorter than the request, and an empty answer would
+// read as a failed append.
 async function readTail(filePath: string, length: number): Promise<string> {
   let handle: FileHandle;
   try {
@@ -845,10 +860,11 @@ async function readTail(filePath: string, length: number): Promise<string> {
 
   try {
     const { size } = await handle.stat();
-    if (size < length) return "";
+    const window = Math.min(size, length);
+    if (window <= 0) return "";
 
-    const tail = Buffer.alloc(length);
-    await handle.read(tail, 0, length, size - length);
+    const tail = Buffer.alloc(window);
+    await handle.read(tail, 0, window, size - window);
     return tail.toString("utf8");
   } catch (error) {
     throw new SriWriterError(`cannot read ${quote(filePath)}: ${toErrorMessage(error)}`, filePath);
