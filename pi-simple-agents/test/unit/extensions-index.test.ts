@@ -1654,6 +1654,115 @@ test("factory: nested loader's agentDir follows <home>/.pi/agent, not a doubled 
   assert.ok(!capturedAgentDir!.includes(`.pi${path.sep}.pi`), `agentDir must not be a doubled path: ${capturedAgentDir}`);
 });
 
+// --- model resolution through the host registry (wiring) ---
+
+// Second resolution source, end to end through the wiring: a provider
+// registered by ANOTHER extension is invisible to this package's own
+// ModelRuntime at load, so the run must reach the invoking ctx's registry
+// before it decides the ref is unresolvable.
+test("subagent tool: resolves an extension-provider model through ctx.modelRegistry when the package runtime misses", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const fromHost = { provider: "ext-provider", id: "model-x" };
+  let captured: Record<string, any> | undefined;
+  const createSessionOverride = (options: Record<string, any>) => {
+    captured = options;
+    return Promise.resolve({ session: fakeAgentSession("done") } as any);
+  };
+  const modelRuntime = { getModel: () => undefined, isUsingSubscription: () => false } as unknown as ModelRuntime;
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSessionOverride, fixture.paths);
+
+  const ctx = {
+    ...fakeExecuteCtx({ cwd: fixture.cwd }),
+    modelRegistry: {
+      find: (provider: string, modelId: string) =>
+        provider === "ext-provider" && modelId === "model-x" ? fromHost : undefined,
+    },
+  };
+  await pi.tool.execute("call-host-registry", { agent: "scout", task: "x", model: "ext-provider/model-x" }, undefined, undefined, ctx);
+
+  await waitFor(() => captured !== undefined, 2000, "createSessionOverride to run");
+  // The host's model object is what reaches the session — proof the ctx's
+  // registry travelled all the way to resolveModel.
+  assert.equal(captured!.model, fromHost);
+  // …and it never becomes a session option of its own.
+  assert.equal("modelRegistry" in captured!, false);
+});
+
+// Degradation, not a crash: a ctx without a modelRegistry (older hosts, test
+// fakes) keeps the single-source path and the pre-existing fail-loud error
+// text, byte for byte.
+test("subagent tool: a ctx without modelRegistry degrades to single-source resolution and still fails loudly", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  let createSessionCalls = 0;
+  const createSessionOverride = () => {
+    createSessionCalls++;
+    return Promise.resolve({ session: fakeAgentSession("done") } as any);
+  };
+  const modelRuntime = { getModel: () => undefined, isUsingSubscription: () => false } as unknown as ModelRuntime;
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSessionOverride, fixture.paths);
+
+  const ctx = fakeExecuteCtx({ cwd: fixture.cwd });
+  await pi.tool.execute("call-no-registry", { agent: "scout", task: "x", model: "ext-provider/model-x" }, undefined, undefined, ctx);
+
+  await waitUntil(() => pi.sentMessages.length > 0);
+  const sent = pi.sentMessages[0] as { message: { content: string; details: { status: string } }; options: unknown };
+  assert.equal(sent.message.details.status, "failed"); // the run failed, not the job: no infrastructure error
+  assert.match(sent.message.content, /was not found in the model registry/);
+  assert.match(sent.message.content, /ext-provider/);
+  assert.equal(createSessionCalls, 0);
+});
+
+// The relaunch path (handleRelaunch → launchSubagentJob's hostModelRegistry)
+// had no coverage beyond tsc: a retry must resolve an extension-provider model
+// exactly like a first launch does.
+test("subagent_job retry: a relaunched job resolves an extension-provider model through ctx.modelRegistry", async (t) => {
+  const fixture = makeAgentFixture(t);
+  // The recorded ack carries no params, so the relaunch runs the agent's own
+  // defaults: the configured `model` is what has to resolve. Written before
+  // the factory loads, since the setup's own discovery load is the first hit
+  // on the registry's TTL cache — a later write would be masked by it.
+  fs.writeFileSync(
+    path.join(fixture.paths.agentsDir, "scout.md"),
+    "---\nname: scout\ndescription: hermetic fixture scout for wiring tests\nmodel: ext-provider/model-x\n---\n",
+    "utf8",
+  );
+  const pi = makeFakePi();
+  const fromHost = { provider: "ext-provider", id: "model-x" };
+  const { launches, createSession } = relaunchLaunchCapture();
+  const modelRuntime = { getModel: () => undefined, isUsingSubscription: () => false } as unknown as ModelRuntime;
+  await extensionFactory(pi as unknown as ExtensionAPI, () => Promise.resolve(modelRuntime), createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2201", "call-r", "scout", "do the thing"),
+    rlCompletionEntry("S2201", "call-r", "failed", "scout", "do the thing"),
+  ]);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  const jobCtx = {
+    ...fakeExecuteCtx({ cwd: fixture.cwd, sessionFile: parentFile }),
+    modelRegistry: {
+      find: (provider: string, modelId: string) =>
+        provider === "ext-provider" && modelId === "model-x" ? fromHost : undefined,
+    },
+  };
+
+  const retried = await jobTool.execute("tc-retry-registry", { action: "retry", id: "call-r" }, undefined, undefined, jobCtx);
+  assert.equal(retried.isError, undefined);
+  assert.match(retried.content[0].text, /^Retrying scout as job S\d+ \(runId retry-call-r-1\)/);
+
+  await waitUntil(() => launches.length > 0);
+  // The host's model object reached the session — proof the action ctx's
+  // registry travelled through launchSubagentJob → runSingleTask → resolveModel.
+  assert.equal(launches[0].sessionOptions.model, fromHost);
+  // …and it never becomes a session option of its own.
+  assert.equal("modelRegistry" in launches[0].sessionOptions, false);
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
 // --- /subagents session wiring ---
 
 const sessionJsonLine = (entry: unknown): string => JSON.stringify(entry);

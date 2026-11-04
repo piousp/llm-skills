@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { readdirSync, readFileSync } from "node:fs";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createAgentRegistry, type AgentRegistryPaths } from "../src/agent-registry.ts";
 import { MAX_TIMEOUT_MS, type RunAgentViaSdkOptions } from "../src/run.ts";
@@ -260,6 +260,12 @@ type JobActionContext = {
   mode: RunAgentViaSdkOptions["mode"];
   sessionManager: { getSessionFile(): string | undefined };
   theme: ProgressTheme;
+  /** ctx.modelRegistry of the context that invoked the action. A relaunch
+      (retry/continue) needs it to resolve a `model` of an extension-registered
+      provider exactly like a first launch does (the package's own runtime
+      misses it, see src/run.ts's findModel). Optional: the test fakes do not
+      carry one, which degrades to single-source resolution. */
+  hostModelRegistry?: ModelRegistry;
 };
 
 export default async function (
@@ -393,6 +399,10 @@ export default async function (
     mode: RunAgentViaSdkOptions["mode"];
     callerSessionFile: string | undefined;
     seedSessionFile?: string;
+    /** The invoking ctx.modelRegistry, forwarded to the run's second
+        resolution source (retry/continue reach here through
+        handleRelaunch's JobActionContext). */
+    hostModelRegistry?: ModelRegistry;
   }): JobSnapshot {
     // The tool path checks `modelRuntimeResult.ok` in execute() before
     // reaching here, and the retry/continue branches check it right below;
@@ -412,6 +422,10 @@ export default async function (
           cwd: input.cwd,
           signal: jobSignal,
           modelRuntime: modelRuntimeResult.value,
+          // The host's registry as the run's second model-resolution source:
+          // a provider registered by another extension is invisible to this
+          // package's ModelRuntime at load (src/task-runner.ts, src/run.ts).
+          hostModelRegistry: input.hostModelRegistry,
           runId: input.runId,
           callerSessionFile: input.callerSessionFile,
           // Threads the caller's real run mode into this subagent's nested
@@ -544,6 +558,7 @@ export default async function (
       mode: ctx.mode,
       callerSessionFile: sessionFile,
       seedSessionFile,
+      hostModelRegistry: ctx.hostModelRegistry,
     });
     if (candidate.status === "interrupted") {
       // The orphan's child dir is consumed by this launch: one branch
@@ -671,6 +686,9 @@ export default async function (
         cwd: ctx.cwd,
         mode: ctx.mode,
         callerSessionFile,
+        // Captured synchronously here: the job's run starts in a microtask,
+        // after this handler has already returned (src/background-jobs.ts).
+        hostModelRegistry: ctx.modelRegistry,
       });
 
       // The ack records the call's REQUESTED overrides (details.params) so
@@ -699,7 +717,7 @@ export default async function (
         action,
         id,
         message,
-        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: PLAIN_THEME },
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: PLAIN_THEME, hostModelRegistry: ctx.modelRegistry },
       );
       return { content: [{ type: "text" as const, text }], details: { action, id } };
     },
@@ -786,7 +804,7 @@ export default async function (
         command.kind,
         "id" in command ? command.id : undefined,
         "message" in command ? command.message : undefined,
-        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: ctx.ui.theme },
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: ctx.ui.theme, hostModelRegistry: ctx.modelRegistry },
       );
       ctx.ui.notify(text, level);
     },

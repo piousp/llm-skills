@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager, type ModelRegistry, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { applyInvocationOverride } from "./agents.ts";
 import { runAgentViaSdk, type AgentRunResult, type RunAgentViaSdkOptions } from "./run.ts";
@@ -28,6 +28,13 @@ export interface RunTaskOptions {
   cwd: string;
   signal: AbortSignal | undefined;
   modelRuntime: ModelRuntime;
+  /** ctx.modelRegistry of the host. A provider registered by ANOTHER extension
+      is invisible to this package's own ModelRuntime at load (that runtime is
+      populated when a child session re-runs the factory), while the host's
+      registry sees it immediately — this is the second resolution source
+      (see runAgentViaSdk's findModel). Optional: SDK consumers and tests have
+      none, which degrades to single-source resolution, never a crash. */
+  hostModelRegistry?: ModelRegistry;
   callerSessionFile: string | undefined;
   /** The subagent tool call's own toolCallId — the basis for this run's childSessionDir. */
   runId: string;
@@ -99,7 +106,7 @@ export async function runSingleTask(
   tracker: ProgressTracker | undefined,
   options: RunTaskOptions,
 ): Promise<AgentRunResult> {
-  const { cwd, signal, modelRuntime, callerSessionFile, runId, mode, seedSessionFile, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent, onSessionReady, onSessionGone } = options;
+  const { cwd, signal, modelRuntime, hostModelRegistry, callerSessionFile, runId, mode, seedSessionFile, createSession = createAgentSession, homeDir = os.homedir(), onSessionEvent, onSessionReady, onSessionGone } = options;
   const effectiveAgent = applyInvocationOverride(agent, invocationOverrideOf(t));
   let usage: AgentRunResult["usage"];
 
@@ -138,6 +145,13 @@ export async function runSingleTask(
         resourceLoader,
         sessionManager: manager,
         getModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
+        // Second source: the host's registry, only when the package's own
+        // runtime misses the ref. `find` is ModelRegistry's synchronous
+        // facade over runtime.getModel — same catalogue, no credential or
+        // enabledModels gating (neither ever gated explicit refs).
+        findModel: hostModelRegistry
+          ? (provider, modelId) => hostModelRegistry.find(provider, modelId)
+          : undefined,
         onProgressEvent: tracker ? (event) => tracker.onEvent(event) : undefined,
         onSessionEvent,
         onSessionReady,

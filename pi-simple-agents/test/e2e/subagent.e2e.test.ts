@@ -198,3 +198,85 @@ live(
     );
   },
 );
+
+// Preconditions for the case below (documented, not asserted blind):
+// - ~/.pi/agent/settings.json declares the neuralwatt provider package
+//   (`packages`, `npm:pi-neuralwatt-provider`), so its directory
+//   (~/.pi/agent/npm/node_modules/pi-neuralwatt-provider) exists and can be
+//   loaded with -e, which resolves that package's own pi.extensions.
+// - `pi --list-models neuralwatt` in a fresh process (no model call) lists
+//   qwen3.6-35b: the child's ref has to be a real catalogue entry, or the run
+//   would fail for a reason other than the one under test.
+// Skips (doesn't fail) when either precondition isn't met, naming it.
+const NEURALWATT_PACKAGE = "npm:pi-neuralwatt-provider";
+const NEURALWATT_PROVIDER_DIR = path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "pi-neuralwatt-provider");
+const AGENT_SETTINGS_PATH = path.join(os.homedir(), ".pi", "agent", "settings.json");
+
+function neuralwattProviderDir(): string | undefined {
+  if (!fs.existsSync(AGENT_SETTINGS_PATH) || !fs.existsSync(NEURALWATT_PROVIDER_DIR)) return undefined;
+  try {
+    const settings = JSON.parse(fs.readFileSync(AGENT_SETTINGS_PATH, "utf8"));
+    const packages: unknown = settings?.packages;
+    return Array.isArray(packages) && packages.includes(NEURALWATT_PACKAGE) ? NEURALWATT_PROVIDER_DIR : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The regression class of the findModel fix: a subagent whose `model` belongs
+// to a provider registered by ANOTHER extension used to die on
+// "was not found in the model registry" until some other job had started a
+// child session in the same process. A repo fixture cannot cover it: the child
+// session discovers extensions from the real ~/.pi/agent/settings.json
+// (src/loader-config.ts), so a provider loaded only by `-e` never reaches the
+// child's own runtime. Hence the installed provider package plus a skip.
+//
+// "The process's first child" is by construction: `pi -p --no-session` is a
+// fresh process and the prompt asks for exactly one delegation, so no child
+// ran before the subagent whose model has to resolve.
+//
+// `-ne` is mandatory: without it the installed copy of pi-simple-agents loads
+// next to this repo's extensions/ and the `subagent` tool is registered twice.
+live(
+  "e2e: a subagent whose model belongs to an extension-registered provider starts as the process's first child",
+  { timeout: TIMEOUT_MS + 10_000 },
+  async (t) => {
+    const providerDir = neuralwattProviderDir();
+    if (!providerDir) {
+      t.skip(`no "${NEURALWATT_PACKAGE}" package configured at ${AGENT_SETTINGS_PATH} (or ${NEURALWATT_PROVIDER_DIR} is missing)`);
+      return;
+    }
+    const catalogue = await runPi(["--list-models", "neuralwatt"]);
+    if (catalogue.code !== 0 || !catalogue.stdout.includes("qwen3.6-35b")) {
+      t.skip(`\`pi --list-models neuralwatt\` does not list qwen3.6-35b (exit ${catalogue.code}). Output:\n${catalogue.stdout}`);
+      return;
+    }
+
+    const prompt =
+      "Haz exactamente una llamada a la herramienta subagent con estos tres parametros: " +
+      "agent='scout', model='neuralwatt/qwen3.6-35b', task='Responde solo: ok'. " +
+      "Reporta el resultado tal cual.";
+
+    const { code, stdout } = await runPi([
+      "-ne",
+      "-e", EXTENSIONS_DIR,
+      "-e", providerDir,
+      "-p", "--no-session",
+      "--model", "neuralwatt/deepseek-v4.1-flash",
+      prompt,
+    ]);
+
+    assert.equal(code, 0, `pi exited non-zero. Output:\n${stdout}`);
+    assert.doesNotMatch(
+      stdout,
+      /was not found in the model registry/,
+      `the package runtime's false negative came back:\n${stdout}`,
+    );
+    assert.doesNotMatch(
+      stdout,
+      /Cannot read properties of undefined|TypeError/,
+      `pi output looked like a crash:\n${stdout}`,
+    );
+    assert.match(stdout, /\bok\b/i, `expected the child's "ok" in the output:\n${stdout}`);
+  },
+);

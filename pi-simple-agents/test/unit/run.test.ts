@@ -888,6 +888,76 @@ test("runAgentViaSdk: calls getModel with provider and modelId split from agent.
   assert.deepEqual(calls, [["anthropic", "claude-fable-5"]]);
 });
 
+// The defect this covers: a provider registered by another extension is
+// invisible to this package's own ModelRuntime until a child session re-runs
+// the extension factory, so getModel legitimately returns undefined for a ref
+// the host's registry already resolves. The second source removes that false
+// negative without falling back to the session default.
+test("runAgentViaSdk: a model the package runtime misses resolves through the host registry (false negative removed)", async (t) => {
+  const warnSpy = t.mock.method(console, "warn", () => {});
+  const fromHost = { provider: "neuralwatt", id: "qwen3.6-35b" };
+  const ownCalls: Array<[string, string]> = [];
+  const hostCalls: Array<[string, string]> = [];
+  let createSessionCalls = 0;
+  let capturedModel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    createSessionCalls++;
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = ((provider: string, modelId: string) => {
+    ownCalls.push([provider, modelId]);
+    return undefined;
+  }) as any;
+  const findModel = ((provider: string, modelId: string) => {
+    hostCalls.push([provider, modelId]);
+    return fromHost;
+  }) as any;
+
+  const result = await runAgentViaSdk(
+    makeAgent({ model: "neuralwatt/qwen3.6-35b" }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel, findModel },
+  );
+
+  assert.equal(result.status, "success");
+  assert.equal(createSessionCalls, 1);
+  assert.equal(capturedModel, fromHost); // the host's model object, by identity
+  assert.deepEqual(ownCalls, [["neuralwatt", "qwen3.6-35b"]]);
+  assert.deepEqual(hostCalls, [["neuralwatt", "qwen3.6-35b"]]);
+  assert.equal(warnSpy.mock.calls.length, 0);
+});
+
+// Order is part of the contract: the host registry is a fallback, never a
+// first choice — the package's own runtime keeps its snapshot semantics for
+// every ref it can already resolve.
+test("runAgentViaSdk: the package runtime wins when both resolvers could resolve the ref (host is not consulted)", async () => {
+  const fromOwn = { provider: "anthropic", id: "claude-fable-5" };
+  const fromHost = { provider: "anthropic", id: "claude-fable-5", via: "host" };
+  let hostCalls = 0;
+  let capturedModel: unknown = undefined;
+  const fakeSession = new FakeAgentSession("done");
+  const createSession = async (opts: any) => {
+    capturedModel = opts.model;
+    return { session: fakeSession as any };
+  };
+  const getModel = (() => fromOwn) as any;
+  const findModel = (() => {
+    hostCalls++;
+    return fromHost;
+  }) as any;
+
+  await runAgentViaSdk(
+    makeAgent({ model: "anthropic/claude-fable-5" }),
+    "find things",
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel, findModel },
+  );
+
+  assert.equal(capturedModel, fromOwn);
+  assert.equal(hostCalls, 0);
+});
+
 test("runAgentViaSdk: fails the run when the configured model is not in the registry (no fallback)", async (t) => {
   const warnSpy = t.mock.method(console, "warn", () => {});
   let createSessionCalled = false;
@@ -896,11 +966,14 @@ test("runAgentViaSdk: fails the run when the configured model is not in the regi
     return { session: new FakeAgentSession("done") as any };
   };
   const getModel = (() => undefined) as any;
+  // Both sources miss: the hybrid must fail exactly like the single-source
+  // path did, never inherit the session default model.
+  const findModel = (() => undefined) as any;
 
   const result = await runAgentViaSdk(
     makeAgent({ model: "nex-agi/nex-n2-mini" }),
     "find things",
-    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel },
+    { createSession, modelRuntime: {} as any, resourceLoader: {} as any, sessionManager: {} as any, getModel, findModel },
   );
 
   assert.equal(result.status, "error");
@@ -945,8 +1018,14 @@ test("runAgentViaSdk: no warning when configured model resolves", async (t) => {
   assert.equal(warnSpy.mock.calls.length, 0);
 });
 
-test("runAgentViaSdk: forwards modelRuntime through to createSession by identity, and never sends modelRegistry", async () => {
+// The session-options contract is what this pins: the child session always
+// receives THIS package's ModelRuntime by identity and never a modelRegistry.
+// The model may now come from the host's registry (see the fourth assertion),
+// which changes where the model object comes from — never what createSession
+// is handed.
+test("runAgentViaSdk: forwards modelRuntime to createSession by identity and never sends modelRegistry, even when the model resolves through the host registry", async () => {
   const runtimeSentinel = { find: () => undefined } as any;
+  const fromHost = { provider: "neuralwatt", id: "qwen3.6-35b" };
   let captured: any = undefined;
   const fakeSession = new FakeAgentSession("done");
   const createSession = async (opts: any) => {
@@ -955,14 +1034,22 @@ test("runAgentViaSdk: forwards modelRuntime through to createSession by identity
   };
 
   await runAgentViaSdk(
-    makeAgent(),
+    makeAgent({ model: "neuralwatt/qwen3.6-35b" }),
     "find things",
-    { modelRuntime: runtimeSentinel, createSession, resourceLoader: {} as any, sessionManager: {} as any },
+    {
+      modelRuntime: runtimeSentinel,
+      createSession,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      getModel: (() => undefined) as any,
+      findModel: (() => fromHost) as any,
+    },
   );
 
   assert.equal(captured.modelRuntime, runtimeSentinel);
   assert.notEqual(captured.modelRuntime, null);
   assert.equal("modelRegistry" in captured, false);
+  assert.equal(captured.model, fromHost);
 });
 
 test("runAgentViaSdk: passes thinkingLevel from agent.thinking", async () => {

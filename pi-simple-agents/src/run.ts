@@ -153,6 +153,13 @@ export interface RunAgentViaSdkOptions {
    * (src/transcript.ts) is the intended consumer. */
   onSessionEvent?: (event: AgentSessionEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+  /** Second source of model resolution, consulted only when getModel returns
+   * undefined: the host's registry (ctx.modelRegistry.find), which already
+   * sees providers registered by other extensions while this package's own
+   * ModelRuntime does not (it is populated when a child session re-runs the
+   * factory). Optional exactly like getModel (Q5): absent means single-source
+   * resolution, identical to the previous behavior. */
+  findModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
   /** Live-session tap for message injection (the job registry's
    * steer/followUp, see src/background-jobs.ts's LiveSessionApi): fired with
    * the session handle immediately before the prompt phase starts — after
@@ -193,15 +200,22 @@ type ModelResolution =
 
 // Q1: strict, zero fallbacks. The only way to the session default model is no
 // model or "inherit"; any other value must be a well-formed "provider/modelId"
-// ref that resolves in the registry, otherwise the run FAILS with a clear
-// error naming the agent, the value, and the fix. The run — not the config
-// load — is the single validation chokepoint (dropping bad values at load
-// would silently yield the session default, the fallback this removes).
+// ref that resolves in one of the two sources, otherwise the run FAILS with a
+// clear error naming the agent, the value, and the fix. Two sources, in order:
+// getModel (this package's own ModelRuntime) first, findModel (the host's
+// registry) second — the second is consulted ONLY when the first returns
+// nothing, so the package's runtime still wins whenever it can resolve the
+// ref. Either miss keeps the same fail-loud error; neither source falls back
+// to the session default. The run — not the config load — is the single
+// validation chokepoint (dropping bad values at load would silently yield the
+// session default, the fallback this removes).
 function resolveModel(
   agent: AgentConfig,
   getModel: RunAgentViaSdkOptions["getModel"],
+  findModel: RunAgentViaSdkOptions["findModel"],
 ): ModelResolution {
-  if (!agent.model || !getModel) return { ok: true, model: undefined }; // inherit / documented test seam (Q5)
+  // Single-source when only one resolver exists; inherit when neither does.
+  if (!agent.model || (!getModel && !findModel)) return { ok: true, model: undefined }; // inherit / documented test seam (Q5)
   if (!isValidModelRef(agent.model)) {
     return {
       ok: false,
@@ -211,7 +225,7 @@ function resolveModel(
   const slashIndex = agent.model.indexOf("/");
   const provider = agent.model.slice(0, slashIndex);
   const modelId = agent.model.slice(slashIndex + 1);
-  const model = getModel(provider, modelId);
+  const model = getModel?.(provider, modelId) ?? findModel?.(provider, modelId);
   if (!model) {
     return {
       ok: false,
@@ -396,7 +410,7 @@ export function runAgentViaSdk(
 
     (async () => {
       try {
-        const modelResolution = resolveModel(agent, options.getModel);
+        const modelResolution = resolveModel(agent, options.getModel, options.findModel);
         if (!modelResolution.ok) {
           // Fails before createSession: no session, no tokens spent; the
           // error carries the run's identity into the job's completion message.
