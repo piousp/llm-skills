@@ -313,6 +313,8 @@ test("proposeSkill: the happy path keeps the candidate and joins the index", asy
     event: "proposed",
     candidateHash: CONTENT_HASH,
     bodyHash: BODY_HASH,
+    // OA4: the line names the failure of the diagnosis the record carries, not a second failure of its own.
+    failureSignature: result.diagnosis.failureSignature,
     targetSkill: "pdf-tools",
     stagingPath: result.staged.stagingPath,
     decisionPath: result.staged.decisionPath,

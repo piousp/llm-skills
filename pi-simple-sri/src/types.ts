@@ -3,6 +3,10 @@
 // optional/required split, no extra keys (the schema sets
 // additionalProperties: false).
 
+// The event vocabulary of the index lives in src/attempts.ts, next to the hashes and the constructor of the
+// line it names. The import is type-only, so this module -- the contract root of the package -- keeps no run
+// time dependency on the module that reads and writes the lines.
+import type { KnownAttemptEvent } from "./attempts.ts";
 import { describe } from "./values.ts";
 
 // Settings read from the `pi-simple-sri` key of settings.json (Q16). Both lists
@@ -419,22 +423,28 @@ export interface DecisionRecord {
 // joined by candidateHash (Q14).
 //
 // A refusal is an event too: a skill the settings exclude, a session with no failure and a run with no
-// model leave their own line, with the hashes of the attempt (see attemptHashes in
-// src/improve-flow.ts), so the index answers "why did nothing happen" for every refusal that cost no
-// generation.
+// model leave their own line, with the hashes of the attempt (see attemptHashes in src/attempts.ts), so the
+// index answers "why did nothing happen" for every refusal that cost no generation.
+//
+// `event` is the vocabulary ATTEMPT_EVENTS declares (src/attempts.ts) plus the events this version only
+// recognizes: a line written by M1c is still a line this version reads, and no reader fails on an event it
+// cannot name. Only the constructor of that module, buildAttemptLine, decides which events are emitted, so
+// the wider type here never becomes a wider writer.
+//
+// `failureSignature` is required and nullable (OA4): the line of a refusal that has no diagnosis carries an
+// explicit null, so the field is always there and a reader never guesses whether its absence meant "no
+// failure" or "an older writer".
 export interface AttemptLine {
   ts: string;
-  event:
-    | "proposed"
-    | "no-evidence"
-    | "not-eligible"
-    | "no-model"
-    | "accepted"
-    | "gate-rejected"
-    | "gate-abstained";
+  event: KnownAttemptEvent;
   candidateHash: string;
   bodyHash: string;
+  failureSignature: string | null;
   targetSkill: string;
   stagingPath?: string;
   decisionPath?: string;
+  // Where the acceptance left the authoritative record of the run: .history/<timestamp>/decision.json
+  // inside the skill, present exactly on the line of an accepted candidate, which is the one event that
+  // wrote a skill.
+  historyPath?: string;
 }

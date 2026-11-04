@@ -442,6 +442,8 @@ test("propose: the happy path stages the lesson, the entry and the index line", 
       event: "proposed",
       candidateHash: CONTENT_HASH,
       bodyHash: BODY_HASH,
+      // OA4: the line names the failure the diagnosis of the record names.
+      failureSignature: write.decision.diagnosis.failureSignature,
       targetSkill: "pdf-tools",
       stagingPath: STAGING_RELATIVE,
       decisionPath: DECISION_RELATIVE,

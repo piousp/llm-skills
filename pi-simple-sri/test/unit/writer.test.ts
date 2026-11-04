@@ -191,6 +191,9 @@ function attemptLine(overrides: Partial<AttemptLine> = {}): AttemptLine {
     event: "proposed",
     candidateHash: `sha256:${"b".repeat(64)}`,
     bodyHash: `sha256:${"c".repeat(64)}`,
+    // OA4: every line carries the failure it is about, and one that has none says so with a null. A digest
+    // here instead of the null proves the field travels through the append unchanged either way.
+    failureSignature: `sha256:${"d".repeat(64)}`,
     targetSkill: "pdf-tools",
     stagingPath: `/pkg/staging/${BASE_TIMESTAMP}/pdf-tools`,
     decisionPath: `/pkg/staging/${BASE_TIMESTAMP}/pdf-tools/decision.json`,
@@ -543,6 +546,57 @@ test("appendAttemptLine: refuses a relative path", async () => {
     () => appendAttemptLine("state", attemptLine()),
     (error: unknown) => error instanceof SriWriterError,
   );
+});
+
+// OA11: the line is appended in one write, so there is no window in which the previous lines were read back
+// and are about to be written again. Two callers of the same process meet in the mutation queue and both
+// lines land; two processes meet in the kernel, which is what O_APPEND buys.
+test("appendAttemptLine: two appends of one process leave two lines and lose none", async (t) => {
+  const fixture = createFixture(t);
+  const attemptsPath = path.join(stateDir(fixture.pkg), "attempts.jsonl");
+  const first = attemptLine({ event: "proposed" });
+  const second = attemptLine({ event: "gate-rejected", candidateHash: `sha256:${"e".repeat(64)}` });
+
+  await Promise.all([appendAttemptLine(fixture.pkg, first), appendAttemptLine(fixture.pkg, second)]);
+
+  const lines = fs.readFileSync(attemptsPath, "utf8").split("\n").filter((line) => line !== "");
+  assert.equal(lines.length, 2);
+  assert.deepEqual(new Set(lines), new Set([JSON.stringify(first), JSON.stringify(second)]));
+});
+
+// The one precondition of an append: the file ends where a line ends. A line glued onto a truncated one would
+// make the index unparseable from that point on, so the append refuses and leaves the bytes as they were.
+test("appendAttemptLine: refuses to append after a line that was truncated", async (t) => {
+  const fixture = createFixture(t);
+  const attemptsPath = path.join(stateDir(fixture.pkg), "attempts.jsonl");
+  const truncated = '{"ts":"2026-11-02T14:03:22.490Z"';
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(attemptsPath, truncated, "utf8");
+
+  await assert.rejects(
+    () => appendAttemptLine(fixture.pkg, attemptLine()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("does not end with a newline"),
+  );
+
+  assert.equal(fs.readFileSync(attemptsPath, "utf8"), truncated);
+});
+
+// The append opens the index through a handle instead of writing a temporary file and renaming it, so the
+// perimeter is the one thing that keeps it from writing through a link into a file this package does not own.
+test("appendAttemptLine: refuses an index that is a symlink out of the state directory", async (t) => {
+  const fixture = createFixture(t);
+  const attemptsPath = path.join(stateDir(fixture.pkg), "attempts.jsonl");
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  const outsidePath = path.join(fixture.base, "elsewhere.jsonl");
+  fs.writeFileSync(outsidePath, "", "utf8");
+  fs.symlinkSync(outsidePath, attemptsPath);
+
+  await assert.rejects(
+    () => appendAttemptLine(fixture.pkg, attemptLine()),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+
+  assert.equal(fs.readFileSync(outsidePath, "utf8"), "");
 });
 
 // F1: a candidate whose index line failed is retired, and the answer says whether the directory is

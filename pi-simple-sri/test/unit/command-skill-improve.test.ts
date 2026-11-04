@@ -601,6 +601,8 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
       event: "proposed",
       candidateHash: CONTENT_HASH,
       bodyHash: BODY_HASH,
+      // OA4: the line names the failure the diagnosis of the record names.
+      failureSignature: decision.diagnosis.failureSignature,
       targetSkill: "pdf-tools",
       stagingPath: STAGING_RELATIVE,
       decisionPath: DECISION_RELATIVE,

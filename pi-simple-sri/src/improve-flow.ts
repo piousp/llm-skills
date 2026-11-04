@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Api, AssistantMessage, Context, Model, ModelsApiStreamOptions } from "@earendil-works/pi-ai";
 import { getAgentDir, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
+import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes } from "./attempts.ts";
 import { readSriConfig } from "./config.ts";
 import { buildDiagnosis } from "./diagnosis.ts";
 import { isEligibleUnderAnySpelling } from "./eligibility.ts";
 import { deriveEvidence, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
-import { sha256Digest } from "./hash.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { SKILL_FILE } from "./names.ts";
 import { createProposer, type CompleteFn, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
@@ -462,15 +462,23 @@ export async function proposeSkill(
   // names both halves, including whether the removal worked (I8): a message that claimed a cleanup it
   // did not manage would be the same lie one layer down.
   try {
-    await seams.appendAttempt(seams.base, {
-      ts: now.toISOString(),
-      event: "proposed",
-      candidateHash: staged.contentHash,
-      bodyHash: staged.bodyHash,
-      targetSkill: skill.name,
-      stagingPath,
-      decisionPath,
-    });
+    await seams.appendAttempt(
+      seams.base,
+      buildAttemptLine({
+        now,
+        event: "proposed",
+        targetSkill: skill.name,
+        // The pair the writer published, not a second computation of it: the record, the entry and the
+        // line name the same bytes.
+        hashes: { candidateHash: staged.contentHash, bodyHash: staged.bodyHash },
+        // The failure a candidate is about, taken from the diagnosis the record carries (OA4): a reader
+        // of the index can group every candidate written for the same failure without opening
+        // decision.json.
+        failureSignature: diagnosis.failureSignature,
+        stagingPath,
+        decisionPath,
+      }),
+    );
   } catch (error) {
     const removed = await discardCandidate(seams.base, staged.stagingPath);
     throw new SriWriterError(
@@ -694,47 +702,23 @@ function focusOrNull(focus: string | undefined): string | null {
   return normalizeFocus(focus) ?? null;
 }
 
-interface AttemptHashes {
-  candidateHash: string;
-  bodyHash: string;
-}
-
-// The name that identifies an attempt in its hashes: an event of the index, or -- for an attempt that
-// produces no line -- the outcome its session entry records. The two vocabularies overlap on purpose;
-// "error" exists only in the second one, because a generation that refused is not an event of the index.
-type AttemptIdentity = AttemptLine["event"] | ImprovementOutcome;
-
-// An event with no candidate and no body has nothing to tell apart, so both fields carry the digest
-// of one documented identity of the attempt: the JSON array [event, skill, focus or ""]. They are
-// equal on purpose -- it keeps the line the shape the index requires and groups the attempts that
-// asked for the same thing on the same skill (D5). The focus is the one normalizeFocus answered, so
-// the digest does not tell "no focus" from "focus empty": the run never carries the second one.
-function attemptHashes(
-  event: AttemptIdentity,
-  skillName: string,
-  focus: string | undefined,
-): AttemptHashes {
-  const digest = sha256Digest(JSON.stringify([event, skillName, focus ?? ""]));
-  return { candidateHash: digest, bodyHash: digest };
-}
-
 // The index line of an attempt that produced no candidate: no evidence, a skill the settings exclude,
 // no model to call. The line is the audit trail of a refusal that cost nothing, so "why did nothing
 // happen" has an answer in state/attempts.jsonl and not only in the surface that reported it.
+//
+// Its failureSignature is null on purpose (OA4): none of these refusals reached a diagnosis, so there is no
+// failure to name, and the field says exactly that instead of being absent.
 async function recordAttempt(
   seams: FlowSeams,
   now: Date,
-  event: AttemptLine["event"],
+  event: AttemptEvent,
   skill: SkillRef,
   hashes: AttemptHashes,
 ): Promise<void> {
-  await seams.appendAttempt(seams.base, {
-    ts: now.toISOString(),
-    event,
-    candidateHash: hashes.candidateHash,
-    bodyHash: hashes.bodyHash,
-    targetSkill: skill.name,
-  });
+  await seams.appendAttempt(
+    seams.base,
+    buildAttemptLine({ now, event, targetSkill: skill.name, hashes, failureSignature: null }),
+  );
 }
 
 // The compensation of F1. The removal can itself fail -- a permission on the directory, a path the

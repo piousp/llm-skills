@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { SriWriterError } from "./errors.ts";
@@ -27,6 +28,11 @@ import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile,
 //      never sees a half-written file;
 //   4. reads the file back and compares the bytes, so a write that did not land is an
 //      error instead of a silent success (verification on write, not only on read).
+//
+// The one write of the package that is not a temporary file and a rename is the append to the index of
+// attempts: a file that is only ever added to has one line appended to it, in one write, and the write is
+// verified against the tail of the file instead of against a read of the whole thing (appendAttemptLine,
+// OA11). Everything above -- the perimeter first, the queue around it -- still holds for it.
 //
 // Nothing here renders lesson frontmatter: src/lesson-frontmatter.ts owns that format
 // (P6) and hands the serialized file over as text. This module only moves bytes, hashes
@@ -180,29 +186,46 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
   };
 }
 
-// Append-only index: one JSON line per event (Q14). The existing bytes are never
-// rewritten or reordered; the new line is the only addition, so events joined by
-// candidateHash stay readable after a crash.
+// Append-only index: one JSON line per event (Q14). The existing bytes are never rewritten or reordered; the
+// new line is the only addition, so events joined by candidateHash stay readable after a crash.
+//
+// The append is one write with the newline included, made through a handle opened for appending (OA11).
+// O_APPEND places the bytes at the end of the file as the kernel sees it when the write runs, so two
+// processes of pi appending at the same moment cannot lose each other's line the way a read-modify-write
+// does -- the whole file used to be read and written back, and the writer that read first overwrote the line
+// of the writer that landed in between.
+//
+// There is no lock file and no retry: a lock is machinery the majority decision discarded (tmp/plan-M1.md,
+// OA11), because the append of one line is what has to be atomic and it already is. What stays is the
+// in-process queue, which keeps two callers of this module from interleaving their verification, and the
+// perimeter, which runs before the handle exists (I10).
 export async function appendAttemptLine(base: string, line: AttemptLine): Promise<void> {
   requireAbsoluteBase(base, "append");
 
-  // The base is known here, so the write is guarded against the whole state directory instead of
-  // the path the caller handed over; that check runs inside writeFileAtomic below, where the bytes
-  // land, and is not repeated here.
+  // The base is known here, so the write is guarded against the whole state directory instead of the path the
+  // caller handed over; that check runs inside appendQueued below, where the bytes land, and is not repeated
+  // here.
   const stateRoot = stateDir(base);
   const statePath = path.join(stateRoot, ATTEMPTS_FILE);
   fs.mkdirSync(stateRoot, { recursive: true });
 
-  const jsonLine = JSON.stringify(line);
+  // One string, one write: the newline travels with the line, so a crash either lands the whole event or
+  // leaves the index as it was to the last complete line.
+  const jsonLine = `${JSON.stringify(line)}\n`;
+  const bytes = Buffer.from(jsonLine, "utf8");
 
   await withFileMutationQueue(statePath, async () => {
-    const previous = await readTextIfExists(statePath);
-    const separator = previous === "" || previous.endsWith("\n") ? "" : "\n";
-    await writeFileAtomic(statePath, Buffer.from(`${previous}${separator}${jsonLine}\n`, "utf8"), stateRoot);
+    await assertEndsWithNewline(statePath);
+    await appendQueued(statePath, bytes, stateRoot);
 
-    const lastLine = (await readTextOrThrow(statePath)).split("\n").filter((entry) => entry !== "").at(-1);
-    if (lastLine !== jsonLine) {
-      throw new SriWriterError(`${quote(statePath)}: the last line after the append is not the event that was written`, statePath);
+    // Verified by its tail: the question is whether the line landed, and the last bytes of the file answer
+    // it without reading -- and certainly without rewriting -- the lines that were already there.
+    const tail = await readTail(statePath, bytes.length);
+    if (tail !== jsonLine) {
+      throw new SriWriterError(
+        `${quote(statePath)}: the last bytes after the append are not the event that was written`,
+        statePath,
+      );
     }
   });
 }
@@ -751,14 +774,86 @@ function listRelativeFiles(rootDir: string): string[] {
   return files.sort();
 }
 
-async function readTextIfExists(filePath: string): Promise<string> {
+// Append-only has one precondition this module checks instead of assuming: the file ends where a line ends.
+// A line appended after a truncated one would be glued to it, and the index would carry a JSON line nobody can
+// parse. The check reads one byte, not the file, so the append stays a write.
+async function assertEndsWithNewline(filePath: string): Promise<void> {
+  let size: number;
   try {
-    return await fs.promises.readFile(filePath, "utf8");
+    size = (await fs.promises.stat(filePath)).size;
   } catch (error) {
-    if (isMissingPathError(error)) {
-      return "";
-    }
+    // A missing index is the ordinary first append: the handle below creates it.
+    if (isMissingPathError(error)) return;
+    throw new SriWriterError(`cannot inspect ${quote(filePath)}: ${toErrorMessage(error)}`, filePath);
+  }
+  if (size === 0) return;
+
+  if ((await readTail(filePath, 1)) !== "\n") {
+    throw new SriWriterError(
+      `${quote(filePath)} does not end with a newline: refusing to append a line after a truncated one`,
+      filePath,
+    );
+  }
+}
+
+// The one append primitive of the module. `root` is the narrowest directory the bytes may land in and the
+// guard runs before the handle exists (I10), so no call site reaches the disk without the perimeter. The
+// handle is followed, not replaced: "a" writes through a symlink instead of renaming over it (Q11), and a
+// link that points outside the root was already refused above.
+async function appendQueued(target: string, bytes: Buffer, root: string): Promise<void> {
+  assertWritable(target, [root]);
+
+  let bytesWritten: number;
+  try {
+    bytesWritten = await appendToFile(target, bytes);
+  } catch (error) {
+    throw new SriWriterError(`cannot append to ${quote(target)}: ${toErrorMessage(error)}`, target);
+  }
+
+  // A short write would leave half a line at the end of the index, and the tail check that follows could
+  // only say the tail is wrong: the count says what happened.
+  if (bytesWritten !== bytes.length) {
+    throw new SriWriterError(
+      `cannot append to ${quote(target)}: wrote ${bytesWritten} of ${bytes.length} bytes`,
+      target,
+    );
+  }
+}
+
+// Opens, writes once and closes. The handle never outlives the call, so no caller can forget to close it, and
+// the write is one call with the whole line in it: O_APPEND puts those bytes at the end of the file as it is
+// when the kernel runs the write.
+async function appendToFile(target: string, bytes: Buffer): Promise<number> {
+  const handle = await fs.promises.open(target, "a");
+  try {
+    return (await handle.write(bytes)).bytesWritten;
+  } finally {
+    await handle.close();
+  }
+}
+
+// The last `length` bytes of a file, as text. The append verifies itself with this and never with a read of
+// the whole file: reading everything to compare one line is the read-modify-write this module stopped doing
+// (OA11).
+async function readTail(filePath: string, length: number): Promise<string> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+  } catch (error) {
     throw new SriWriterError(`cannot read ${quote(filePath)}: ${toErrorMessage(error)}`, filePath);
+  }
+
+  try {
+    const { size } = await handle.stat();
+    if (size < length) return "";
+
+    const tail = Buffer.alloc(length);
+    await handle.read(tail, 0, length, size - length);
+    return tail.toString("utf8");
+  } catch (error) {
+    throw new SriWriterError(`cannot read ${quote(filePath)}: ${toErrorMessage(error)}`, filePath);
+  } finally {
+    await handle.close();
   }
 }
 
