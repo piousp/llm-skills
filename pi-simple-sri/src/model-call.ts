@@ -1,8 +1,10 @@
 import type { Api, AssistantMessage, Context, Model, ModelsApiStreamOptions } from "@earendil-works/pi-ai";
-import type { DirectionalJudgeFn } from "./gate/directional-flow.ts";
+import { modelIdentity } from "./evidence.ts";
+import type { DirectionalGateDeps, DirectionalGateRequest, DirectionalJudgeFn } from "./gate/directional-flow.ts";
+import type { GateDeps, GateRequest } from "./gate/flow.ts";
 import { createJudge } from "./gate/judge.ts";
 import type { CompleteFn } from "./proposer.ts";
-import type { GateTokens } from "./types.ts";
+import type { GateTokens, Result } from "./types.ts";
 import { toErrorMessage } from "./values.ts";
 
 // The construction of the one model call this package makes (M1c, S5).
@@ -28,6 +30,10 @@ import { toErrorMessage } from "./values.ts";
 // M1c adds the second construction of this module and no new rule: `createDirectionalJudge` wraps a CompleteFn built by
 // `createModelCall` with the judge of the bank base, which is the same call with the same budget and the same session,
 // read one step closer so that the cost of the judgement can travel with the verdict.
+//
+// M1c adds a third piece too, and it is the one that keeps the two surfaces of the package from building the gate of the bank
+// twice: `wireDirectionalGate` is the request, the seams and the judge of that gate, built once from the session of the run
+// the way the proposer and the judge above are built from it.
 
 // The one method of pi's ModelRegistry this package calls, typed exactly after it: a ModelRegistry satisfies this
 // interface without a conversion, and a test fake only has to provide one method.
@@ -126,5 +132,66 @@ export function createDirectionalJudge(complete: CompleteFn): DirectionalJudgeFn
     if (usage === undefined) return { ok: false, error: { error: "unavailable" } };
 
     return { ok: true, value: { verdict: verdict.value.verdict, reason: verdict.value.reason, usage } };
+  };
+}
+
+// The wiring of the gate of the bank, shared by the two surfaces that can run one (M1c, S10).
+//
+// A gate of the bank spends the model twice -- one call to replay the cases of the two arms, one to judge what the candidate
+// answered (OA5) -- so the surface that runs it builds three things that only make sense together: the request, which adds the
+// bank the user wrote and the identity of the session model to the candidate both bases are pointed at; the seams, which add
+// the judge to the ones the surface was handed; and the judge itself, which is the second condition over the call above. A
+// request without the judge is a gate the flow refuses to run, and a modification of the judge that landed in one surface and
+// not in the other would spend a different call for the same decision, which is why they are built here and not twice.
+//
+// The two surfaces keep what is theirs: the command throws the refusal of a session without a model and the tool returns it as
+// a failure with its own vocabulary. The refusal itself is a value, because a session with no model is a fact of the run and
+// not an exception of this module.
+export interface DirectionalGateContext {
+  // The model of the session, already resolved: this module never picks one (see createModelCall above).
+  readonly model: Model<Api> | undefined;
+  readonly modelRegistry: ModelCallRegistry;
+}
+
+export interface DirectionalGateInput {
+  context: DirectionalGateContext;
+  // The identifier of the session the judge's call belongs to, read once by the surface that has the session manager.
+  sessionId: string;
+  // The candidate, named the way both bases name it: this function adds the two facts only the bank base has.
+  request: GateRequest;
+  // The bank that measures this run. A defect names a bank and is measured by the replay base instead (OA11), so the surface
+  // decides which flow runs and this function wires the one it was pointed at.
+  bankPath: string;
+  // The seams the surface already had, passed through untouched; the judge is the one field this function owns.
+  gateDeps?: GateDeps;
+}
+
+// What the flow of the bank is called with, once the wiring exists.
+export interface DirectionalGateRun {
+  request: DirectionalGateRequest;
+  deps: DirectionalGateDeps;
+}
+
+// The wiring, or the one reason it does not exist: a session without a model cannot gate a bank at all.
+export type DirectionalGateRunResult = Result<DirectionalGateRun, "no-model">;
+
+export function wireDirectionalGate(input: DirectionalGateInput): DirectionalGateRunResult {
+  const model = input.context.model;
+  // OA5 read the other way: a model this package cannot identify is no model at all, because every run and the judge itself
+  // pin the "provider/model" the record keeps.
+  const identity = model === undefined ? undefined : modelIdentity(model.provider, model.id);
+  if (model === undefined || identity === undefined) return { ok: false, error: "no-model" };
+
+  return {
+    ok: true,
+    value: {
+      request: { ...input.request, bankPath: input.bankPath, model: identity },
+      deps: {
+        ...input.gateDeps,
+        judge: createDirectionalJudge(
+          createModelCall({ registry: input.context.modelRegistry, model, sessionId: input.sessionId }),
+        ),
+      },
+    },
   };
 }

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SriFailClosedError, SriWriterError } from "./errors.ts";
-import { modelIdentity } from "./evidence.ts";
 import { acceptCandidate, type AcceptDeps } from "./gate/acceptance.ts";
 import {
   gateDirectionalCandidate,
@@ -40,7 +39,7 @@ import {
   refusedText,
   unknownSkillText,
 } from "./messages.ts";
-import { createDirectionalJudge, createModelCall } from "./model-call.ts";
+import { wireDirectionalGate } from "./model-call.ts";
 import { COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
 import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef } from "./types.ts";
@@ -145,8 +144,8 @@ export interface SkillImproveDeps extends ImproveFlowDeps {
   //
   // `gateDirectional` is the second flow of M1c, and it is a second seam because it is a second flow: the base of the bank
   // resolves no inventory and spends a judge, so a test that drives the chain of that base cannot be a request of the other
-  // one. The judge it needs is built here from the session and is not a seam of its own -- the flow requires it, so a test
-  // that wants a verdict replaces the whole flow instead of the call inside it.
+  // one. The judge it needs is built from the session by the one wiring of src/model-call.ts and is not a seam of its own --
+  // the flow requires it, so a test that wants a verdict replaces the whole flow instead of the call inside it.
   gate?: typeof gateStagedCandidate;
   gateDirectional?: typeof gateDirectionalCandidate;
   gateDeps?: GateDeps;
@@ -496,25 +495,19 @@ async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | D
   }
 
   // The base of the bank needs the model of the session twice -- one to replay the cases of the two arms, one to judge the
-  // answers of the candidate (OA5) -- so a session without one cannot gate it at all. It is said before the first read,
-  // which is the last moment at which nothing has been spent.
-  const model = ctx.model;
-  const identity = model === undefined ? undefined : modelIdentity(model.provider, model.id);
-  if (model === undefined || identity === undefined) {
-    throw new SriFailClosedError(noModelGateText(SURFACE, target.skill));
-  }
+  // answers of the candidate (OA5) -- so a session without one cannot gate it at all. The wiring is the one of
+  // src/model-call.ts, shared with the tool: it answers the request and the seams of this flow, or the refusal of a session
+  // with no model, which this surface reports as the error it is.
+  const wired = wireDirectionalGate({
+    context: ctx,
+    sessionId: ctx.sessionManager.getSessionId(),
+    request,
+    bankPath: target.bankPath,
+    ...(deps.gateDeps === undefined ? {} : { gateDeps: deps.gateDeps }),
+  });
+  if (!wired.ok) throw new SriFailClosedError(noModelGateText(SURFACE, target.skill));
 
-  return await (deps.gateDirectional ?? gateDirectionalCandidate)(
-    { ...request, bankPath: target.bankPath, model: identity },
-    {
-      ...deps.gateDeps,
-      // The second condition, wired here and nowhere else: the one model call of this package, bounded with the judge's
-      // budget and carrying the session, plus the cost of the call the record of the bank keeps (src/model-call.ts).
-      judge: createDirectionalJudge(
-        createModelCall({ registry: ctx.modelRegistry, model, sessionId: ctx.sessionManager.getSessionId() }),
-      ),
-    },
-  );
+  return await (deps.gateDirectional ?? gateDirectionalCandidate)(wired.value.request, wired.value.deps);
 }
 
 // Step 7 of the protocol of §7, and the only path of this package that writes inside a skill. Everything it

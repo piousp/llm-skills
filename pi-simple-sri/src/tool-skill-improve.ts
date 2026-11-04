@@ -2,12 +2,7 @@ import path from "node:path";
 import { getAgentDir, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { describeExpectation } from "./diagnosis.ts";
-import { modelIdentity } from "./evidence.ts";
-import {
-  gateDirectionalCandidate,
-  type DirectionalGateResult,
-  type DirectionalJudgeFn,
-} from "./gate/directional-flow.ts";
+import { gateDirectionalCandidate, type DirectionalGateResult } from "./gate/directional-flow.ts";
 import {
   gateStagedCandidate,
   type GateConcludedResult,
@@ -37,7 +32,7 @@ import {
   refusedText,
   unknownSkillText,
 } from "./messages.ts";
-import { createDirectionalJudge, createModelCall } from "./model-call.ts";
+import { wireDirectionalGate } from "./model-call.ts";
 import { SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import type { GenerationUsage } from "./proposer.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
@@ -170,8 +165,8 @@ export type SkillImproveOutcome =
 // M1c adds three. `bankPath` and `defect` are the fields of the call of the bank base, present on the outcome of
 // every call that named them and absent on the call of M1, which names neither. `judgeVerdict` is what the judge of
 // that base answered about the whole set of cases, in the three words the record keeps (CaseGateEvaluation.judge):
-// it is present on a gate of the bank base and absent on the other one, which has no judge, and it is read from the
-// seam this surface wired -- a gate that never asked is `not-run`, which is what the record says too.
+// it is present on a gate of the bank base and absent on the other one, which has no judge, and the flow of that base
+// carries it in its answer -- a gate that never asked is `not-run`, which is what the record says too.
 export interface ToolDetails {
   action: SkillImproveAction;
   skill: string;
@@ -198,8 +193,8 @@ export interface ToolDetails {
 //
 // `gateDirectional` is the second flow of M1c and is a second seam for the same reason: its answer is a different union
 // (a base with no baseline is one of its outcomes), so a test that proves the dispatch cannot drive it through the seam of
-// the other base. The judge it requires is built here from the session and is not a seam: the flow refuses to run without
-// it, so a test that wants a verdict replaces the whole flow instead of the call inside it.
+// the other base. The judge it requires is not a seam: the one wiring of src/model-call.ts builds it from the session, and a
+// test that wants a verdict replaces the whole flow instead of the call inside it.
 export interface SkillImproveToolDeps extends ImproveFlowDeps {
   appendEntry?: (customType: string, data: ImprovementEntry) => void;
   gate?: typeof gateStagedCandidate;
@@ -491,73 +486,43 @@ async function runGate(
   const measuringBankPath = params.defect === true ? undefined : params.bankPath;
 
   if (measuringBankPath === undefined) {
-    return answerOf(action, skill, base, params, {
-      result: await (deps.gate ?? gateStagedCandidate)(request, deps.gateDeps),
-    });
+    return answerOf(action, skill, base, params, await (deps.gate ?? gateStagedCandidate)(request, deps.gateDeps));
   }
 
   // The base of the bank spends the model twice -- one to replay the cases of the two arms, one to judge the answers of the
-  // candidate (OA5) -- so a session without one cannot gate it at all. Said before the first read, which is the last moment at
-  // which nothing has been spent.
-  const model = ctx.model;
-  const identity = model === undefined ? undefined : modelIdentity(model.provider, model.id);
-  if (model === undefined || identity === undefined) {
+  // candidate (OA5) -- so a session without one cannot gate it at all. The wiring is the one of src/model-call.ts, shared with
+  // the command: it answers the request and the seams of this flow, or the refusal of a session with no model, which is said
+  // before the first read and is therefore the last moment at which nothing has been spent.
+  const wired = wireDirectionalGate({
+    context: ctx,
+    sessionId: ctx.sessionManager.getSessionId(),
+    request,
+    bankPath: measuringBankPath,
+    ...(deps.gateDeps === undefined ? {} : { gateDeps: deps.gateDeps }),
+  });
+  if (!wired.ok) {
     return failure(action, skill.name, "no-model", "no-model", noModelGateText(SURFACE, skill));
   }
 
-  // What the judge answers during this call, watched at the seam this surface wires: the answer of the gate does not carry it,
-  // and the record of the bank keeps it in the same three words (CaseGateEvaluation.judge).
-  const judged: JudgeTally = { answer: "not-run" };
-  const result = await (deps.gateDirectional ?? gateDirectionalCandidate)(
-    { ...request, bankPath: measuringBankPath, model: identity },
-    {
-      ...deps.gateDeps,
-      judge: watchingJudge(
-        createDirectionalJudge(
-          createModelCall({ registry: ctx.modelRegistry, model, sessionId: ctx.sessionManager.getSessionId() }),
-        ),
-        judged,
-      ),
-    },
+  return answerOf(
+    action,
+    skill,
+    base,
+    params,
+    await (deps.gateDirectional ?? gateDirectionalCandidate)(wired.value.request, wired.value.deps),
   );
-
-  return answerOf(action, skill, base, params, { result, judgeVerdict: judged.answer });
 }
 
-// The answer of a gate, with what the judge of the bank said when this call wired one. The two flows answer different unions --
-// the base of the bank adds the candidate nobody could measure -- so the mapping into details is one function and not two.
-interface GateAnswer {
-  result: GateFlowResult | DirectionalGateResult;
-  judgeVerdict?: "pass" | "fail" | "not-run";
-}
-
-// What the judge of the bank answered during one call, as the record of the gate names it. The surface is the only place that
-// sees the judge it wired, so the seam is watched here instead of being re-derived from the reason of the verdict, which cannot
-// tell a bank without a rubric from one whose judge agreed.
-interface JudgeTally {
-  answer: "pass" | "fail" | "not-run";
-}
-
-// A judge that records the answer it gave. A call that failed or a reply nobody could read is `not-run`, which is the word the
-// record keeps for the second condition that did not speak.
-function watchingJudge(judge: DirectionalJudgeFn, tally: JudgeTally): DirectionalJudgeFn {
-  return async (request) => {
-    const result = await judge(request);
-    tally.answer = result.ok ? result.value.verdict : "not-run";
-    return result;
-  };
-}
-
-// The mapping of an answer into the documented result, for the two bases and every outcome of each.
+// The mapping of an answer into the documented result, for the two bases and every outcome of each. What the judge of the bank
+// said travels in the answer of that base and not through a seam watched here: the flow concludes with the reading the record
+// keeps, so the words of details and the words of decision.json cannot disagree.
 function answerOf(
   action: SkillImproveAction,
   skill: SkillRef,
   base: string,
   params: SkillImproveParams,
-  answer: GateAnswer,
+  result: GateFlowResult | DirectionalGateResult,
 ): AgentToolResult<ToolDetails> {
-  const { result, judgeVerdict } = answer;
-
   if (result.kind === "refused") {
     // The candidate cannot be gated at all -- it is not inside staging, it belongs to another skill, its record is unreadable or
     // from a version this package does not read, or it announces the other base -- and nothing was written, so the refusal and
@@ -610,7 +575,7 @@ function answerOf(
       plannedRuns: result.plannedRuns,
       usedRuns: result.usedRuns,
       ...bankFieldsOf(params),
-      ...(judgeVerdict === undefined ? {} : { judgeVerdict }),
+      ...(result.judgeVerdict === undefined ? {} : { judgeVerdict: result.judgeVerdict }),
     },
     ...(result.kind === "gate-accepted" ? {} : { isError: true }),
   };

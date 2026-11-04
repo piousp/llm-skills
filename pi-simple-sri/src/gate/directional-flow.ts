@@ -22,6 +22,7 @@ import { relativeToBase } from "../write-base.ts";
 import { appendAttemptLine, rewriteStagingDecision, writeTextAtomically } from "../writer.ts";
 import { spendBudget, tokenTallyOf, type PlannedItem } from "./budget.ts";
 import {
+  answerGateConclusion,
   appendGateAnswerLine,
   preregisteredRecordOf,
   resolveStagedCandidate,
@@ -218,6 +219,9 @@ export async function gateDirectionalCandidate(
       plannedRuns: 0,
       usedRuns: 0,
       overlays: null,
+      // The judge of this base never spoke about a candidate whose bytes moved, which is the word the record keeps for a
+      // gate of the second condition that was never asked.
+      judgeVerdict: "not-run",
       detail: lesson.error,
     };
   }
@@ -260,6 +264,7 @@ export async function gateDirectionalCandidate(
       plannedRuns: 0,
       usedRuns: 0,
       overlays: null,
+      judgeVerdict: "not-run",
       detail: `the copy ${quote(copyPath)} hashes to ${copyDigest}, not to the ${loaded.value.contentHash} of the bank that was read`,
     };
   }
@@ -300,7 +305,7 @@ export async function gateDirectionalCandidate(
   if (!overlays.ok) {
     // The preregistration stays on disk: the rule and the materials were recorded and the gate ended without a result, which
     // is what a preregistered record means.
-    return await answered({
+    return await answerGateConclusion({
       request,
       seams,
       record,
@@ -311,6 +316,7 @@ export async function gateDirectionalCandidate(
       usedRuns: 0,
       overlays: null,
       detail: overlays.error.detail,
+      judgeVerdict: "not-run",
     });
   }
 
@@ -458,8 +464,9 @@ export async function gateDirectionalCandidate(
   await seams.rewriteDecision(request.base, candidateDir, concluded);
 
   // Step 11. The one line of the index, and nothing inside the skill: `gate-accepted` is a state of decision.json, and the
-  // line of an accepted candidate is the `accepted` event the acceptance writes when it edits the skill.
-  return await answered({
+  // line of an accepted candidate is the `accepted` event the acceptance writes when it edits the skill. The answer carries
+  // what the judge said about the whole set, which is the word the record of this base keeps (CaseGateEvaluation.judge).
+  return await answerGateConclusion({
     request,
     seams,
     record,
@@ -469,6 +476,7 @@ export async function gateDirectionalCandidate(
     plannedRuns: plan.design.plannedRuns,
     usedRuns: budget.usedRuns,
     overlays: caseBankOverlays,
+    judgeVerdict: evaluation.judge,
     ...(detail === undefined ? {} : { detail }),
   });
 }
@@ -619,45 +627,9 @@ async function noBaseline(input: {
   };
 }
 
-// The reading of the gate and the one line of the index it gains, in the same words the replay base uses: the answer, the
-// paths, the budget and the overlays of one concluded gate. The line itself is written by the one writer of both bases.
-interface AnswerInput {
-  request: DirectionalGateRequest;
-  seams: DirectionalGateSeams;
-  record: DecisionRecord;
-  candidateDir: string;
-  verdict: GateVerdict;
-  reason: GateConclusionReason | null;
-  plannedRuns: number;
-  usedRuns: number;
-  overlays: GateOverlays | null;
-  detail?: string;
-}
-
-async function answered(input: AnswerInput): Promise<GateConcludedResult> {
-  const paths = await appendGateAnswerLine({
-    seams: input.seams,
-    base: input.request.base,
-    skillName: input.request.skill.name,
-    candidateDir: input.candidateDir,
-    record: input.record,
-    answer: input.verdict,
-    reason: input.reason,
-    ...(input.detail === undefined ? {} : { detail: input.detail }),
-  });
-
-  return {
-    kind: input.verdict,
-    reason: input.reason,
-    stagingPath: paths.stagingPath,
-    decisionPath: paths.decisionPath,
-    plannedRuns: input.plannedRuns,
-    usedRuns: input.usedRuns,
-    overlays: input.overlays,
-    ...(input.detail === undefined ? {} : { detail: input.detail }),
-  };
-}
-
+// The reading of the gate and the one line of the index it gains are the gate's, and this base answers them through the one
+// function that builds them (answerGateConclusion, ./flow.ts) with its own request and its own seams: the answer, the paths,
+// the budget, the overlays and the word of the judge are the same shape in the two bases.
 function refused(reason: CandidateRejectionReason, detail: string): GateRefusedResult {
   return { kind: "refused", rejection: { reason, detail } };
 }

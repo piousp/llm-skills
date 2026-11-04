@@ -1144,6 +1144,9 @@ test("gate: a call that names a bank dispatches to the flow of the bank", async 
         plannedRuns: 4,
         usedRuns: 4,
         overlays: null,
+        // The flow concludes with the reading of the judge it spent, and the tool copies it into details: the word travels in
+        // the answer of the gate and not through a seam this surface watches.
+        judgeVerdict: asked.ok ? asked.value.verdict : "not-run",
       };
     },
   });

@@ -81,10 +81,11 @@ import type {
 // surfaces run it and a candidate this module gates is one the whole package then trusts: one
 // implementation, one set of guards, and no second reading of a decision.json.
 //
-// Two pieces of this sequence are exported because the second base of M1c is a second flow and not a copy of this one:
-// `verifiedStagedLesson` is the guard of the candidate's bytes, which both bases run before they write anything, and
-// `appendGateAnswerLine` is the one writer of the line the index gains, which both bases write. What each base decides is
-// its own; how a candidate is verified and how the index hears about it is the gate's, and it lives in one place.
+// Three pieces of this sequence are exported because the second base of M1c is a second flow and not a copy of this one:
+// `verifiedStagedLesson` is the guard of the candidate's bytes, which both bases run before they write anything,
+// `appendGateAnswerLine` is the one writer of the line the index gains, which both bases write, and `answerGateConclusion` is
+// the answer of a concluded gate, which both build over that line. What each base decides is its own; how a candidate is
+// verified and how the index hears about a verdict is the gate's, and it lives in one place.
 //
 // Nothing here resolves a seam at import time, and nothing it does starts a process the caller did not
 // allow: the replay executor is resolved inside gateStagedCandidate, and a test drives the whole gate with a
@@ -246,6 +247,11 @@ export interface GateRefusedResult {
 // not copy, the skill of the item that no longer resolves, the lesson whose bytes moved. It is absent when the
 // reason is the whole story, and it is the same text the line of the index keeps, so the answer and the index
 // cannot describe two different refusals.
+//
+// `judgeVerdict` is what the judge of the bank answered about the whole set of cases, in the three words the record keeps
+// (CaseGateEvaluation.judge). It is present on the answer of a base that has a judge and absent on this one, which has
+// none, and the flow that spends a judge fills it with the reading it already concluded on -- so no surface has to watch
+// the seam it wired, and the answer and the record cannot disagree about what the second condition said.
 export interface GateConcludedResult {
   kind: GateVerdict;
   reason: GateConclusionReason | null;
@@ -255,6 +261,7 @@ export interface GateConcludedResult {
   usedRuns: number;
   overlays: GateOverlays | null;
   detail?: string;
+  judgeVerdict?: "pass" | "fail" | "not-run";
 }
 
 // The union the command switches on. It is its own and not ProposeFlowResult: a gate answers about a
@@ -308,7 +315,7 @@ export async function gateStagedCandidate(
   // runs before the rest because a gate about nothing is the cheapest one to stop.
   const moved = await movedOriginOf(record, request.cwd);
   if (moved !== null) {
-    return await answered({
+    return await answerGateConclusion({
       request,
       seams,
       record,
@@ -345,7 +352,7 @@ export async function gateStagedCandidate(
   // abstention the scorer answers instead of planning, and the exclusions travel with it.
   const plan = planGate(planItemsOf(record));
   if ("abstain" in plan) {
-    return await answered({
+    return await answerGateConclusion({
       request,
       seams,
       record,
@@ -367,7 +374,7 @@ export async function gateStagedCandidate(
   // spends anything, which is the honest reading of "the diagnosis cannot say what failed".
   const models = modelsOf(selected);
   if (models === undefined) {
-    return await answered({
+    return await answerGateConclusion({
       request,
       seams,
       record,
@@ -388,7 +395,7 @@ export async function gateStagedCandidate(
   for (const entry of selected) {
     const dirs = sharedSkillDirs(entry.item, inventory, request.skill);
     if (!dirs.ok) {
-      return await answered({
+      return await answerGateConclusion({
         request,
         seams,
         record,
@@ -433,7 +440,7 @@ export async function gateStagedCandidate(
     // The preregistration stays on disk: the rule was recorded and the gate ended without a result, which is
     // what a preregistered record means. The reason travels in the line and in this answer, with the refusal of
     // the copy in it -- which file of which skill stopped the overlay (M4).
-    return await answered({
+    return await answerGateConclusion({
       request,
       seams,
       record,
@@ -529,7 +536,7 @@ export async function gateStagedCandidate(
   // does not carry the verdict yet.
   await seams.rewriteDecision(request.base, candidateDir, concluded);
 
-  return await answered({
+  return await answerGateConclusion({
     request,
     seams,
     record,
@@ -614,12 +621,22 @@ export function preregisteredRecordOf(
   };
 }
 
+// The two seams a concluded answer spends: the clock the line is stamped with and the writer that appends it. A seam set
+// with more than the two -- the resolved seams of a flow -- satisfies it as it stands, which is what lets the two bases of
+// the gate answer through one function.
+export type GateAnswerSeams = Pick<GateSeams, "now" | "appendAttempt">;
+
 // The verdict of the gate and the one line of the index it gains. The record is the caller's and can be older
 // than this answer: the abstentions that end before the budget -- insufficient-items, no-model, skill-unavailable,
 // overlay-failed -- leave it in "not-run" or in "preregistered" while the line and the answer carry the result.
-interface AnswerInput {
-  request: GateRequest;
-  seams: GateSeams;
+//
+// The request and the seams are generic because the two bases answer through this function with their own: the flow of the
+// bank adds the bank and the model to the request and the judge to the seams, and both satisfy the two constraints as they
+// stand (DirectionalGateRequest extends GateRequest, DirectionalGateSeams is a GateSeams with the judge on top), so neither
+// base needs a conversion to reach the one writer of the line.
+export interface GateAnswerInput<Request extends GateRequest, Seams extends GateAnswerSeams> {
+  request: Request;
+  seams: Seams;
   record: DecisionRecord;
   candidateDir: string;
   verdict: GateVerdict;
@@ -631,9 +648,17 @@ interface AnswerInput {
   // longer resolves. It reaches the line of the index and the answer, and it is absent when the reason is the
   // whole story (M4).
   detail?: string;
+  // What the judge of the bank said about the whole set of cases, for the base that has one. The base of the replay does
+  // not pass it: it has no judge, and the field of its answer is absent instead of "not-run".
+  judgeVerdict?: "pass" | "fail" | "not-run";
 }
 
-async function answered(input: AnswerInput): Promise<GateConcludedResult> {
+// The answer of a concluded gate, with the one line of the index it gains. It is exported because the two bases of M1c
+// conclude through it: the layout of the answer and the writer of the line are the gate's, and a second copy in the flow of
+// the bank would be a second answer to "what does a gate tell the index".
+export async function answerGateConclusion<Request extends GateRequest, Seams extends GateAnswerSeams>(
+  input: GateAnswerInput<Request, Seams>,
+): Promise<GateConcludedResult> {
   const paths = await appendGateAnswerLine({
     seams: input.seams,
     base: input.request.base,
@@ -654,6 +679,7 @@ async function answered(input: AnswerInput): Promise<GateConcludedResult> {
     usedRuns: input.usedRuns,
     overlays: input.overlays,
     ...(input.detail === undefined ? {} : { detail: input.detail }),
+    ...(input.judgeVerdict === undefined ? {} : { judgeVerdict: input.judgeVerdict }),
   };
 }
 
@@ -663,7 +689,7 @@ export type GateAnswerEvent = GateVerdict | "no-baseline";
 
 // What a line of the index is made of, with the two paths the caller publishes in the record of the candidate.
 export interface GateLineInput {
-  seams: Pick<GateSeams, "now" | "appendAttempt">;
+  seams: GateAnswerSeams;
   base: string;
   skillName: string;
   candidateDir: string;

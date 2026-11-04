@@ -562,6 +562,8 @@ test("gateDirectionalCandidate: mechanics and judge accepting is an acceptance w
   assert.equal(result.reason, null);
   assert.equal(result.plannedRuns, PLANNED_RUNS);
   assert.equal(result.usedRuns, PLANNED_RUNS);
+  // What the second condition said about the whole set travels in the answer, so no surface has to watch the judge it wired.
+  assert.equal(result.judgeVerdict, "pass");
   assert.equal(result.stagingPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME));
   assert.equal(result.decisionPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME, DECISION_FILE));
   assert.notEqual(result.overlays, null);
@@ -689,6 +691,8 @@ test("gateDirectionalCandidate: a mechanical rejection never calls the judge", a
   assert.equal(result.kind, "gate-rejected");
   assert.equal(result.reason, "below-threshold");
   assert.equal(harness.judged.length, 0);
+  // The judge was never asked, and the answer says so in the word the record keeps for a condition that did not speak.
+  assert.equal(result.judgeVerdict, "not-run");
 
   const record = readRecord(fixture.decisionPath);
   assert.deepEqual(validateAgainstSchema(record), []);
@@ -721,6 +725,7 @@ test("gateDirectionalCandidate: a mechanical acceptance the judge does not accom
   assert.equal(result.kind, "gate-rejected");
   assert.equal(result.reason, "judge-failed");
   assert.equal(harness.judged.length, 2);
+  assert.equal(result.judgeVerdict, "fail");
 
   const gate = concludedCaseBank(readRecord(fixture.decisionPath));
   const judge = gate.caseBank.judge;
