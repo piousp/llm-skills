@@ -420,13 +420,44 @@ test("propose: a failing model call is refused with its cause", async () => {
   assert.match(error.message, /socket hang up/);
 });
 
+// The refusal is the refusal of the base of the transcript, and the base is named here so the assertion is about that base
+// and not about the guard having disappeared (M1c): the base of the bank is the case below.
 test("propose: an empty evidence list is refused before the model is called", async () => {
   const fake = fakeComplete({ text: replyText() });
 
-  const error = await rejectionOf(fake, proposeInput({ evidence: [] }));
+  const error = await rejectionOf(fake, proposeInput({ evidence: [], basis: "replay" }));
 
   assert.match(error.message, /evidence/);
   assert.equal(fake.calls.length, 0);
+});
+
+// M1c, OA2: the base of the bank writes its lesson from the cases the bank declares, so a run of it carries no evidence
+// item and the guard above does not apply. The prompt says the same: the block holds the summary of the ask and opens no
+// section it cannot fill, and the draft lists no evidence id.
+const BASELINE_DIAGNOSIS: Diagnosis = {
+  summary: 'Directional improvement of skill "pdf-tools": no focus was asked for.',
+  failureSignature: `sha256:${"e".repeat(64)}`,
+  replayItems: [],
+};
+
+test("propose: an empty evidence list is accepted by the base of the bank", async () => {
+  const fake = fakeComplete({ text: replyText() });
+
+  const proposal = await proposeOrFail(
+    fake,
+    proposeInput({ evidence: [], basis: "case-bank", diagnosis: BASELINE_DIAGNOSIS }),
+  );
+
+  assert.deepEqual(proposal.draft.sourceEvidence, []);
+  assert.equal(fake.calls.length, 1);
+
+  const prompt = userPromptOf(fake.calls[0].context);
+  // The ask reached the model, inside the block the system prompt declares as data.
+  assert.equal(prompt.includes("no focus was asked for"), true);
+  assert.equal(prompt.includes(PROMPT_MARKERS.evidenceOpen), true);
+  // And no section announces what this base does not have.
+  assert.equal(prompt.includes("failure excerpts:"), false);
+  assert.equal(prompt.includes("failing turns:"), false);
 });
 
 test("propose: an unusable clock is refused before the model is called", async () => {

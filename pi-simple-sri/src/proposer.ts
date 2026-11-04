@@ -2,7 +2,7 @@ import type { AssistantMessage, Context, TextContent } from "@earendil-works/pi-
 import { describeExpectation } from "./diagnosis.ts";
 import { ProposerError } from "./errors.ts";
 import { MAX_BODY_BYTES, serializeLesson, slugify } from "./lesson-frontmatter.ts";
-import type { Diagnosis, EvidenceItem, LessonDraft, Result } from "./types.ts";
+import type { Diagnosis, EvidenceItem, GateBasis, LessonDraft, Result } from "./types.ts";
 import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 
 // The proposer: a diagnosis and the text of a skill become a lesson draft (P7, Q9).
@@ -29,7 +29,8 @@ import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 // The evidence block carries the failures two ways: the turns the diagnosis selected, and the
 // excerpt of every evidence item that has one, which is the tool output the model would otherwise
 // never see. The draft's source-evidence is the list of ids, so the ids travel as data and not as
-// prompt text.
+// prompt text. A diagnosis of the base of the case bank carries neither the turns nor the excerpts
+// (M1c), and then the block holds the summary of the ask and the draft lists no evidence id.
 
 // The rest of the fail-closed errors live in src/errors.ts so one `instanceof SriFailClosedError`
 // tells the refusals of the whole package apart; the module that raises this one re-exports it.
@@ -105,9 +106,15 @@ export interface ProposeInput {
   skill: SkillContext;
   // The evidence that backs the lesson: its ids become the draft's source-evidence, and the excerpt
   // of each item travels into the prompt inside the evidence block, which is the only place the
-  // model reads the tool output that broke the turn. A lesson without evidence is not a lesson this
-  // package can gate, so an empty list is refused before the model is called.
+  // model reads the tool output that broke the turn. A lesson with no evidence is not a lesson the base
+  // of the transcript can gate, so an empty list is refused before the model is called -- unless the base
+  // says the failures are written down elsewhere (see `basis`).
   evidence: readonly EvidenceItem[];
+  // How the candidate is going to be measured, and with that where its failures are written down (M1c):
+  // absent is the base of the transcript, which is the only one M1 wrote; the bank is the base whose
+  // failures are the cases the user wrote, so a run of it carries no evidence item and still has something
+  // to write from. The base decides which way the guard below reads; it never decides what the prompt hides.
+  basis?: GateBasis;
   focus?: string;
   now: Date;
   // What the caller aborts with: pi aborts the signal of a tool call it cancels, and a command has
@@ -134,7 +141,12 @@ export function createProposer(complete: CompleteFn): Proposer {
     async propose(input: ProposeInput): Promise<ProposeResult> {
       const { skill, evidence, now } = input;
 
-      if (evidence.length === 0) {
+      // A lesson is written from a failure, and the base of the run says where that failure is written down: in the
+      // transcript, whose items are the evidence -- and none of them is a run with nothing to fix -- or in the case
+      // bank, whose cases the gate replays, so a run of the bank arrives with no evidence item and is not a run with
+      // nothing to write from (M1c, OA2). The refusal is therefore the refusal of the base of the transcript, and the
+      // base of the bank leaves it.
+      if (evidence.length === 0 && (input.basis ?? "replay") === "replay") {
         return fail(`cannot propose a lesson for skill ${quote(skill.name)}: no evidence backs it`);
       }
 
@@ -269,6 +281,10 @@ function buildUserPrompt(input: ProposeInput): string {
 // the turns it failed on. The evidence ids are not here because the lesson must not mention them;
 // the draft already carries them. An item without an excerpt contributes no line: it is a failure
 // the diagnosis names and the model has nothing to read about.
+//
+// A diagnosis of the base of the bank names no turn, and then the last section is not opened: a header with
+// nothing under it reads as a list the model failed to read, which is worse than a block that says only what
+// it has. The base of the transcript always carries a turn, so nothing of M1 changes here.
 function evidenceLines(diagnosis: Diagnosis, evidence: readonly EvidenceItem[]): string[] {
   const lines = [`summary: ${dataValue(diagnosis.summary)}`];
 
@@ -279,6 +295,8 @@ function evidenceLines(diagnosis: Diagnosis, evidence: readonly EvidenceItem[]):
       lines.push(`- ${dataValue(excerpt)}`);
     }
   }
+
+  if (diagnosis.replayItems.length === 0) return lines;
 
   lines.push("failing turns:");
 

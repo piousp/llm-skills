@@ -75,8 +75,9 @@
         "summary": { "type": "string", "minLength": 1 },
         "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "replayItems": {
+          "description": "The turns this attempt replays, and how many there are is a property of the base: the base of the transcript needs at least one, and the base of the case bank replays the cases it was written for, which the gate supplies when it runs, so a directional attempt carries none. The keyword was minItems 1 until M1c; relaxing it invalidates no record written before, and the guard that still refuses an empty diagnosis of the transcript lives in src/diagnosis.ts, one per base.",
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {
             "type": "object",
             "additionalProperties": false,

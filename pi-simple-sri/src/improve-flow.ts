@@ -4,7 +4,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes } from "./attempts.ts";
 import { readSriConfig } from "./config.ts";
-import { buildDiagnosis } from "./diagnosis.ts";
+import { buildBaselineDiagnosis, buildDiagnosis } from "./diagnosis.ts";
 import { isEligibleUnderAnySpelling } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
@@ -19,9 +19,14 @@ import type {
   AttemptLine,
   DecisionRecord,
   DecisionSurface,
+  DecisionTrigger,
   Diagnosis,
   Eligibility,
   EvidenceItem,
+  GateBasis,
+  GateBlock,
+  GateBudget,
+  GateTokenTally,
   LessonDraft,
   SkillRef,
   SriConfig,
@@ -51,7 +56,10 @@ import {
 //   2. a skill the settings exclude is refused before the model is called, and the refusal is
 //      recorded with its reason, so an ineligible skill never spends a generation (Q17, D6);
 //   3. the evidence comes from the session branch alone; with none there is no candidate, and the
-//      attempt is recorded anyway so "nothing happened" is auditable (D5);
+//      attempt is recorded anyway so "nothing happened" is auditable (D5). A run that names a case
+//      bank asks for a direction instead (M1c): its failures are the cases the bank declares, so this
+//      step does not apply to it, the diagnosis is the ask itself, and the record says the gate of the
+//      bank will measure the candidate;
 //   4. the session model writes one lesson from a diagnosis of that evidence;
 //   5. the lesson and its decision.json go to the package staging tree and the attempt joins the
 //      index. The two writes are one unit: a candidate whose line cannot be appended is retired, so
@@ -184,6 +192,16 @@ export interface ImproveRequest {
   // absent (normalizeFocus). The published shapes -- the trigger of decision.json and the session
   // entry -- are the only places that spell it as null.
   focus?: string;
+  // Where the case bank of this run is, when the run has one (M1c): a request that names a bank asks for a directional
+  // improvement, so the run proposes from the ask instead of from the transcript and its record says the bank will
+  // measure it. Absent is the run of M1, unchanged -- the evidence of the session and a gate of the replayed turns --
+  // and the path itself is read by the gate and not here: a bank that does not exist is a missing baseline, which is a
+  // state of the attempt and not a reason to refuse the proposal (OA9).
+  bankPath?: string;
+  // Whether the bank describes the artifact a defect came from instead of the cases to measure (M1c). The branch that
+  // reads it is the defect branch (S8); this flow only knows what it means for the base, and a defect is measured by
+  // the replay flow (OA11), so such a request is not the base of the bank.
+  defect?: boolean;
   // The abort signal of the surface that asked, when it has one: a tool call carries one pi can
   // abort, a command has nothing to abort with and leaves it absent. It travels to the single model
   // call of the run and nothing else does (F7).
@@ -357,9 +375,15 @@ export async function proposeSkill(
     };
   }
 
-  const derived = sessionEvidence(ctx);
+  // Where the failures of this run are written down is a property of its base (M1c): a request that names a bank asks
+  // for a direction and the bank is what measures it, so the transcript is not read at all -- a session with no
+  // failure is not a refusal in this base -- while a request that names none is the run of M1, unchanged.
+  const basis = basisOf(request);
+  const derived = basis === "replay" ? sessionEvidence(ctx) : undefined;
 
-  if (derived === undefined) {
+  // Zero items is absence and not an empty result, and it is the refusal of the base that reads the transcript: a
+  // summary of nothing would read like a diagnosis that found the skill healthy.
+  if (basis === "replay" && derived === undefined) {
     const hashes = attemptHashes("no-evidence", skill.name, focus);
     await recordAttempt(seams, now, "no-evidence", skill, hashes);
     return {
@@ -376,13 +400,22 @@ export async function proposeSkill(
     return { kind: "no-model", skill };
   }
 
-  const diagnosis = diagnoseEvidence(derived.items, derived.contextById, skill, ctx);
+  // What the generation is written from, per base: the evidence the transcript gave and the diagnosis built from it, or
+  // the ask alone -- no evidence item and no replayed turn -- because the turns a directional attempt replays are the
+  // cases of the bank, which the gate reads when it runs and this run has not read yet. `derived` is undefined exactly
+  // in the second case: the replay base without evidence returned above.
+  const evidence = derived === undefined ? [] : derived.items;
+  const diagnosis =
+    derived === undefined
+      ? buildBaselineDiagnosis(triggerOf(request), skill)
+      : diagnoseEvidence(derived.items, derived.contextById, skill, ctx);
   const skillText = await seams.readSkillText(skill);
 
   const proposal = await propose({
     diagnosis,
     skill: { name: skill.name, description: skill.description, skillText },
-    evidence: derived.items,
+    evidence,
+    basis,
     now,
     ...(focus === undefined ? {} : { focus }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -397,7 +430,7 @@ export async function proposeSkill(
       entry: attemptEntry(
         request,
         skill,
-        derived.items.length,
+        evidence.length,
         "error",
         proposal.error.message,
         refusedHashes,
@@ -427,7 +460,7 @@ export async function proposeSkill(
     // The verdict this run calculated, and not an assumed one: the record says what admitted the
     // skill, so a record built under a false verdict cannot claim to be eligible.
     verdict,
-    evidence: derived.items,
+    evidence,
     diagnosis,
     draft,
     usage: proposal.value.usage,
@@ -486,7 +519,7 @@ export async function proposeSkill(
   return {
     kind: "proposed",
     skill,
-    evidence: derived.items,
+    evidence,
     diagnosis,
     draft,
     usage: proposal.value.usage,
@@ -495,7 +528,7 @@ export async function proposeSkill(
     entry: attemptEntry(
       request,
       skill,
-      derived.items.length,
+      evidence.length,
       "proposed",
       null,
       { candidateHash: staged.contentHash, bodyHash: staged.bodyHash },
@@ -571,7 +604,8 @@ async function resolveRunTarget(
 // Step 3 of the run, also shared: the evidence of the session branch, or undefined when the session
 // shows no failure. Zero items is absence and not an empty result -- a summary of zero failures would
 // read like a diagnosis that found the skill healthy -- so the reading lives here and neither entry
-// checks the count for itself.
+// checks the count for itself. The base of the case bank never comes here (M1c): its failures are the cases
+// the bank declares, and the transcript is not what it measures.
 function sessionEvidence(ctx: ImproveFlowContext): DerivedEvidence | undefined {
   const derived = deriveEvidence(messageEntries(ctx.sessionManager.getBranch()));
   return derived.items.length === 0 ? undefined : derived;
@@ -691,9 +725,44 @@ function normalizeFocus(focus: string | undefined): string | undefined {
 }
 
 // The edge of the published shapes: DecisionTrigger and ImprovementEntry declare the focus as
-// string | null, so the conversion happens here and in buildDecision and nowhere else.
+// string | null, so the conversion happens here -- and through triggerOf, which is the one caller that builds the
+// published trigger -- and nowhere else.
 function focusOrNull(focus: string | undefined): string | null {
   return normalizeFocus(focus) ?? null;
+}
+
+// The trigger of the record, in the published spelling. It has one owner because two artifacts are derived from it and
+// not one: the trigger block of decision.json and the diagnosis of a directional attempt, which summarizes the ask
+// (src/diagnosis.ts, buildBaselineDiagnosis). Two spellings would let the record and its own summary describe two
+// different requests.
+function triggerOf(request: ImproveRequest): DecisionTrigger {
+  return { surface: request.surface, focus: focusOrNull(request.focus) };
+}
+
+// Which base measures the candidate of this run (M1c). A request that names a bank asks for a directional improvement
+// and the bank is where its failures are written down; everything else -- including a request that names no bank at
+// all, which is the only shape M1 wrote -- is the base of the replayed turns. The defect branch reuses that base
+// (OA11), so a bank of the origin profile is not the base of the bank and its branch reads this value as replay.
+function basisOf(request: ImproveRequest): GateBasis {
+  return request.bankPath !== undefined && request.defect !== true ? "case-bank" : "replay";
+}
+
+// The gate block of a candidate that was proposed and not gated yet: a budget of zero runs, the tokens of the proposal and
+// no preregistration nor result, because neither is invented by a run that has not gated anything. The two bases share
+// every one of those fields and differ in the key named after the base -- the schema requires `replay` of every block
+// and leaves `caseBank` to the base that has one -- which is the whole difference this function states.
+function proposedGateOf(basis: GateBasis, usage: GenerationUsage): GateBlock {
+  const budget: GateBudget = { plannedRuns: 0, usedRuns: 0, interruptedAt: null };
+  const tokens: GateTokenTally = {
+    proposal: { input: usage.input, output: usage.output },
+    incumbent: { input: 0, output: 0 },
+    candidate: { input: 0, output: 0 },
+    total: { input: usage.input, output: usage.output },
+  };
+
+  return basis === "case-bank"
+    ? { basis, status: "not-run", budget, tokens, preregistration: null, replay: null, caseBank: null }
+    : { basis, status: "not-run", budget, tokens, preregistration: null, replay: null };
 }
 
 // The index line of an attempt that produced no candidate: no evidence, a skill the settings exclude,
@@ -752,7 +821,7 @@ export function buildDecision(input: DecisionInput): DecisionRecord {
   return {
     schema: "pi-simple-sri/decision@1",
     createdAt: input.now.toISOString(),
-    trigger: { surface: input.request.surface, focus: focusOrNull(input.request.focus) },
+    trigger: triggerOf(input.request),
     skill: toDecisionSkill(skill, input.verdict.eligible),
     eligibility: { allow: [...input.config.allow], deny: [...input.config.deny] },
     evidence: [...input.evidence],
@@ -768,24 +837,13 @@ export function buildDecision(input: DecisionInput): DecisionRecord {
       contentHash: input.hashes.contentHash,
       bodyHash: input.hashes.bodyHash,
     },
-    // The gate has not run: `basis` names how it would decide (a paired replay), the preregistration and
-    // the result are absent, and neither the budget nor a verdict is invented. The tokens of the single
-    // generation are the one number the block can carry -- they were spent to produce this candidate and Q6
-    // wants them recorded per decision -- and `total` is the sum of the three, which today is the proposal
-    // alone because no run of the gate has happened yet.
-    gate: {
-      basis: "replay",
-      status: "not-run",
-      budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
-      tokens: {
-        proposal: { input: input.usage.input, output: input.usage.output },
-        incumbent: { input: 0, output: 0 },
-        candidate: { input: 0, output: 0 },
-        total: { input: input.usage.input, output: input.usage.output },
-      },
-      preregistration: null,
-      replay: null,
-    },
+    // The gate has not run: `basis` names how it would decide -- and it is the base of the run, read from the request
+    // and not passed in, so no caller can stamp a block that names a base its own request does not (M1c) --, the
+    // preregistration and the result are absent, and neither the budget nor a verdict is invented. The tokens of the
+    // single generation are the one number the block can carry -- they were spent to produce this candidate and Q6
+    // wants them recorded per decision -- and `total` is the sum of the components, which today is the proposal alone
+    // because no run of the gate has happened yet.
+    gate: proposedGateOf(basisOf(input.request), input.usage),
     // The outcome is the one its gate status implies, through the single mapping that relates the two fields
     // (outcomeStatusFor): a gate that has not run has decided nothing, so the record says the candidate was
     // proposed and no moment decided it.

@@ -127,7 +127,11 @@ export interface ReplayItem {
 export interface Diagnosis {
   summary: string;
   failureSignature: string; // "sha256:" + 64 hex
-  replayItems: ReplayItem[]; // at least 1
+  // The turns this attempt replays, and the number of them is a property of the base: the base of the transcript
+  // replays the failures it read from the session and needs at least one (src/diagnosis.ts, buildDiagnosis), while
+  // the base of the bank replays the cases the user wrote, which the gate supplies when it runs, so the diagnosis of
+  // a directional attempt is empty here and that is its correct value (M1c, OA2).
+  replayItems: ReplayItem[];
 }
 
 // The closed set of lesson states, declared once (M2, I4). The type is derived from the array
@@ -248,6 +252,12 @@ export interface GateBudget {
   usedRuns: number;
   interruptedAt: number | null;
 }
+
+// How a gate decides, which is also where the failures of the attempt are written down (M1c): a paired replay of the
+// turns the diagnosis carries, or a bank of cases the user wrote. The gate block of the record uses it as its
+// discriminator and the schema declares the same two as the enum of `basis`, and the propose flow names it before any
+// gate exists -- a record of an attempt that has not been gated still has to say which base would measure it.
+export type GateBasis = "replay" | "case-bank";
 
 // The token pair of one thing that spent tokens: the generation that produced the candidate, one arm of
 // the gate, the judge, or the whole run.
@@ -607,10 +617,10 @@ export interface DecisionRecord {
 // model leave their own line, with the hashes of the attempt (see attemptHashes in src/attempts.ts), so the
 // index answers "why did nothing happen" for every refusal that cost no generation.
 //
-// `event` is the vocabulary ATTEMPT_EVENTS declares (src/attempts.ts) plus the events this version only
-// recognizes: a line written by M1c is still a line this version reads, and no reader fails on an event it
-// cannot name. Only the constructor of that module, buildAttemptLine, decides which events are emitted, so
-// the wider type here never becomes a wider writer.
+// `event` is the vocabulary ATTEMPT_EVENTS declares (src/attempts.ts) plus whatever a later version reserves:
+// M1c emits `no-baseline` and the reserve it left behind is empty, so this wider type is the shape of the line and
+// never a wider writer -- only the constructor of that module, buildAttemptLine, decides which events are emitted, and
+// it takes the narrower AttemptEvent. A line with an event this version does not know is still a line it reads.
 //
 // `failureSignature` is required and nullable (OA4): the line of a refusal that has no diagnosis carries an
 // explicit null, so the field is always there and a reader never guesses whether its absence meant "no

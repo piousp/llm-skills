@@ -1,8 +1,17 @@
+import { attemptSignature } from "./attempts.ts";
 import { SriDiagnosisError } from "./errors.ts";
 import type { EvidenceContext } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
 import { assertNever } from "./types.ts";
-import type { Diagnosis, EvidenceItem, EvidenceKind, Expectation, ReplayItem, SkillRef } from "./types.ts";
+import type {
+  DecisionTrigger,
+  Diagnosis,
+  EvidenceItem,
+  EvidenceKind,
+  Expectation,
+  ReplayItem,
+  SkillRef,
+} from "./types.ts";
 import { quote } from "./values.ts";
 
 // Evidence becomes a diagnosis here: one summary, one signature, and the replay items the M1
@@ -26,6 +35,11 @@ import { quote } from "./values.ts";
 // the case bank gives it. A defect whose predicate does not travel with the evidence is not replayable from the
 // transcript, so this module answers no expectation for the class instead of inventing one (see expectationFor);
 // the constructor that has the bank in hand builds that item, and it is the only one that attaches checks.
+//
+// The base of the case bank has a constructor of its own, buildBaselineDiagnosis, and it does not come through here:
+// an attempt measured by a bank has no failure of the transcript to point at, so its diagnosis is the ask and it
+// carries no replay item. How many items a diagnosis must carry is a property of the base, and each constructor owns
+// the answer for its own.
 
 const ID_SEPARATOR = "\n";
 
@@ -120,6 +134,37 @@ export function buildDiagnosis(
     failureSignature: signatureOf(evidence.map((item) => item.id)),
     replayItems,
   };
+}
+
+// The other constructor of this module, for the other base (M1c, OA2): an attempt that asks for a change and names a
+// bank to measure it with has no failure of this session to point at and no turn of it to replay, so its diagnosis is
+// the ask -- the skill and the focus the record already carries -- and nothing else. `replayItems` is empty because the
+// turns it replays are the cases of the bank: the gate supplies them when it runs, and an item invented here would name
+// a prompt nobody wrote.
+//
+// It does not go through buildDiagnosis on purpose. The guard of that constructor -- at least one replay item -- is the
+// guard of the base of the transcript, and it stays there: how many items are right is a property of the base, so the
+// constructor of each base owns its own answer instead of the schema owning neither.
+//
+// The signature of the ask is the digest of the attempt's identity (attemptSignature), which is what makes two
+// directional attempts that ask for the same thing on the same skill one failure for a reader of the index, and a
+// different focus or another skill a different one.
+export function buildBaselineDiagnosis(trigger: DecisionTrigger, skill: SkillRef): Diagnosis {
+  return {
+    summary: summaryOfAsk(trigger, skill),
+    // The published trigger spells an absent focus as null and the digest spells it as "": the conversion is here,
+    // as it is for the hashes of an attempt (src/attempts.ts).
+    failureSignature: attemptSignature("directional_improvement", skill.name, trigger.focus ?? undefined),
+    replayItems: [],
+  };
+}
+
+// One sentence, determined by the trigger: the skill and the ask, and -- when the user asked for nothing in particular --
+// exactly that. It is the first text of a record a human reads, so the absent focus is said instead of filled in: a
+// sentence that supplied a subject would be describing a request nobody made.
+function summaryOfAsk(trigger: DecisionTrigger, skill: SkillRef): string {
+  const ask = trigger.focus === null ? "no focus was asked for" : `the focus asked for was ${quote(trigger.focus)}`;
+  return `Directional improvement of skill ${quote(skill.name)}: ${ask}.`;
 }
 
 // A failure that yields both values a replay item needs, read once from the evidence and its

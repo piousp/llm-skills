@@ -28,6 +28,10 @@ import type { AttemptLine } from "./types.ts";
 // M1 does not emit `gate-accepted`: a gate that passes writes no line of the index, because the line of an
 // accepted candidate is the `accepted` event the acceptance writes after it edits the skill. The
 // intermediate state lives in decision.json, where it cannot be confused with the record of a write.
+//
+// `no-baseline` was the one entry of the reserve below and M1c turned that permission on: a gate of the
+// directional base that finds no bank to measure against writes the line, leaves the candidate staged and
+// leaves the record in the state it was, so the attempt is retryable instead of a dead end (Q23, OA1).
 export const ATTEMPT_EVENTS = [
   "proposed",
   "no-evidence",
@@ -36,27 +40,32 @@ export const ATTEMPT_EVENTS = [
   "accepted",
   "gate-rejected",
   "gate-abstained",
+  "no-baseline",
 ] as const;
 
 export type AttemptEvent = (typeof ATTEMPT_EVENTS)[number];
 
-// The vocabulary a reader of M1c will meet and this version only recognizes: `no-baseline` (Q23) is the
-// first extension the plan reserves, the answer of a gate that found no baseline to compare against. It is
-// not on ATTEMPT_EVENTS, so no writer of this version can emit it, and it is known, so a line carrying it is
-// a line this version classifies instead of one it trips over.
-export const RESERVED_ATTEMPT_EVENTS = ["no-baseline"] as const;
+// The reserve: the vocabulary a later version is going to emit and no writer of this one may. It is empty
+// today -- `no-baseline` was its only entry and it is now an event this version writes -- and the mechanism
+// stays, because the rule it enforces is the reason both predicates below exist: recognizing an event and
+// emitting it are two different permissions. The next name a reader has to classify before a writer may use
+// it is declared here first, and the two types derive from this list instead of being edited by hand.
+// `ReservedAttemptEvent` is `never` while the list is empty, which is what makes KnownAttemptEvent equal
+// AttemptEvent without either of them being rewritten.
+export const RESERVED_ATTEMPT_EVENTS = [] as const;
 
 export type ReservedAttemptEvent = (typeof RESERVED_ATTEMPT_EVENTS)[number];
 
 export type KnownAttemptEvent = AttemptEvent | ReservedAttemptEvent;
 
-// What this version may write. The reserved vocabulary is refused on purpose: recognizing an event and
-// emitting it are two different permissions, and M1c is what turns the second one on.
+// What this version may write. The reserved vocabulary is refused on purpose, and today that refusal is a
+// refusal of nothing: the list is empty, and it is the place the next event lands.
 export function isAttemptEvent(value: string): value is AttemptEvent {
   return ATTEMPT_EVENTS.some((event) => event === value);
 }
 
-// What this version can read: the event it writes, and the ones it knows by name.
+// What this version can read: the event it writes, and the ones it knows by name. The two predicates stay two
+// functions even while they answer alike, because the day the reserve grows again they stop answering alike.
 export function isKnownAttemptEvent(value: string): value is KnownAttemptEvent {
   return isAttemptEvent(value) || RESERVED_ATTEMPT_EVENTS.some((event) => event === value);
 }
@@ -69,20 +78,40 @@ export interface AttemptHashes {
 // The name that identifies an attempt in its hashes: an event of the index, or -- for an attempt that
 // produces no line -- the outcome its session entry records. The two vocabularies overlap on purpose;
 // "error" exists only in the second one, because a generation that refused is not an event of the index.
-export type AttemptIdentity = KnownAttemptEvent | "error";
+//
+// "directional_improvement" is the third kind of name and is no event either (M1c): the attempt it names does
+// write a line -- the `proposed` one every candidate writes -- and has no failure of the transcript to point
+// at, because what it fixes is the ask itself. Its diagnosis signs this identity instead of a set of evidence
+// ids (src/diagnosis.ts, buildBaselineDiagnosis), so the failure signature of a directional attempt and the
+// hashes of the attempt are one value computed by one rule and not two spellings of the same name.
+export type AttemptIdentity = KnownAttemptEvent | "error" | "directional_improvement";
+
+// The digest of one identity of an attempt: sha256 over the JSON array [identity, skill, focus or ""]. This is
+// the one rule of the module that computes it, and the two hashes below are two uses of it.
+//
+// The focus is the one the flow normalized, so the digest does not tell "no focus" from "focus empty": the run
+// never carries the second one.
+export function attemptSignature(
+  identity: AttemptIdentity,
+  skillName: string,
+  focus: string | undefined,
+): string {
+  return sha256Digest(JSON.stringify([identity, skillName, focus ?? ""]));
+}
 
 // An event with no candidate and no body has nothing to tell apart, so both fields carry the digest of one
-// documented identity of the attempt: the JSON array [event, skill, focus or ""]. They are equal on purpose
-// -- it keeps the line the shape the index requires and groups the attempts that asked for the same thing on
-// the same skill (D5). The focus is the one the flow normalized, so the digest does not tell "no focus" from
-// "focus empty": the run never carries the second one.
+// documented identity of the attempt. They are equal on purpose -- it keeps the line the shape the index
+// requires and groups the attempts that asked for the same thing on the same skill (D5) -- and both come from
+// attemptSignature, which is where the rule lives.
 export function attemptHashes(
   identity: AttemptIdentity,
   skillName: string,
   focus: string | undefined,
 ): AttemptHashes {
-  const digest = sha256Digest(JSON.stringify([identity, skillName, focus ?? ""]));
-  return { candidateHash: digest, bodyHash: digest };
+  return {
+    candidateHash: attemptSignature(identity, skillName, focus),
+    bodyHash: attemptSignature(identity, skillName, focus),
+  };
 }
 
 // What a line is made of, before it is a line. The timestamp arrives as a Date and not as a string because

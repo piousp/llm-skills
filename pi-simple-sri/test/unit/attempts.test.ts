@@ -8,12 +8,13 @@ import {
   ATTEMPT_EVENTS,
   RESERVED_ATTEMPT_EVENTS,
   attemptHashes,
+  attemptSignature,
   buildAttemptLine,
   isAttemptEvent,
   isKnownAttemptEvent,
+  type ReservedAttemptEvent,
 } from "../../src/attempts.ts";
 import { ATTEMPTS_FILE } from "../../src/names.ts";
-import type { AttemptLine } from "../../src/types.ts";
 import { stateDir } from "../../src/write-base.ts";
 import { appendAttemptLine } from "../../src/writer.ts";
 
@@ -107,6 +108,26 @@ test("attemptHashes: an attempt with no candidate hashes to its own identity", (
   );
 });
 
+// One rule of the digest, two callers (M1c): the pair of a run with no candidate is two uses of attemptSignature, and the
+// signature of a directional diagnosis is a third one, so the failure signature of an attempt and the hashes of the same
+// attempt cannot be two spellings of the same name.
+test("attemptSignature: the digest of an attempt is what both hashes and a directional diagnosis carry", () => {
+  const signature = attemptSignature("not-eligible", "pdf-tools", "merged cells");
+  const hashes = attemptHashes("not-eligible", "pdf-tools", "merged cells");
+
+  assert.match(signature, HASH_PATTERN);
+  assert.equal(hashes.candidateHash, signature);
+  assert.equal(hashes.bodyHash, signature);
+
+  // The third kind of identity: a directional attempt writes a line, so its name is no event of the index, and what the
+  // digest names is the ask -- another focus or another skill is another name.
+  const directional = attemptSignature("directional_improvement", "pdf-tools", "merged cells");
+  assert.match(directional, HASH_PATTERN);
+  assert.equal(directional, attemptSignature("directional_improvement", "pdf-tools", "merged cells"));
+  assert.notEqual(directional, attemptSignature("directional_improvement", "pdf-tools", undefined));
+  assert.notEqual(directional, attemptSignature("directional_improvement", "other-skill", "merged cells"));
+});
+
 test("ATTEMPT_EVENTS: the emitible vocabulary is the one of Q14 and every member is emitible", () => {
   assert.deepEqual([...ATTEMPT_EVENTS], [
     "proposed",
@@ -116,6 +137,7 @@ test("ATTEMPT_EVENTS: the emitible vocabulary is the one of Q14 and every member
     "accepted",
     "gate-rejected",
     "gate-abstained",
+    "no-baseline",
   ]);
 
   for (const event of ATTEMPT_EVENTS) {
@@ -124,12 +146,21 @@ test("ATTEMPT_EVENTS: the emitible vocabulary is the one of Q14 and every member
   }
 });
 
-// The reserve of M1c (Q23): a reader of this version classifies a line it could not have written, and no
-// writer of this version can emit it because buildAttemptLine takes AttemptEvent and not KnownAttemptEvent.
-test("isAttemptEvent and isKnownAttemptEvent: the reserved vocabulary is recognized and not emitted", () => {
-  assert.deepEqual([...RESERVED_ATTEMPT_EVENTS], ["no-baseline"]);
+// The reserve of M1c had one name, `no-baseline`, and this slice turned that permission on: the event is on
+// ATTEMPT_EVENTS now and the list is empty. What survives is the mechanism -- a list, a derived type and a predicate of
+// its own -- because the next name a later version writes is declared there first.
+//
+// The empty tuple in the conditional is what keeps it from distributing over `never`: the constant is a compile-time
+// proof that today's reserve derives to nothing, and a name added to the list turns it into a type error that forces
+// this suite to be revisited.
+const RESERVE_IS_EMPTY: [ReservedAttemptEvent] extends [never] ? true : false = true;
 
-  assert.equal(isAttemptEvent("no-baseline"), false);
+test("isAttemptEvent and isKnownAttemptEvent: the reserve is empty and the two predicates stay two", () => {
+  assert.deepEqual([...RESERVED_ATTEMPT_EVENTS], []);
+  assert.equal(RESERVE_IS_EMPTY, true);
+
+  // M1c emits it: a gate of the directional base answers it when it finds no bank to measure against.
+  assert.equal(isAttemptEvent("no-baseline"), true);
   assert.equal(isKnownAttemptEvent("no-baseline"), true);
 
   // M1 does not add gate-accepted to the index: a gate that passes writes no line, and the intermediate
@@ -142,26 +173,38 @@ test("isAttemptEvent and isKnownAttemptEvent: the reserved vocabulary is recogni
 });
 
 // The rule the module writes down: the line is the shape, the event is a value in it. A line carrying an event
-// of another version survives the format unchanged, which is what lets a reader of M1c read an index written
-// by M1.
-test("a line with a reserved event survives the round trip through the index format", () => {
-  // buildAttemptLine does not emit this event -- that is the reserve -- so the line is written the way a
-  // reader would find it.
-  const line: AttemptLine = {
+// of another version survives the format unchanged, which is what lets a reader of M1 read an index written by M1c.
+//
+// `no-baseline` is the event this version adds, and its line is written by the constructor: the reason of the missing
+// baseline is the field that says why the attempt has to be retried, and it comes back unchanged.
+test("a no-baseline line is built by the constructor and comes back unchanged", () => {
+  const line = buildAttemptLine({
+    now: NOW,
+    event: "no-baseline",
+    targetSkill: "pdf-tools",
+    hashes: { candidateHash: CANDIDATE_HASH, bodyHash: BODY_HASH },
+    failureSignature: SIGNATURE,
+    stagingPath: STAGING_PATH,
+    decisionPath: DECISION_PATH,
+    reason: "bank-absent: /work/cases.json",
+  });
+
+  assert.deepEqual(line, {
     ts: NOW.toISOString(),
     event: "no-baseline",
     candidateHash: CANDIDATE_HASH,
     bodyHash: BODY_HASH,
-    failureSignature: null,
+    failureSignature: SIGNATURE,
     targetSkill: "pdf-tools",
     stagingPath: STAGING_PATH,
-  };
+    decisionPath: DECISION_PATH,
+    reason: "bank-absent: /work/cases.json",
+  });
 
-  const json = JSON.stringify(line);
-  assert.equal(json.includes('"event":"no-baseline"'), true);
-
-  const parsed: unknown = JSON.parse(json);
+  // Through the format the index is: one JSON line, and the event on it is one this version both reads and writes.
+  const parsed: unknown = JSON.parse(JSON.stringify(line));
   assert.deepEqual(parsed, line);
+  assert.equal(isAttemptEvent(line.event), true);
   assert.equal(isKnownAttemptEvent(line.event), true);
 });
 

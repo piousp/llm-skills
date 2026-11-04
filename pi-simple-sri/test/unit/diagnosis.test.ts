@@ -1,8 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { attemptSignature } from "../../src/attempts.ts";
 import type { CaseCheck } from "../../src/checks.ts";
-import { buildDiagnosis, describeExpectation, expectationViolation, SriDiagnosisError } from "../../src/diagnosis.ts";
+import {
+  buildBaselineDiagnosis,
+  buildDiagnosis,
+  describeExpectation,
+  expectationViolation,
+  SriDiagnosisError,
+} from "../../src/diagnosis.ts";
 import type { EvidenceContext } from "../../src/evidence.ts";
 import type { EvidenceItem, EvidenceKind, Expectation, SkillRef } from "../../src/types.ts";
 
@@ -39,6 +46,63 @@ test("buildDiagnosis: zero evidence throws instead of inventing a diagnosis", ()
     () => buildDiagnosis([], contextsOf([]), SKILL, CWD),
     (error: unknown) => error instanceof SriDiagnosisError,
   );
+});
+
+// M1c, S7: relaxing the record does not relax the base that needs the items. buildDiagnosis is still the constructor of
+// the transcript, and a run of it that cannot replay anything is refused instead of producing an empty diagnosis --
+// which is why the diagnosis of the bank is built by its own constructor and not by this one.
+test("buildDiagnosis: the base of the transcript still requires a replay item", () => {
+  const error = evidenceItem("ev-00000061", "tool_error", "bash");
+
+  // Evidence the diagnosis names and cannot replay: a prompt nobody recorded.
+  assert.throws(
+    () => buildDiagnosis([error], contextsOf([]), SKILL, CWD),
+    (thrown: unknown) => thrown instanceof SriDiagnosisError,
+  );
+
+  // The same evidence with its turn is one item, and the guard is what those two answers differ by.
+  const replayable = buildDiagnosis([error], contextsOf([["ev-00000061", { prompt: "extract the table" }]]), SKILL, CWD);
+  assert.equal(replayable.replayItems.length, 1);
+});
+
+// M1c, S7 (OA2): a directional attempt has no failure of this session to point at, so its diagnosis is the ask -- the
+// skill and the focus -- and it carries no replay item. It is not built through buildDiagnosis, whose guard belongs to
+// the other base, and the signature is the digest of the attempt's own identity.
+test("buildBaselineDiagnosis: the diagnosis of a directional attempt names the ask and replays nothing", () => {
+  const diagnosis = buildBaselineDiagnosis({ surface: "command", focus: "merged cells" }, SKILL);
+
+  assert.deepEqual(diagnosis, {
+    summary: 'Directional improvement of skill "pdf-tools": the focus asked for was "merged cells".',
+    failureSignature: attemptSignature("directional_improvement", "pdf-tools", "merged cells"),
+    replayItems: [],
+  });
+});
+
+// The summary is determined by the trigger and never invented: with no focus it says exactly that, instead of filling the
+// sentence with a subject the user did not give.
+test("buildBaselineDiagnosis: an absent focus is said and not filled in", () => {
+  const fromCommand = buildBaselineDiagnosis({ surface: "command", focus: null }, SKILL);
+  const fromTool = buildBaselineDiagnosis({ surface: "tool", focus: null }, SKILL);
+
+  assert.equal(fromCommand.summary, 'Directional improvement of skill "pdf-tools": no focus was asked for.');
+  assert.deepEqual(fromCommand.replayItems, []);
+  // The surface is not part of the sentence, so the two surfaces that can ask for the same thing derive the same
+  // diagnosis -- the record already says which of them asked.
+  assert.deepEqual(fromTool, fromCommand);
+});
+
+// The signature of the ask: two directional attempts that ask for the same thing on the same skill are the same failure
+// for a reader of the index, and a different focus or another skill is a different one.
+test("buildBaselineDiagnosis: the signature is stable per skill and focus and changes with either", () => {
+  const signatureFor = (skillName: string, focus: string | null): string =>
+    buildBaselineDiagnosis({ surface: "command", focus }, { ...SKILL, name: skillName }).failureSignature;
+
+  assert.match(signatureFor("pdf-tools", "merged cells"), HASH_PATTERN);
+  assert.equal(signatureFor("pdf-tools", "merged cells"), signatureFor("pdf-tools", "merged cells"));
+  assert.notEqual(signatureFor("pdf-tools", "merged cells"), signatureFor("pdf-tools", "another focus"));
+  assert.notEqual(signatureFor("pdf-tools", "merged cells"), signatureFor("other-skill", "merged cells"));
+  // Asking for nothing is one ask and not a wildcard: it has a signature of its own.
+  assert.notEqual(signatureFor("pdf-tools", null), signatureFor("pdf-tools", "merged cells"));
 });
 
 test("buildDiagnosis: the failure signature names the set of evidence ids", () => {

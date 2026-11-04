@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, ToolCall, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Context, ToolCall, Usage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { ProposerError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
 import {
@@ -16,10 +16,20 @@ import {
   type ProposeFlowResult,
   type ProposeFn,
 } from "../../src/improve-flow.ts";
+import { createProposer, type CompleteFn } from "../../src/proposer.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR } from "../../src/names.ts";
 import { stagingDir, stateDir } from "../../src/write-base.ts";
-import type { AttemptLine, Diagnosis, Eligibility, EvidenceItem, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
+import type {
+  AttemptLine,
+  DecisionRecord,
+  Diagnosis,
+  Eligibility,
+  EvidenceItem,
+  LessonDraft,
+  SkillRef,
+  SriConfig,
+} from "../../src/types.ts";
 import {
   lessonHashes,
   writeStagingCandidate,
@@ -204,6 +214,47 @@ function writingWriter(): (input: StagingWriteInput) => Promise<StagingWriteResu
 
     return { stagingPath: candidateDir, lessonPath, decisionPath, contentHash: CONTENT_HASH, bodyHash: BODY_HASH };
   };
+}
+
+// The only tests of this file that inject no proposer are the ones of the base of the bank, and they need one that is real:
+// the guard which used to refuse an empty evidence list lives inside createProposer, so a double would answer a candidate the
+// production code could have refused. The fake is the completer, which is the single boundary this package crosses.
+interface FakeModel {
+  complete: CompleteFn;
+  calls: Context[];
+}
+
+function fakeModel(): FakeModel {
+  const calls: Context[] = [];
+  const complete: CompleteFn = async (context) => {
+    calls.push(context);
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: JSON.stringify({ title: LESSON_TITLE, body: LESSON_BODY }) }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      usage: USAGE,
+      stopReason: "stop",
+      timestamp: NOW.getTime(),
+    };
+  };
+  return { complete, calls };
+}
+
+// The proposer the flow builds in production, over that fake: one model call away from the real thing and no seam of its
+// own in between.
+function realProposer(model: FakeModel): ProposeFn {
+  const proposer = createProposer(model.complete);
+  return (input) => proposer.propose(input);
+}
+
+// The text of the one user message the proposer sends, so a test reads what the model was asked without a provider.
+function promptOf(context: Context): string {
+  const message = context.messages[0];
+  if (message.role !== "user") assert.fail("expected the request to hold one user message");
+  if (typeof message.content !== "string") assert.fail("expected the user message to carry text");
+  return message.content;
 }
 
 function flowDeps(fixture: Fixture, appendAttempt?: (root: string, line: AttemptLine) => Promise<void>): ImproveFlowDeps {
@@ -742,4 +793,148 @@ test("proposeSkill: a base inside the linked path of a skill is refused", async 
   );
 
   assert.deepEqual(attempts, []);
+});
+
+// M1c, S7: a request that names a bank asks for a direction, and the bank is where that direction is measured. The
+// session contributes nothing -- there is no failure of it to write from and none to replay -- so the run proposes from
+// the ask, records the base of the bank and spends no gate. The proposer here is the real one over a fake completer,
+// because the guard this slice relaxes lives inside it: with a seam the run would look green and the production call
+// would still refuse the empty evidence list (OA2).
+test("proposeSkill: a directional run proposes with no evidence and stamps the base of the bank", async (t) => {
+  const fixture = createFixture(t);
+  const model = fakeModel();
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name, focus: "merged cells", bankPath: "/work/cases.json" },
+    // A session with no failure at all: the base of the bank is asked, and nothing of the transcript is.
+    flowContext([]),
+    { ...flowDeps(fixture), propose: realProposer(model) },
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  // The generation happened: an empty evidence list did not refuse the proposal.
+  assert.equal(model.calls.length, 1);
+  // And what the model read was the ask, with no excerpt and no turn to list.
+  const prompt = promptOf(model.calls[0]);
+  assert.equal(prompt.includes("summary:"), true);
+  assert.equal(prompt.includes("merged cells"), true);
+  assert.equal(prompt.includes("failure excerpts:"), false);
+  assert.equal(prompt.includes("failing turns:"), false);
+
+  const record: DecisionRecord = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
+
+  assert.equal(record.trigger.focus, "merged cells");
+  // The whole block, field for field: the base of the run, the status of a gate that has not run, a budget of zero runs,
+  // the tokens of the generation as the only number it can carry, no preregistration and no result of either base. The
+  // deep comparison is also what proves the block carries no key outside the schema, `caseBank` included.
+  assert.deepEqual(record.gate, {
+    basis: "case-bank",
+    status: "not-run",
+    budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+    tokens: {
+      proposal: { input: 412, output: 137 },
+      incumbent: { input: 0, output: 0 },
+      candidate: { input: 0, output: 0 },
+      total: { input: 412, output: 137 },
+    },
+    preregistration: null,
+    replay: null,
+    caseBank: null,
+  });
+
+  // The diagnosis of the base: the ask and nothing to replay, and the empty list of evidence the lens asks for.
+  assert.deepEqual(record.diagnosis.replayItems, []);
+  assert.deepEqual(record.evidence, []);
+  assert.equal(record.diagnosis.failureSignature, result.diagnosis.failureSignature);
+  // The outcome is the one a gate that has not run implies, from the one mapping that relates the two fields.
+  assert.equal(record.outcome.status, "proposed");
+  assert.equal(record.outcome.decidedAt, null);
+
+  // No gate was called. The flow has none to call, and the staging tree says the same: a gate leaves its runs under
+  // <candidate>/gate/, which is not there.
+  assert.equal(fs.existsSync(path.join(fixture.pkg, result.staged.stagingPath, "gate")), false);
+
+  // The line of the index is the one every candidate writes, and it names the failure of the diagnosis it carries.
+  const lines = fs
+    .readFileSync(path.join(stateDir(fixture.pkg), ATTEMPTS_FILE), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  assert.equal(lines.length, 1);
+  const line: AttemptLine = JSON.parse(lines[0]);
+  assert.equal(line.event, "proposed");
+  assert.equal(line.failureSignature, record.diagnosis.failureSignature);
+  assert.equal(line.stagingPath, result.staged.stagingPath);
+});
+
+// The failure of a directional attempt is the ask itself, so the signature of two runs that ask for the same thing on the
+// same skill is one value -- a reader of the index groups them -- while another focus is another failure.
+test("proposeSkill: the failureSignature of a directional run is stable per skill and focus", async (t) => {
+  const first = createFixture(t);
+  const second = createFixture(t);
+  const other = createFixture(t);
+
+  const signatureFor = async (fixture: Fixture, focus: string): Promise<string> => {
+    const result = await proposeSkill(
+      { surface: "command", skillName: SKILL.name, focus, bankPath: "/work/cases.json" },
+      flowContext([]),
+      { ...flowDeps(fixture), propose: realProposer(fakeModel()) },
+    );
+    if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+    return result.diagnosis.failureSignature;
+  };
+
+  const merged = await signatureFor(first, "merged cells");
+  assert.match(merged, /^sha256:[0-9a-f]{64}$/);
+  assert.equal(await signatureFor(second, "merged cells"), merged);
+  assert.notEqual(await signatureFor(other, "another focus"), merged);
+});
+
+// The other side of the branch: without a bankPath the run is the run of M1, field for field. A record's base is what its
+// request asked for and never a default of this version.
+test("proposeSkill: without a bank the record is the one M1 writes", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name, focus: "merged cells" },
+    flowContext(failingBranch()),
+    flowDeps(fixture),
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  const record: DecisionRecord = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
+  assert.equal(record.gate.basis, "replay");
+  assert.equal(record.gate.status, "not-run");
+  // The key of the other base is not written at all, and the materials of the transcript are the ones of M1.
+  assert.equal("caseBank" in record.gate, false);
+  assert.equal(record.evidence.length, 1);
+  assert.equal(record.diagnosis.replayItems.length, 1);
+});
+
+// A bank names the failures of the run, so a session that also carries failures contributes none of them: the record of a
+// directional run holds no evidence item even when the transcript has one, which is what keeps the two bases from mixing
+// their materials in one record.
+test("proposeSkill: a directional run does not read the transcript", async (t) => {
+  const fixture = createFixture(t);
+  const model = fakeModel();
+
+  const result = await proposeSkill(
+    { surface: "tool", skillName: SKILL.name, bankPath: "/work/cases.json" },
+    flowContext(failingBranch()),
+    { ...flowDeps(fixture), propose: realProposer(model) },
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  assert.deepEqual(result.evidence, []);
+  assert.deepEqual(result.diagnosis.replayItems, []);
+  assert.equal(result.entry.evidenceCount, 0);
+  // The draft lists no evidence id, which is what the frontmatter of the lesson carries too.
+  assert.deepEqual(result.draft.sourceEvidence, []);
+  assert.equal(model.calls.length, 1);
 });

@@ -852,6 +852,31 @@ test("decision.schema.json: the check kinds of the schema are the ones src/check
   assert.deepEqual(inReplay.enum, [...CASE_CHECK_KINDS]);
 });
 
+// M1c, S7 (OA2): the diagnosis of a directional attempt replays nothing, so the schema stops requiring an item and the
+// guard moves to the constructor of the base that needs one (src/diagnosis.ts, buildDiagnosis). Relaxing minItems is the
+// one change of this slice that touches a keyword already written, and it invalidates no record: everything written
+// before it has an item, and an item is still an item.
+test("decision.schema.json: a diagnosis with no replay item validates in the base of the bank", () => {
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    // The other half of the same base: no evidence item either, because the failures of the run are the cases of the
+    // bank and the gate reads them when it runs.
+    evidence: [],
+    diagnosis: { ...VALID_RECORD.diagnosis, replayItems: [] },
+    gate: caseBankWith("not-run"),
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+  // The keyword itself, read from the file: zero is the floor the schema states now.
+  assert.equal(schemaNode("properties", "diagnosis", "properties", "replayItems").minItems, 0);
+  // The schema ties the number of items to no basis, which is why the same empty diagnosis validates under the other
+  // one too: the guard that refuses it there is the constructor of that base and not the validator.
+  assert.deepEqual(
+    validateAgainstSchema({ ...VALID_RECORD, diagnosis: { ...VALID_RECORD.diagnosis, replayItems: [] } }),
+    [],
+  );
+});
+
 interface NegativeCase {
   name: string;
   build: () => unknown;
