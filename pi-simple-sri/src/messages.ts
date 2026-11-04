@@ -30,6 +30,19 @@ import { quote } from "./values.ts";
 // because the session has no model to replay and judge with (noModelGateText). The correction of
 // noEvidenceText belongs to the same slice: the defect branch refuses with the word `no-evidence` when its
 // bank or its artifact cannot be read, and the sentence may not claim that the session showed no failure.
+// The discovery slice adds the third: the one line the extension reports when a session starts
+// (feedbackNoticeText), which belongs here because it names both surfaces and this module is the one owner of
+// the wording a surface reports.
+
+// The line the extension reports once at the start of a session (M1c, S11, Q26). It exists because the channels of the
+// package fail differently: the description of the tool is what a model reads and a session notice is what a user reads,
+// and neither reader is guaranteed to see the other. So the line names what can be recorded and through which surface --
+// the failures of the session, the two profiles of a bank, and the tool a correction or a rejection is registered with --
+// and the one cost that has to be known before running any of them. It promises nothing beyond that: this version does
+// not reload a session (M2), and the line names no skill and no path.
+export function feedbackNoticeText(): string {
+  return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from a tool failure of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows, and the ${SKILL_IMPROVE_TOOL_NAME} tool registers a correction; the gate spends tokens before a skill is edited.`;
+}
 
 // The set of skills offered for improvement, one line per skill, with the description that says what
 // the skill does. Exported because the command's usage line offers the same list under a

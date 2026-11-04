@@ -215,9 +215,11 @@ const TOOL_DESCRIPTION = [
   "bankPath declares -- with defect when that bank describes a defect an artifact shows instead of the cases to",
   "measure --, and gate measures it with the cases of the same bank. gate spends the replay budget of the paired",
   "design it preregisters, and every run of that budget spends tokens; a bank that is absent or unreadable spends",
-  "nothing, leaves the candidate in staging and leaves the attempt retryable. It never edits the skill and never",
-  "accepts a candidate: the only writes are the package staging tree, the attempt index and the session entry, and",
-  "acceptance belongs to the /skill-improve command.",
+  "nothing, leaves the candidate in staging and leaves the attempt retryable. Before any of that is spent, this tool",
+  "is also where a correction or a rejection is recorded: a correction the user made in this session is evidence that",
+  "propose reads, and a draft the user rejected is a case of a bank of a defect, which gate measures. It never edits",
+  "the skill and never accepts a candidate: the only writes are the package staging tree, the attempt index and the",
+  "session entry, and acceptance belongs to the /skill-improve command.",
 ].join(" ");
 
 export function createSkillImproveTool(

@@ -33,7 +33,7 @@ import type {
 } from "../../src/gate/directional-flow.ts";
 import type { GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import { countReferenceLines } from "../../src/skill-reference.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
@@ -539,6 +539,20 @@ test("runSkillImprove: without arguments it reports the usage and the eligible s
   // The list is the eligible one: the deny list removes a skill from the offer, not just from
   // generation.
   assert.equal(harness.notified[0].message.includes("system-config"), false);
+
+  // M1c (S11, Q26): the help names the four ways feedback reaches this command -- the failures of the session, the two
+  // profiles of a bank and the tool the model registers a correction with -- because a user who typed the command alone
+  // is the reader the line exists for. Each one is the invocation that reaches it, and the gate's cost is in the help too.
+  const help = harness.notified[0].message;
+  assert.equal(help.includes("a tool failure of this session"), true);
+  assert.equal(help.includes("a directional improvement"), true);
+  // The third is asserted by the continuation the description line does not carry: the same words appear in the sentence
+  // above it, and what proves the fourth way is listed is the clause of the line itself.
+  assert.equal(help.includes("a defect an artifact shows, measured against the truth that bank declares"), true);
+  assert.equal(help.includes("a correction or a rejection"), true);
+  assert.equal(help.includes("--bank=<path> --defect"), true);
+  assert.equal(help.includes(SKILL_IMPROVE_TOOL_NAME), true);
+  assert.equal(help.includes("spends tokens"), true);
 
   assert.deepEqual(harness.proposals, []);
   assert.deepEqual(harness.completed, []);

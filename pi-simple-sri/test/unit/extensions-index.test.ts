@@ -11,7 +11,10 @@ import sriExtension, {
   type SkillImproveToolDefinition,
   type SriCommandRegistration,
   type SriExtensionApi,
+  type SriNoticeContext,
   type SriSeams,
+  type SriSessionStartEvent,
+  type SriSessionStartHandler,
 } from "../../extensions/index.ts";
 import {
   ENTRY_TYPE,
@@ -21,6 +24,7 @@ import {
 } from "../../src/command-skill-improve.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import type { GateRequest } from "../../src/gate/flow.ts";
+import { feedbackNoticeText } from "../../src/messages.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR } from "../../src/names.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
 import {
@@ -222,6 +226,10 @@ interface Harness {
   toolNames: string[];
   entries: EntryCall[];
   messages: SentMessage[];
+  /** The session_start handlers the factory registered, in the order it registered them. */
+  startHandlers: SriSessionStartHandler[];
+  /** Every event name the factory listened to, in order: the one handler it registers is the only one. */
+  onEvents: string[];
   notified: NotifiedCall[];
   /** Every read of the context's `ui`, in order: a copied context reads it eagerly (see the test below). */
   uiReads: string[];
@@ -284,6 +292,8 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const toolNames: string[] = [];
   const entries: EntryCall[] = [];
   const messages: SentMessage[] = [];
+  const startHandlers: SriSessionStartHandler[] = [];
+  const onEvents: string[] = [];
   const notified: NotifiedCall[] = [];
   const uiReads: string[] = [];
   const modelCalls: string[] = [];
@@ -302,6 +312,13 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     },
     sendMessage(message) {
       messages.push(message);
+    },
+    on(event, handler) {
+      onEvents.push(event);
+      startHandlers.push(handler);
+      // The unsubscribe pi hands back: no test here unregisters a handler, and a registration that a test
+      // could drop would make the count of notices meaningless.
+      return () => undefined;
     },
   };
 
@@ -372,6 +389,8 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     toolNames,
     entries,
     messages,
+    startHandlers,
+    onEvents,
     notified,
     uiReads,
     modelCalls,
@@ -421,6 +440,22 @@ function restoreEnv(previous: string | undefined): void {
   process.env[REPLAY_ENV_VAR] = previous;
 }
 
+// Drives the one session_start handler the factory registered, with a context narrowed to the channel the handler
+// reads (SriNoticeContext) and one reason. The handler notifies and returns, so what it reports lands in the same
+// recorder the command's own notices use.
+function startSession(harness: Harness, reason: SriSessionStartEvent["reason"]): void {
+  const handler = harness.startHandlers.at(0);
+  assert.ok(handler !== undefined, "the factory must register a session_start handler");
+  const ctx: SriNoticeContext = {
+    ui: {
+      notify: (message: string, type?: NotifyType) => {
+        harness.notified.push({ message, type: type ?? "info" });
+      },
+    },
+  };
+  handler({ type: "session_start", reason }, ctx);
+}
+
 test("the factory registers the command and the tool, exactly once each", () => {
   const harness = makeHarness();
 
@@ -461,6 +496,66 @@ test("the factory registers the command and the tool, exactly once each", () => 
   assert.equal(tool.description.includes("bankPath"), true);
   assert.equal(tool.description.includes("defect"), true);
   assert.equal(tool.description.includes("retryable"), true);
+  // M1c (S11, Q26): the model is told, before it spends anything, that this tool is also where a correction or a
+  // rejection is recorded -- the other channel, the notice at the start of a session, is one a model may never read.
+  assert.equal(tool.description.includes("Before any of that is spent"), true);
+  assert.equal(tool.description.includes("a correction or a rejection"), true);
+});
+
+// M1c (S11, Q26, OA8): the package tells the reader that the feedback of a session can be recorded, from two channels
+// that cover the failure of the other. The first one is this handler: one line, once per session, and never on a reload.
+test("the factory registers one session_start handler, and registering it reports nothing", () => {
+  const harness = makeHarness();
+
+  registerSurfaces(harness.pi, harness.seams);
+
+  // One event and one handler: a second handler would be the second notice OA8 accepted the risk of only once.
+  assert.deepEqual(harness.onEvents, ["session_start"]);
+  assert.equal(harness.startHandlers.length, 1);
+  // The registration is not the notice: a session that never starts reports nothing, and nothing of the loop ran.
+  assert.deepEqual(harness.notified, []);
+});
+
+test("the session_start handler reports the feedback notice once, as info", () => {
+  const harness = makeHarness();
+  registerSurfaces(harness.pi, harness.seams);
+
+  startSession(harness, "startup");
+
+  assert.deepEqual(harness.notified, [{ message: feedbackNoticeText(), type: "info" }]);
+  // The notice names both surfaces of the package and the one cost of the gate, and promises nothing else: this
+  // version does not reload a session, so the line does not say it will.
+  const notice = harness.notified[0].message;
+  assert.equal(notice.includes("/skill-improve"), true);
+  assert.equal(notice.includes(SKILL_IMPROVE_TOOL_NAME), true);
+  assert.equal(notice.includes("--bank=<path>"), true);
+  assert.equal(notice.includes("spends tokens"), true);
+  // It is one line, and it reports and returns: no file, no model and no candidate behind it.
+  assert.equal(notice.includes("\n"), false);
+  assert.deepEqual(harness.log.settingsReads, []);
+  assert.deepEqual(harness.log.inventories, []);
+  assert.deepEqual(harness.log.writes, []);
+  assert.deepEqual(harness.log.attempts, []);
+  assert.deepEqual(harness.entries, []);
+  assert.deepEqual(harness.modelCalls, []);
+});
+
+// The value a reload carries is the one that is not news: pi reloads a session after an acceptance (M2), and the notice
+// of the reloaded session is the line the reader has just read.
+test("the session_start handler does not report the notice on a reload", () => {
+  const harness = makeHarness();
+  registerSurfaces(harness.pi, harness.seams);
+
+  startSession(harness, "reload");
+
+  assert.deepEqual(harness.notified, []);
+  // Every other reason is a session with something to say, so the silence is the reload's and not the handler's.
+  for (const reason of ["startup", "new", "resume", "fork"] as const) {
+    const other = makeHarness();
+    registerSurfaces(other.pi, other.seams);
+    startSession(other, reason);
+    assert.equal(other.notified.length, 1, `the notice must be reported for the reason ${reason}`);
+  }
 });
 
 // The module is imported at the top of this file, before any test ran; a fake API that is never
@@ -471,6 +566,7 @@ test("importing the module registers nothing: only the factory call does", async
 
   assert.deepEqual(harness.commandNames, []);
   assert.deepEqual(harness.toolNames, []);
+  assert.deepEqual(harness.onEvents, []);
   assert.deepEqual(harness.entries, []);
 
   // The default export is the entry point pi calls with its own ExtensionAPI; registerSurfaces is the
@@ -480,6 +576,7 @@ test("importing the module registers nothing: only the factory call does", async
   assert.equal(imported.registerSurfaces, registerSurfaces);
   assert.deepEqual(harness.commandNames, []);
   assert.deepEqual(harness.toolNames, []);
+  assert.deepEqual(harness.onEvents, []);
 });
 
 // Rule 3 of the slice: no process, no socket, no timer, no file read at registration. Every seam of
@@ -495,8 +592,11 @@ test("registering runs no part of the loop", () => {
   // The registration did happen; only the loop was left untouched.
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
+  assert.deepEqual(harness.onEvents, ["session_start"]);
   assert.deepEqual(harness.entries, []);
   assert.deepEqual(harness.messages, []);
+  // Registering the session_start handler reports nothing by itself: the notice is the event's, not the wiring's.
+  assert.deepEqual(harness.notified, []);
 });
 
 // The handler the extension registers is the command: it parses, it asks the flow, and it reports.
@@ -739,6 +839,9 @@ test("inside a replay the factory registers neither the command nor the tool", (
 
   assert.deepEqual(harness.commandNames, []);
   assert.deepEqual(harness.toolNames, []);
+  // The notice of the session is a surface of the loop too: a replay child that reported it would print a line of this
+  // package in a transcript nobody is reading, so the guard covers the event along with the two registrations.
+  assert.deepEqual(harness.onEvents, []);
   assert.deepEqual(harness.entries, []);
   assert.deepEqual(harness.messages, []);
   // No seam of the loop was touched either: the guard is the registration's first statement.
@@ -760,4 +863,5 @@ test("the replay guard answers only to the value \"1\"", () => {
 
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
+  assert.deepEqual(harness.onEvents, ["session_start"]);
 });

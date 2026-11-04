@@ -9,8 +9,10 @@ import {
   type SkillImproveContext,
   type SkillImproveDeps,
   type SkillImproveMessage,
+  type SkillImproveUi,
 } from "../src/command-skill-improve.ts";
 import type { ImproveFlowContext, ImproveFlowDeps } from "../src/improve-flow.ts";
+import { feedbackNoticeText } from "../src/messages.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR, SKILL_IMPROVE_TOOL_NAME } from "../src/names.ts";
 import {
   createSkillImproveTool,
@@ -20,9 +22,9 @@ import {
   type ToolDetails,
 } from "../src/tool-skill-improve.ts";
 
-// The wiring (P10): the two surfaces of the loop registered on pi's extension API, and nothing else.
-// Every decision this package makes lives in src/; this file decides only which surface is called
-// and which dependencies it is called with.
+// The wiring (P10): the two surfaces of the loop and the notice of a session start, registered on pi's
+// extension API, and nothing else. Every decision this package makes lives in src/; this file decides only which
+// surface is called and which dependencies it is called with.
 //
 //   /skill-improve <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]  -> runSkillImprove
 //   skill_improve { action, skill, focus, stagingPath, bankPath, defect }               -> createSkillImproveTool
@@ -33,11 +35,16 @@ import {
 // that passes into the acceptance (src/gate/acceptance.ts). The tool receives its dependencies at registration time and
 // the command receives the same ones at call time.
 //
+// The third registration is not a surface but a line: the one event this file listens to reports feedbackNoticeText
+// (src/messages.ts) at the start of every session whose reason is not "reload" (M1c, S11), so a user who never reads a
+// description and a model that never reads a notice both hear that the feedback of a session can be recorded.
+//
 // What the factory does not do is as much part of the contract as what it does: no process, no
 // socket, no timer, no file read (docs/extensions.md:58-60). The root below is path arithmetic; the
 // settings, the inventory, the model, the writer and the clock are all resolved inside a run. That
-// is also why M0 registers no session_start or session_shutdown handler: nothing here holds a
-// resource that would need one.
+// is also why no session_shutdown handler is registered: nothing here holds a resource that would
+// need one, and the one session_start handler of M1c holds nothing either -- it reports one line and
+// returns.
 //
 // Importing this module runs nothing either. The only statements at module level declare types and
 // constants, so a `pi -e` that loads the file and never calls the factory registers nothing.
@@ -94,15 +101,35 @@ export interface SkillImproveToolDefinition {
   ): Promise<AgentToolResult<ToolDetails>>;
 }
 
-// The slice of ExtensionAPI this package uses: the two registrations, and the two channels that only
+// Why a session started, as pi reports it (SessionStartEvent.reason), and the slice of the context the one
+// event handler of this package reads.
+//
+// "reload" is the value that is not a session with news in it: pi reloads after an acceptance (M2) and the
+// notice of a reloaded session would be the line the reader has just read, so the handler stays silent on it
+// (OA8). The context is narrowed to the one channel the handler uses, the way SriCommandRegistration narrows
+// the command's: a test drives the handler with one member, and pi's own context satisfies it at the
+// assignment in sriExtension below.
+export interface SriSessionStartEvent {
+  readonly type: "session_start";
+  readonly reason: "startup" | "reload" | "new" | "resume" | "fork";
+}
+
+export interface SriNoticeContext {
+  readonly ui: SkillImproveUi;
+}
+
+export type SriSessionStartHandler = (event: SriSessionStartEvent, ctx: SriNoticeContext) => void;
+
+// The slice of ExtensionAPI this package uses: the two registrations, the two channels that only
 // the extension API carries (appendEntry and sendMessage do not exist on the context pi hands a
-// handler or a tool). The session entry of this package is always the same payload, so appendEntry
-// is narrowed to it here rather than at every call site.
+// handler or a tool), and the one event it listens to. The session entry of this package is always the
+// same payload, so appendEntry is narrowed to it here rather than at every call site.
 export interface SriExtensionApi {
   registerCommand(name: string, options: SriCommandRegistration): void;
   registerTool(tool: SkillImproveToolDefinition): void;
   appendEntry(customType: string, data?: ImprovementEntry): void;
   sendMessage(message: SkillImproveMessage): void;
+  on(event: "session_start", handler: SriSessionStartHandler): () => void;
 }
 
 // What pi loads and calls once per session. The parameter is pi's own ExtensionAPI, so what this
@@ -115,7 +142,7 @@ export default function sriExtension(pi: ExtensionAPI, seams: SriSeams = {}): vo
 
 // The registration itself, over the slice. It is a separate function because pi's ExtensionAPI has
 // fifty members a test here would have to stub and none of which it reads: a test drives this one
-// with a four-member fake, and the assignment in sriExtension above is what keeps the slice honest.
+// with a five-member fake, and the assignment in sriExtension above is what keeps the slice honest.
 export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): void {
   // OA8: a replay's child must not be able to start another loop over itself. The check is the first
   // statement of the registration and not a wrapper around the handlers, because a surface that is
@@ -158,11 +185,21 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   });
 
   api.registerTool(createSkillImproveTool(deps));
+
+  // M1c (S11, Q26): the user and the model learn that the feedback of a session can be recorded from two channels that
+  // cover the failure of the other -- a model reads the description of a tool and may never read a session notice, and a
+  // user reads the notice and may never read a description. One line per session, and none on a reload (OA8): the notice
+  // of a session pi reloaded after an acceptance would be the line the reader just read. Nothing behind the handler
+  // reads a file, starts a process or holds a timer, so a session_start handler is all this costs.
+  api.on("session_start", (event, ctx) => {
+    if (event.reason === "reload") return;
+    ctx.ui.notify(feedbackNoticeText(), "info");
+  });
 }
 
 // The value src/gate/replay-runner.ts sets for its child (OA8). Only the exact string "1" disables
 // the registration: anything else -- absent, empty, another value -- leaves the extension working,
-// because an environment a caller did not mean to set must not silently remove the two surfaces.
+// because an environment a caller did not mean to set must not silently remove these registrations.
 function isReplayChild(): boolean {
   return process.env[REPLAY_ENV_VAR] === "1";
 }

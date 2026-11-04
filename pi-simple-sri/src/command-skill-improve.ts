@@ -41,7 +41,7 @@ import {
   unknownSkillText,
 } from "./messages.ts";
 import { createDirectionalJudge, createModelCall } from "./model-call.ts";
-import { COMMAND_NAME } from "./names.ts";
+import { COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
 import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef } from "./types.ts";
 import { quote, toErrorMessage } from "./values.ts";
@@ -657,10 +657,20 @@ function gateStartedText(skill: SkillRef): string {
 // The command's own sentence: the usage line and the offer of the eligible set, which no other
 // surface prints. The flags of M1c are in the syntax line because the parser accepts them and the usage error
 // names them; what each one is for is the description of the command and of the tool (extensions/index.ts).
+//
+// The four ways of giving feedback are listed here and not in a description, because the user who typed the command
+// alone is exactly the one the channel is for (M1c, S11, Q26): the failures of the session, the two profiles of a bank
+// and the tool the model registers a correction with. Each line is the invocation that reaches it, so the help is
+// usable without reading anything else.
 function usageText(eligible: readonly SkillRef[]): string {
   return [
     `Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`,
     "Stages a lesson candidate for one skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows -- gates it with a paired replay and accepts it into the skill only when the gate passes; --staged=<stagingPath> gates a candidate that is already in staging, and the gate spends tokens.",
+    "Feedback it can record, in four ways:",
+    `  - a tool failure of this session: /${COMMAND_NAME} <skill> [focus]`,
+    `  - a directional improvement, measured against the cases a bank declares: /${COMMAND_NAME} <skill> --bank=<path>`,
+    `  - a defect an artifact shows, measured against the truth that bank declares: /${COMMAND_NAME} <skill> --bank=<path> --defect`,
+    `  - a correction or a rejection the model registers before anything is spent: the ${SKILL_IMPROVE_TOOL_NAME} tool`,
     "Eligible skills:",
     ...listedSkills(eligible),
   ].join("\n");
