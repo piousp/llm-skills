@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/case-bank@1.json",
+  "title": "pi-simple-sri case bank, format 1",
+  "description": "The cases of a directional improvement or of a defect, as a file a user writes. One format, two profiles chosen by the invocation that reads it -- baseline (which may declare a rubric) and origin (which requires an origin and forbids a rubric) -- and the file carries no discriminator: a bank that is not there still has to be read as one of the two, so the profile is an argument and not a field. The relation between the profile and the fields is the one thing this contract cannot express: JSON Schema cannot tie the presence of one property to the value of another without if/then/oneOf, and the shape stays flat on purpose. src/case-bank.ts is therefore the authority on which profile accepts which fields, and test/unit/case-bank.test.ts validates the same fixtures with both readers. Every level sets additionalProperties: false, so a bank with a misspelled field is refused by name. A change of the shape or of the meaning of a field already declared here is a new format, with a new `format` const.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "cases"],
+  "properties": {
+    "format": {
+      "description": "The versioned id of the format. A bank of another version is a different contract: src/case-bank.ts refuses it whole instead of reading it as this one with fields missing.",
+      "const": "pi-simple-sri/case-bank@1"
+    },
+    "description": {
+      "description": "For humans. It never enters a prompt, and an empty one is accepted: it says nothing, which is what the absence of the key would say too.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "rubric": {
+      "description": "The criterion the judge applies to every case of this bank, verbatim. Only the baseline profile accepts it: a defect has an observable truth, and a rubric would leave the judge deciding something the artifact already says.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "origin": {
+      "description": "The artifact the defect came from. Required by the origin profile and forbidden by the baseline one, a relation this contract does not express (see the description of the format). The path travels as it was written: the reader neither resolves it nor reads the file, and the flow that reads a defect fails closed before spending when the artifact is not there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "path", "excerpt"],
+      "properties": {
+        "kind": {
+          "description": "How the defect was found, the same two values evidence.items.origin.kind declares in decision@1.",
+          "enum": ["review-finding", "rejected-draft"]
+        },
+        "path": { "type": "string", "minLength": 1 },
+        "excerpt": {
+          "description": "The entry that does not hold, at the length an evidence excerpt is kept (src/evidence.ts).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "cases": {
+      "description": "The cases the gate replays. Two is the floor of Q23: with fewer, the paired replay cannot tell a candidate from the incumbent. The ids are unique, and that rule lives in src/case-bank.ts because JSON Schema has no keyword for it.",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "prompt", "checks"],
+        "properties": {
+          "id": {
+            "description": "The coordinate of the case in the record and in checkFailures, which is why it is a slug: lowercase letters and digits joined by single hyphens.",
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64
+          },
+          "prompt": {
+            "description": "The prompt of the replay. The runner prepends /skill:<name> and a space to it, the way it does for a replay item of an M1 diagnosis.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "checks": {
+            "description": "What the final answer of the replayed turn has to satisfy. Every check has to pass (AND): an OR is two cases, because the rule of the gate is unanimity between cases. Which of value and pattern a check needs follows from its kind, and JSON Schema ties no property to another, so src/checks.ts validates that pair and is the one place a check is executed.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                "flags": { "enum": ["", "i"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
