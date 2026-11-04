@@ -78,10 +78,12 @@ is worth changing the skill for? It answers it by replaying the failure under tw
 language:
 
 - **Two paired arms.** The skill is copied twice into staging and the failure is replayed against both
-  copies. The two copies differ in one place only: the `## Lessons` section. The incumbent arm is the
-  skill as it stands; the candidate arm is the skill plus the new lesson and its reference line.
-  Everything else -- the rest of `SKILL.md`, the other lessons, the files of the skill -- is identical,
-  so a difference between the arms is about the lesson.
+  copies. Both arms carry a `## Lessons` section, because an arm without it would not be comparable with
+  the candidate, which needs the section for the new lesson: where the skill has none, an empty one is
+  added to both copies. The incumbent arm is the skill as it stands, with that section empty of this
+  candidate; the candidate arm is the same skill plus one reference line in the section and the lesson
+  file the line points at. Everything else -- the rest of `SKILL.md`, the other lessons, the files of the
+  skill -- is identical, so a difference between the arms is about the lesson.
 - **A fixed budget.** Each arm gets two repetitions of each replay item, over at most three items, so
   the budget is `2 x 2 x min(items, 3)` runs: eight with two items, twelve with three. With fewer than
   two eligible items the gate abstains without spending a run. Items are used in the order the evidence
@@ -93,11 +95,11 @@ language:
   numbers in hand. The rule is unanimity plus strict superiority over that sample: the candidate arm has
   to pass every one of its runs and the incumbent arm has to miss at least one. A candidate that misses
   a single run is rejected; a candidate that matches a perfect incumbent is not evidence of anything.
-- **Abstention as a result.** The plan is also preregistered as a floor: with six runs per arm the
-  smallest difference the design can resolve is one run, one sixth, while the rule asks for a
-  difference of one whole pass rate. When the two arms come out identical, or when a run proves nothing
-  about the skill, the gate abstains instead of claiming a result. The recorded interval is descriptive
-  and never decides.
+- **Abstention as a result.** The plan is also preregistered as a floor: `2 x min(items, 3)` runs per
+  arm resolve a difference of one run and no finer one -- a quarter with two items, a sixth with three --
+  while the rule asks for a difference of one whole pass rate. When the two arms come out identical, or
+  when a run proves nothing about the skill, the gate abstains instead of claiming a result. The recorded
+  interval is descriptive and never decides.
 - **Verdicts that fail closed.** A run that broke -- a kill, a timeout, a non-zero exit, a stream nobody
   can read, a missing working directory, or a skill that did not load -- abstains the whole gate,
   because the broken arm is the baseline the other arm is compared against. A tool result marked as an
@@ -108,6 +110,14 @@ The gate accepts a candidate, rejects it, or abstains. Rejected and abstained ca
 skill untouched; what separates them is that a rejection is evidence against the lesson and an
 abstention is the absence of evidence either way. On an acceptance the lesson is written into the
 skill, next to a copy of the skill as it was, and the record of the write is kept beside that copy.
+
+An abstention reached before the budget is spent leaves `decision.json` as it was. `insufficient-items`,
+`no-model` and `skill-unavailable` stop before the preregistration, so `gate.status` stays `"not-run"`,
+and `overlay-failed` stops after it, so the status stays `"preregistered"`. That is the true state of the
+record, not a gap in it: the gate did not conclude. The reason such an abstention is about lives in the
+line the index gains and in the answer, and the record is rewritten with a verdict only once the gate has
+gone on to spend its budget -- the abstention of an interrupted gate included, which is a verdict about
+the runs it did not get.
 
 **The reload of the session is not in this version.** After an acceptance the lesson is on disk and the
 `SKILL.md` references it, but the session that accepted it keeps the skill it loaded at start: the new
@@ -169,7 +179,9 @@ not displace one that is. Each replay item also carries the model that produced 
    next to each other in time.
 10. Judge the runs with the preregistered rule, and rewrite `decision.json` with the verdict, the runs,
     the tokens per arm and the interval. The index gains one line: `gate-rejected` or
-    `gate-abstained`.
+    `gate-abstained`. An abstention that stopped before this step judged no runs and rewrites nothing:
+    the record keeps `not-run`, or `preregistered` when the arms were already being built, and the line
+    and the answer are where its reason is reported.
 11. On an acceptance, and only then: snapshot the skill into `.history/<timestamp>/`, write the lesson,
     add the reference line to `SKILL.md`, write the record of the write into the snapshot, and append
     `accepted` to the index. If the reference line cannot be written the lesson is withdrawn, because a
@@ -290,9 +302,9 @@ directory name, because pi accepts that the two differ. The file is only read.
 - Standalone `.md` skills cannot be improved. They have no directory of their own for `lessons/`.
 - Acceptance needs a passing gate and nothing else: there is no override, no `--force`, and no way to
   write a lesson into a skill from the tool.
-- The gate is expensive and hard to satisfy. A lesson has to pass every one of six runs while the skill
-  it replaces misses at least one, so a rejection or an abstention is a normal answer and not a defect
-  of the run.
+- The gate is expensive and hard to satisfy. A lesson has to pass every run of its arm -- four with two
+  items, six with three -- while the skill it replaces misses at least one, so a rejection or an
+  abstention is a normal answer and not a defect of the run.
 - The session is not reloaded after an acceptance, so the lesson is active from the next session.
 - The proposal is one model call capped at 2048 tokens. A longer lesson fails validation instead of
   arriving truncated.

@@ -22,7 +22,9 @@ so the threshold cannot be chosen with the numbers in hand. The rule is
 unanimity of the candidate arm plus strict superiority over the incumbent.
 - Abstention as a recorded result: `insufficient-items`, `no-improvement`,
 `invalid-run`, `interrupted`, `no-model`, `skill-unavailable`, `overlay-failed`
-and `candidate-mismatch`, each with the runs actually spent.
+and `candidate-mismatch`, each with the runs actually spent. The line the index
+gains for an abstention carries the reason it stopped and the detail behind it,
+so the index answers why nothing was published without opening the record.
 - Mechanical expectation per replay item, replacing the prose predicate: which
 tool call, or which correction, has to stop failing. A failure intrinsic to the
 task is excluded before the items are counted, and the exclusion is recorded.
@@ -30,6 +32,9 @@ task is excluded before the items are counted, and the exclusion is recorded.
 directory and under the `provider/model` of the failing turn, loading the arm
 and the rest of the skills that session had. 180 s per run, 20 minutes per gate,
 and the raw output of every run kept under the candidate, truncated at 2 MiB.
+A run whose stream passed the cap, and a child that never started, are both
+named in the record of that run instead of leaving the gate with an abstention
+nobody can explain.
 - Acceptance: `.history/<timestamp>/` copy taken before the first edit,
 `lessons/<slug>.md` verified against the hash the gate measured, an idempotent
 reference line under `## Lessons` in `SKILL.md`, the record of the acceptance

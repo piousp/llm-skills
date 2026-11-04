@@ -85,10 +85,19 @@ quantiles.
   already makes it so: the bytes land at the end of the file as the kernel sees it, so two processes do
   not overwrite each other's line the way a read-modify-write does. A lock file would be machinery
   guarding a race that no longer exists, and an orphaned lock file is a worse failure than the race. The
-  in-process queue still wraps the append, so two callers of the writer cannot interleave.
+  in-process queue still wraps the append, so two callers of the writer cannot interleave. A line of the
+  index that is cut short is not repaired either: `appendAttemptLine` reads the last byte of the file and
+  refuses to append after a tail that does not end with a newline, so every later append of that
+  installation fails the same way until somebody opens the index and looks. That is deliberate -- a line
+  glued onto a truncated one is an index nobody can parse, and a writer that quietly repaired the file
+  would bury the damage instead of reporting it.
 - The gate measures copies. Both arms are built inside the candidate directory of staging and the
   replay is pointed at them, so a gate that passes and an acceptance that fails leave the skill exactly
   as it was.
+- The sentence that announces the gate is printed before the gate is called and promises the cost in
+  tokens with no figure. The number of runs exists only once the gate has planned, and planning happens
+  inside the gate, so the warning comes earlier than the number: it says what is about to happen, and
+  the figure arrives with the verdict.
 
 ## Order of an acceptance
 
@@ -116,6 +125,18 @@ the next one:
 
 The staged `decision.json` is never rewritten to `accepted`: it keeps the `gate-accepted` the gate
 decided, and the index line is what tells the two states apart.
+
+A failed acceptance writes nothing at all: the staged record stays in `gate-accepted`, no line is added
+to the index, and the reason the protocol refused (`slug-already-referenced`, `skill-drift`,
+`history-exists`, `reference-failed`) reaches the caller with its detail. That is why `outcome.status`
+has no member for a failed acceptance: the record has nothing to record.
+
+An acceptance that breaks after step 2 keeps whatever the steps after it already wrote -- the snapshot
+in every case, the lesson and the reference line once steps 3 and 4 have landed -- so a skill can end up
+with a reachable lesson and no `accepted` line in the index. The record keeps `gate-accepted`, because
+that is what the gate decided, and the failure reaches the user as the error that stopped the acceptance,
+with the paths in it and nowhere else: what a reader has to compare is the index line against the
+snapshot.
 
 ### Where M2 enters
 
@@ -149,6 +170,9 @@ and the schema as a whole. Each has one written rule.
 - `RESERVED_ATTEMPT_EVENTS` holds the names this version recognizes and does not emit. `no-baseline` is
   the only member: it is reserved for the gate that finds no baseline to compare against, which is not
   a state M1 can reach. Recognizing a name and emitting it are two different permissions.
+- `reason` is the optional field that says what an abstention was about, in the words of the vocabulary
+  plus the detail the flow computed: `overlay-failed: cannot copy ...`. It is absent when the reason is
+  the whole story, so a line written by an older version and a line written today read the same way.
 - M1 does not emit `gate-accepted`: a gate that passes writes no line, and the line of an accepted
   candidate is the `accepted` event the acceptance writes when it edits the skill. The intermediate
   state lives in `decision.json`, where it cannot be confused with the record of a write.
