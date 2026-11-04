@@ -4,30 +4,155 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveStagedCandidate, type CandidateRejection, type StagedCandidateResult } from "../../src/gate/flow.ts";
-import { DECISION_FILE, LESSONS_DIR } from "../../src/names.ts";
-import type { DecisionRecord } from "../../src/types.ts";
-import { stagingDir } from "../../src/write-base.ts";
+import {
+  gateStagedCandidate,
+  resolveStagedCandidate,
+  type CandidateRejection,
+  type GateConcludedResult,
+  type GateDeps,
+  type GateFlowResult,
+  type GateRequest,
+  type StagedCandidateResult,
+} from "../../src/gate/flow.ts";
+import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
+import { sha256Digest } from "../../src/hash.ts";
+import { serializeLesson } from "../../src/lesson-frontmatter.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
+import type { ListSkillsOptions } from "../../src/skills-inventory.ts";
+import type {
+  AttemptLine,
+  DecisionRecord,
+  EvidenceItem,
+  GateBlock,
+  GateConcluded,
+  ReplayItem,
+  SkillRef,
+} from "../../src/types.ts";
+import { stateDir, stagingDir } from "../../src/write-base.ts";
+import { lessonHashes } from "../../src/writer.ts";
+import { validateAgainstSchema } from "./schema-reader.ts";
 
-// What this suite covers today is the step every gate run begins with: the record of the candidate the run
-// was pointed at, or the typed refusal that says why there is none. The orchestration around it --
-// preregistration, overlays, runs, verdict, index line -- is not written yet and belongs to the same module.
+// The flow of the gate (S8), in the two halves it has: the candidate a run is pointed at -- the record or the
+// typed refusal that says why there is none -- and the gate over it, from the preregistration to the one line
+// of the index.
 //
-// Everything runs on a staging tree built in mkdtemp: no test names a real skill, and no directory outside
-// the temporary one is read or written.
+// Everything runs on a staging tree and a skill built in mkdtemp: no test names a real skill, nothing outside
+// the temporary directory is read or written, and no run starts a process. `runReplay` is the seam the whole
+// budget goes through, so the twelve runs of a 2x2x3 design cost nothing and answer exactly what a test says.
 
 const SKILL_NAME = "pdf-tools";
+const OTHER_SKILL = "pdf-images";
 const SLUG = "merged-cells";
 const TITLE = "Extract merged cells with the lattice strategy";
+const TOOL = "bash";
+// OA5: the model of the failing turn, in the spelling a replay pins.
+const MODEL = "opencode-go/deepseek-v4.1-flash";
+// The failure signature of the diagnosis, which every line of this candidate's index names (OA4).
 const SIGNATURE = `sha256:${"c".repeat(64)}`;
-const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
-const BODY_HASH = `sha256:${"b".repeat(64)}`;
 const STAGING_TIMESTAMP = "20261102T140322481Z";
+// The clock of the harness starts here and advances one second per reading, so every moment of a run is
+// distinct and ordered.
+const CLOCK_START = new Date("2026-11-02T14:10:00.000Z");
+const CLOCK_STEP_MS = 1000;
+// What one run of the budget costs, small enough to add up in an assertion.
+const RUN_USAGE = { input: 10, output: 2 };
+// The design of §8: two repetitions of each of the three items, in two arms.
+const PLANNED_RUNS = 12;
+const RUNS_PER_ARM = 6;
 
-// The record writeStagingCandidate publishes next to the lesson: schema @1, the candidate the gate will
-// rewrite and the diagnosis its index line names. It is a literal because nothing in this suite runs the
-// propose flow -- what is under test is the reading of a file that flow already wrote.
-function decisionRecord(): DecisionRecord {
+// The evidence of the diagnosis: a failed tool call per replay item, with the two fields the two halves of the
+// gate read -- the excerpt the intrinsic-failure exclusion reads (OA7) and the id whose digest names the
+// failure of the item.
+const EVIDENCE: readonly EvidenceItem[] = [
+  {
+    id: "ev-3f9a1c02",
+    kind: "tool_error",
+    toolName: TOOL,
+    timestamp: 1762082602481,
+    source: "transcript",
+    excerpt: "pdftotext: cannot open report.pdf",
+  },
+  {
+    id: "ev-4a8b2d11",
+    kind: "tool_error",
+    toolName: TOOL,
+    timestamp: 1762082603492,
+    source: "transcript",
+    excerpt: "pdftotext: the table of page 3 stops after the first column",
+  },
+  {
+    id: "ev-5b7c3e22",
+    kind: "tool_error",
+    toolName: TOOL,
+    timestamp: 1762082604503,
+    source: "transcript",
+    excerpt: "pdftotext: merged cells come out as two columns",
+  },
+];
+
+// The candidate lesson, in the format src/lesson-frontmatter.ts owns: src/writer.ts reads the staged bytes back
+// with the parser of that module before it lets a record be replaced, so the fixture is built by the writer of
+// the format and not by hand.
+const LESSON_TEXT = fixtureLesson();
+
+// The pair of hashes the record declares, from the same function the writer uses: the fixture is a candidate
+// whose bytes and record agree, which is what the gate checks before it writes anything (and what one test
+// breaks on purpose).
+const HASHES = fixtureHashes();
+
+function fixtureLesson(): string {
+  const lesson = serializeLesson({
+    slug: SLUG,
+    title: TITLE,
+    date: "2026-11-02",
+    status: "proposed",
+    sourceEvidence: [EVIDENCE[0].id],
+    gate: "pending",
+    body: "Use pdfplumber with the lattice strategy so merged cells stay apart.",
+  });
+  if (!lesson.ok) throw new Error(`the fixture lesson is not a lesson file: ${lesson.error}`);
+  return lesson.value;
+}
+
+function fixtureHashes(): { contentHash: string; bodyHash: string } {
+  const hashes = lessonHashes(LESSON_TEXT);
+  if (!hashes.ok) throw new Error(`the fixture lesson has no hashes: ${hashes.error}`);
+  return hashes.value;
+}
+
+// One replay item of the diagnosis. Its failure signature is the digest of one evidence id, which is the rule
+// src/diagnosis.ts applies and the reason the flow can pair an item with the excerpt it came from.
+function replayItem(index: number, skills: readonly string[]): ReplayItem {
+  const evidence = EVIDENCE[index] ?? EVIDENCE[0];
+
+  return {
+    prompt: `extract the merged-cell table of report ${index}.pdf`,
+    cwd: "/work/reports",
+    expectation: { class: "tool_error", version: 1, tool: TOOL },
+    model: MODEL,
+    skills: [...skills],
+    failureSignature: sha256Digest(evidence.id),
+  };
+}
+
+interface RecordOverrides {
+  // The pair of hashes the record declares. The honest pair is the default; a test that wants a candidate whose
+  // lesson moved since it was staged passes another one.
+  contentHash?: string;
+  bodyHash?: string;
+  // How many replay items the diagnosis carries, which is what decides the plan.
+  items?: number;
+  // The skills the session of every item had (OA6).
+  itemSkills?: readonly string[];
+}
+
+// The record writeStagingCandidate publishes next to the lesson: schema @1, the candidate the gate will rewrite
+// and the diagnosis its index line names. It is a literal because nothing in this suite runs the propose flow --
+// what is under test is the reading, the rewriting and the gating of a file that flow already wrote.
+function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
+  const count = overrides.items ?? 3;
+  const itemSkills = overrides.itemSkills ?? [SKILL_NAME];
+
   return {
     schema: "pi-simple-sri/decision@1",
     createdAt: "2026-11-02T14:03:22.481Z",
@@ -40,26 +165,11 @@ function decisionRecord(): DecisionRecord {
       eligible: true,
     },
     eligibility: { allow: [], deny: [] },
-    evidence: [
-      {
-        id: "ev-3f9a1c02",
-        kind: "tool_error",
-        toolName: "bash",
-        timestamp: 1762082602481,
-        source: "transcript",
-        excerpt: "pdftotext: cannot open report.pdf",
-      },
-    ],
+    evidence: EVIDENCE.slice(0, count).map((item) => ({ ...item })),
     diagnosis: {
       summary: "Table extraction loses merged cells",
       failureSignature: SIGNATURE,
-      replayItems: [
-        {
-          prompt: "extract the merged-cell table from report.pdf",
-          cwd: "/work/reports",
-          expectation: { class: "tool_error", version: 1, tool: "bash" },
-        },
-      ],
+      replayItems: Array.from({ length: count }, (_unused, index) => replayItem(index, itemSkills)),
     },
     candidate: {
       kind: "new-lesson",
@@ -67,8 +177,8 @@ function decisionRecord(): DecisionRecord {
       title: TITLE,
       targetLesson: null,
       lessonPath: `lessons/${SLUG}.md`,
-      contentHash: CONTENT_HASH,
-      bodyHash: BODY_HASH,
+      contentHash: overrides.contentHash ?? HASHES.contentHash,
+      bodyHash: overrides.bodyHash ?? HASHES.bodyHash,
     },
     gate: {
       basis: "replay",
@@ -87,27 +197,69 @@ function decisionRecord(): DecisionRecord {
   };
 }
 
+// A declared skill the way a user writes one: frontmatter, a body, and a script next to it. The `## Lessons`
+// section is absent on purpose -- the overlay completes it in both arms, which is the case of the first lesson
+// of a skill.
+function skillFile(): string {
+  return [
+    "---",
+    `name: ${SKILL_NAME}`,
+    "description: Extract tables from PDFs",
+    "---",
+    "",
+    `# ${SKILL_NAME}`,
+    "",
+    "Use the scripts in this directory.",
+    "",
+  ].join("\n");
+}
+
+interface FixtureOptions extends RecordOverrides {
+  // A symlink inside the skill: the overlay refuses to copy it, so the gate abstains before spending a run.
+  symlink?: boolean;
+}
+
 interface Fixture {
   base: string; // the write base of the run: <base>/staging holds the candidate
   candidateDir: string; // <base>/staging/<ts>/<skill>
   decisionPath: string;
+  skill: SkillRef; // the skill the candidate was written for, as the inventory resolves it
+  skillFilePath: string; // <base>/skills/<skill>/SKILL.md
 }
 
-function createFixture(t: TestContext): Fixture {
+function createFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
   const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-gate-flow-"));
   t.after(() => {
     fs.rmSync(base, { recursive: true, force: true });
   });
 
+  const skillDir = path.join(base, "skills", SKILL_NAME);
+  fs.mkdirSync(path.join(skillDir, "scripts"), { recursive: true });
+  const skillFilePath = path.join(skillDir, SKILL_FILE);
+  fs.writeFileSync(skillFilePath, skillFile(), "utf8");
+  fs.writeFileSync(path.join(skillDir, "scripts", "extract.sh"), "#!/bin/sh\npdftotext \"$1\" -\n", "utf8");
+  if (options.symlink === true) {
+    fs.symlinkSync(SKILL_FILE, path.join(skillDir, "linked-skill.md"));
+  }
+
+  const skill: SkillRef = {
+    name: SKILL_NAME,
+    description: "Extract tables from PDFs",
+    dir: skillDir,
+    realDir: skillDir,
+    hasLessons: false,
+    kind: "declared",
+  };
+
   const candidateDir = path.join(stagingDir(base), STAGING_TIMESTAMP, SKILL_NAME);
   const lessonsDir = path.join(candidateDir, LESSONS_DIR);
   fs.mkdirSync(lessonsDir, { recursive: true });
-  fs.writeFileSync(path.join(lessonsDir, `${SLUG}.md`), "the lesson the candidate carries\n", "utf8");
+  fs.writeFileSync(path.join(lessonsDir, `${SLUG}.md`), LESSON_TEXT, "utf8");
 
   const decisionPath = path.join(candidateDir, DECISION_FILE);
-  fs.writeFileSync(decisionPath, `${JSON.stringify(decisionRecord(), null, 2)}\n`, "utf8");
+  fs.writeFileSync(decisionPath, `${JSON.stringify(decisionRecord(options), null, 2)}\n`, "utf8");
 
-  return { base, candidateDir, decisionPath };
+  return { base, candidateDir, decisionPath, skill, skillFilePath };
 }
 
 // The record a successful resolution answers with, or the reason the test expected none.
@@ -119,6 +271,130 @@ function recordOf(result: StagedCandidateResult): DecisionRecord {
 function rejectionOf(result: StagedCandidateResult): CandidateRejection {
   if (result.ok) assert.fail("the candidate must be refused");
   return result.error;
+}
+
+// The same reading for the gate: a refused candidate is a failure of the test, because none of the assertions
+// below is about the refusal.
+function concluded(result: GateFlowResult): GateConcludedResult {
+  if (result.kind === "refused") {
+    assert.fail(`the candidate was refused: ${result.rejection.reason} (${result.rejection.detail})`);
+  }
+  return result;
+}
+
+// The concluded gate block of a record, or a failure naming the state the gate is in instead. It is the one
+// narrowing the assertions below share: a record whose gate did not conclude has no `replay` to read.
+function concludedGate(record: DecisionRecord): GateConcluded {
+  const gate = record.gate;
+  if (gate.status !== "gate-accepted" && gate.status !== "gate-rejected" && gate.status !== "gate-abstained") {
+    assert.fail(`the gate did not conclude: ${gate.status}`);
+  }
+  return gate;
+}
+
+function readRecord(decisionPath: string): DecisionRecord {
+  return JSON.parse(fs.readFileSync(decisionPath, "utf8")) as DecisionRecord;
+}
+
+function attemptsPath(base: string): string {
+  return path.join(stateDir(base), ATTEMPTS_FILE);
+}
+
+// The lines of state/attempts.jsonl, in the order they were appended. An index nobody wrote answers with no
+// lines, which is what a gate that passes has to leave behind.
+function readLines(base: string): AttemptLine[] {
+  const indexPath = attemptsPath(base);
+  if (!fs.existsSync(indexPath)) return [];
+
+  return fs
+    .readFileSync(indexPath, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as AttemptLine);
+}
+
+// The clock the flow reads: one second per reading, so the preregistration of a run is older than every run that
+// followed it, which is what makes "recorded before the first run" checkable.
+function createClock(start: Date = CLOCK_START): () => Date {
+  let tick = 0;
+  return () => {
+    tick += 1;
+    return new Date(start.getTime() + tick * CLOCK_STEP_MS);
+  };
+}
+
+// One completed run of the budget: the process answered, the skill loaded, and the tool of the item reported an
+// error exactly when `toolFails`. The verdict of the run is the reading of the expectation, so the arm that
+// fails is the one thing a test controls.
+function completedRun(request: ReplayRunRequest, toolFails: boolean): ReplayRun {
+  return {
+    request,
+    outcome: "pass",
+    stopReason: "stop",
+    toolCalls: [
+      {
+        toolName: TOOL,
+        isError: toolFails,
+        argsHash: sha256Digest(`${request.item}:${request.rep}:${request.arm}`),
+      },
+    ],
+    usage: RUN_USAGE,
+    durationMs: 5,
+    exitCode: 0,
+    skillLoaded: true,
+    rawStream: `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "stop" } })}\n`,
+  };
+}
+
+// The shape of the budget that accepts: the incumbent reproduces its failure in every run and the candidate
+// passes every one, which is the only difference the preregistered rule accepts.
+function incumbentFails(request: ReplayRunRequest): ReplayRun {
+  return completedRun(request, request.arm === "incumbent");
+}
+
+// What one run answers. The behaviour receives the request and returns the whole run, so a test writes a
+// budget without a process, a provider or a token.
+type RunBehaviour = (request: ReplayRunRequest) => ReplayRun;
+
+interface HarnessOptions {
+  behaviour?: RunBehaviour;
+  listSkills?: (options: ListSkillsOptions) => Promise<SkillRef[]>;
+}
+
+interface Harness {
+  deps: GateDeps;
+  // Every run the flow asked for, with the moment the executor was entered: the timestamps the preregistration
+  // is compared against.
+  runs: { at: string; request: ReplayRunRequest }[];
+}
+
+function createHarness(options: HarnessOptions = {}): Harness {
+  const clock = createClock();
+  const behaviour = options.behaviour ?? incumbentFails;
+  const runs: Harness["runs"] = [];
+
+  const deps: GateDeps = {
+    now: clock,
+    // The seam the whole budget goes through: the gate resolves its executor here and a test answers every run
+    // of the twelve without a child.
+    runReplay: async (request) => {
+      runs.push({ at: clock().toISOString(), request });
+      return behaviour(request);
+    },
+    ...(options.listSkills === undefined ? {} : { listSkills: options.listSkills }),
+  };
+
+  return { deps, runs };
+}
+
+function gateRequest(fixture: Fixture): GateRequest {
+  return {
+    base: fixture.base,
+    agentDir: path.join(fixture.base, "agent"),
+    cwd: fixture.base,
+    stagingPath: fixture.candidateDir,
+    skill: fixture.skill,
+  };
 }
 
 test("resolveStagedCandidate: a staged candidate answers the record it carries", async (t) => {
@@ -210,7 +486,7 @@ test("resolveStagedCandidate: a record of another schema is refused and left unt
   const old = {
     ...decisionRecord(),
     schema: "pi-simple-sri/decision@0",
-    predicate: { class: "tool_error", version: 1, tool: "bash" },
+    predicate: { class: "tool_error", version: 1, tool: TOOL },
   };
   const before = `${JSON.stringify(old, null, 2)}\n`;
   fs.writeFileSync(fixture.decisionPath, before, "utf8");
@@ -222,4 +498,382 @@ test("resolveStagedCandidate: a record of another schema is refused and left unt
   assert.equal(rejection.detail.includes("pi-simple-sri/decision@1"), true);
   // The record the gate could not read is exactly the record that was there.
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The gate over the candidate
+// ---------------------------------------------------------------------------------------------
+
+// Step 3 of the sequence, which is the one a record can be checked against: the threshold, the design and the
+// floor are on disk before the first run, and the moment they were recorded is older than every run that
+// followed. A rule recorded after the runs would be a rule chosen with the result in hand.
+test("gateStagedCandidate: the preregistration is written before the first run", async (t) => {
+  const fixture = createFixture(t);
+  // What every run saw on disk at the moment it was entered, which is the only place the order is observable.
+  const gates: GateBlock[] = [];
+
+  const harness = createHarness({
+    behaviour: (request) => {
+      gates.push(readRecord(fixture.decisionPath).gate);
+      return incumbentFails(request);
+    },
+  });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  assert.equal(harness.runs.length, PLANNED_RUNS);
+  assert.equal(gates.length, PLANNED_RUNS);
+
+  for (const [index, gate] of gates.entries()) {
+    assert.equal(gate.status, "preregistered");
+    const preregistration = gate.preregistration;
+    if (preregistration === null) assert.fail(`the run ${index} started without a preregistration`);
+
+    assert.equal(preregistration.design.plannedRuns, PLANNED_RUNS);
+    assert.equal(preregistration.design.reps, 2);
+    assert.equal(preregistration.design.items, 3);
+    assert.equal(preregistration.threshold.rule, "unanimous-and-strictly-better");
+    assert.equal(preregistration.threshold.candidatePasses, RUNS_PER_ARM);
+    assert.equal(preregistration.threshold.incumbentPassesMax, RUNS_PER_ARM - 1);
+    assert.equal(preregistration.mde.runsPerArm, RUNS_PER_ARM);
+    // The one assertion this test exists for: the moment recorded for the rule is older than the run.
+    assert.ok(
+      Date.parse(preregistration.recordedAt) < Date.parse(harness.runs[index].at),
+      `the preregistration of ${preregistration.recordedAt} is not older than the run at ${harness.runs[index].at}`,
+    );
+  }
+
+  // The record it concluded with keeps the preregistration it was judged by, so one file carries both.
+  const gate = concludedGate(readRecord(fixture.decisionPath));
+  assert.equal(gate.preregistration.recordedAt, gates[0].preregistration?.recordedAt);
+});
+
+// A gate that passes is a state of decision.json and never an event of the index: the line of an accepted
+// candidate is the `accepted` event the acceptance writes, and the gate neither writes it nor touches the skill.
+test("gateStagedCandidate: an accepted gate rewrites the record and writes no line", async (t) => {
+  const fixture = createFixture(t);
+  const skillBefore = fs.readFileSync(fixture.skillFilePath, "utf8");
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  assert.equal(result.reason, null);
+  assert.equal(result.plannedRuns, PLANNED_RUNS);
+  assert.equal(result.usedRuns, PLANNED_RUNS);
+  assert.equal(result.stagingPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME));
+  assert.equal(result.decisionPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME, DECISION_FILE));
+  assert.notEqual(result.overlays, null);
+
+  const record = readRecord(fixture.decisionPath);
+  // The record the gate leaves behind is a record of the schema, not only of the types.
+  assert.deepEqual(validateAgainstSchema(record), []);
+
+  const gate = concludedGate(record);
+  assert.equal(gate.status, "gate-accepted");
+  assert.equal(record.outcome.status, "gate-accepted");
+  assert.equal(record.outcome.reason, null);
+  assert.notEqual(record.outcome.decidedAt, null);
+
+  assert.equal(gate.replay.items.length, 3);
+  for (const item of gate.replay.items) {
+    assert.equal(item.reps.length, 4);
+    assert.equal(item.reps.filter((run) => run.arm === "incumbent").length, 2);
+    assert.equal(item.reps.filter((run) => run.arm === "candidate").length, 2);
+    assert.equal(item.model, MODEL);
+    // OA10: every run kept its stream under the candidate, where the record says it is.
+    for (const run of item.reps) {
+      const stream = run.stream;
+      if (stream === undefined) assert.fail(`the run ${item.index}/${run.rep}/${run.arm} kept no stream`);
+      assert.equal(stream.startsWith(path.join("staging", STAGING_TIMESTAMP, SKILL_NAME, "gate", "runs")), true);
+      assert.equal(fs.existsSync(path.join(fixture.base, stream)), true);
+    }
+  }
+
+  // §8, the order of the budget: item -> rep -> (incumbent, candidate), so the two arms of one pair are adjacent
+  // in time and the arms of an item are the copy of the skill and the skill plus the lesson.
+  assert.deepEqual(
+    harness.runs.map((run) => `${run.request.item}:${run.request.rep}:${run.request.arm}`),
+    [
+      "0:1:incumbent",
+      "0:1:candidate",
+      "0:2:incumbent",
+      "0:2:candidate",
+      "1:1:incumbent",
+      "1:1:candidate",
+      "1:2:incumbent",
+      "1:2:candidate",
+      "2:1:incumbent",
+      "2:1:candidate",
+      "2:2:incumbent",
+      "2:2:candidate",
+    ],
+  );
+
+  // What one run is given: the prompt and the cwd of its item, the model of the failing turn (OA5), the cap of a
+  // run, and the arm of the pair as the first directory the child loads (OA6).
+  const [first] = harness.runs;
+  assert.equal(first.request.prompt, replayItem(0, [SKILL_NAME]).prompt);
+  assert.equal(first.request.cwd, "/work/reports");
+  assert.equal(first.request.model, MODEL);
+  assert.equal(first.request.timeoutMs, 180_000);
+  assert.deepEqual(first.request.skillDirs, [path.join(fixture.candidateDir, "arms", "incumbent", SKILL_NAME)]);
+  assert.deepEqual(harness.runs[1].request.skillDirs, [
+    path.join(fixture.candidateDir, "arms", "candidate", SKILL_NAME),
+  ]);
+
+  assert.equal(gate.replay.arms.incumbent.passes, 0);
+  assert.equal(gate.replay.arms.candidate.passes, RUNS_PER_ARM);
+  assert.equal(gate.replay.regressions, 0);
+  assert.deepEqual(gate.replay.arms.candidate.tokens, { input: 60, output: 12 });
+  // Q6: the two arms and the proposal add up, and the total is recorded so nobody adds them again.
+  assert.deepEqual(record.gate.tokens.incumbent, { input: 60, output: 12 });
+  assert.deepEqual(record.gate.tokens.total, { input: 412 + 120, output: 137 + 24 });
+  assert.deepEqual(gate.budget, { plannedRuns: PLANNED_RUNS, usedRuns: PLANNED_RUNS, interruptedAt: null });
+
+  // No line of the index, and no byte written inside the skill: the acceptance is the slice that writes it.
+  assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+  assert.equal(fs.readFileSync(fixture.skillFilePath, "utf8"), skillBefore);
+});
+
+// The other side of the rule: a candidate that misses one run of an arm is refused, and the refusal is the one
+// event of the gate the index carries.
+test("gateStagedCandidate: a rejected gate writes the line of the index", async (t) => {
+  const fixture = createFixture(t);
+  // The candidate passes the second repetition of every item and fails the first, so three of six.
+  const harness = createHarness({
+    behaviour: (request) => completedRun(request, request.arm === "incumbent" || request.rep === 1),
+  });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-rejected");
+  assert.equal(result.reason, "below-threshold");
+  assert.equal(result.usedRuns, PLANNED_RUNS);
+
+  const record = readRecord(fixture.decisionPath);
+  assert.deepEqual(validateAgainstSchema(record), []);
+  const gate = concludedGate(record);
+  assert.equal(gate.status, "gate-rejected");
+  assert.equal(gate.replay.reason, "below-threshold");
+  assert.equal(gate.replay.arms.candidate.passes, 3);
+
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  // OA4: the line says which failure it is about, and it is the one the diagnosis declares.
+  assert.equal(lines[0].failureSignature, record.diagnosis.failureSignature);
+  assert.equal(lines[0].event, "gate-rejected");
+  assert.equal(lines[0].targetSkill, SKILL_NAME);
+  // The pair of the record, so the lines of one candidate group on candidateHash.
+  assert.equal(lines[0].candidateHash, record.candidate.contentHash);
+  assert.equal(lines[0].bodyHash, record.candidate.bodyHash);
+  assert.equal(lines[0].stagingPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME));
+  assert.equal(lines[0].decisionPath, path.join("staging", STAGING_TIMESTAMP, SKILL_NAME, DECISION_FILE));
+});
+
+// OA9: an interruption stops the budget before the next child, keeps the run that was in flight with its partial
+// stream, and abstains instead of reading a short budget as a verdict.
+test("gateStagedCandidate: an interrupted gate keeps the partial run and abstains", async (t) => {
+  const fixture = createFixture(t);
+  const controller = new AbortController();
+  const partial = `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason: "aborted" } })}\n`;
+
+  const harness = createHarness({
+    behaviour: (request) => {
+      // The caller gives up while the first run is in flight.
+      controller.abort();
+      return {
+        ...completedRun(request, true),
+        outcome: "invalid",
+        invalidReason: "interrupted",
+        exitCode: null,
+        rawStream: partial,
+      };
+    },
+  });
+
+  const result = concluded(
+    await gateStagedCandidate({ ...gateRequest(fixture), signal: controller.signal }, harness.deps),
+  );
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "interrupted");
+  assert.equal(result.usedRuns, 1);
+  // One run was in flight and the eleven of the rest were never started.
+  assert.equal(harness.runs.length, 1);
+
+  const record = readRecord(fixture.decisionPath);
+  assert.deepEqual(validateAgainstSchema(record), []);
+  const gate = concludedGate(record);
+  assert.equal(gate.status, "gate-abstained");
+  assert.equal(gate.replay.reason, "interrupted");
+  assert.equal(gate.budget.usedRuns, 1);
+  assert.equal(typeof gate.budget.interruptedAt, "number");
+
+  // What the interruption kept: the partial run, its verdict and the bytes it wrote.
+  const [item] = gate.replay.items;
+  assert.equal(item.reps.length, 1);
+  assert.equal(item.reps[0].outcome, "invalid");
+  assert.equal(item.reps[0].invalidReason, "interrupted");
+  const stream = item.reps[0].stream;
+  if (stream === undefined) assert.fail("the partial run kept no stream");
+  assert.equal(fs.readFileSync(path.join(fixture.base, stream), "utf8"), partial);
+  assert.equal(readLines(fixture.base)[0].event, "gate-abstained");
+});
+
+// OA3: a run nobody can read abstains the whole gate, so the rest of the budget is not spent on a comparison the
+// scorer has already refused.
+test("gateStagedCandidate: a broken run abstains without spending the rest of the budget", async (t) => {
+  const fixture = createFixture(t);
+
+  const harness = createHarness({
+    behaviour: (request) => ({
+      ...completedRun(request, true),
+      outcome: "invalid",
+      invalidReason: "cwd-missing",
+      exitCode: null,
+      rawStream: "",
+    }),
+  });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "invalid-run");
+  assert.equal(result.usedRuns, 1);
+  assert.equal(harness.runs.length, 1);
+
+  const gate = concludedGate(readRecord(fixture.decisionPath));
+  assert.equal(gate.replay.reason, "invalid-run");
+  assert.equal(gate.budget.usedRuns, 1);
+  assert.equal(gate.budget.interruptedAt, null);
+  // A run that wrote nothing points at no stream.
+  assert.equal(gate.replay.items[0].reps[0].stream, undefined);
+});
+
+// The overlay is the fourth step and the last one before a run: a skill it cannot copy abstains the gate with the
+// rule already recorded, so the record says the gate is preregistered and the index says it answered nothing.
+test("gateStagedCandidate: a skill the overlay cannot copy abstains before the first run", async (t) => {
+  const fixture = createFixture(t, { symlink: true });
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "overlay-failed");
+  assert.equal(result.usedRuns, 0);
+  assert.equal(result.overlays, null);
+  assert.equal(harness.runs.length, 0);
+
+  const record = readRecord(fixture.decisionPath);
+  assert.equal(record.gate.status, "preregistered");
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, "gate-abstained");
+  assert.equal(lines[0].failureSignature, SIGNATURE);
+});
+
+// Step 2: the candidate is the bytes its record declares, and a lesson that moved since it was staged is the one
+// abstention that writes nothing at all -- the rewrite would refuse it, and neither the record nor the index may
+// describe a candidate whose bytes disagree with their own record.
+test("gateStagedCandidate: a lesson that no longer matches the record abstains and writes nothing", async (t) => {
+  const fixture = createFixture(t, { contentHash: `sha256:${"a".repeat(64)}` });
+  const before = fs.readFileSync(fixture.decisionPath, "utf8");
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "candidate-mismatch");
+  assert.equal(result.usedRuns, 0);
+  assert.equal(harness.runs.length, 0);
+
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+});
+
+// OA6 in the positive: a run loads the arm's copy of the skill first and then the real directories of the rest of
+// the set the session had, which is the set the failure was measured in.
+test("gateStagedCandidate: a run loads the arm first and then the rest of the session's skills", async (t) => {
+  const fixture = createFixture(t, { itemSkills: [SKILL_NAME, OTHER_SKILL] });
+  const other: SkillRef = {
+    ...fixture.skill,
+    name: OTHER_SKILL,
+    dir: path.join(fixture.base, "skills", OTHER_SKILL),
+    realDir: path.join(fixture.base, "skills", OTHER_SKILL),
+  };
+  const harness = createHarness({ listSkills: async () => [fixture.skill, other] });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  const [first] = harness.runs;
+  assert.deepEqual(first.request.skillDirs, [
+    path.join(fixture.candidateDir, "arms", "incumbent", SKILL_NAME),
+    other.realDir,
+  ]);
+});
+
+// OA6: a replay loads the set of skills the session had. One of them missing is an abstention before the first
+// run, because the same item replayed with a smaller set is a different task.
+test("gateStagedCandidate: an item whose skill no longer resolves abstains without a run", async (t) => {
+  const fixture = createFixture(t, { itemSkills: [SKILL_NAME, OTHER_SKILL] });
+  // The inventory holds the skill under test and nothing else.
+  const harness = createHarness({ listSkills: async () => [fixture.skill] });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "skill-unavailable");
+  assert.equal(result.usedRuns, 0);
+  assert.equal(harness.runs.length, 0);
+
+  // Nothing was spent and nothing was rewritten: the gate has not run, and the index says the attempt abstained.
+  assert.equal(readRecord(fixture.decisionPath).gate.status, "not-run");
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, "gate-abstained");
+  assert.equal(lines[0].failureSignature, SIGNATURE);
+});
+
+// §8: fewer than two eligible items is not a smaller gate, it is a gate that cannot measure, so it answers before
+// spending anything and still leaves the event of the abstention in the index.
+test("gateStagedCandidate: fewer than two items abstains with zero runs", async (t) => {
+  const fixture = createFixture(t, { items: 1 });
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "insufficient-items");
+  assert.equal(result.plannedRuns, 0);
+  assert.equal(result.usedRuns, 0);
+  assert.equal(harness.runs.length, 0);
+
+  const record = readRecord(fixture.decisionPath);
+  assert.equal(record.gate.status, "not-run");
+  assert.equal(readLines(fixture.base)[0].event, "gate-abstained");
+});
+
+// OA12, on the gate itself: a candidate of another version is refused before anything is read from it, so the
+// record is exactly the record that was there and no run was spent.
+test("gateStagedCandidate: a decision@0 candidate is refused before it is read", async (t) => {
+  const fixture = createFixture(t);
+  const old = {
+    ...decisionRecord(),
+    schema: "pi-simple-sri/decision@0",
+    predicate: { class: "tool_error", version: 1, tool: TOOL },
+  };
+  const before = `${JSON.stringify(old, null, 2)}\n`;
+  fs.writeFileSync(fixture.decisionPath, before, "utf8");
+  const harness = createHarness();
+
+  const result = await gateStagedCandidate(gateRequest(fixture), harness.deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  assert.equal(result.rejection.reason, "unsupported-schema");
+  assert.equal(harness.runs.length, 0);
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
 });
