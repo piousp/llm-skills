@@ -222,10 +222,15 @@ export type GateVerdictReason =
   | "below-threshold"
   | Extract<GateAbstentionReason, "no-improvement" | "invalid-run" | "interrupted">;
 
-// What the gate will spend, recorded before the first run: the design, the rule it will be judged by and the
-// floor of the design. The exclusions travel with it because a gate that ran fewer items than the diagnosis
-// offered has to say which ones it dropped and why (OA7).
+// What the gate will spend, recorded before the first run: the items it chose, the design, the rule it will be
+// judged by and the floor of the design. The exclusions travel with it because a gate that ran fewer items than
+// the diagnosis offered has to say which ones it dropped and why (OA7).
+//
+// `items` is read by the flow and `design.items` is its length: the plan is the one application of the eligibility
+// predicate of OA7, so no caller re-derives the list with a second reading of it and the count cannot disagree
+// with the items that are actually spent.
 export interface GatePlan {
+  items: readonly GatePlanItem[];
   design: GateDesign;
   threshold: GateThreshold;
   mde: GateMde;

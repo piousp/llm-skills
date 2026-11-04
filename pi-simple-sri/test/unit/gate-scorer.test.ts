@@ -91,9 +91,11 @@ function assertBounds(bounds: GateBounds, low: number, high: number): void {
 }
 
 test("planGate: 2x2x3 plans twelve runs, six per arm, with the rule and the floor preregistered", () => {
-  // The whole plan is asserted: a field added to the design, the rule or the floor breaks this test instead of
-  // travelling into a decision record unnoticed.
+  // The whole plan is asserted, the items it chose included: a field added to the design, the rule or the floor
+  // breaks this test instead of travelling into a decision record unnoticed, and the list the gate spends has to be
+  // the list the prefix of three items names.
   assert.deepEqual(planOf(3), {
+    items: [planItem(0), planItem(1), planItem(2)],
     design: { reps: 2, items: 3, plannedRuns: 12, arms: ["incumbent", "candidate"] },
     threshold: {
       rule: "unanimous-and-strictly-better",

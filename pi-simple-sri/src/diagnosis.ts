@@ -220,7 +220,11 @@ export function describeExpectation(expectation: Expectation): string {
 
 // Ids are sorted before hashing: the signature names the set of failures, so the same evidence
 // in another transcript order yields the same signature, and one different id changes it.
-function signatureOf(ids: readonly string[]): string {
+//
+// Exported because it is the package's one rule for what a failure signature is: the gate recovers the excerpt of
+// a replay item by signing the id of each evidence entry with this function (src/gate/flow.ts), so a change here
+// moves the signature of the diagnosis and the pairing of the gate together instead of only one of them.
+export function signatureOf(ids: readonly string[]): string {
   return sha256Digest([...ids].sort().join(ID_SEPARATOR));
 }
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildAttemptLine, type AttemptEvent } from "../attempts.ts";
-import { sha256Digest } from "../hash.ts";
+import { signatureOf } from "../diagnosis.ts";
 import { DECISION_FILE, LESSONS_DIR } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "../skills-inventory.ts";
@@ -23,7 +23,7 @@ import type {
 import { currentTime, describe, isDirectory, isPlainObject, isRegularFile, quote, toErrorMessage } from "../values.ts";
 import { relativeToBase, stagingDir } from "../write-base.ts";
 import { appendAttemptLine, lessonHashes, rewriteStagingDecision, writeTextAtomically } from "../writer.ts";
-import { evaluateExpectation, isIntrinsicFailure } from "./expectation.ts";
+import { evaluateExpectation } from "./expectation.ts";
 import { buildArmOverlays, type OverlayArms, type OverlayRequest, type OverlayResult } from "./overlay.ts";
 import { createReplayRunner } from "./replay-runner.ts";
 import { evaluateGate, planGate } from "./scorer.ts";
@@ -285,8 +285,7 @@ export async function gateStagedCandidate(
 
   // Step 3, first half: the plan, which is pure and costs nothing. Fewer than two eligible items is the one
   // abstention the scorer answers instead of planning, and the exclusions travel with it.
-  const planItems = planItemsOf(record);
-  const plan = planGate(planItems);
+  const plan = planGate(planItemsOf(record));
   if ("abstain" in plan) {
     return await answered({
       request,
@@ -301,8 +300,9 @@ export async function gateStagedCandidate(
     });
   }
 
-  // The prefix of the plan, in the order the evidence gave the items (OA13).
-  const selected = selectedItemsOf(planItems, plan);
+  // The items the plan chose, in the order the evidence gave them (OA13). The eligibility of OA7 was applied
+  // there and not again here: one predicate, so the list spent is the list counted.
+  const selected = plan.items;
 
   // OA5: every run pins "provider/model", and an item whose transcript named no model cannot be replayed at
   // all -- a run started with no model measures whatever the child defaults to. The gate abstains before it
@@ -398,14 +398,16 @@ export async function gateStagedCandidate(
   }
 
   // Steps 5 and 6. The budget, and the reading of it.
-  const items: ReplayItemRecord[] = selected.map((entry, index) => ({
+  //
+  // The planned items travel without their runs: the budget builds the records the record carries and answers with
+  // them, so nothing of this list is written by another function.
+  const plannedItems: PlannedItem[] = selected.map((entry, index) => ({
     index,
     // A replay item names its own failure; one that does not is an item of the diagnosis's failure, and the
     // signature of the diagnosis is the only one this record can honestly put in its place.
     failureSignature: entry.item.failureSignature ?? record.diagnosis.failureSignature,
     expectation: entry.item.expectation,
     model: models[index],
-    reps: [],
   }));
 
   const budget = await spendBudget({
@@ -415,7 +417,7 @@ export async function gateStagedCandidate(
     selected,
     models,
     sharedDirs,
-    items,
+    items: plannedItems,
     candidateDir,
     arms: overlays.value,
   });
@@ -482,15 +484,11 @@ export async function gateStagedCandidate(
 
 // The seams with their production default, resolved once per call. `runReplay` is the one that matters: the
 // default opens a runner, and a runner starts nothing until a run is asked for.
-interface GateSeams {
-  now: () => Date;
-  runReplay: ReplayRunFn;
-  buildOverlays: (input: OverlayRequest) => Promise<OverlayResult>;
-  rewriteDecision: typeof rewriteStagingDecision;
-  appendAttempt: typeof appendAttemptLine;
-  writeStream: typeof writeTextAtomically;
-  listSkills: (options: ListSkillsOptions) => Promise<SkillRef[]>;
-}
+//
+// The type of a resolved seam is derived from the deps and not declared again: every field of GateDeps is one
+// this resolver fills, so `Required<>` is exactly what a resolved seam is, and a new dependency means editing
+// GateDeps and this resolver instead of a third list that could fall behind them.
+type GateSeams = Required<GateDeps>;
 
 function gateSeamsOf(deps: GateDeps): GateSeams {
   return {
@@ -513,6 +511,10 @@ interface BudgetResult {
   interruptedAt: number | null;
 }
 
+// One planned item, before its runs: the coordinates of the item and the expectation it is judged by, which are the
+// fields the flow knows before the first run. The repetitions are what the budget adds.
+type PlannedItem = Omit<ReplayItemRecord, "reps">;
+
 interface BudgetInput {
   request: GateRequest;
   seams: GateSeams;
@@ -520,7 +522,7 @@ interface BudgetInput {
   selected: readonly GatePlanItem[];
   models: readonly string[];
   sharedDirs: readonly (readonly string[])[];
-  items: ReplayItemRecord[];
+  items: readonly PlannedItem[];
   candidateDir: string;
   arms: OverlayArms;
 }
@@ -539,17 +541,20 @@ async function spendBudget(input: BudgetInput): Promise<BudgetResult> {
   };
   const startedAt = input.seams.now().getTime();
   const runs: RunVerdict[] = [];
+  // The records this function answers with: the item as the flow planned it, with the runs started here appended
+  // to it in the order they were asked for. The array of the caller is read and never written.
+  const items: ReplayItemRecord[] = input.items.map((planned) => ({ ...planned, reps: [] }));
   let usedRuns = 0;
 
   for (const [index, entry] of input.selected.entries()) {
-    const item = input.items[index];
+    const item = items[index];
 
     for (let rep = 1; rep <= input.plan.design.reps; rep += 1) {
       for (const arm of input.plan.design.arms) {
         // OA9: the twenty minutes of the gate are checked between runs, so an interruption costs at most the
         // run that is in flight, and a caller that already gave up starts no child at all.
         const interruptedAt = interruptionOf(input.request.signal, startedAt, input.seams.now);
-        if (interruptedAt !== null) return { runs, items: input.items, usedRuns, interruptedAt };
+        if (interruptedAt !== null) return { runs, items, usedRuns, interruptedAt };
 
         // The order of `skillDirs` is the order pi loads them in: the arm first, then the rest of the set the
         // session had, so the skill under test is the copy and the others are the skills themselves (OA6).
@@ -582,13 +587,13 @@ async function spendBudget(input: BudgetInput): Promise<BudgetResult> {
 
         if (run.outcome === "invalid") {
           const interrupted = run.invalidReason === "interrupted" ? input.seams.now().getTime() : null;
-          return { runs, items: input.items, usedRuns, interruptedAt: interrupted };
+          return { runs, items, usedRuns, interruptedAt: interrupted };
         }
       }
     }
   }
 
-  return { runs, items: input.items, usedRuns, interruptedAt: null };
+  return { runs, items, usedRuns, interruptedAt: null };
 }
 
 // The verdict of the gate and the one line of the index it gains. The record is the caller's and can be older
@@ -679,28 +684,20 @@ function eventOf(verdict: GateVerdict): AttemptEvent | undefined {
 
 // The items of the diagnosis paired with the excerpt of the evidence each was built from (OA7). The excerpt
 // does not travel on ReplayItem -- the schema of decision@1 closes that block -- so it is recovered from the
-// evidence: a replay item's failure signature is the digest of the id of one evidence item, so the digest of
-// every id names the excerpt it came from without a second rule for what a signature is.
+// evidence: a replay item's failure signature is the signature of one evidence id, so signing every id with the
+// one rule that defines it (signatureOf, src/diagnosis.ts) names the excerpt it came from. The rule is imported
+// and not spelled out again, because a second spelling of it would stop pairing the two -- and then the
+// exclusion of OA7 would quietly stop happening -- the day the rule changed.
 function planItemsOf(record: DecisionRecord): GatePlanItem[] {
   const excerptBySignature = new Map<string, string>();
   for (const item of record.evidence) {
-    if (item.excerpt !== undefined) excerptBySignature.set(sha256Digest(item.id), item.excerpt);
+    if (item.excerpt !== undefined) excerptBySignature.set(signatureOf([item.id]), item.excerpt);
   }
 
   return record.diagnosis.replayItems.map((item) => {
     const excerpt = item.failureSignature === undefined ? undefined : excerptBySignature.get(item.failureSignature);
     return excerpt === undefined ? { item } : { item, excerpt };
   });
-}
-
-// The prefix of the plan: the eligible items in the order the diagnosis gave them, cut at the count the plan
-// fixed (OA13). planGate answers with the count and not with the items, so the cut reads the count from the
-// plan and the eligibility from the one predicate that defines it -- and this flow pairs an excerpt with an
-// item exactly when the item names a failure it can pair, which is the condition the exclusion in the scorer
-// applies before it counts anything.
-function selectedItemsOf(items: readonly GatePlanItem[], plan: GatePlan): GatePlanItem[] {
-  const eligible = items.filter((entry) => !isIntrinsicFailure(entry.item, entry.excerpt));
-  return eligible.slice(0, plan.design.items);
 }
 
 // The model of every planned item, or undefined when one of them has none: a run pins the model of the

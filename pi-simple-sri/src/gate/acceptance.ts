@@ -119,15 +119,10 @@ export interface AcceptDeps {
   appendAttempt?: (base: string, line: AttemptLine) => Promise<void>;
 }
 
-interface AcceptSeams {
-  now: () => Date;
-  snapshot: (skillRealDir: string, timestamp: string) => Promise<string>;
-  writeLesson: (skillRealDir: string, slug: string, lessonText: string, expectedContentHash: string) => Promise<string>;
-  removeLesson: (skillRealDir: string, slug: string) => Promise<boolean>;
-  upsertReference: (skillRealDir: string, slug: string, title: string) => Promise<void>;
-  writeHistoryDecision: (skillRealDir: string, timestamp: string, decision: DecisionRecord) => Promise<string>;
-  appendAttempt: (base: string, line: AttemptLine) => Promise<void>;
-}
+// What an acceptance resolves its seams to. The type is derived and not declared: every field of AcceptDeps is one
+// this resolver fills, so `Required<>` is exactly a resolved seam, and a new dependency means editing AcceptDeps and
+// this resolver instead of a third list that could fall behind them.
+type AcceptSeams = Required<AcceptDeps>;
 
 // The protocol of §7, in its order. The answer is the acceptance or the named reason it did not happen;
 // the refusal of a broken file is thrown, and it names the path it is about.

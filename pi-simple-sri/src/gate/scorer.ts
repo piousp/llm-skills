@@ -1,5 +1,4 @@
 import { SriFailClosedError } from "../errors.ts";
-import type { ReplayItem } from "../types.ts";
 import { isIntrinsicFailure } from "./expectation.ts";
 import type {
   GateArm,
@@ -52,14 +51,14 @@ const MDE_BASIS = "replay";
 
 export function planGate(items: readonly GatePlanItem[], options: GatePlanOptions = {}): GatePlanResult {
   const excluded: GateReplayExclusion[] = [];
-  const eligible: ReplayItem[] = [];
+  const eligible: GatePlanItem[] = [];
 
   // OA7: the exclusion runs before anything is counted, so an intrinsic failure never takes one of the three
   // slots of a failure the gate can measure.
   for (const entry of items) {
     const exclusion = exclusionOf(entry);
     if (exclusion === undefined) {
-      eligible.push(entry.item);
+      eligible.push(entry);
     } else {
       excluded.push(exclusion);
     }
@@ -74,6 +73,9 @@ export function planGate(items: readonly GatePlanItem[], options: GatePlanOption
   const runsPerArm = REPS * selected.length;
 
   return {
+    // The list the plan chose and not only its count: the flow runs these items, and the count below is their
+    // length, so the two cannot describe different plans.
+    items: selected,
     design: { reps: REPS, items: selected.length, plannedRuns: runsPerArm * ARMS.length, arms: [...ARMS] },
     threshold: {
       rule: "unanimous-and-strictly-better",
