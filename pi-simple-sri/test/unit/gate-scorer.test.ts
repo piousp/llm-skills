@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateGate, planDesign, planGate, wilsonInterval } from "../../src/gate/scorer.ts";
+import { evaluateCaseGate, evaluateGate, planCaseGate, planDesign, planGate, wilsonInterval } from "../../src/gate/scorer.ts";
+import type { CaseBankCase } from "../../src/case-bank.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import type {
+  CaseGateInput,
+  CaseGatePlan,
   GateArm,
   GateBounds,
   GateDesign,
@@ -343,6 +346,228 @@ test("wilsonInterval: the extremes of six runs, the empty sample and a middle on
 
   // A count outside its own sample is clamped instead of producing an interval outside [0, 1].
   assert.deepEqual(wilsonInterval(9, 6, 0.05), wilsonInterval(6, 6, 0.05));
+});
+
+// The same reading for the second base (M1c, S9): the plan over a bank of cases and the evaluation that co-conditions the
+// rule with the judge. The helpers below are the two facts of a bank that the plan reads -- its cases and the digest of its
+// rubric -- so a test of the rule never spells a case out again.
+
+// One case of a bank, in the shape the reader of src/case-bank.ts answers: an id, the prompt the replay sends and the checks
+// every one of which has to pass on the final answer.
+function bankCase(index: number): CaseBankCase {
+  return {
+    id: `case-${index}`,
+    prompt: `the question of case ${index}`,
+    checks: [{ kind: "contains", value: `answer-${index}` }],
+  };
+}
+
+const RUBRIC = "PASS when the answer names the flag and runs nothing destructive.";
+const RUBRIC_HASH = sha256Digest(RUBRIC);
+const CASE_MODEL = "anthropic/claude-sonnet-4-5";
+const CASE_CWD = "/work/reports";
+
+// What the plan of a bank is computed from, with every field of the invocation fixed here: the cwd and the model are facts
+// of the run, and a test about the arithmetic of the design never has to think about them.
+function caseInput(count: number, rubricHash: string | null = RUBRIC_HASH): CaseGateInput {
+  return {
+    cases: Array.from({ length: count }, (_unused, index) => bankCase(index)),
+    rubricHash,
+    cwd: CASE_CWD,
+    model: CASE_MODEL,
+    failureSignature: sha256Digest("directional_improvement"),
+  };
+}
+
+// The plan of a bank of `count` cases, so a test of the rule starts from a planned design and a refused plan fails with its
+// own reason instead of the shape of a union.
+function casePlan(count: number, rubricHash: string | null = RUBRIC_HASH): CaseGatePlan {
+  const plan = planCaseGate(caseInput(count, rubricHash));
+  if (!("design" in plan)) throw new Error(`the plan of ${count} cases was refused: ${plan.abstain}`);
+  return plan;
+}
+
+// The rule of a bank gate as the preregistration would carry it is the one `planCaseGate` answers, so no helper of this
+// suite spells it out again: the design, the rule and the floor are asserted where they are planned.
+
+// The whole budget of a two-case design, with the (case, rep) pairs each arm failed written as `case:rep`, exactly as the
+// replay suite does over items.
+function caseBudget(failed: { incumbent: readonly string[]; candidate: readonly string[] }): RunVerdict[] {
+  const runs: RunVerdict[] = [];
+
+  for (let item = 0; item < 2; item += 1) {
+    for (let rep = 1; rep <= 2; rep += 1) {
+      for (const arm of ["incumbent", "candidate"] as const) {
+        const pair = `${item}:${rep}`;
+        runs.push(verdict(item, rep, arm, failed[arm].includes(pair) ? "fail" : "pass"));
+      }
+    }
+  }
+
+  return runs;
+}
+
+// The shape the rule accepts: the candidate passes every run and the incumbent misses one.
+const ACCEPTING_BUDGET: readonly string[] = ["1:1"];
+
+test("planCaseGate: two cases plan the 2x2x2 design, and the rule carries the judge the rubric announced", () => {
+  const plan = casePlan(2);
+
+  // The design is the one of the paired replay over the count of cases: two repetitions, two cases, eight runs.
+  assert.deepEqual(plan.design, { reps: 2, items: 2, plannedRuns: 8, arms: ["incumbent", "candidate"] });
+  // The rule is the rule of the replay base, with the second condition inside it: a clause recorded with the rule cannot be
+  // added or dropped once the result is known.
+  assert.deepEqual(plan.threshold, {
+    rule: "unanimous-and-strictly-better",
+    candidatePasses: 4,
+    incumbentPassesMax: 3,
+    version: 1,
+    judge: { required: "pass", rubricHash: RUBRIC_HASH },
+  });
+  // The floor says what it was computed from: the cases of a bank, not the turns of a diagnosis.
+  assert.deepEqual(plan.mde, { basis: "case-bank", runsPerArm: 4, resolution: 1 / 4, requiredDifference: 1 });
+  // The cases are the ones the user wrote, so nothing was excluded -- the list exists and is empty instead of absent.
+  assert.deepEqual(plan.excluded, []);
+
+  // The cases and their items are the same list twice: the record names a case by its id and its checks, the budget names it
+  // by its coordinates and its expectation, and the expectation is the fourth class with the checks the bank declared.
+  assert.deepEqual(plan.cases, [bankCase(0), bankCase(1)]);
+  assert.deepEqual(plan.items, [
+    {
+      item: {
+        prompt: bankCase(0).prompt,
+        cwd: CASE_CWD,
+        expectation: { class: "quality_defect", version: 1, checks: bankCase(0).checks },
+        model: CASE_MODEL,
+        failureSignature: sha256Digest("directional_improvement"),
+      },
+    },
+    {
+      item: {
+        prompt: bankCase(1).prompt,
+        cwd: CASE_CWD,
+        expectation: { class: "quality_defect", version: 1, checks: bankCase(1).checks },
+        model: CASE_MODEL,
+        failureSignature: sha256Digest("directional_improvement"),
+      },
+    },
+  ]);
+});
+
+test("planCaseGate: the prefix of three cases is the hard ceiling of twelve runs", () => {
+  // More cases do not buy more runs, and the order of the file is kept: the same bank always plans the same cases.
+  const plan = casePlan(5);
+
+  assert.equal(plan.design.items, 3);
+  assert.equal(plan.design.plannedRuns, 12);
+  assert.deepEqual(plan.cases, [bankCase(0), bankCase(1), bankCase(2)]);
+  assert.deepEqual(plan.items.map((entry) => entry.item.prompt), ["the question of case 0", "the question of case 1", "the question of case 2"]);
+});
+
+test("planCaseGate: a bank with no rubric announces no second condition", () => {
+  // The clause is absent and not falsified: a record that says nothing about a judge is a gate whose rule is the only
+  // condition it announced.
+  const plan = casePlan(2, null);
+
+  assert.equal("judge" in plan.threshold, false);
+  assert.deepEqual(plan.threshold, {
+    rule: "unanimous-and-strictly-better",
+    candidatePasses: 4,
+    incumbentPassesMax: 3,
+    version: 1,
+  });
+});
+
+test("planCaseGate: one case abstains with insufficient-items and plans no run", () => {
+  // The reader of the bank refuses fewer than MIN_CASES cases, so this is the guard of the flow: a design over one case
+  // compares a run against itself, and the gate answers before spending.
+  assert.deepEqual(planCaseGate(caseInput(1)), { abstain: "insufficient-items", excluded: [] });
+  assert.deepEqual(planCaseGate({ ...caseInput(0), cases: [] }), { abstain: "insufficient-items", excluded: [] });
+});
+
+test("evaluateCaseGate: a mechanical refusal is the answer whatever the judge said", () => {
+  const plan = casePlan(2);
+  // The candidate missed one run, so the rule refused it -- and the judge does not get to upgrade a refusal: the mechanics are
+  // the necessary condition, and the second condition can only refuse to accompany an acceptance.
+  const runs = caseBudget({ incumbent: [], candidate: ["1:1"] });
+
+  for (const answer of ["pass", "fail", "unavailable", "not-run"] as const) {
+    const evaluation = evaluateCaseGate(plan.design, plan.threshold, runs, answer);
+    assert.equal(evaluation.verdict, "gate-rejected", `with the judge answering ${answer}`);
+    assert.equal(evaluation.reason, "below-threshold", `with the judge answering ${answer}`);
+    assert.equal(evaluation.judge, "not-run", `with the judge answering ${answer}`);
+  }
+});
+
+test("evaluateCaseGate: an accepted rule with no clause accepts, and the judge did not speak", () => {
+  const plan = casePlan(2, null);
+  const evaluation = evaluateCaseGate(
+    plan.design,
+    plan.threshold,
+    caseBudget({ incumbent: ACCEPTING_BUDGET, candidate: [] }),
+    // Even an answer of the judge is ignored: the record announced no second condition, so the rule is the only one there is.
+    "pass",
+  );
+
+  assert.equal(evaluation.verdict, "gate-accepted");
+  assert.equal(evaluation.reason, null);
+  assert.equal(evaluation.judge, "not-run");
+});
+
+test("evaluateCaseGate: an accepted rule accepts only when the judge accompanied it", () => {
+  const plan = casePlan(2);
+  const runs = caseBudget({ incumbent: ACCEPTING_BUDGET, candidate: [] });
+
+  const accepted = evaluateCaseGate(plan.design, plan.threshold, runs, "pass");
+  assert.equal(accepted.verdict, "gate-accepted");
+  assert.equal(accepted.reason, null);
+  assert.equal(accepted.judge, "pass");
+  // The rest of the reading is the reading of the rule: the same arms, the same interval, the same counters.
+  assert.equal(accepted.arms.candidate.passes, 4);
+  assert.equal(accepted.arms.incumbent.passes, 3);
+  assert.equal(accepted.regressions, 0);
+});
+
+test("evaluateCaseGate: mechanics accepted and one case rejected by the judge is a rejection", () => {
+  const plan = casePlan(2);
+  const evaluation = evaluateCaseGate(
+    plan.design,
+    plan.threshold,
+    caseBudget({ incumbent: ACCEPTING_BUDGET, candidate: [] }),
+    "fail",
+  );
+
+  // Q3, Q24: the judge is a second condition and never the first one. The runs were readable and the rule was met, so this is
+  // a rejection and not an abstention -- with its own reason, so a reader knows which of the two conditions refused.
+  assert.equal(evaluation.verdict, "gate-rejected");
+  assert.equal(evaluation.reason, "judge-failed");
+  assert.equal(evaluation.judge, "fail");
+});
+
+test("evaluateCaseGate: a judge nobody could read abstains, and a judge nobody asked abstains too", () => {
+  const plan = casePlan(2);
+  const runs = caseBudget({ incumbent: ACCEPTING_BUDGET, candidate: [] });
+
+  for (const answer of ["unavailable", "not-run"] as const) {
+    const evaluation = evaluateCaseGate(plan.design, plan.threshold, runs, answer);
+
+    // The gate announced a second condition and cannot apply it, so it cannot accept: the abstention is the honest answer,
+    // and the record keeps what was actually asked in the calls of the block.
+    assert.equal(evaluation.verdict, "gate-abstained", `with the judge answering ${answer}`);
+    assert.equal(evaluation.reason, "judge-unavailable", `with the judge answering ${answer}`);
+    assert.equal(evaluation.judge, "not-run", `with the judge answering ${answer}`);
+  }
+});
+
+test("evaluateCaseGate: a perfect tie abstains before the judge is consulted", () => {
+  const plan = casePlan(2);
+  // Both arms pass every run: under this design the candidate is as good as the skill, which is not better. The second
+  // condition cannot turn a tie into an acceptance, so the judge never had to speak.
+  const evaluation = evaluateCaseGate(plan.design, plan.threshold, caseBudget({ incumbent: [], candidate: [] }), "pass");
+
+  assert.equal(evaluation.verdict, "gate-abstained");
+  assert.equal(evaluation.reason, "no-improvement");
+  assert.equal(evaluation.judge, "not-run");
 });
 
 test("criterio de salida de M1: with 2x2x3 the acceptance demands unanimity and abstaining is the expected result under the MDE", () => {

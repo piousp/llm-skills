@@ -1,6 +1,12 @@
 import { SriFailClosedError } from "../errors.ts";
+import { assertNever } from "../types.ts";
+import type { CaseBankCase } from "../case-bank.ts";
 import { isIntrinsicFailure } from "./expectation.ts";
 import type {
+  CaseGateEvaluation,
+  CaseGateInput,
+  CaseGateJudgeAnswer,
+  CaseGatePlanResult,
   GateArm,
   GateArmTally,
   GateBounds,
@@ -21,6 +27,11 @@ import type {
 // The plan and the verdict of the gate (M1, S7): what the budget pays for before the first run, and what the
 // runs proved once they are paid. Pure over data, like the evaluator it consumes: no process, no file, no
 // clock, and no dependency.
+//
+// M1c (S9) adds the same two readings for the second base: `planCaseGate` is the plan over the cases of a bank -- the same
+// design, the same rule and the same floor, computed by the same arithmetic -- and `evaluateCaseGate` is the evaluation of
+// a bank gate together with the judge, which is where the conjunction of Q3 and Q24 lives. Splitting the two bases into two
+// copies of the rule would have been the way for one of them to accept something the other rejects.
 //
 // The design is fixed by §8 of the plan and not by the caller: two repetitions of each item in two arms, at
 // most three items, which is twelve runs and the hard ceiling of the budget. The prefix of three is the
@@ -51,8 +62,10 @@ const ARMS: readonly GateArm[] = ["incumbent", "candidate"];
 // of the report and not a setting.
 const ALPHA = 0.05;
 
-// What the floor was computed from, recorded with it: the paired replay of `runsPerArm` runs per arm.
+// What the floor was computed from, recorded with it: the paired replay of `runsPerArm` runs per arm, or the paired replay
+// of the cases of a bank (M1c). The two bases spend the same design over a different material, and the MDE says which one.
 const MDE_BASIS = "replay";
+const CASE_BANK_MDE_BASIS = "case-bank";
 
 export function planGate(items: readonly GatePlanItem[], options: GatePlanOptions = {}): GatePlanResult {
   const excluded: GateReplayExclusion[] = [];
@@ -140,6 +153,103 @@ export function evaluateGate(
       difference: wilsonInterval(improvedPairs(pairs), pairs.length, ALPHA),
     },
     regressions: regressionsOf(pairs),
+  };
+}
+
+// The plan of a gate over a bank of cases (M1c, S9): the prefix of cases the design pays for, the same cases as the replay
+// items the budget spends, and the design, the rule and the floor computed over their count by the one function that owns
+// the arithmetic (planDesign).
+//
+// The rule is the rule of the paired replay, and the second condition joins it here and not in the flow: a bank that
+// declares a rubric is judged, and the clause travels inside the preregistered threshold so it cannot be added or removed
+// once the result is known. A bank that declares none leaves `threshold.judge` absent, which is the record saying that the
+// rule is the only condition it announces.
+//
+// The classification of a case is not a decision of this function: every case is a `quality_defect`, the class whose truth
+// is a text, and `expectation.checks` is where the predicates travel. That is what makes the reading of a run of the bank
+// the reading of a class the gate already owns -- and what closes the vacuous pass of a `not-contains` over an empty
+// answer, because the evaluator refuses to judge a turn that produced no text.
+export function planCaseGate(input: CaseGateInput): CaseGatePlanResult {
+  // The ceiling of the design is hard and the order of the file is kept, exactly like the prefix of the evidence: the same
+  // bank always plans the same cases, and more cases do not buy more runs.
+  const cases = input.cases.slice(0, MAX_ITEMS);
+
+  // The reader of a bank refuses fewer cases than MIN_CASES, so this is a guard and not a case: a design over one case
+  // compares a run against itself, and the answer is the abstention the replay base answers with the same word.
+  if (cases.length < MIN_ITEMS) return { abstain: "insufficient-items", excluded: [] };
+
+  const plan = planDesign(cases.length, CASE_BANK_MDE_BASIS);
+
+  return {
+    cases,
+    items: cases.map((entry) => caseItemOf(entry, input)),
+    design: plan.design,
+    threshold:
+      input.rubricHash === null
+        ? plan.threshold
+        : { ...plan.threshold, judge: { required: "pass", rubricHash: input.rubricHash } },
+    mde: plan.mde,
+    // The cases are the ones the user wrote: there is no failure of a task to drop, so the list of OA7 is empty rather
+    // than absent, and a reader of the plan sees that nothing was excluded.
+    excluded: [],
+  };
+}
+
+// The reading of a bank gate's budget together with the second condition: this is the owner of the conjunction (Q3, Q24).
+//
+// An acceptance of the mechanics is a necessary condition and never a sufficient one. The rule is read first, and a rule
+// that refused is the answer whatever the judge said -- which is why the judge is only ever asked once the mechanics
+// accepted, and why a refusal here reports the judge as `not-run`. Then, if the record announced a judgement clause, the
+// answer the judge gave over the whole set is the second and last condition: every case accepted is an acceptance, one
+// rejected is a rejection with `judge-failed`, and a judge nobody could read abstains with `judge-unavailable` instead of
+// leaving the gate with a condition it could not apply.
+//
+// A clause that exists and an answer of `not-run` is the shape of a caller that forgot to ask, and it fails closed: the
+// gate announced a second condition and cannot accept without it.
+export function evaluateCaseGate(
+  design: GateDesign,
+  threshold: GateThreshold,
+  runs: readonly RunVerdict[],
+  judge: CaseGateJudgeAnswer,
+): CaseGateEvaluation {
+  const evaluation = evaluateGate(design, threshold, runs);
+
+  // The mechanics refused, so the second condition never spoke. Its reading is not lost -- it was never asked -- and
+  // the verdict of the rule is the verdict of the gate.
+  if (evaluation.verdict !== "gate-accepted") return { ...evaluation, judge: "not-run" };
+
+  // No rubric in the bank, no second condition: the rule is the only condition the record announces, and an acceptance
+  // of the rule is an acceptance.
+  if (threshold.judge === undefined) return { ...evaluation, judge: "not-run" };
+
+  switch (judge) {
+    case "pass":
+      return { ...evaluation, judge: "pass" };
+    case "fail":
+      return { ...evaluation, verdict: "gate-rejected", reason: "judge-failed", judge: "fail" };
+    case "unavailable":
+    case "not-run":
+      // Both are the same answer of the gate and two different facts of the judge: nobody could read it, or nobody asked.
+      // Neither can be an acceptance, and the record keeps what was actually asked in the calls of the block.
+      return { ...evaluation, verdict: "gate-abstained", reason: "judge-unavailable", judge: "not-run" };
+    default:
+      return assertNever(judge);
+  }
+}
+
+// One case as the replay item the budget spends: the prompt of the case, the cwd and the model of the invocation, the class
+// the checks are judged by and the signature of the attempt, since a case names no failure of its own. The checks travel on
+// the expectation and not beside it, so one evaluator reads them and the verdict of a case's run cannot be a second reading
+// of the vocabulary src/checks.ts executes.
+function caseItemOf(entry: CaseBankCase, input: CaseGateInput): GatePlanItem {
+  return {
+    item: {
+      prompt: entry.prompt,
+      cwd: input.cwd,
+      expectation: { class: "quality_defect", version: 1, checks: entry.checks },
+      model: input.model,
+      failureSignature: input.failureSignature,
+    },
   };
 }
 

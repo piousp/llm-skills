@@ -1047,8 +1047,9 @@ test("gateStagedCandidate: fewer than two items abstains with zero runs", async 
   const record = readRecord(fixture.decisionPath);
   assert.equal(record.gate.status, "not-run");
   assert.equal(readLines(fixture.base)[0].event, "gate-abstained");
-  // M4: an abstention with no detail to give leaves the field out instead of writing an empty one.
-  assert.equal(Object.hasOwn(readLines(fixture.base)[0], "reason"), false);
+  // M4: the line names the reason even when there is no detail to append, so the index alone says why the gate
+  // answered nothing.
+  assert.equal(readLines(fixture.base)[0].reason, "insufficient-items");
 });
 
 // OA7, end to end: the item whose failure is intrinsic to the task is dropped before the plan, and the pairing

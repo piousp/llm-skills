@@ -68,6 +68,11 @@ import type {
 // surfaces run it and a candidate this module gates is one the whole package then trusts: one
 // implementation, one set of guards, and no second reading of a decision.json.
 //
+// Two pieces of this sequence are exported because the second base of M1c is a second flow and not a copy of this one:
+// `verifiedStagedLesson` is the guard of the candidate's bytes, which both bases run before they write anything, and
+// `appendGateAnswerLine` is the one writer of the line the index gains, which both bases write. What each base decides is
+// its own; how a candidate is verified and how the index hears about it is the gate's, and it lives in one place.
+//
 // Nothing here resolves a seam at import time, and nothing it does starts a process the caller did not
 // allow: the replay executor is resolved inside gateStagedCandidate, and a test drives the whole gate with a
 // fake runReplay and no child at all.
@@ -92,7 +97,15 @@ export type CandidateRejectionReason =
   // decision.json is not a JSON object, or it cannot be read.
   | "unreadable-record"
   // The record declares a schema this version does not read (OA12).
-  | "unsupported-schema";
+  | "unsupported-schema"
+  // The record announces the other base of the gate (M1c): a candidate proposed with a bank is measured by a case bank, a
+  // candidate proposed from a transcript by a replay, and the gate of one base reading the record of the other would decide
+  // on a material the record does not describe.
+  | "basis-mismatch"
+  // The gate of the record already answered (M1c): `preregistered` or one of the three concluded statuses. A candidate is
+  // gated once -- the rule is preregistered against a candidate nobody has measured yet -- so a second gate is refused
+  // instead of rewriting a verdict somebody may already have read.
+  | "already-concluded";
 
 export interface CandidateRejection {
   reason: CandidateRejectionReason;
@@ -273,9 +286,8 @@ export async function gateStagedCandidate(
   // that writes nothing at all -- not even its line -- because neither the record nor the index may describe
   // a candidate whose own bytes disagree with it, and the rewrite below would refuse the write anyway. The
   // detail travels in the answer, which is the only place it can be said (M4).
-  const lesson = await readStagedLesson(candidateDir, record.candidate.lessonPath);
-  const mismatch = lesson.ok ? undeclaredBytes(lesson.value, record) : lesson.error;
-  if (!lesson.ok || mismatch !== null) {
+  const lesson = await verifiedStagedLesson(candidateDir, record);
+  if (!lesson.ok) {
     return {
       kind: "gate-abstained",
       reason: "candidate-mismatch",
@@ -284,7 +296,7 @@ export async function gateStagedCandidate(
       plannedRuns: 0,
       usedRuns: 0,
       overlays: null,
-      ...(mismatch === null ? {} : { detail: mismatch }),
+      detail: lesson.error,
     };
   }
   const lessonText = lesson.value;
@@ -558,39 +570,22 @@ interface AnswerInput {
 }
 
 async function answered(input: AnswerInput): Promise<GateConcludedResult> {
-  const stagingPath = relativeToBase(input.request.base, input.candidateDir);
-  const decisionPath = relativeToBase(input.request.base, path.join(input.candidateDir, DECISION_FILE));
-
-  const event = eventOf(input.verdict);
-  if (event !== undefined) {
-    const reason = attemptReasonOf(input);
-    await input.seams.appendAttempt(
-      input.request.base,
-      buildAttemptLine({
-        now: input.seams.now(),
-        event,
-        targetSkill: input.request.skill.name,
-        // The pair the record already carries, so the gate's lines group with the `proposed` line of the same
-        // candidate on candidateHash instead of inventing a second name for it.
-        hashes: {
-          candidateHash: input.record.candidate.contentHash,
-          bodyHash: input.record.candidate.bodyHash,
-        },
-        // OA4: the failure the candidate is about, so a reader of the index can group every attempt on one
-        // failure without opening a decision.json.
-        failureSignature: input.record.diagnosis.failureSignature,
-        stagingPath,
-        decisionPath,
-        ...(reason === undefined ? {} : { reason }),
-      }),
-    );
-  }
+  const paths = await appendGateAnswerLine({
+    seams: input.seams,
+    base: input.request.base,
+    skillName: input.request.skill.name,
+    candidateDir: input.candidateDir,
+    record: input.record,
+    answer: input.verdict,
+    reason: input.reason,
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
+  });
 
   return {
     kind: input.verdict,
     reason: input.reason,
-    stagingPath,
-    decisionPath,
+    stagingPath: paths.stagingPath,
+    decisionPath: paths.decisionPath,
     plannedRuns: input.plannedRuns,
     usedRuns: input.usedRuns,
     overlays: input.overlays,
@@ -598,29 +593,91 @@ async function answered(input: AnswerInput): Promise<GateConcludedResult> {
   };
 }
 
-// M4: the abstention names its reason, and the line names what the reason is about. The vocabulary word alone
-// leaves a reader without the file that stopped the gate, and the detail alone loses the word every reader
-// groups on, so the line carries both in one string. Absent when there is no detail to give: then the reason
-// is the whole story and the line says nothing more.
-function attemptReasonOf(input: AnswerInput): string | undefined {
-  if (input.reason === null || input.detail === undefined) return undefined;
-  return `${input.reason}: ${input.detail}`;
+// The answer a line of the index reports: the three verdicts of a concluded gate, and the missing baseline of the base
+// M1c adds, which is an event of the index and not a state of the record (OA1).
+export type GateAnswerEvent = GateVerdict | "no-baseline";
+
+// What a line of the index is made of, with the two paths the caller publishes in the record of the candidate.
+export interface GateLineInput {
+  seams: Pick<GateSeams, "now" | "appendAttempt">;
+  base: string;
+  skillName: string;
+  candidateDir: string;
+  record: DecisionRecord;
+  answer: GateAnswerEvent;
+  // The reason as its vocabulary spells it, or the stable text of an answer that has no vocabulary word of the gate's own
+  // (`caseBankReason`). `detail` is what the reason is about, and the two reach the line in one field.
+  reason: string | null;
+  detail?: string;
+}
+
+export interface GateAnswerPaths {
+  stagingPath: string;
+  decisionPath: string;
+}
+
+// The one writer of the line the index gains when a gate answers something other than an acceptance (S9).
+//
+// It is exported because the two bases of M1c write the same five facts -- the hashes of the candidate, the failure
+// signature of the diagnosis, the two relative paths and the reason with its detail -- and two copies of that layout would
+// be two answers to "what does a gate tell the index". The pairs it names are the record's own, so the line groups with the
+// `proposed` line of the same candidate on candidateHash instead of inventing a second name for it (Q14).
+export async function appendGateAnswerLine(input: GateLineInput): Promise<GateAnswerPaths> {
+  const stagingPath = relativeToBase(input.base, input.candidateDir);
+  const decisionPath = relativeToBase(input.base, path.join(input.candidateDir, DECISION_FILE));
+  const paths = { stagingPath, decisionPath };
+
+  const event = eventOf(input.answer);
+  if (event === undefined) return paths;
+
+  const reason = lineReasonOf(input.reason, input.detail);
+  await input.seams.appendAttempt(
+    input.base,
+    buildAttemptLine({
+      now: input.seams.now(),
+      event,
+      targetSkill: input.skillName,
+      hashes: {
+        candidateHash: input.record.candidate.contentHash,
+        bodyHash: input.record.candidate.bodyHash,
+      },
+      // OA4: the failure the candidate is about, so a reader of the index can group every attempt on one
+      // failure without opening a decision.json.
+      failureSignature: input.record.diagnosis.failureSignature,
+      stagingPath,
+      decisionPath,
+      ...(reason === undefined ? {} : { reason }),
+    }),
+  );
+
+  return paths;
+}
+
+// M4: the answer names its reason, and the line names what the reason is about. The vocabulary word alone leaves a reader
+// without the file that stopped the gate, and the detail alone loses the word every reader groups on, so the line carries
+// both in one string. The detail is the optional half -- a rejection below the threshold has none -- and then the reason is
+// the whole story the line keeps; only a gate that answered without a reason leaves the field out.
+function lineReasonOf(reason: string | null, detail: string | undefined): string | undefined {
+  if (reason === null) return undefined;
+  return detail === undefined ? reason : `${reason}: ${detail}`;
 }
 
 // An acceptance is the one verdict with no line: the index records what happened to the skill, and a gate
 // that passed has not touched the skill yet -- the acceptance does, and it writes `accepted` when it does.
-// The switch is total over the verdicts, so a fourth one would stop compiling here instead of being
+// The switch is total over the answers, so a fourth verdict or a third event would stop compiling here instead of being
 // classified as an abstention by a fallthrough.
-function eventOf(verdict: GateVerdict): AttemptEvent | undefined {
-  switch (verdict) {
+function eventOf(answer: GateAnswerEvent): AttemptEvent | undefined {
+  switch (answer) {
     case "gate-accepted":
       return undefined;
     case "gate-rejected":
       return "gate-rejected";
     case "gate-abstained":
       return "gate-abstained";
+    case "no-baseline":
+      return "no-baseline";
     default:
-      return assertNever(verdict);
+      return assertNever(answer);
   }
 }
 
@@ -697,6 +754,23 @@ function sharedSkillDirs(
   }
 
   return { ok: true, value: dirs };
+}
+
+// The lesson of the candidate as the bytes its record declares, or the detail of the disagreement (S9).
+//
+// It is exported because both bases of M1c read it: a candidate whose lesson moved is the one abstention that writes
+// nothing at all, and the comparison -- the file the record names, the pair of hashes and the reason the two do not agree --
+// is one rule with one owner. A second copy in the flow of the bank would be a second answer to "are these the bytes the
+// record declares", and the two would drift the day one of them learned about a third hash.
+export async function verifiedStagedLesson(
+  candidateDir: string,
+  record: DecisionRecord,
+): Promise<Result<string, string>> {
+  const lesson = await readStagedLesson(candidateDir, record.candidate.lessonPath);
+  if (!lesson.ok) return lesson;
+
+  const mismatch = undeclaredBytes(lesson.value, record);
+  return mismatch === null ? lesson : { ok: false, error: mismatch };
 }
 
 // The lesson of the candidate, read from the path the record names. The path is data from a file, so it is

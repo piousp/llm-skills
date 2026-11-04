@@ -194,22 +194,30 @@ function interruptionOf(
   return at - startedAt >= GATE_TIMEOUT_MS ? at : null;
 }
 
-// What the whole decision spent, split by where it went. `total` is the sum of the three (Q6): a reader never
-// adds them again, and the proposal is the number the record already carried before the gate ran.
+// What the whole decision spent, split by where it went. `total` is the sum of the components that are present (Q6): a
+// reader never adds them again, and the proposal is the number the record already carried before the gate ran.
+//
+// `judge` is the fourth component and it is optional (M1c, OA10): a replay gate has no second condition, and a bank that
+// declared no rubric has none either, so those records keep the three components that add up exactly as they did. When it
+// is there, it is part of the total -- leaving the cost of the judge out would make the record underestimate the decision,
+// which is worse than the ambiguity of "the sum of the components that are there".
 export function tokenTallyOf(
   proposal: GateTokens,
   arms: { incumbent: GateArmTally; candidate: GateArmTally },
+  judge?: GateTokens,
 ): GateTokenTally {
   const incumbent = arms.incumbent.tokens;
   const candidate = arms.candidate.tokens;
+  const judged = judge ?? { input: 0, output: 0 };
 
   return {
     proposal,
     incumbent,
     candidate,
+    ...(judge === undefined ? {} : { judge }),
     total: {
-      input: proposal.input + incumbent.input + candidate.input,
-      output: proposal.output + incumbent.output + candidate.output,
+      input: proposal.input + incumbent.input + candidate.input + judged.input,
+      output: proposal.output + incumbent.output + candidate.output + judged.output,
     },
   };
 }

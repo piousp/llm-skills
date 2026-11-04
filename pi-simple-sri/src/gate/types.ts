@@ -14,7 +14,15 @@
 //
 // Nothing here reads a clock, a file or the environment: these are the shapes the runner and the
 // scorer trade, and every module of src/gate/ that fills one of them is another file.
+//
+// M1c (S9) adds the contracts of the second base and of the answers only it can give: the plan of a gate over a bank of
+// cases (CaseGatePlan, which is a GatePlan with the cases it pays for), the evaluation that co-conditions it with the
+// judge (CaseGateEvaluation, whose owner is the scorer) and the answer of a gate that found no bank at all
+// (NoBaselineResult, which is neither a refusal nor a conclusion). They are here and not in src/gate/directional-flow.ts
+// for the reason the replay contracts are: the flow, the scorer and the surface of the command trade them, and a shape two
+// modules trade is not a detail of one of them.
 
+import type { CaseBankCase } from "../case-bank.ts";
 import type {
   GateArm,
   GateArmTally,
@@ -248,6 +256,15 @@ export type GateVerdictReason =
   | "judge-failed"
   | Extract<GateAbstentionReason, "no-improvement" | "invalid-run" | "interrupted">;
 
+// Why a gate of the case-bank base says what it says: the reasons of the rule, which the two bases share, plus the one the
+// second condition produces when it could not answer at all. It is a narrowing of GateAbstentionReason and not a second
+// list, so a reason cannot reach a record of this base without the scorer or the flow having named it first.
+//
+// `judge-failed` is a rejection and `judge-unavailable` an abstention, and the difference is the whole point of the
+// conjunction: mechanics that accepted and a judge that did not is a candidate the rule does not publish, while a judge
+// nobody could read is a condition the gate announced and could not apply -- the gate cannot decide, so it says nothing.
+export type CaseGateVerdictReason = GateVerdictReason | Extract<GateAbstentionReason, "judge-unavailable">;
+
 // What the gate will spend, recorded before the first run: the items it chose, the design, the rule it will be
 // judged by and the floor of the design. The exclusions travel with it because a gate that ran fewer items than
 // the diagnosis offered has to say which ones it dropped and why (OA7).
@@ -282,4 +299,82 @@ export interface GateEvaluation {
   arms: { incumbent: GateArmTally; candidate: GateArmTally };
   interval: GateInterval;
   regressions: number;
+}
+
+// What the judge answered about the whole set of cases of one gate, which is the second condition read as one value.
+//
+// `pass` is every case accepted and `fail` at least one rejected -- the two answers the judge can give a rule that asks
+// it to agree. `unavailable` is a call that failed or a reply nobody could read, which is an abstention and never a
+// rejection. `not-run` is nobody having asked: the bank declared no rubric, or the mechanics had already refused, and the
+// record keeps that distinction in JudgeRecord.verdict so a reader never guesses which of the two happened.
+export type CaseGateJudgeAnswer = "pass" | "fail" | "not-run" | "unavailable";
+
+// What the budget of a case-bank gate proved, with the second condition next to the rule that it co-conditions. It is the
+// evaluation of the paired replay plus the reading of the judge, and the scorer is the owner of the conjunction: an
+// acceptance of the mechanics that the judge does not accompany leaves this function as a rejection or an abstention,
+// never as an acceptance.
+//
+// `judge` is the verdict the record carries (JudgeRecord.verdict): the judge that spoke about every case, or the one that
+// did not have to. A judge that was asked and could not answer is `not-run` here, because the set was never judged --
+// what it did answer travels in the calls of the record, not in this word.
+export interface CaseGateEvaluation {
+  verdict: GateVerdict;
+  reason: CaseGateVerdictReason | null;
+  arms: { incumbent: GateArmTally; candidate: GateArmTally };
+  interval: GateInterval;
+  regressions: number;
+  judge: "pass" | "fail" | "not-run";
+}
+
+// What the plan of a case-bank gate is computed from: the cases the user wrote, the digest of the rubric the judge
+// applies (null when the bank declares none) and the three facts of the invocation the replay items need -- the cwd the
+// cases run in, the model every run and the judge pin (OA5), and the signature of the attempt, which every case inherits
+// because a case names no failure of its own.
+//
+// It is one input object and not five parameters because the plan is one decision: the design follows from the count of
+// cases and the items from the rest, and a caller that could pass one without the others could plan a gate whose rule
+// and whose runs describe two different things.
+export interface CaseGateInput {
+  cases: readonly CaseBankCase[];
+  rubricHash: string | null;
+  cwd: string;
+  model: string;
+  failureSignature: string;
+}
+
+// The plan of a gate of the case bank: the prefix of cases the design pays for, in the order the file declares them, the
+// same cases as the replay items the budget spends, and the design, the rule and the floor computed over their count.
+//
+// It extends GatePlan, so the budget of the paired replay spends it without a second list: `items` are the items handed to
+// spendBudget and no others, and `excluded` is always empty because the cases are the ones the user wrote -- the exclusion
+// of OA7 is about a failure of the task read from a transcript, and a bank has no transcript and no failure to drop.
+//
+// `cases` and `items` are the same list twice on purpose: the record of the gate names each case by its id and its checks
+// and the budget names each of them by its coordinates and its expectation, and the two cannot be re-derived from one
+// another without a second reading of the class a case is judged by.
+export interface CaseGatePlan extends GatePlan {
+  cases: readonly CaseBankCase[];
+}
+
+// The plan of a bank too small to compare, which the reader of the bank has already refused (MIN_CASES): it is the
+// abstention the replay base answers with the same word, kept total so a bank that reached this flow by another road is
+// still answered instead of planned as a design of one case.
+export type CaseGatePlanResult = CaseGatePlan | GatePlanAbstained;
+
+// What a gate of the case-bank base answers when there is no baseline to measure against (OA1, OA9): the bank is absent,
+// unreadable, over its cap, not JSON or not a bank of this version, so the gate has no case to spend a run on.
+//
+// It is an answer and not a state of the record: the candidate stays `not-run`/`proposed`, the line of the index says
+// `no-baseline`, and the attempt is retryable -- `reason` is the stable text of the reader (caseBankReason) and the paths
+// are the ones the retry needs. A `GateConcludedResult` with a null verdict would have said the gate concluded, and it did
+// not: it never started, which is why `plannedRuns` and `usedRuns` are the literal zero and the overlays were never built.
+export interface NoBaselineResult {
+  kind: "no-baseline";
+  reason: string;
+  detail?: string;
+  stagingPath: string;
+  decisionPath: string;
+  plannedRuns: 0;
+  usedRuns: 0;
+  overlays: null;
 }

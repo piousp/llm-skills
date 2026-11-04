@@ -87,6 +87,18 @@ export interface CaseBank {
   cases: readonly CaseBankCase[];
 }
 
+// The bank, the bytes it was read from and the digest of those bytes.
+//
+// It is what a gate that preregisters a bank needs (OA4): the record pins the digest of the bytes it judged, and a
+// preregistration computed from a second read of the path would describe whatever the file says at that later moment. The
+// two reads are the classic check-then-use gap, and the answer is not to check harder -- it is to hand the bytes of the
+// read that was parsed to the caller that has to pin them.
+export interface LoadedCaseBank {
+  bank: CaseBank;
+  bytes: Buffer;
+  contentHash: string; // "sha256:" + 64 hex over the bytes, the same value caseBankDigest computes
+}
+
 // What a refusal carries: the kind, so a caller decides by code and not by message text, and the detail, which is
 // the path, the count or the first violation of the file.
 export interface CaseBankFailure {
@@ -117,10 +129,24 @@ const CASE_FIELDS: readonly string[] = ["id", "prompt", "checks"];
 
 // The reader. The file is read as bytes, the cap is checked on the bytes, and the same bytes are what
 // caseBankDigest hashes: the bank a preregistration pins is the bank this call read, not a re-serialization of it.
+//
+// It answers the data alone, which is what a caller that only wants to know whether the file is a bank needs. A caller
+// that has to pin what it read -- the gate, whose preregistration keeps the digest of the bytes it judged -- reads through
+// readCaseBank below instead: the two are one reader with one parse, and the narrower answer is derived from the wider one.
 export async function loadCaseBank(
   file: string,
   profile: CaseBankProfile,
 ): Promise<Result<CaseBank, CaseBankFailure>> {
+  const loaded = await readCaseBank(file, profile);
+  return loaded.ok ? { ok: true, value: loaded.value.bank } : loaded;
+}
+
+// The same reader, answering the bytes it read and the digest of those bytes next to the data (M1c, S9). One read, one
+// parse, and the caller that pins the bank and the parser that judged it are looking at the same file.
+export async function readCaseBank(
+  file: string,
+  profile: CaseBankProfile,
+): Promise<Result<LoadedCaseBank, CaseBankFailure>> {
   const bytes = await readBankBytes(file);
   if (!bytes.ok) return bytes;
 
@@ -136,7 +162,12 @@ export async function loadCaseBank(
   }
 
   const parsed = parseCaseBank(raw, profile);
-  return parsed.ok ? parsed : refuse("invalid", parsed.error);
+  if (!parsed.ok) return refuse("invalid", parsed.error);
+
+  return {
+    ok: true,
+    value: { bank: parsed.value, bytes: bytes.value, contentHash: caseBankDigest(bytes.value) },
+  };
 }
 
 // The digest of a bank as it is on disk, which is what a preregistration pins (OA4): the bytes and not the data, so
@@ -368,6 +399,6 @@ function problem(message: string): { ok: false; error: string } {
   return { ok: false, error: message };
 }
 
-function refuse(error: CaseBankError, detail: string): Result<CaseBank, CaseBankFailure> {
+function refuse(error: CaseBankError, detail: string): Result<never, CaseBankFailure> {
   return { ok: false, error: { error, detail } };
 }
