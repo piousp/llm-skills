@@ -1,4 +1,5 @@
 import type { AssistantMessage, Context, TextContent } from "@earendil-works/pi-ai";
+import { describeExpectation } from "./diagnosis.ts";
 import { ProposerError } from "./errors.ts";
 import { MAX_BODY_BYTES, serializeLesson, slugify } from "./lesson-frontmatter.ts";
 import type { Diagnosis, EvidenceItem, LessonDraft, Result } from "./types.ts";
@@ -283,7 +284,7 @@ function evidenceLines(diagnosis: Diagnosis, evidence: readonly EvidenceItem[]):
 
   for (const item of diagnosis.replayItems) {
     lines.push(`- prompt: ${dataValue(item.prompt)}`, `  cwd: ${dataValue(item.cwd)}`);
-    lines.push(`  must-stop: ${dataValue(item.predicate)}`);
+    lines.push(`  must-stop: ${dataValue(describeExpectation(item.expectation))}`);
     if (item.failingToolCall !== undefined) {
       lines.push(`  failing-tool: ${dataValue(item.failingToolCall)}`);
     }

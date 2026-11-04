@@ -1,7 +1,8 @@
 import { SriDiagnosisError } from "./errors.ts";
 import type { EvidenceContext } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
-import type { Diagnosis, EvidenceItem, EvidenceKind, ReplayItem, SkillRef } from "./types.ts";
+import { assertNever } from "./types.ts";
+import type { Diagnosis, EvidenceItem, EvidenceKind, Expectation, ReplayItem, SkillRef } from "./types.ts";
 import { quote } from "./values.ts";
 
 // Evidence becomes a diagnosis here: one summary, one signature, and the replay items the M1
@@ -16,22 +17,19 @@ import { quote } from "./values.ts";
 // that turn, which is what a replay pins (Q13); the option below is only their fallback.
 //
 // Which class is replayable: the tool errors of the session. If the session has none, the retry
-// loops. If it has neither, the user corrections, whose predicate does not need a tool name.
+// loops. If it has neither, the user corrections, whose expectation needs no tool name.
 // One replay item per selected failure, so the gate measures the failure that produced the
 // diagnosis and not a different one.
 
 const ID_SEPARATOR = "\n";
 
-// Stands for the failing tool inside a predicate, so a tool class is one string in the table
-// instead of one string per kind.
-const TOOL_PLACEHOLDER = "{tool}";
-
 interface KindRule {
   // Fallback order of the classes: the lower the number, the stronger the class.
   priority: number;
-  // What the replayed turn must stop doing, with TOOL_PLACEHOLDER where the tool name goes.
-  predicate: string;
-  // Whether the predicate has to carry the name of the failing tool to say anything.
+  // What the replayed turn must stop doing, as the gate reads it. The tool name is not in the table: a
+  // tool class is one row for every tool, and expectationFor adds the name the evidence item carries.
+  expectation: Expectation;
+  // Whether the expectation has to carry the name of the failing tool to say anything.
   needsTool: boolean;
   // Singular form the summary uses; every label pluralizes with "s".
   label: string;
@@ -44,19 +42,19 @@ interface KindRule {
 const KIND_RULES: Record<EvidenceKind, KindRule> = {
   tool_error: {
     priority: 0,
-    predicate: `the tool ${TOOL_PLACEHOLDER} does not return an error again`,
+    expectation: { class: "tool_error", version: 1 },
     needsTool: true,
     label: "tool error",
   },
   retry_loop: {
     priority: 1,
-    predicate: `the tool ${TOOL_PLACEHOLDER} does not return an error again`,
+    expectation: { class: "retry_loop", version: 1 },
     needsTool: true,
     label: "retry loop",
   },
   user_correction: {
     priority: 2,
-    predicate: "the user does not correct the model again",
+    expectation: { class: "user_correction", version: 1 },
     needsTool: false,
     label: "user correction",
   },
@@ -113,14 +111,14 @@ export function buildDiagnosis(
 interface Replayable {
   item: EvidenceItem;
   prompt: string;
-  predicate: string;
+  expectation: Expectation;
 }
 
 // M5: the prompt filter comes first, so a failure without a prompt never displaces one that can
 // be replayed. Among the items that can, the strongest class present wins: a tool error is a
 // failure the gate measures directly, a retry loop is the same failure observed several times,
-// and a correction is the model being wrong with no tool failing. An item also has to yield a
-// predicate: a tool class without a tool name cannot say what must stop failing, so it is not
+// and a correction is the model being wrong with no tool failing. An item also has to yield an
+// expectation: a tool class without a tool name cannot say what must stop failing, so it is not
 // replayable either and must not shadow a weaker class that is.
 //
 // One pass over the evidence: the buffer holds the strongest class seen so far and a stronger one
@@ -136,15 +134,15 @@ function selectReplayable(
     const prompt = promptOf(item, contextById);
     if (prompt === undefined) continue;
 
-    const predicate = predicateFor(item);
-    if (predicate === undefined) continue;
+    const expectation = expectationFor(item);
+    if (expectation === undefined) continue;
 
     const { priority } = KIND_RULES[item.kind];
     if (priority < strongestPriority) {
       strongestPriority = priority;
       replayable.length = 0;
     }
-    if (priority === strongestPriority) replayable.push({ item, prompt, predicate });
+    if (priority === strongestPriority) replayable.push({ item, prompt, expectation });
   }
 
   return replayable;
@@ -157,12 +155,12 @@ function buildReplayItem(
   cwd: string,
   options: DiagnosisOptions,
 ): ReplayItem {
-  const { item, prompt, predicate } = replayable;
+  const { item, prompt, expectation } = replayable;
 
   const replayItem: ReplayItem = {
     prompt,
     cwd,
-    predicate,
+    expectation,
     skills: [skill.name],
     failureSignature: signatureOf([item.id]),
   };
@@ -189,13 +187,35 @@ function promptOf(
   return prompt;
 }
 
-// A tool class needs the tool name to say what must stop failing; a correction does not, because
-// what must stop is the user objecting.
-function predicateFor(item: EvidenceItem): string | undefined {
+// The condition a replayed turn is judged by. A tool class needs the tool name to say what must stop
+// failing; a correction does not, because what must stop is the user objecting. A fresh object every
+// time: the row of the table is shared by every item of its class, and a caller that edited what it was
+// handed would edit the class.
+function expectationFor(item: EvidenceItem): Expectation | undefined {
   const rule = KIND_RULES[item.kind];
-  if (!rule.needsTool) return rule.predicate;
+  if (!rule.needsTool) return { ...rule.expectation };
   if (item.toolName === undefined) return undefined;
-  return rule.predicate.replace(TOOL_PLACEHOLDER, item.toolName);
+  return { ...rule.expectation, tool: item.toolName };
+}
+
+// The sentence a human reads about an expectation, derived from the descriptor so the wording never
+// becomes the contract again: src/proposer.ts writes it into the prompt as "must-stop" and
+// src/tool-skill-improve.ts answers a diagnosis with it. The text is the one the prose predicate used to
+// carry, word for word: this function changes where the sentence comes from, not what it says.
+export function describeExpectation(expectation: Expectation): string {
+  switch (expectation.class) {
+    case "user_correction":
+      return "the user does not correct the model again";
+    case "tool_error":
+    case "retry_loop":
+      // A tool class without a tool name is not replayable, so nothing this package writes reaches the
+      // fallback; the sentence still has to describe the class for a record written elsewhere.
+      return expectation.tool === undefined
+        ? "the failing tool does not return an error again"
+        : `the tool ${expectation.tool} does not return an error again`;
+    default:
+      return assertNever(expectation.class);
+  }
 }
 
 // Ids are sorted before hashing: the signature names the set of failures, so the same evidence

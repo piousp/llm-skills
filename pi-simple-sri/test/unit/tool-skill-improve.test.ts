@@ -361,7 +361,7 @@ test("diagnose: a diagnosis writes nothing and records no session entry", async 
   assert.deepEqual(harness.entries, []);
 });
 
-test("diagnose: the answer names the failure, its signature and the replay predicates", async () => {
+test("diagnose: the answer names the failure, its signature and the expectation of every replay item", async () => {
   const harness = createHarness();
 
   const result = await harness.run({ action: "diagnose", skill: "pdf-tools" });

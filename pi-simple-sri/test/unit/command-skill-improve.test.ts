@@ -555,7 +555,7 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
 
   // decision.json as the command builds it, before the writer stamps the hashes.
   const decision = write.decision;
-  assert.equal(decision.schema, "pi-simple-sri/decision@0");
+  assert.equal(decision.schema, "pi-simple-sri/decision@1");
   assert.equal(decision.createdAt, NOW_ISO);
   assert.deepEqual(decision.trigger, { surface: "command", focus: "merged cells" });
   assert.deepEqual(decision.skill, {
@@ -578,14 +578,19 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
     bodyHash: sha256Digest(LESSON_BODY),
   });
   assert.deepEqual(decision.gate, {
+    basis: "replay",
     status: "not-run",
-    threshold: null,
-    reps: null,
     budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
-    tokens: { input: 412, output: 137 },
-    mde: null,
+    tokens: {
+      proposal: { input: 412, output: 137 },
+      incumbent: { input: 0, output: 0 },
+      candidate: { input: 0, output: 0 },
+      total: { input: 412, output: 137 },
+    },
+    preregistration: null,
+    replay: null,
   });
-  assert.deepEqual(decision.outcome, { status: "proposed", reason: null });
+  assert.deepEqual(decision.outcome, { status: "proposed", reason: null, decidedAt: null });
 
   // The index line carries the hashes the writer answered with, and names the candidate relative to
   // the base of the run.

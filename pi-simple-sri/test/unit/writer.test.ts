@@ -108,7 +108,7 @@ function lessonTextFor(draft: LessonDraft): string {
 
 function makeDecision(): DecisionRecord {
   return {
-    schema: "pi-simple-sri/decision@0",
+    schema: "pi-simple-sri/decision@1",
     createdAt: "2026-11-02T14:03:22.481Z",
     trigger: { surface: "command", focus: "merged cells" },
     skill: {
@@ -133,7 +133,9 @@ function makeDecision(): DecisionRecord {
     diagnosis: {
       summary: "Table extraction loses merged cells",
       failureSignature: HASH_PLACEHOLDER,
-      replayItems: [{ prompt: "extract the table", cwd: "/work", predicate: "cells 3 and 4 stay separate" }],
+      replayItems: [
+        { prompt: "extract the table", cwd: "/work", expectation: { class: "tool_error", version: 1, tool: "bash" } },
+      ],
     },
     candidate: {
       kind: "new-lesson",
@@ -145,14 +147,19 @@ function makeDecision(): DecisionRecord {
       bodyHash: HASH_PLACEHOLDER,
     },
     gate: {
+      basis: "replay",
       status: "not-run",
-      threshold: null,
-      reps: null,
       budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
-      tokens: { input: 0, output: 0 },
-      mde: null,
+      tokens: {
+        proposal: { input: 0, output: 0 },
+        incumbent: { input: 0, output: 0 },
+        candidate: { input: 0, output: 0 },
+        total: { input: 0, output: 0 },
+      },
+      preregistration: null,
+      replay: null,
     },
-    outcome: { status: "proposed", reason: null },
+    outcome: { status: "proposed", reason: null, decidedAt: null },
   };
 }
 
@@ -980,7 +987,7 @@ test("removeLessonFile: a slug that leaves lessons/ is refused", async (t) => {
 test("rewriteStagingDecision: replaces the record of a candidate whose lesson is unchanged", async (t) => {
   const fixture = createFixture(t);
   const staged = await writeStagingCandidate(inputFor(fixture));
-  const next: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "gate-accepted" } };
+  const next: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "gate-accepted", decidedAt: null } };
 
   const result = await rewriteStagingDecision(fixture.pkg, staged.stagingPath, next);
 
@@ -1151,7 +1158,7 @@ test("writeHistoryDecision: writes the record into the snapshot that exists", as
   const fixture = createFixture(t);
   const skill = makeSkill(fixture);
   const snapshotPath = await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
-  const record: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "accepted" } };
+  const record: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "accepted", decidedAt: null } };
 
   const decisionPath = await writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, record);
 

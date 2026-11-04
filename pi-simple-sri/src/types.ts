@@ -1,5 +1,5 @@
-// Data contracts shared by the M0 modules. Every field of DecisionRecord mirrors
-// schemas/decision.schema.json (schema 0) field by field: same names, same
+// Data contracts shared by the modules of the loop. Every field of DecisionRecord mirrors
+// schemas/decision.schema.json (schema 1) field by field: same names, same
 // optional/required split, no extra keys (the schema sets
 // additionalProperties: false).
 
@@ -59,11 +59,26 @@ export interface EvidenceItem {
   excerpt?: string;
 }
 
+// Q18: what a replayed turn has to stop doing, as data the gate executes instead of prose it would have
+// to parse. `class` names the failure and with it the check a replayed turn is judged by; `tool` is the
+// tool that check watches, present exactly when the class needs one -- a tool class without a tool name
+// cannot say what must stop failing, so such an item is not replayable (src/diagnosis.ts).
+//
+// `version` is the version of the check and not of the record: a gate that meets a version it does not
+// implement refuses the item instead of guessing what the class meant one version ago. src/diagnosis.ts
+// derives the text a human reads from this descriptor (describeExpectation), so the prose never becomes
+// the contract again.
+export interface Expectation {
+  class: EvidenceKind;
+  version: 1;
+  tool?: string;
+}
+
 // Q2, Q13: one replayable failing turn, re-run as-is in both arms.
 export interface ReplayItem {
   prompt: string;
   cwd: string;
-  predicate: string;
+  expectation: Expectation;
   // Q13, OA5: "provider/model" of the assistant turn the failure belongs to, never the bare id:
   // an id alone is ambiguous between providers that serve it. Absent when the transcript carries
   // no assistant message to name it, and then src/diagnosis.ts falls back to the model of the
@@ -102,12 +117,55 @@ export interface LessonDraft {
   body: string;
 }
 
-// Schema 0 is what M0 writes; M1 adds the full gate block under schema 1.
-export type DecisionSchema = "pi-simple-sri/decision@0";
+// One schema at a time (OA12): schema 1 is the only one this package writes and the only one
+// test/unit/schema-reader.ts validates. A decision.json of schema 0 is a historical artifact the package
+// never revalidates, so there is no dispatcher between the two.
+export type DecisionSchema = "pi-simple-sri/decision@1";
 
 export type DecisionSurface = "command" | "tool";
 
-export type DecisionOutcomeStatus = "proposed" | "not-eligible";
+// The closed set of gate statuses, declared once and derived to a type the way LESSON_STATUSES is: the
+// schema declares the same list as an enum, so a status added here without reaching the schema is a
+// drift the suites catch (test/unit/decision-schema.test.ts).
+export const GATE_STATUSES = [
+  "not-run",
+  "preregistered",
+  "gate-accepted",
+  "gate-rejected",
+  "gate-abstained",
+] as const;
+export type GateStatus = (typeof GATE_STATUSES)[number];
+
+// "accepted" and "accept-failed" are not implied by a gate status: the acceptance decides them after the
+// gate ran, and the record carries that moment in outcome.decidedAt.
+export type DecisionOutcomeStatus =
+  | "proposed"
+  | "not-eligible"
+  | "gate-accepted"
+  | "gate-rejected"
+  | "gate-abstained"
+  | "accepted"
+  | "accept-failed";
+
+// The one mapping from what the gate decided to what the record's outcome says. The record is built
+// through it, so `outcome.status` and `gate.status` cannot disagree while this table is the only place
+// that relates the two. The schema ties no two properties together, so the table is the owner of the
+// relation and test/unit/decision-schema.test.ts proves it is total over GATE_STATUSES and that every
+// status it answers is one the schema accepts.
+//
+// A preregistered gate has not decided anything yet: the candidate was proposed and the gate is running,
+// which is what "proposed" already says, and inventing a verdict for it is what this mapping refuses.
+const OUTCOME_STATUS_OF_GATE: Record<GateStatus, DecisionOutcomeStatus> = {
+  "not-run": "proposed",
+  preregistered: "proposed",
+  "gate-accepted": "gate-accepted",
+  "gate-rejected": "gate-rejected",
+  "gate-abstained": "gate-abstained",
+};
+
+export function outcomeStatusFor(gateStatus: GateStatus): DecisionOutcomeStatus {
+  return OUTCOME_STATUS_OF_GATE[gateStatus];
+}
 
 export interface DecisionTrigger {
   surface: DecisionSurface;
@@ -160,25 +218,188 @@ export interface GateBudget {
   interruptedAt: number | null;
 }
 
+// The token pair of one thing that spent tokens: the generation that produced the candidate, one arm of
+// the gate, or the whole run.
 export interface GateTokens {
   input: number;
   output: number;
 }
 
-// Schema 0 gate block: M0 never runs the gate, so every result field is null.
-// `arms` and the per-item results arrive with schema 1.
-export interface GateBlock {
-  status: "not-run";
-  threshold: null;
-  reps: null;
-  budget: GateBudget;
-  tokens: GateTokens;
-  mde: null;
+// What the whole decision spent, split by where it went. `total` is the sum of the other three and is
+// recorded so a reader never adds them again: it is the cost of the decision, gate included.
+export interface GateTokenTally {
+  proposal: GateTokens;
+  incumbent: GateTokens;
+  candidate: GateTokens;
+  total: GateTokens;
 }
+
+// The two arms of a paired replay: the skill as it stands, and the skill with the candidate lesson.
+export type GateArm = "incumbent" | "candidate";
+
+// The rule the gate is judged by, recorded before the first run so it cannot be chosen once the result is
+// known. `version` is the version of the rule: a reader that does not implement it refuses the record
+// instead of interpreting the numbers of an older rule.
+export interface GateThreshold {
+  rule: "unanimous-and-strictly-better";
+  candidatePasses: number;
+  incumbentPassesMax: number;
+  version: 1;
+}
+
+// The design the budget pays for: reps per item, items replayed, runs planned in total, and the arms every
+// run is measured in.
+export interface GateDesign {
+  reps: number;
+  items: number;
+  plannedRuns: number;
+  arms: GateArm[];
+}
+
+// The floor of the design and not the threshold: `resolution` is the smallest difference this many runs
+// can tell apart and `requiredDifference` is the difference the rule demands. The two travel together
+// because a rule that asks for less than the floor is measuring noise. `basis` names what the numbers were
+// computed from, so a reader knows the arithmetic behind them before trusting the floor.
+export interface GateMde {
+  basis: string;
+  runsPerArm: number;
+  resolution: number;
+  requiredDifference: number;
+}
+
+// What was recorded before the first run of the gate: the moment, the rule, the design and the floor.
+export interface GatePreregistration {
+  recordedAt: string;
+  threshold: GateThreshold;
+  design: GateDesign;
+  mde: GateMde;
+}
+
+// One run of one item in one arm, which is the unit the gate decides on.
+export type RunOutcome = "pass" | "fail" | "invalid";
+
+export interface ReplayRunRecord {
+  arm: GateArm;
+  rep: number;
+  outcome: RunOutcome;
+  // Why a run was discarded instead of judged. The vocabulary belongs to the executor of the replay
+  // (src/gate/replay-runner.ts), so this field is a string and not an enum of the record contract: a reader
+  // that does not know a reason still knows the run was discarded.
+  invalidReason?: string;
+  stopReason: string | null;
+  skillLoaded: boolean;
+  usage: GateTokens;
+  durationMs: number;
+  exitCode: number | null;
+  // Path of the raw JSONL of the run, when the flow persists it: the audit trail of a verdict, which is
+  // what makes an abstention explainable after the fact.
+  stream?: string;
+}
+
+// One replay item of the diagnosis and every run of it, with the expectation it was judged by. The
+// expectation is copied from the replay item on purpose: the record of the gate has to stand alone, and a
+// reader must not have to join it against the diagnosis to know what was tested.
+export interface ReplayItemRecord {
+  index: number;
+  failureSignature: string;
+  expectation: Expectation;
+  model: string;
+  reps: ReplayRunRecord[];
+}
+
+export interface GateArmTally {
+  passes: number;
+  runs: number;
+  tokens: GateTokens;
+}
+
+export interface GateBounds {
+  low: number;
+  high: number;
+}
+
+// Descriptive and not decisive: the rule decides, the interval says how little the design resolves.
+export interface GateInterval {
+  method: "wilson";
+  alpha: number;
+  incumbent: GateBounds;
+  candidate: GateBounds;
+  difference: GateBounds;
+}
+
+// A replay item the gate did not run, with the failure it names and why it cannot be replayed (OA7): a
+// failure intrinsic to the task says nothing about the skill, and dropping the item silently would leave a
+// gate that ran fewer items than the diagnosis offered with no record of the difference.
+export interface GateReplayExclusion {
+  failureSignature: string;
+  reason: "intrinsic-failure";
+}
+
+// The two skill trees the replay ran against, with the hashes that let a reader prove the candidate was
+// measured against the skill it was written for.
+export interface GateOverlays {
+  incumbent: string;
+  candidate: string;
+  skillContentHash: string;
+  manifestHash: string;
+}
+
+export interface GateReplayResult {
+  completedAt: string;
+  verdict: "gate-accepted" | "gate-rejected" | "gate-abstained";
+  reason: string | null;
+  items: ReplayItemRecord[];
+  arms: { incumbent: GateArmTally; candidate: GateArmTally };
+  interval: GateInterval;
+  regressions: number;
+  excluded: GateReplayExclusion[];
+  overlays: GateOverlays;
+}
+
+// The gate block, discriminated by `basis`: every field that depends on how the gate decides lives under a
+// key named after the basis (`replay` today), and the fields of the top level -- basis, status, budget,
+// tokens, preregistration -- are neutral to it. M1 has one basis, so this union has one member and its
+// variants are told apart by `status`; a second basis is one more member here, and every `assertNever`
+// over the block then lists what has to learn about it.
+export interface GateNotRun {
+  basis: "replay";
+  status: "not-run";
+  budget: GateBudget;
+  tokens: GateTokenTally;
+  preregistration: null;
+  replay: null;
+}
+
+// Preregistered and not yet run: the rule, the design and the floor exist, the runs do not.
+export interface GatePreregistered {
+  basis: "replay";
+  status: "preregistered";
+  budget: GateBudget;
+  tokens: GateTokenTally;
+  preregistration: GatePreregistration;
+  replay: null;
+}
+
+// Concluded: the preregistration it was judged by and the result it produced are both recorded, so a reader
+// can check the rule against the numbers it decided.
+export interface GateConcluded {
+  basis: "replay";
+  status: "gate-accepted" | "gate-rejected" | "gate-abstained";
+  budget: GateBudget;
+  tokens: GateTokenTally;
+  preregistration: GatePreregistration;
+  replay: GateReplayResult;
+}
+
+export type GateBlock = GateNotRun | GatePreregistered | GateConcluded;
 
 export interface DecisionOutcome {
   status: DecisionOutcomeStatus;
   reason: string | null;
+  // The moment the status was decided, when it was: null while the candidate is only proposed, and a
+  // date-time once the gate or the acceptance decided. It is the field that makes "decided before or after
+  // the runs" answerable from the record alone.
+  decidedAt: string | null;
 }
 
 export interface DecisionRecord {

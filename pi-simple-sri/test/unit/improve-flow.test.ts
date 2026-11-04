@@ -77,7 +77,7 @@ const DIAGNOSIS: Diagnosis = {
     {
       prompt: "extract the merged-cell table from report.pdf",
       cwd: CWD,
-      predicate: "the tool bash does not return an error again",
+      expectation: { class: "tool_error", version: 1, tool: "bash" },
     },
   ],
 };

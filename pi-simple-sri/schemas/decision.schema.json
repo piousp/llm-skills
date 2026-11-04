@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://pi.dev/schemas/pi-simple-sri/decision@0.json",
-  "title": "pi-simple-sri decision record, schema 0",
-  "description": "Record written next to a staged lesson candidate during M0. M1 adds a gate block with per-item results, interval, model and tokens per arm under schema 1.",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/decision@1.json",
+  "title": "pi-simple-sri decision record, schema 1",
+  "description": "Record written next to a staged lesson candidate. Schema 1 adds the full gate block and replaces the prose predicate of a replay item with the mechanical expectation the gate executes. A change is additive -- and stays in schema 1 -- when it adds an optional key, widens an enum, or adds a branch under gate named after a new basis; a change of the shape or of the meaning of a field already written under schema 1 is schema 2.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "createdAt", "trigger", "skill", "eligibility", "evidence", "diagnosis", "candidate", "gate", "outcome"],
   "properties": {
-    "schema": { "const": "pi-simple-sri/decision@0" },
+    "schema": { "const": "pi-simple-sri/decision@1" },
     "createdAt": { "type": "string", "format": "date-time" },
     "trigger": {
       "type": "object",
@@ -69,7 +69,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["prompt", "cwd", "predicate"],
+            "required": ["prompt", "cwd", "expectation"],
             "properties": {
               "prompt": { "type": "string", "minLength": 1 },
               "cwd": { "type": "string", "minLength": 1 },
@@ -77,8 +77,18 @@
               "skills": { "type": "array", "items": { "type": "string" } },
               "assistantCycleIndex": { "type": "integer", "minimum": 0 },
               "failingToolCall": { "type": "string" },
-              "predicate": { "type": "string", "minLength": 1 },
-              "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+              "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "expectation": {
+                "description": "What the replayed turn has to stop doing, as data the gate executes. version is the version of the check and not of the record: a checker that reads a version it does not implement refuses it instead of guessing.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["class", "version"],
+                "properties": {
+                  "class": { "enum": ["tool_error", "retry_loop", "user_correction"] },
+                  "version": { "const": 1 },
+                  "tool": { "type": "string", "minLength": 1 }
+                }
+              }
             }
           }
         }
@@ -99,13 +109,13 @@
       }
     },
     "gate": {
+      "description": "basis is the discriminator of the block: every field that depends on how the gate decides lives under a key named after the basis (replay today), and the top-level fields -- basis, status, budget, tokens, preregistration -- are neutral to it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "threshold", "reps", "budget", "tokens", "mde"],
+      "required": ["basis", "status", "budget", "tokens", "preregistration", "replay"],
       "properties": {
-        "status": { "const": "not-run" },
-        "threshold": { "type": "null" },
-        "reps": { "type": "null" },
+        "basis": { "const": "replay" },
+        "status": { "enum": ["not-run", "preregistered", "gate-accepted", "gate-rejected", "gate-abstained"] },
         "budget": {
           "type": "object",
           "additionalProperties": false,
@@ -119,22 +129,266 @@
         "tokens": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["input", "output"],
+          "required": ["proposal", "incumbent", "candidate", "total"],
           "properties": {
-            "input": { "type": "integer", "minimum": 0 },
-            "output": { "type": "integer", "minimum": 0 }
+            "proposal": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer", "minimum": 0 },
+                "output": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "incumbent": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer", "minimum": 0 },
+                "output": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "candidate": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer", "minimum": 0 },
+                "output": { "type": "integer", "minimum": 0 }
+              }
+            },
+            "total": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer", "minimum": 0 },
+                "output": { "type": "integer", "minimum": 0 }
+              }
+            }
           }
         },
-        "mde": { "type": "null" }
+        "preregistration": {
+          "description": "What was recorded before the first run of the gate, so the rule cannot be chosen after the result is known.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["recordedAt", "threshold", "design", "mde"],
+          "properties": {
+            "recordedAt": { "type": "string", "format": "date-time" },
+            "threshold": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rule", "candidatePasses", "incumbentPassesMax", "version"],
+              "properties": {
+                "rule": { "enum": ["unanimous-and-strictly-better"] },
+                "candidatePasses": { "type": "integer", "minimum": 0 },
+                "incumbentPassesMax": { "type": "integer", "minimum": 0 },
+                "version": { "const": 1 }
+              }
+            },
+            "design": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["reps", "items", "plannedRuns", "arms"],
+              "properties": {
+                "reps": { "type": "integer", "minimum": 1 },
+                "items": { "type": "integer", "minimum": 1 },
+                "plannedRuns": { "type": "integer", "minimum": 0 },
+                "arms": { "type": "array", "minItems": 2, "items": { "enum": ["incumbent", "candidate"] } }
+              }
+            },
+            "mde": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "runsPerArm", "resolution", "requiredDifference"],
+              "properties": {
+                "basis": { "type": "string", "minLength": 1 },
+                "runsPerArm": { "type": "integer", "minimum": 1 },
+                "resolution": { "type": "number", "minimum": 0 },
+                "requiredDifference": { "type": "number", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "replay": {
+          "description": "The result of a gate whose basis is a paired replay of the diagnosis. It exists only once the budget was spent or the gate abstained.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["completedAt", "verdict", "reason", "items", "arms", "interval", "regressions", "excluded", "overlays"],
+          "properties": {
+            "completedAt": { "type": "string", "format": "date-time" },
+            "verdict": { "enum": ["gate-accepted", "gate-rejected", "gate-abstained"] },
+            "reason": { "type": ["string", "null"] },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["index", "failureSignature", "expectation", "model", "reps"],
+                "properties": {
+                  "index": { "type": "integer", "minimum": 0 },
+                  "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                  "model": { "type": "string", "minLength": 1 },
+                  "expectation": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["class", "version"],
+                    "properties": {
+                      "class": { "enum": ["tool_error", "retry_loop", "user_correction"] },
+                      "version": { "const": 1 },
+                      "tool": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  "reps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["arm", "rep", "outcome", "stopReason", "skillLoaded", "usage", "durationMs", "exitCode"],
+                      "properties": {
+                        "arm": { "enum": ["incumbent", "candidate"] },
+                        "rep": { "type": "integer", "minimum": 1 },
+                        "outcome": { "enum": ["pass", "fail", "invalid"] },
+                        "invalidReason": { "type": "string", "minLength": 1 },
+                        "stopReason": { "type": ["string", "null"] },
+                        "skillLoaded": { "type": "boolean" },
+                        "durationMs": { "type": "number", "minimum": 0 },
+                        "exitCode": { "type": ["integer", "null"] },
+                        "stream": { "type": "string", "minLength": 1 },
+                        "usage": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["input", "output"],
+                          "properties": {
+                            "input": { "type": "integer", "minimum": 0 },
+                            "output": { "type": "integer", "minimum": 0 }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "arms": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["incumbent", "candidate"],
+              "properties": {
+                "incumbent": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["passes", "runs", "tokens"],
+                  "properties": {
+                    "passes": { "type": "integer", "minimum": 0 },
+                    "runs": { "type": "integer", "minimum": 0 },
+                    "tokens": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["input", "output"],
+                      "properties": {
+                        "input": { "type": "integer", "minimum": 0 },
+                        "output": { "type": "integer", "minimum": 0 }
+                      }
+                    }
+                  }
+                },
+                "candidate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["passes", "runs", "tokens"],
+                  "properties": {
+                    "passes": { "type": "integer", "minimum": 0 },
+                    "runs": { "type": "integer", "minimum": 0 },
+                    "tokens": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["input", "output"],
+                      "properties": {
+                        "input": { "type": "integer", "minimum": 0 },
+                        "output": { "type": "integer", "minimum": 0 }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "interval": {
+              "description": "Descriptive and not decisive: the decision is the preregistered rule, and the intervals say how little the design resolves.",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "alpha", "incumbent", "candidate", "difference"],
+              "properties": {
+                "method": { "enum": ["wilson"] },
+                "alpha": { "type": "number", "minimum": 0 },
+                "incumbent": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                },
+                "candidate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                },
+                "difference": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["low", "high"],
+                  "properties": {
+                    "low": { "type": "number" },
+                    "high": { "type": "number" }
+                  }
+                }
+              }
+            },
+            "regressions": { "type": "integer", "minimum": 0 },
+            "excluded": {
+              "description": "The replay items the gate did not run, each with the failure it names and why it cannot be replayed: an item whose failure is intrinsic to the task is not evidence about the skill.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["failureSignature", "reason"],
+                "properties": {
+                  "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                  "reason": { "enum": ["intrinsic-failure"] }
+                }
+              }
+            },
+            "overlays": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["incumbent", "candidate", "skillContentHash", "manifestHash"],
+              "properties": {
+                "incumbent": { "type": "string", "minLength": 1 },
+                "candidate": { "type": "string", "minLength": 1 },
+                "skillContentHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+                "manifestHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+              }
+            }
+          }
+        }
       }
     },
     "outcome": {
+      "description": "outcome.status is what the gate decided (or the acceptance after it), and src/types.ts derives it from gate.status with outcomeStatusFor: the schema cannot tie two properties together, so the agreement of the two fields has one owner.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["status", "reason"],
+      "required": ["status", "reason", "decidedAt"],
       "properties": {
-        "status": { "enum": ["proposed", "not-eligible"] },
-        "reason": { "type": ["string", "null"] }
+        "status": { "enum": ["proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", "accept-failed"] },
+        "reason": { "type": ["string", "null"] },
+        "decidedAt": { "type": ["string", "null"], "format": "date-time" }
       }
     }
   }

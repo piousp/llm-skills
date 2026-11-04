@@ -4,23 +4,31 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolCall, Usage } from "@earendil-works/pi-ai";
 import { proposeSkill, type ImproveFlowContext, type ImproveFlowDeps, type ProposeFn } from "../../src/improve-flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { toDecisionSkill } from "../../src/types.ts";
-import type { DecisionRecord, DecisionSkill, LessonDraft, SkillRef } from "../../src/types.ts";
+import { assertNever, GATE_STATUSES, outcomeStatusFor, toDecisionSkill } from "../../src/types.ts";
+import type {
+  DecisionRecord,
+  DecisionSkill,
+  GateBlock,
+  GateBudget,
+  GatePreregistration,
+  GateReplayResult,
+  GateStatus,
+  GateTokenTally,
+  LessonDraft,
+  SkillRef,
+} from "../../src/types.ts";
 import { isPlainObject } from "../../src/values.ts";
 import { writeStagingCandidate } from "../../src/writer.ts";
+import { loadDecisionSchema, validateAgainstSchema } from "./schema-reader.ts";
 
-// G2: the exit criterion of M0 is that the decision.json the writer publishes satisfies
-// schemas/decision.schema.json. No JSON Schema validator is a dependency (ajv is not installed), so
-// the constraints the schema declares are checked by the small reader below, which lives in this
-// file and is not exported.
-
-const SCHEMA_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas", "decision.schema.json");
-const DECISION_SCHEMA: unknown = JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));
+// G2, schema 1: the exit criterion is that the decision.json the writer publishes satisfies
+// schemas/decision.schema.json. The reader that checks it lives in test/unit/schema-reader.ts because the
+// suites of the gate and of the acceptance validate the records they produce too; this file keeps the
+// negative cases, which fix what the reader catches, one injected fault per case.
 
 const LESSON_SLUG = "extract-tables-with-merged-cells";
 const LESSON_TITLE = "Extract tables with merged cells";
@@ -30,193 +38,140 @@ const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
 const BODY_HASH = `sha256:${"b".repeat(64)}`;
 const FAILURE_SIGNATURE = `sha256:${"c".repeat(64)}`;
 
-// The schema declares createdAt as format: "date-time" and every date-time this package writes
-// comes from Date#toISOString, so the accepted shape is the UTC one with milliseconds.
-const DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const ZERO_TOKENS: GateTokenTally = {
+  proposal: { input: 0, output: 0 },
+  incumbent: { input: 0, output: 0 },
+  candidate: { input: 0, output: 0 },
+  total: { input: 0, output: 0 },
+};
 
-// The keywords schemas/decision.schema.json uses, one function per family: type, const, enum,
-// pattern, format date-time, minLength, maxLength, minimum, minItems, required, properties, items
-// and additionalProperties: false. A keyword the schema adds later and this reader does not know is
-// ignored, which is why the negative cases below pin what it does catch.
-function validateAgainstSchema(document: unknown): string[] {
-  const violations: string[] = [];
-  collectViolations(document, DECISION_SCHEMA, "decision", violations);
-  return violations;
-}
+const PLANNED_BUDGET: GateBudget = { plannedRuns: 12, usedRuns: 0, interruptedAt: null };
+const SPENT_BUDGET: GateBudget = { plannedRuns: 12, usedRuns: 12, interruptedAt: null };
 
-function collectViolations(value: unknown, schemaNode: unknown, at: string, violations: string[]): void {
-  if (!isPlainObject(schemaNode)) {
-    violations.push(`${at}: the schema node is not an object`);
-    return;
-  }
+// What a gate of three items and two reps per item registers before its first run: the rule it will be
+// judged by, the design that rule pays for, and the floor of that design. The value of `mde.basis` is a
+// placeholder of this fixture on purpose: the schema declares it as a string because the scorer that names
+// its arithmetic is a later slice, and pinning a vocabulary here would be deciding that slice's wording.
+const PREREGISTRATION: GatePreregistration = {
+  recordedAt: "2026-11-02T14:04:00.000Z",
+  threshold: {
+    rule: "unanimous-and-strictly-better",
+    candidatePasses: 6,
+    incumbentPassesMax: 5,
+    version: 1,
+  },
+  design: { reps: 2, items: 3, plannedRuns: 12, arms: ["incumbent", "candidate"] },
+  mde: { basis: "resolution-of-the-design", runsPerArm: 6, resolution: 0.1667, requiredDifference: 1 },
+};
 
-  checkType(value, schemaNode.type, at, violations);
-  checkConst(value, schemaNode, at, violations);
-  checkEnum(value, schemaNode.enum, at, violations);
-  checkString(value, schemaNode, at, violations);
-  checkNumber(value, schemaNode, at, violations);
-  checkArray(value, schemaNode, at, violations);
-  checkObject(value, schemaNode, at, violations);
-}
+// A concluded replay, in the shape schema 1 declares. It is typed, so the compiler proves this fixture and
+// the schema describe the same block: the negative cases below are one field away from a valid record.
+const REPLAY: GateReplayResult = {
+  completedAt: "2026-11-02T14:20:00.000Z",
+  verdict: "gate-accepted",
+  reason: null,
+  items: [
+    {
+      index: 0,
+      failureSignature: FAILURE_SIGNATURE,
+      expectation: { class: "tool_error", version: 1, tool: "bash" },
+      model: "anthropic/claude-sonnet-4-5",
+      reps: [
+        {
+          arm: "incumbent",
+          rep: 1,
+          outcome: "fail",
+          stopReason: "stop",
+          skillLoaded: true,
+          usage: { input: 900, output: 120 },
+          durationMs: 4200,
+          exitCode: 0,
+        },
+        {
+          arm: "candidate",
+          rep: 1,
+          outcome: "pass",
+          stopReason: "stop",
+          skillLoaded: true,
+          usage: { input: 910, output: 110 },
+          durationMs: 3900,
+          exitCode: 0,
+          stream: "staging/20261102T140322481Z/pdf-tools/gate/runs/0-1-candidate.jsonl",
+        },
+      ],
+    },
+  ],
+  arms: {
+    incumbent: { passes: 0, runs: 1, tokens: { input: 900, output: 120 } },
+    candidate: { passes: 1, runs: 1, tokens: { input: 910, output: 110 } },
+  },
+  interval: {
+    method: "wilson",
+    alpha: 0.05,
+    incumbent: { low: 0, high: 0.7935 },
+    candidate: { low: 0.2065, high: 1 },
+    difference: { low: -0.7935, high: 1 },
+  },
+  regressions: 0,
+  excluded: [{ failureSignature: `sha256:${"d".repeat(64)}`, reason: "intrinsic-failure" }],
+  overlays: {
+    incumbent: "staging/20261102T140322481Z/pdf-tools/arms/incumbent/pdf-tools",
+    candidate: "staging/20261102T140322481Z/pdf-tools/arms/candidate/pdf-tools",
+    skillContentHash: CONTENT_HASH,
+    manifestHash: `sha256:${"e".repeat(64)}`,
+  },
+};
 
-function checkType(value: unknown, declared: unknown, at: string, violations: string[]): void {
-  const types = declaredTypes(declared);
-  if (types.length === 0 || types.some((type) => matchesType(value, type))) {
-    return;
-  }
-  violations.push(`${at}: expected ${types.join(" or ")}, got ${describe(value)}`);
-}
-
-// `type` is a string or a list of strings in JSON Schema. A type this reader does not know fails
-// the check instead of passing silently, so a keyword added to the schema surfaces here.
-function declaredTypes(declared: unknown): readonly string[] {
-  if (typeof declared === "string") {
-    return [declared];
-  }
-  if (!Array.isArray(declared)) {
-    return [];
-  }
-  const entries: readonly unknown[] = declared;
-  return entries.flatMap((entry) => (typeof entry === "string" ? [entry] : []));
-}
-
-function matchesType(value: unknown, type: string): boolean {
-  switch (type) {
-    case "object":
-      return isPlainObject(value);
-    case "array":
-      return Array.isArray(value);
-    case "string":
-      return typeof value === "string";
-    case "boolean":
-      return typeof value === "boolean";
-    case "number":
-      return typeof value === "number";
-    case "integer":
-      return typeof value === "number" && Number.isInteger(value);
-    case "null":
-      return value === null;
+// The block of a gate in a given status, field for field what the schema of that status requires: the
+// preregistration exists once the gate was preregistered, and the result exists once it concluded. The
+// switch is exhaustive over GATE_STATUSES, so a status added to the union loses its case here.
+function gateWith(status: GateStatus): GateBlock {
+  switch (status) {
+    case "not-run":
+      return {
+        basis: "replay",
+        status: "not-run",
+        budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+        tokens: ZERO_TOKENS,
+        preregistration: null,
+        replay: null,
+      };
+    case "preregistered":
+      return {
+        basis: "replay",
+        status: "preregistered",
+        budget: PLANNED_BUDGET,
+        tokens: ZERO_TOKENS,
+        preregistration: PREREGISTRATION,
+        replay: null,
+      };
+    case "gate-accepted":
+    case "gate-rejected":
+    case "gate-abstained":
+      return {
+        basis: "replay",
+        status,
+        budget: SPENT_BUDGET,
+        tokens: ZERO_TOKENS,
+        preregistration: PREREGISTRATION,
+        // The verdict of the result and the status of the block are the same value here, as they are in a
+        // record the flow writes: the schema cannot tie them either, so the fixture says it once.
+        replay: { ...REPLAY, verdict: status },
+      };
     default:
-      return false;
+      return assertNever(status);
   }
 }
 
-function checkConst(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
-  if (!Object.hasOwn(schemaNode, "const")) {
-    return;
+// One node of the schema on disk, named by the keys that lead to it. A node that is not there is a failure
+// and never a silent pass, so a comparison below cannot agree with a node the file does not have.
+function schemaNode(...keys: string[]): Record<string, unknown> {
+  let current: unknown = loadDecisionSchema();
+  for (const key of keys) {
+    current = isPlainObject(current) ? current[key] : undefined;
   }
-  const expected = schemaNode.const;
-  if (!isSameValue(value, expected)) {
-    violations.push(`${at}: expected the constant ${describe(expected)}, got ${describe(value)}`);
-  }
-}
-
-function checkEnum(value: unknown, options: unknown, at: string, violations: string[]): void {
-  if (!Array.isArray(options)) {
-    return;
-  }
-  const allowed: readonly unknown[] = options;
-  if (allowed.some((option) => isSameValue(value, option))) {
-    return;
-  }
-  violations.push(`${at}: expected one of ${allowed.map((option) => describe(option)).join(", ")}, got ${describe(value)}`);
-}
-
-function checkString(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
-  if (typeof value !== "string") {
-    return;
-  }
-
-  const pattern = schemaNode.pattern;
-  if (typeof pattern === "string" && !new RegExp(pattern).test(value)) {
-    violations.push(`${at}: ${describe(value)} does not match /${pattern}/`);
-  }
-
-  // Only the one format the schema declares is checked; an unknown format is an annotation.
-  const format = schemaNode.format;
-  if (format === "date-time" && !DATE_TIME_PATTERN.test(value)) {
-    violations.push(`${at}: ${describe(value)} is not a date-time`);
-  }
-
-  const minLength = schemaNode.minLength;
-  if (typeof minLength === "number" && value.length < minLength) {
-    violations.push(`${at}: ${describe(value)} is shorter than ${minLength}`);
-  }
-
-  const maxLength = schemaNode.maxLength;
-  if (typeof maxLength === "number" && value.length > maxLength) {
-    violations.push(`${at}: ${describe(value)} is longer than ${maxLength}`);
-  }
-}
-
-function checkNumber(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
-  const minimum = schemaNode.minimum;
-  if (typeof minimum !== "number" || typeof value !== "number") {
-    return;
-  }
-  if (value < minimum) {
-    violations.push(`${at}: ${value} is below the minimum ${minimum}`);
-  }
-}
-
-function checkArray(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
-  if (!Array.isArray(value)) {
-    return;
-  }
-  const elements: readonly unknown[] = value;
-
-  const minItems = schemaNode.minItems;
-  if (typeof minItems === "number" && elements.length < minItems) {
-    violations.push(`${at}: the array has ${elements.length} items, fewer than ${minItems}`);
-  }
-
-  const items = schemaNode.items;
-  if (items === undefined) {
-    return;
-  }
-  elements.forEach((element, index) => {
-    collectViolations(element, items, `${at}[${index}]`, violations);
-  });
-}
-
-function checkObject(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
-  if (!isPlainObject(value)) {
-    return;
-  }
-
-  const required = schemaNode.required;
-  const requiredNames: readonly unknown[] = Array.isArray(required) ? required : [];
-  for (const name of requiredNames) {
-    if (typeof name === "string" && !Object.hasOwn(value, name)) {
-      violations.push(`${at}: the required property "${name}" is missing`);
-    }
-  }
-
-  const declaredProperties = schemaNode.properties;
-  const properties: Record<string, unknown> = isPlainObject(declaredProperties) ? declaredProperties : {};
-  for (const [key, childSchema] of Object.entries(properties)) {
-    if (Object.hasOwn(value, key)) {
-      collectViolations(value[key], childSchema, `${at}.${key}`, violations);
-    }
-  }
-
-  if (schemaNode.additionalProperties === false) {
-    for (const key of Object.keys(value)) {
-      if (!Object.hasOwn(properties, key)) {
-        violations.push(`${at}: the property "${key}" is not declared by the schema (additionalProperties: false)`);
-      }
-    }
-  }
-}
-
-// The schema only uses scalar const and enum values, so comparing their JSON form is enough.
-function isSameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function describe(value: unknown): string {
-  const json = JSON.stringify(value);
-  return json ?? String(value);
+  if (!isPlainObject(current)) assert.fail(`the schema node ${keys.join(".")} is not an object`);
+  return current;
 }
 
 interface Fixture {
@@ -359,7 +314,7 @@ function makeSkillRef(overrides: Partial<SkillRef> = {}): SkillRef {
 
 function makeDecision(skill: DecisionSkill = toDecisionSkill(makeSkillRef(), true)): DecisionRecord {
   return {
-    schema: "pi-simple-sri/decision@0",
+    schema: "pi-simple-sri/decision@1",
     createdAt: CREATED_AT,
     trigger: { surface: "command", focus: null },
     skill,
@@ -378,7 +333,9 @@ function makeDecision(skill: DecisionSkill = toDecisionSkill(makeSkillRef(), tru
     diagnosis: {
       summary: "Table extraction loses merged cells",
       failureSignature: FAILURE_SIGNATURE,
-      replayItems: [{ prompt: "extract the table", cwd: "/work", predicate: "cells 3 and 4 stay separate" }],
+      replayItems: [
+        { prompt: "extract the table", cwd: "/work", expectation: { class: "tool_error", version: 1, tool: "bash" } },
+      ],
     },
     candidate: {
       kind: "new-lesson",
@@ -389,15 +346,8 @@ function makeDecision(skill: DecisionSkill = toDecisionSkill(makeSkillRef(), tru
       contentHash: CONTENT_HASH,
       bodyHash: BODY_HASH,
     },
-    gate: {
-      status: "not-run",
-      threshold: null,
-      reps: null,
-      budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
-      tokens: { input: 0, output: 0 },
-      mde: null,
-    },
-    outcome: { status: "proposed", reason: null },
+    gate: gateWith("not-run"),
+    outcome: { status: "proposed", reason: null, decidedAt: null },
   };
 }
 
@@ -438,7 +388,7 @@ test("decision.json: the record the writer publishes satisfies schemas/decision.
   const document: unknown = JSON.parse(fs.readFileSync(result.decisionPath, "utf8"));
 
   // The reader is proven by the negative cases below; on the published record it must find nothing,
-  // which is the M0 exit criterion: every required field present, no field outside the schema, every
+  // which is the exit criterion: every required field present, no field outside the schema, every
   // pattern matched, and the two hashes stamped by the writer in the documented form.
   assert.deepEqual(validateAgainstSchema(document), []);
 });
@@ -447,10 +397,10 @@ test("validateAgainstSchema: the record the command builds has no violations", (
   assert.deepEqual(validateAgainstSchema(VALID_RECORD), []);
 });
 
-// G2 from the other end: the literal above is a fixture, and what M0 has to satisfy is the file a run
-// publishes. The same reader validates the decision.json a proposeSkill run leaves in staging, so a
-// field the flow calculates -- the verdict of the skill block, the two hashes -- is checked against the
-// schema and not only against itself.
+// G2 from the other end: the literal above is a fixture, and what the package has to satisfy is the file a
+// run publishes. The same reader validates the decision.json a proposeSkill run leaves in staging, so a
+// field the flow calculates -- the verdict of the skill block, the two hashes, the shape of the gate block
+// -- is checked against the schema and not only against itself.
 test("decision.json: the record a proposeSkill run publishes satisfies schemas/decision.schema.json", async (t) => {
   const fixture = createFixture(t);
   const skill = makeSkillRef({ dir: fixture.skillDir, realDir: fs.realpathSync(fixture.skillDir) });
@@ -498,6 +448,58 @@ test("toDecisionSkill: builds exactly the five fields the schema declares", () =
   assert.deepEqual(validateAgainstSchema(makeDecision(block)), []);
 });
 
+// §TECHNICAL 3: gate.status and outcome.status are related by one mapping, and this is the proof that it is
+// total over the statuses the schema declares and that every status it answers is one the schema accepts.
+// The schema ties no two properties together, so the agreement of the two fields is a property of the code
+// and of this test, and never of the validator.
+test("outcomeStatusFor: every gate status maps to an outcome status the schema accepts", () => {
+  for (const gateStatus of GATE_STATUSES) {
+    const status = outcomeStatusFor(gateStatus);
+    const record: DecisionRecord = {
+      ...VALID_RECORD,
+      gate: gateWith(gateStatus),
+      // A candidate that was only proposed has no moment that decided it; every other status was decided
+      // when the gate concluded, and the record says when.
+      outcome: {
+        status,
+        reason: null,
+        decidedAt: status === "proposed" ? null : "2026-11-02T14:20:00.000Z",
+      },
+    };
+
+    assert.deepEqual(validateAgainstSchema(record), [], `the record of a gate in status ${gateStatus}`);
+  }
+});
+
+// The mapping itself, written out: a gate that decided is named by the outcome, and a gate that has not
+// decided is not named by it -- a preregistered gate has no verdict to report, so the record goes on saying
+// the candidate was proposed.
+test("outcomeStatusFor: a gate that decided is the outcome, a gate that did not leaves it proposed", () => {
+  assert.deepEqual(GATE_STATUSES.map(outcomeStatusFor), [
+    "proposed",
+    "proposed",
+    "gate-accepted",
+    "gate-rejected",
+    "gate-abstained",
+  ]);
+  // An outcome the acceptance decides is not implied by any gate status, which is why the acceptance
+  // writes it with the moment it decided.
+  assert.equal(GATE_STATUSES.map(outcomeStatusFor).includes("accepted"), false);
+});
+
+// One list of statuses, two files: the type derives them from the array and the schema declares them as an
+// enum, so a status this package can write but the schema refuses (or the other way round) fails here
+// instead of in a record that silently does not validate.
+test("decision.schema.json: the gate statuses of the schema are the ones src/types.ts declares", () => {
+  assert.deepEqual(schemaNode("properties", "gate", "properties", "status").enum, [...GATE_STATUSES]);
+});
+
+// The block's discriminator is `basis`, and schema 1 has exactly one: the negative case below proves the
+// constant is enforced, and the keyword is the one a second basis turns into an enum.
+test("decision.schema.json: the basis of the gate block is replay", () => {
+  assert.equal(schemaNode("properties", "gate", "properties", "basis").const, "replay");
+});
+
 interface NegativeCase {
   name: string;
   build: () => unknown;
@@ -518,8 +520,12 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
   },
   {
     name: "an outcome status outside the enum",
-    build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "accepted" } }),
-    expected: ['decision.outcome.status: expected one of "proposed", "not-eligible", got "accepted"'],
+    // "gate-passed" is the spelling a caller would reach for and the one no status of this package uses:
+    // the enum is what decides which statuses exist, and the negative has to stay outside it.
+    build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "gate-passed" } }),
+    expected: [
+      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", "accept-failed", got "gate-passed"',
+    ],
   },
   {
     name: "a negative assistant cycle index",
@@ -541,6 +547,43 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
       return { ...VALID_RECORD, candidate: withoutBodyHash };
     },
     expected: ['decision.candidate: the required property "bodyHash" is missing'],
+  },
+  {
+    name: "a basis of the gate that schema 1 does not know",
+    // §TECHNICAL 5: `basis` is the discriminator, so a block of a basis this schema does not declare is
+    // refused whole instead of being read as a replay block with fields missing.
+    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, basis: "case-bank" } }),
+    expected: ['decision.gate.basis: expected the constant "replay", got "case-bank"'],
+  },
+  {
+    name: "an expectation class outside the enum",
+    // The classes are the closed set the gate knows how to verify (Q18): a class outside it would be an
+    // expectation no checker can run, which is worse than no expectation at all.
+    build: () => ({
+      ...VALID_RECORD,
+      diagnosis: {
+        ...VALID_RECORD.diagnosis,
+        replayItems: VALID_RECORD.diagnosis.replayItems.map((item) => ({
+          ...item,
+          expectation: { class: "latency", version: 1 },
+        })),
+      },
+    }),
+    expected: [
+      'decision.diagnosis.replayItems[0].expectation.class: expected one of "tool_error", "retry_loop", "user_correction", got "latency"',
+    ],
+  },
+  {
+    name: "a replay result with a negative number of regressions",
+    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, replay: { ...REPLAY, regressions: -1 } } }),
+    expected: ["decision.gate.replay.regressions: -1 is below the minimum 0"],
+  },
+  {
+    name: "a property the schema does not declare under the gate",
+    // §TECHNICAL 5: a second basis is a branch of this block and a decision, not a hole. additionalProperties:
+    // false is what makes that true, so the keyword is pinned by a case of its own.
+    build: () => ({ ...VALID_RECORD, gate: { ...VALID_RECORD.gate, caseBank: { cases: [] } } }),
+    expected: ['decision.gate: the property "caseBank" is not declared by the schema (additionalProperties: false)'],
   },
 ];
 

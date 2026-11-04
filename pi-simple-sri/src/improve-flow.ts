@@ -13,7 +13,7 @@ import { SKILL_FILE } from "./names.ts";
 import { createProposer, type CompleteFn, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "./skills-inventory.ts";
-import { toDecisionSkill } from "./types.ts";
+import { outcomeStatusFor, toDecisionSkill } from "./types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -772,7 +772,7 @@ export function buildDecision(input: DecisionInput): DecisionRecord {
   const { skill, draft } = input;
 
   return {
-    schema: "pi-simple-sri/decision@0",
+    schema: "pi-simple-sri/decision@1",
     createdAt: input.now.toISOString(),
     trigger: { surface: input.request.surface, focus: focusOrNull(input.request.focus) },
     skill: toDecisionSkill(skill, input.verdict.eligible),
@@ -790,18 +790,28 @@ export function buildDecision(input: DecisionInput): DecisionRecord {
       contentHash: input.hashes.contentHash,
       bodyHash: input.hashes.bodyHash,
     },
-    // M0 never runs the gate, so every result field is null (schema 0). The tokens of the single
-    // generation are the one number the block can carry: they were spent to produce this candidate
-    // and Q6 wants them recorded per decision.
+    // The gate has not run: `basis` names how it would decide (a paired replay), the preregistration and
+    // the result are absent, and neither the budget nor a verdict is invented. The tokens of the single
+    // generation are the one number the block can carry -- they were spent to produce this candidate and Q6
+    // wants them recorded per decision -- and `total` is the sum of the three, which today is the proposal
+    // alone because no run of the gate has happened yet.
     gate: {
+      basis: "replay",
       status: "not-run",
-      threshold: null,
-      reps: null,
       budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
-      tokens: { input: input.usage.input, output: input.usage.output },
-      mde: null,
+      tokens: {
+        proposal: { input: input.usage.input, output: input.usage.output },
+        incumbent: { input: 0, output: 0 },
+        candidate: { input: 0, output: 0 },
+        total: { input: input.usage.input, output: input.usage.output },
+      },
+      preregistration: null,
+      replay: null,
     },
-    outcome: { status: "proposed", reason: null },
+    // The outcome is the one its gate status implies, through the single mapping that relates the two fields
+    // (outcomeStatusFor): a gate that has not run has decided nothing, so the record says the candidate was
+    // proposed and no moment decided it.
+    outcome: { status: outcomeStatusFor("not-run"), reason: null, decidedAt: null },
   };
 }
 

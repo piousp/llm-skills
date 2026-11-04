@@ -1,5 +1,6 @@
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { describeExpectation } from "./diagnosis.ts";
 import {
   ENTRY_TYPE,
   diagnoseSkill,
@@ -338,7 +339,7 @@ function diagnosedText(skill: SkillRef, eligibility: Eligibility, diagnosis: Dia
     `diagnosis: ${diagnosis.summary}`,
     `failure signature: ${diagnosis.failureSignature}`,
     `replay items: ${diagnosis.replayItems.length}`,
-    ...diagnosis.replayItems.map((item) => `  - ${item.predicate}`),
+    ...diagnosis.replayItems.map((item) => `  - ${describeExpectation(item.expectation)}`),
     "No candidate was proposed: diagnose reports what a replay would test and writes nothing.",
   ].join("\n");
 }

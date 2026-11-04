@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildDiagnosis, SriDiagnosisError } from "../../src/diagnosis.ts";
+import { buildDiagnosis, describeExpectation, SriDiagnosisError } from "../../src/diagnosis.ts";
 import type { EvidenceContext } from "../../src/evidence.ts";
 import type { EvidenceItem, EvidenceKind, SkillRef } from "../../src/types.ts";
 
@@ -72,7 +72,7 @@ test("buildDiagnosis: the signature is stable for the same set and changes with 
   assert.notEqual(inOrder, different);
 });
 
-test("buildDiagnosis: a tool_error replay item carries the prompt, the cwd, the model and the tool predicate", () => {
+test("buildDiagnosis: a tool_error replay item carries the prompt, the cwd, the model and the tool expectation", () => {
   const error = evidenceItem("ev-3f9a1c02", "tool_error", "bash");
   const contextById = contextsOf([
     ["ev-3f9a1c02", { prompt: "extract the merged-cell table", assistantCycleIndex: 2 }],
@@ -84,7 +84,7 @@ test("buildDiagnosis: a tool_error replay item carries the prompt, the cwd, the 
     {
       prompt: "extract the merged-cell table",
       cwd: CWD,
-      predicate: "the tool bash does not return an error again",
+      expectation: { class: "tool_error", version: 1, tool: "bash" },
       skills: ["pdf-tools"],
       failureSignature: expectedSignature(["ev-3f9a1c02"]),
       model: MODEL,
@@ -157,14 +157,14 @@ test("buildDiagnosis: a replayable correction survives a tool_error without a pr
 
   const onlyCorrection = buildDiagnosis([errorWithoutPrompt, correction], contextById, SKILL, CWD);
   assert.deepEqual(
-    onlyCorrection.replayItems.map((item) => item.predicate),
-    ["the user does not correct the model again"],
+    onlyCorrection.replayItems.map((item) => item.expectation),
+    [{ class: "user_correction", version: 1 }],
   );
 
   const both = buildDiagnosis([errorWithoutPrompt, errorWithPrompt, correction], contextById, SKILL, CWD);
   assert.deepEqual(
-    both.replayItems.map((item) => item.predicate),
-    ["the tool read does not return an error again"],
+    both.replayItems.map((item) => item.expectation),
+    [{ class: "tool_error", version: 1, tool: "read" }],
   );
 });
 
@@ -188,8 +188,8 @@ test("buildDiagnosis: retry loops are replayed only when there is no tool error"
 
   const onlyRetryLoop = buildDiagnosis([retryLoop], contextById, SKILL, CWD);
   assert.deepEqual(
-    onlyRetryLoop.replayItems.map((item) => item.predicate),
-    ["the tool bash does not return an error again"],
+    onlyRetryLoop.replayItems.map((item) => item.expectation),
+    [{ class: "retry_loop", version: 1, tool: "bash" }],
   );
 
   const both = buildDiagnosis([toolError, retryLoop], contextById, SKILL, CWD);
@@ -197,15 +197,17 @@ test("buildDiagnosis: retry loops are replayed only when there is no tool error"
   assert.equal(both.replayItems[0].failureSignature, expectedSignature(["ev-00000004"]));
 });
 
-test("buildDiagnosis: a user correction is replayed with the user predicate", () => {
+test("buildDiagnosis: a user correction is replayed with the expectation of its class", () => {
   const correction = evidenceItem("ev-00000005", "user_correction", "bash");
   const contextById = contextsOf([["ev-00000005", { prompt: "extract the table", assistantCycleIndex: 0 }]]);
 
   const diagnosis = buildDiagnosis([correction], contextById, SKILL, CWD);
 
+  // The tool the evidence carries does not travel with the expectation: what has to stop is the user
+  // objecting, and the check watches the turn and not the tool.
   assert.deepEqual(
-    diagnosis.replayItems.map((item) => item.predicate),
-    ["the user does not correct the model again"],
+    diagnosis.replayItems.map((item) => item.expectation),
+    [{ class: "user_correction", version: 1 }],
   );
 });
 
@@ -269,7 +271,7 @@ test("buildDiagnosis: the summary lists every class present in priority order", 
   );
 });
 
-// M5 sibling: an item that yields no predicate is as unreplayable as one without a prompt, so it
+// M5 sibling: an item that yields no expectation is as unreplayable as one without a prompt, so it
 // must not shadow a weaker class that can be replayed.
 test("buildDiagnosis: a tool_error without a tool name does not shadow a replayable correction", () => {
   const namelessError = evidenceItem("ev-00000030", "tool_error");
@@ -282,7 +284,45 @@ test("buildDiagnosis: a tool_error without a tool name does not shadow a replaya
   const diagnosis = buildDiagnosis([namelessError, correction], contextById, SKILL, CWD);
 
   assert.deepEqual(
-    diagnosis.replayItems.map((item) => item.predicate),
-    ["the user does not correct the model again"],
+    diagnosis.replayItems.map((item) => item.expectation),
+    [{ class: "user_correction", version: 1 }],
+  );
+});
+
+// S3: the sentence a human reads is derived from the descriptor and is no longer the contract. These three
+// cases are the whole text the package can produce from an expectation, worded exactly as the prose
+// predicate was: the migration changed where the sentence comes from, not what it says.
+test("describeExpectation: a tool class names the tool that must stop failing", () => {
+  assert.equal(
+    describeExpectation({ class: "tool_error", version: 1, tool: "bash" }),
+    "the tool bash does not return an error again",
+  );
+  // The two tool classes say the same thing because Q18 checks the same thing for both: the tool is
+  // invoked again and none of its invocations returned isError.
+  assert.equal(
+    describeExpectation({ class: "retry_loop", version: 1, tool: "bash" }),
+    "the tool bash does not return an error again",
+  );
+});
+
+test("describeExpectation: a correction is described without a tool", () => {
+  assert.equal(
+    describeExpectation({ class: "user_correction", version: 1 }),
+    "the user does not correct the model again",
+  );
+  // A correction whose record carries a tool keeps the sentence of its class: the check watches the turn
+  // and not the tool, so the name is not part of what the user is told.
+  assert.equal(
+    describeExpectation({ class: "user_correction", version: 1, tool: "bash" }),
+    "the user does not correct the model again",
+  );
+});
+
+test("describeExpectation: a tool class without a tool name still describes its class", () => {
+  // src/diagnosis.ts never writes this shape -- a tool class without a tool name is not replayable -- so
+  // the sentence exists for a record written by something else, and it names no tool it does not have.
+  assert.equal(
+    describeExpectation({ class: "tool_error", version: 1 }),
+    "the failing tool does not return an error again",
   );
 });
