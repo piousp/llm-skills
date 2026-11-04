@@ -17,7 +17,7 @@ import { ATTEMPTS_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/n
 import { countReferenceLines } from "../../src/skill-reference.ts";
 import type { DecisionRecord } from "../../src/types.ts";
 import { stateDir } from "../../src/write-base.ts";
-import { SriWriterError } from "../../src/writer.ts";
+import { lessonHashes, SriWriterError } from "../../src/writer.ts";
 
 // The acceptance (S9) on a skill built in mkdtemp: the snapshot, the lesson, the reference line, the record
 // of the history and the line of the index. No test names a real skill and nothing outside the temporary
@@ -35,7 +35,7 @@ const NOW = new Date("2026-11-02T15:04:05.123Z");
 // 2026-11-02T15:04:05.123Z in the spelling writeStagingCandidate gives a staging directory.
 const TIMESTAMP = "20261102T150405123Z";
 const FAILURE_SIGNATURE = `sha256:${"c".repeat(64)}`;
-const BODY_HASH = `sha256:${"b".repeat(64)}`;
+const LESSON_BODY = "Use pdfplumber with the lattice strategy so merged cells stay apart.";
 
 // The candidate as it was staged: frontmatter included, in the format src/lesson-frontmatter.ts writes, so
 // src/writer.ts reads it back with the parser that owns the format.
@@ -49,9 +49,14 @@ const LESSON_TEXT = [
   `gate: "accepted@${TIMESTAMP}"`,
   "---",
   "",
-  "Use pdfplumber with the lattice strategy so merged cells stay apart.",
+  LESSON_BODY,
   "",
 ].join("\n");
+
+// The two hashes the record declares, computed here and not with src/writer.ts: what the acceptance publishes has
+// to agree with an independent computation of the same bytes, and bodyHash is the one of the normalized body,
+// which for this body is the body itself.
+const BODY_HASH = digestOf(LESSON_BODY);
 
 // A declared skill the way a user writes one: frontmatter, a body, and a `## Lessons` section that already
 // lists a lesson. The section exists and its list is one bullet, so the candidate line has to become the
@@ -298,8 +303,14 @@ test("acceptCandidate: the accepted candidate leaves its snapshot, its lesson an
   assert.equal(readFile(path.join(snapshotDir, SKILL_FILE)), skillBefore);
   assert.deepEqual(relativeTree(snapshotDir), [SKILL_FILE, "decision.json", "lessons/pdf-first.md"]);
 
-  // The lesson is in the skill and it is the text the gate measured.
+  // The lesson is in the skill and it is the text the gate measured. Read back from the skill it hashes to the
+  // pair the record declares -- contentHash over the whole file and bodyHash over the normalized body -- which is
+  // the join between the record, the disk and the index (M2).
   assert.equal(readFile(value.lessonPath), LESSON_TEXT);
+  const hashes = lessonHashes(readFile(value.lessonPath));
+  if (!hashes.ok) assert.fail(`the lesson the acceptance wrote must hash: ${hashes.error}`);
+  assert.equal(hashes.value.contentHash, request.decision.candidate.contentHash);
+  assert.equal(hashes.value.bodyHash, request.decision.candidate.bodyHash);
   assert.deepEqual(relativeTree(fixture.lessonsDir), [`${SLUG}.md`, "pdf-first.md"]);
 
   // One line, and it is the first bullet of the section that was already there: the reference the lesson

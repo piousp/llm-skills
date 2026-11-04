@@ -21,6 +21,7 @@ import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, CASE_BANK_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -132,9 +133,9 @@ function fixtureLesson(): string {
     slug: SLUG,
     title: TITLE,
     date: "2026-11-05",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: ["ev-00000000"],
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: "Only `git rebase --onto` with a base; the flag `--squash-all` does not exist.",
   });
   if (!lesson.ok) throw new Error(`the fixture lesson is not a lesson file: ${lesson.error}`);

@@ -12,6 +12,7 @@ import {
   type ProposeSuccess,
   type SkillContext,
 } from "../../src/proposer.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { Diagnosis, EvidenceItem } from "../../src/types.ts";
 
 // The proposer is tested against a fake `complete`, never a provider: the module owns the prompt,
@@ -182,8 +183,8 @@ test("propose: the happy path builds the draft from the reply and from what the 
     slug: REPLY_SLUG,
     title: REPLY_TITLE,
     date: NOW_DATE,
-    status: "proposed",
-    gate: "pending",
+    status: "accepted",
+    gate: LESSON_GATE_ACCEPTED,
     sourceEvidence: [...EVIDENCE_IDS],
     body: REPLY_BODY,
   });
@@ -197,6 +198,17 @@ test("propose: the usage of the generation is mapped to input and output", async
   const proposal = await proposeOrFail(fake, proposeInput());
 
   assert.deepEqual(proposal.usage, { input: 412, output: 137 });
+});
+
+// M2: the text the gate hashes, the text it measures and the text that lands are the same file, so the
+// candidate is serialized with the frontmatter of the finished lesson and not with that of a draft.
+test("propose: the lesson text carries the frontmatter of the published lesson", async () => {
+  const fake = fakeComplete({ text: replyText() });
+
+  const proposal = await proposeOrFail(fake, proposeInput());
+
+  assert.equal(proposal.lessonText.includes('status: "accepted"'), true);
+  assert.equal(proposal.lessonText.includes(`gate: "${LESSON_GATE_ACCEPTED}"`), true);
 });
 
 test("propose: the lesson text is a lesson parseLesson reads back as the same draft", async () => {

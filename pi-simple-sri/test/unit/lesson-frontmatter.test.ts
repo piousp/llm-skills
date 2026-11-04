@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseLesson, serializeLesson, slugify } from "../../src/lesson-frontmatter.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { LessonDraft } from "../../src/types.ts";
 
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -77,6 +78,18 @@ test("serializeLesson: emits the documented block followed by the body", () => {
   );
 });
 
+// M2: the status and the gate a candidate is written with are the ones the file holds, and both directions
+// agree on them the way they do for every other field.
+test("serializeLesson: writes the accepted frontmatter a candidate is serialized with", () => {
+  const draft = makeDraft({ status: "accepted", gate: LESSON_GATE_ACCEPTED });
+
+  const text = serializeOrFail(draft);
+
+  assert.equal(text.includes('status: "accepted"'), true);
+  assert.equal(text.includes(`gate: "${LESSON_GATE_ACCEPTED}"`), true);
+  assert.deepEqual(parseLesson(text), { ok: true, value: draft });
+});
+
 test("parseLesson: reads back the output of serializeLesson unchanged", () => {
   const draft = makeDraft();
 
@@ -112,6 +125,15 @@ test("parseLesson: reads back every field and derives the slug from the title", 
     gate: "pending",
     body: "Use lattice mode.",
   });
+});
+
+// `gate` is an open field, so the value with the instant it was accepted at keeps parsing: a lesson written
+// before M2 is not a broken file (OA9 does not migrate it).
+test("parseLesson: accepts a gate that carries the instant the lesson was accepted at", () => {
+  const result = parseLesson(rawLesson(withLine(5, 'gate: "accepted@2026-11-02T14:03:22.481Z"')));
+
+  if (!result.ok) assert.fail(`expected the lesson to parse, got: ${result.error}`);
+  assert.equal(result.value.gate, "accepted@2026-11-02T14:03:22.481Z");
 });
 
 test("parseLesson: accepts a body of exactly the size limit", () => {

@@ -4,15 +4,16 @@ import type { LessonDraft, LessonStatus, Result } from "./types.ts";
 import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 
 // The lesson file format: a frontmatter block with title, date, status, source-evidence and gate,
-// then the body.
+// then the body. The example carries the status and the gate a candidate is written with (M2); a lesson
+// written before M2 says "proposed" and "pending" and validates exactly the same way.
 //
 //   ---
 //   title: "Extract tables with merged cells"
 //   date: "2026-11-02"
-//   status: "proposed"
+//   status: "accepted"
 //   source-evidence:
 //     - "ev-3f9a1c02"
-//   gate: "pending"
+//   gate: "accepted"
 //   ---
 //
 //   <body>

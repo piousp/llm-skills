@@ -2,6 +2,7 @@ import type { AssistantMessage, Context, TextContent } from "@earendil-works/pi-
 import { describeExpectation } from "./diagnosis.ts";
 import { ProposerError } from "./errors.ts";
 import { MAX_BODY_BYTES, serializeLesson, slugify } from "./lesson-frontmatter.ts";
+import { LESSON_GATE_ACCEPTED } from "./types.ts";
 import type { Diagnosis, EvidenceItem, GateBasis, LessonDraft, Result } from "./types.ts";
 import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 
@@ -187,12 +188,15 @@ export function createProposer(complete: CompleteFn): Proposer {
         return reply;
       }
 
+      // M2: the draft is the lesson the skill will hold, not a draft of one. The bytes that are hashed, the
+      // bytes the gate measures and the bytes that land are the same file, so the candidate is born with the
+      // status and the gate of a published lesson and nothing rewrites them later.
       const draft: LessonDraft = {
         slug: slugify(reply.value.title),
         title: reply.value.title,
         date: utcDate(now),
-        status: "proposed",
-        gate: "pending",
+        status: "accepted",
+        gate: LESSON_GATE_ACCEPTED,
         sourceEvidence: evidence.map((item: EvidenceItem) => item.id),
         body: reply.value.body,
       };

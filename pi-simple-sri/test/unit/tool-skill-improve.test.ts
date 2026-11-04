@@ -38,6 +38,7 @@ import {
   type SkillImproveToolDeps,
   type ToolDetails,
 } from "../../src/tool-skill-improve.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from "../../src/writer.ts";
 
@@ -245,9 +246,9 @@ function lessonDraftFor(input: Parameters<ProposeFn>[0]): LessonDraft {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: input.evidence.map((item) => item.id),
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: LESSON_BODY,
   };
 }

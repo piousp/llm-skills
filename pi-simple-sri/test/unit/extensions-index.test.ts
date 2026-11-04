@@ -32,6 +32,7 @@ import {
   skillImproveParams,
   type ToolDetails,
 } from "../../src/tool-skill-improve.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import type { StagingWriteInput, StagingWriteResult } from "../../src/writer.ts";
 
@@ -247,9 +248,9 @@ function lessonDraftFor(input: Parameters<ProposeFn>[0]): LessonDraft {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: input.evidence.map((item) => item.id),
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: LESSON_BODY,
   };
 }
@@ -354,6 +355,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     cwd: CWD,
     hasUI: options.hasUI ?? true,
     model: undefined,
+    // Both are required by the contract and nothing in the wiring reaches them: the reload lives in the
+    // command handler and this suite only records where the handler and the seams are connected.
+    waitForIdle: async () => {},
+    reload: async () => {},
     sessionManager: {
       getBranch: () => [...(options.branch ?? failingBranch())],
       getSessionId: () => "session-test",

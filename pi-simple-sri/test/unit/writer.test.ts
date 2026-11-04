@@ -23,6 +23,7 @@ import {
   writeTextAtomically,
   type StagingWriteInput,
 } from "../../src/writer.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef } from "../../src/types.ts";
 
 // The real fs.promises.open, captured before any test replaces the property: a stub that has to let the real
@@ -90,9 +91,9 @@ function makeDraft(overrides: Partial<LessonDraft> = {}): LessonDraft {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: ["ev-3f9a1c02"],
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: "Use pdfplumber with the lattice strategy for merged cells.",
     ...overrides,
   };

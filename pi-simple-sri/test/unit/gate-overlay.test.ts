@@ -13,6 +13,7 @@ import {
   type OverlayResult,
 } from "../../src/gate/overlay.ts";
 import { ensureLessonsSection, upsertReferenceLine } from "../../src/skill-reference.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { SkillRef } from "../../src/types.ts";
 import { stagingDir } from "../../src/write-base.ts";
 
@@ -38,8 +39,8 @@ const LESSON_TEXT = [
   `slug: ${SLUG}`,
   `title: ${TITLE}`,
   "date: 2026-11-02",
-  "status: proposed",
-  "gate: pending",
+  "status: accepted",
+  `gate: ${LESSON_GATE_ACCEPTED}`,
   "---",
   "",
   "Use pdfplumber with the lattice strategy so merged cells stay apart.",

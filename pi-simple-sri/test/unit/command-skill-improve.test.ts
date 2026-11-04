@@ -37,6 +37,7 @@ import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import { countReferenceLines } from "../../src/skill-reference.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { stateDir } from "../../src/write-base.ts";
@@ -265,6 +266,10 @@ interface Harness {
   gateRequests: GateRequest[];
   directionalRequests: DirectionalGateRequest[];
   acceptRequests: AcceptRequest[];
+  // The two calls of the reload (M2), counted instead of recorded: nothing in this slice calls them, and the slice
+  // that does (S3) asserts how often the context was asked to go idle and to reload.
+  idleCalls: number;
+  reloadCalls: number;
   run: (args: string) => Promise<void>;
 }
 
@@ -275,9 +280,9 @@ function lessonDraftFor(input: Parameters<ProposeFn>[0]): LessonDraft {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: input.evidence.map((item) => item.id),
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: LESSON_BODY,
   };
 }
@@ -304,6 +309,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const gateRequests: GateRequest[] = [];
   const directionalRequests: DirectionalGateRequest[] = [];
   const acceptRequests: AcceptRequest[] = [];
+  let idleCalls = 0;
+  let reloadCalls = 0;
 
   const modelRegistry: SkillImproveModelRegistry = {
     complete: async (model, context, request) => {
@@ -322,6 +329,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
       notify: (message, type) => {
         notified.push({ message, type: type ?? "info" });
       },
+    },
+    // The two members of the command context that M2 needs. Both resolve instead of acting, and each one is counted so a
+    // test can order them without replacing the context.
+    waitForIdle: async () => {
+      idleCalls += 1;
+    },
+    reload: async () => {
+      reloadCalls += 1;
     },
   };
 
@@ -437,6 +452,13 @@ function createHarness(options: HarnessOptions = {}): Harness {
     gateRequests,
     directionalRequests,
     acceptRequests,
+    // Read when the caller reads them: the run increments them after this object was built.
+    get idleCalls() {
+      return idleCalls;
+    },
+    get reloadCalls() {
+      return reloadCalls;
+    },
     run: (args: string) => runSkillImprove(args, ctx, deps),
   };
 }
@@ -1034,9 +1056,9 @@ const FIXED_DRAFT: LessonDraft = {
   slug: LESSON_SLUG,
   title: LESSON_TITLE,
   date: "2026-11-02",
-  status: "proposed",
+  status: "accepted",
   sourceEvidence: ["ev-3f9a1c02"],
-  gate: "pending",
+  gate: LESSON_GATE_ACCEPTED,
   body: LESSON_BODY,
 };
 

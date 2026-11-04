@@ -145,6 +145,13 @@ export interface Diagnosis {
 export const LESSON_STATUSES = ["proposed", "accepted", "retired"] as const;
 export type LessonStatus = (typeof LESSON_STATUSES)[number];
 
+// The gate value a lesson is written with (M2). A candidate is serialized with the frontmatter the lesson will
+// have inside the skill, so the text the gate hashes, the text it measures and the text that lands are one
+// file. `gate` has no validator of its own -- src/lesson-frontmatter.ts accepts any non-empty string -- so the
+// literal lives here and the prologue and the tests read it, instead of spelling it twice in a way nothing
+// would refuse when the two drifted apart.
+export const LESSON_GATE_ACCEPTED = "accepted";
+
 // Frontmatter of a lessons/<slug>.md file.
 export interface LessonDraft {
   slug: string; // [a-z0-9-], no consecutive or leading/trailing hyphens, <= 64
@@ -152,7 +159,10 @@ export interface LessonDraft {
   date: string; // YYYY-MM-DD
   status: LessonStatus;
   sourceEvidence: string[]; // ids "ev-xxxxxxxx"
-  gate: string; // e.g. "pending" | "accepted@<ts>" | "rejected@<ts>"
+  // `accepted` is the value a lesson is written with (LESSON_GATE_ACCEPTED); `accepted@<ts>` is still valid for
+  // a file already on disk, although no writer of this package produces it. The field is open by contract:
+  // src/lesson-frontmatter.ts only asks for a non-empty string.
+  gate: string;
   body: string;
 }
 

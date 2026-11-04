@@ -11,7 +11,7 @@ import type { CaseCheck } from "../../src/checks.ts";
 import { expectationViolation } from "../../src/diagnosis.ts";
 import { proposeSkill, type ImproveFlowContext, type ImproveFlowDeps, type ProposeFn } from "../../src/improve-flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { assertNever, GATE_STATUSES, outcomeStatusFor, toDecisionSkill } from "../../src/types.ts";
+import { assertNever, GATE_STATUSES, LESSON_GATE_ACCEPTED, outcomeStatusFor, toDecisionSkill } from "../../src/types.ts";
 import type {
   DecisionRecord,
   DecisionSkill,
@@ -433,9 +433,9 @@ function proposerForTest(): ProposeFn {
       slug: LESSON_SLUG,
       title: LESSON_TITLE,
       date: "2026-11-02",
-      status: "proposed",
+      status: "accepted",
       sourceEvidence: input.evidence.map((item) => item.id),
-      gate: "pending",
+      gate: LESSON_GATE_ACCEPTED,
       body: "Use pdfplumber with the lattice strategy for merged cells.",
     };
     const lesson = serializeLesson(draft);
@@ -519,9 +519,9 @@ function lessonTextForTest(): string {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: [EVIDENCE_ID],
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: "Use pdfplumber with the lattice strategy for merged cells.",
   };
   const serialized = serializeLesson(draft);

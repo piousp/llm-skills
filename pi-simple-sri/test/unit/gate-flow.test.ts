@@ -21,6 +21,7 @@ import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
 import type { ListSkillsOptions } from "../../src/skills-inventory.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -133,9 +134,9 @@ function fixtureLesson(): string {
     slug: SLUG,
     title: TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: [EVIDENCE[0].id],
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: "Use pdfplumber with the lattice strategy so merged cells stay apart.",
   });
   if (!lesson.ok) throw new Error(`the fixture lesson is not a lesson file: ${lesson.error}`);

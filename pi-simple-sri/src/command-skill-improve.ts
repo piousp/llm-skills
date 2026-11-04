@@ -109,18 +109,31 @@ export interface SkillImproveMessage {
 }
 
 // The part of the command context this command uses, spelled out instead of taking the whole
-// ExtensionCommandContext: a fake in the tests then costs six fields, and a change in pi's context
+// ExtensionCommandContext: a fake in the tests then costs eight fields, and a change in pi's context
 // that breaks this contract fails to compile where the wiring passes the real context.
 //
 // It carries no appendEntry and no sendMessage: both live on the extension API
 // (ExtensionAPI.appendEntry, ExtensionAPI.sendMessage) and pi's command context has neither, so both
 // channels are seams of SkillImproveDeps and the wiring is the one that connects them.
 //
+// waitForIdle and reload are members here and not seams of SkillImproveDeps, for the opposite reason: pi
+// exposes both on the context of a command and not on the context of a tool (ExtensionCommandContext, in
+// dist/core/extensions/types.d.ts:290 and :322), and this context is already the thing the tests replace
+// with a fake -- a seam would be a second place to say what the context already says (M2).
+//
+// Both are required and not optional with a no-op: a fake that forgets them has to break the compiler.
+// Optional members would let a context without them satisfy this interface, and the reload of the session
+// would then be lost in silence -- which is exactly the defect M2 closes.
+//
 // The four members the loop reads come from ImproveFlowContext, so this context is a superset of it
 // and reaches proposeSkill without a conversion.
 export interface SkillImproveContext extends ImproveFlowContext {
   readonly hasUI: boolean;
   readonly ui: SkillImproveUi;
+  // Step 8 of a run that accepted a candidate (M2): the session waits for the agent to go idle and then reloads
+  // itself, so the skill the acceptance just wrote is read again here instead of at the next session start.
+  waitForIdle(): Promise<void>;
+  reload(): Promise<void>;
 }
 
 // Every dependency the command touches: the seams of the loop, the two steps M1 chains after it, plus the two
@@ -563,10 +576,12 @@ async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, ru
 
   // M2: await ctx.waitForIdle(); await ctx.reload();
   //
-  // Step 8 and not a step of this module: the reload is a call on the context pi hands a command, and
-  // SkillImproveContext declares neither `waitForIdle` nor `reload`. M2 will have to widen that contract with
-  // `waitForIdle(): Promise<void>` and `reload(): Promise<void>` -- pi exposes both on the command context -- and
-  // put the two calls here, after the acceptance answered and before the run reports the task done.
+  // Step 8 and not a step of this module: the reload is a call on the context pi hands a command, and the two
+  // members it needs are declared on SkillImproveContext, at the top of this file. What is missing here is the two
+  // calls and nothing else: the acceptance has answered and its writes are on disk, so the reload cannot lose a
+  // line. waitForIdle first, because pi warns and returns without reloading while the agent is streaming, and the
+  // handler never sees a rejection. Nothing may run after reload: the code that follows lands in the frame the
+  // reload invalidated.
 }
 
 // The record the gate left in the candidate, with the hash of the skill it measured. The acceptance writes the

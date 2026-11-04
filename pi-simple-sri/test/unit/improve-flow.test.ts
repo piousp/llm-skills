@@ -22,6 +22,7 @@ import { createProposer, type CompleteFn } from "../../src/proposer.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR } from "../../src/names.ts";
 import { stagingDir, stateDir } from "../../src/write-base.ts";
+import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -189,9 +190,9 @@ function successfulProposer(): ProposeFn {
       slug: LESSON_SLUG,
       title: LESSON_TITLE,
       date: "2026-11-02",
-      status: "proposed",
+      status: "accepted",
       sourceEvidence: input.evidence.map((item) => item.id),
-      gate: "pending",
+      gate: LESSON_GATE_ACCEPTED,
       body: LESSON_BODY,
     };
     const lesson = serializeLesson(draft);
@@ -435,9 +436,9 @@ function decisionInput(verdict: Eligibility): DecisionInput {
     slug: LESSON_SLUG,
     title: LESSON_TITLE,
     date: "2026-11-02",
-    status: "proposed",
+    status: "accepted",
     sourceEvidence: [EVIDENCE.id],
-    gate: "pending",
+    gate: LESSON_GATE_ACCEPTED,
     body: LESSON_BODY,
   };
   const lesson = serializeLesson(draft);
