@@ -89,25 +89,30 @@ export interface EvidenceItem {
 }
 
 // Q18: what a replayed turn has to stop doing, as data the gate executes instead of prose it would have
-// to parse. `class` names the failure and with it the check a replayed turn is judged by; `tool` is the
-// tool that check watches, present exactly when the class needs one -- a tool class without a tool name
-// cannot say what must stop failing, so such an item is not replayable (src/diagnosis.ts).
+// to parse. `class` names the failure and with it the check a replayed turn is judged by.
+//
+// One branch per family of the class table (src/diagnosis.ts, KIND_RULES), and the union is the relation between a class and
+// its payload: `tool` is required on exactly the two classes that watch a tool -- a tool class without a name cannot say what
+// must stop failing -- `checks` on the class whose truth is a text, and neither on the correction, where what must stop is the
+// user objecting. A record whose payload belongs to another class is therefore not an Expectation at all, and the reader that
+// has to accept one anyway -- a file on disk, which anybody may have edited -- judges it with expectationViolation.
+//
+// The non-emptiness of `checks` is not part of this: a non-empty list is a property of an array and not of a type, so it stays
+// with the two places that state it for a value (minItems: 1 in schemas/decision.schema.json, expectationViolation in
+// src/diagnosis.ts). A tuple here would state it and would break every expectation built by spreading the checks of a case.
 //
 // `version` is the version of the check and not of the record: a gate that meets a version it does not
 // implement refuses the item instead of guessing what the class meant one version ago. src/diagnosis.ts
 // derives the text a human reads from this descriptor (describeExpectation), so the prose never becomes
 // the contract again.
 //
-// `checks` is the condition of the class whose truth is a text and not a run: the predicates of a
-// quality_defect, which src/checks.ts executes and src/diagnosis.ts relates to the class. It travels with the
-// evidence and not with the class, because a defect whose predicate is not recorded is not replayable from the
-// record alone.
-export interface Expectation {
-  class: EvidenceKind;
-  version: 1;
-  tool?: string;
-  checks?: readonly CaseCheck[];
-}
+// `checks` is also the condition that travels with the evidence and not with the class: the predicates of a quality_defect,
+// which src/checks.ts executes. A defect whose predicate is not recorded is not replayable from the record alone, which is why
+// the branch requires the list and why the constructor that holds the bank is the one that fills it.
+export type Expectation =
+  | { class: "tool_error" | "retry_loop"; version: 1; tool: string }
+  | { class: "quality_defect"; version: 1; checks: readonly CaseCheck[] }
+  | { class: "user_correction"; version: 1 };
 
 // Q2, Q13: one replayable failing turn, re-run as-is in both arms.
 export interface ReplayItem {

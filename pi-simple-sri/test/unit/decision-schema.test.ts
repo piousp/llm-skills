@@ -16,7 +16,6 @@ import type {
   DecisionRecord,
   DecisionSkill,
   EvidenceItem,
-  Expectation,
   GateBlock,
   GateBudget,
   GateCaseBankResult,
@@ -322,12 +321,17 @@ function caseBankWith(status: GateStatus): GateBlock {
   }
 }
 
-// One node of the schema on disk, named by the keys that lead to it. A node that is not there is a failure
-// and never a silent pass, so a comparison below cannot agree with a node the file does not have.
+// One node of the schema on disk, named by the keys that lead to it: the name of a property, or the position of a branch when the
+// node above is a oneOf. A node that is not there is a failure and never a silent pass, so a comparison below cannot agree with a
+// node the file does not have.
 function schemaNode(...keys: string[]): Record<string, unknown> {
   let current: unknown = loadDecisionSchema();
   for (const key of keys) {
-    current = isPlainObject(current) ? current[key] : undefined;
+    if (Array.isArray(current)) {
+      current = current[Number(key)];
+    } else {
+      current = isPlainObject(current) ? current[key] : undefined;
+    }
   }
   if (!isPlainObject(current)) assert.fail(`the schema node ${keys.join(".")} is not an object`);
   return current;
@@ -788,34 +792,53 @@ test("decision.schema.json: an evidence item of the fourth class carries the ori
   assert.deepEqual(validateAgainstSchema({ ...VALID_RECORD, evidence: [{ ...item, kind: "quality_defect" }] }), []);
 });
 
-// The predicate of the class travels with the evidence and not with the class: an expectation of a defect carries the
-// checks its case bank declared.
-test("decision.schema.json: a quality_defect expectation validates with and without its checks", () => {
+// M2, S5: the expectation is one branch per family of class, and each branch requires the payload of its class and closes the
+// object to the fields of that payload. A payload carried by a class that does not own it is therefore refused, instead of being
+// read as the payload of another class. The expectation below is untyped on purpose: these are the shapes no constructor of
+// src/diagnosis.ts can build and any editor of decision.json can write, which is what the schema is read for.
+test("decision.schema.json: an expectation validates in exactly one branch, the one of its class", () => {
   const checks: readonly CaseCheck[] = [
     { kind: "contains", value: "--interactive" },
     { kind: "not-contains", value: "--squash-all" },
     { kind: "not-regex", pattern: "no (existe|soportado)", flags: "i" },
   ];
-  const recordWith = (expectation: Expectation): DecisionRecord => ({
+  const recordWith = (expectation: unknown): unknown => ({
     ...VALID_RECORD,
     diagnosis: {
       ...VALID_RECORD.diagnosis,
       replayItems: [{ prompt: "which flags does git rebase accept", cwd: "/work", expectation }],
     },
   });
+  const refusalsOf = (expectation: unknown): string[] => validateAgainstSchema(recordWith(expectation));
+  // The sentence the reader of the schema answers when no branch holds: the six shapes below are refused here, and the
+  // violations of each branch are reported after it.
+  const refusal = "decision.diagnosis.replayItems[0].expectation: 0 branches of the oneOf matched and exactly one has to";
 
-  assert.deepEqual(validateAgainstSchema(recordWith({ class: "quality_defect", version: 1, checks })), []);
-  // An expectation of the class without checks validates too: the keyword that would relate the two is a condition on
-  // `class`, and schema 1 stays additive. The relation has one owner in the code, and the two assertions below are the
-  // proof that it is closed there and not here.
-  assert.deepEqual(validateAgainstSchema(recordWith({ class: "quality_defect", version: 1 })), []);
+  // The two tool classes carry the name of the tool and nothing else.
+  assert.deepEqual(refusalsOf({ class: "tool_error", version: 1, tool: "bash" }), []);
+  assert.deepEqual(refusalsOf({ class: "retry_loop", version: 1, tool: "bash" }), []);
+  assert.equal(refusalsOf({ class: "tool_error", version: 1 }).includes(refusal), true);
 
+  // The defect carries its checks, and the one change the branch makes to what schema 1 accepted before is that the list is
+  // required: the keyword is no longer additive, because a defect without a condition is not what the class means.
+  assert.deepEqual(refusalsOf({ class: "quality_defect", version: 1, checks }), []);
+  assert.equal(refusalsOf({ class: "quality_defect", version: 1 }).includes(refusal), true);
+
+  // The payload of one class on the class of another: `tool` on the defect, `checks` on a tool class, and neither on the
+  // correction.
+  assert.equal(refusalsOf({ class: "quality_defect", version: 1, tool: "bash", checks }).includes(refusal), true);
+  assert.equal(refusalsOf({ class: "tool_error", version: 1, tool: "bash", checks }).includes(refusal), true);
+  assert.deepEqual(refusalsOf({ class: "user_correction", version: 1 }), []);
+
+  // The reader of the record states the same relations for a value no file was read through (src/diagnosis.ts,
+  // expectationViolation), which is the half the schema cannot state for a record a flow built in memory.
   assert.equal(expectationViolation({ class: "quality_defect", version: 1, checks }), undefined);
   assert.notEqual(expectationViolation({ class: "quality_defect", version: 1 }), undefined);
 });
 
 // One vocabulary of a check, two files: the array src/checks.ts exports and the enum of the schema. Both appearances of
-// the expectation carry it, and the comparison runs over both, for the same reason the statuses are compared above.
+// the expectation carry it -- inside the branch of the class whose condition is a text -- and the comparison runs over both,
+// for the same reason the statuses are compared above.
 test("decision.schema.json: the check kinds of the schema are the ones src/checks.ts declares", () => {
   const inDiagnosis = schemaNode(
     "properties",
@@ -825,6 +848,8 @@ test("decision.schema.json: the check kinds of the schema are the ones src/check
     "items",
     "properties",
     "expectation",
+    "oneOf",
+    "1",
     "properties",
     "checks",
     "items",
@@ -841,6 +866,8 @@ test("decision.schema.json: the check kinds of the schema are the ones src/check
     "items",
     "properties",
     "expectation",
+    "oneOf",
+    "1",
     "properties",
     "checks",
     "items",
@@ -946,7 +973,8 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
   {
     name: "an expectation class outside the enum",
     // The classes are the closed set the gate knows how to verify (Q18): a class outside it would be an
-    // expectation no checker can run, which is worse than no expectation at all.
+    // expectation no checker can run, which is worse than no expectation at all. Since M2 the class is the discriminator of
+    // the expectation, so the value matches no branch and every branch reports why.
     build: () => ({
       ...VALID_RECORD,
       diagnosis: {
@@ -958,7 +986,12 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
       },
     }),
     expected: [
-      'decision.diagnosis.replayItems[0].expectation.class: expected one of "tool_error", "retry_loop", "user_correction", "quality_defect", got "latency"',
+      "decision.diagnosis.replayItems[0].expectation: 0 branches of the oneOf matched and exactly one has to",
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0): the required property "tool" is missing',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0).class: expected one of "tool_error", "retry_loop", got "latency"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 1): the required property "checks" is missing',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 1).class: expected the constant "quality_defect", got "latency"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 2).class: expected the constant "user_correction", got "latency"',
     ],
   },
   {
@@ -999,7 +1032,8 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
   {
     name: "a check whose kind is outside the vocabulary",
     // The four kinds are the whole predicate the gate can execute (M1c): a fifth name here would be a check nobody can
-    // run, which is worse than a case with no check at all.
+    // run, which is worse than a case with no check at all. The defect branch is the one that carries the list, and it is the
+    // branch that reports the kind.
     build: () => ({
       ...VALID_RECORD,
       diagnosis: {
@@ -1011,13 +1045,20 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
       },
     }),
     expected: [
-      'decision.diagnosis.replayItems[0].expectation.checks[0].kind: expected one of "contains", "not-contains", "regex", "not-regex", got "equals"',
+      "decision.diagnosis.replayItems[0].expectation: 0 branches of the oneOf matched and exactly one has to",
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0): the required property "tool" is missing',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0).class: expected one of "tool_error", "retry_loop", got "quality_defect"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0): the property "checks" is not declared by the schema (additionalProperties: false)',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 1).checks[0].kind: expected one of "contains", "not-contains", "regex", "not-regex", got "equals"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 2).class: expected the constant "user_correction", got "quality_defect"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 2): the property "checks" is not declared by the schema (additionalProperties: false)',
     ],
   },
   {
     name: "an empty list of checks",
     // A defect with no check is a defect with no condition: minItems is the only part of the rule the schema can state,
-    // because which field a check needs depends on its kind and that relation is src/checks.ts's.
+    // because which field a check needs depends on its kind and that relation is src/checks.ts's. Since M2 the list is
+    // required by the branch, so the empty one is refused here and a missing one by the required keyword above.
     build: () => ({
       ...VALID_RECORD,
       diagnosis: {
@@ -1028,7 +1069,15 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
         })),
       },
     }),
-    expected: ["decision.diagnosis.replayItems[0].expectation.checks: the array has 0 items, fewer than 1"],
+    expected: [
+      "decision.diagnosis.replayItems[0].expectation: 0 branches of the oneOf matched and exactly one has to",
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0): the required property "tool" is missing',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0).class: expected one of "tool_error", "retry_loop", got "quality_defect"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 0): the property "checks" is not declared by the schema (additionalProperties: false)',
+      "decision.diagnosis.replayItems[0].expectation (oneOf branch 1).checks: the array has 0 items, fewer than 1",
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 2).class: expected the constant "user_correction", got "quality_defect"',
+      'decision.diagnosis.replayItems[0].expectation (oneOf branch 2): the property "checks" is not declared by the schema (additionalProperties: false)',
+    ],
   },
   {
     name: "a replay result with a negative number of regressions",

@@ -9,6 +9,7 @@ import type { Api, AssistantMessage, Context, Model, ToolCall, Usage } from "@ea
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CASE_BANK_FORMAT } from "../../src/case-bank.ts";
 import { ProposerError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
+import { planDesign, planGate } from "../../src/gate/scorer.ts";
 import {
   buildDecision,
   proposeSkill,
@@ -169,6 +170,69 @@ function failingBranch(): SessionEntry[] {
       },
     },
   ];
+}
+
+// S6: the commands of a branch where the session ran the same task twice and then another one. The identity the equivalence
+// reads is the digest of the arguments, which is what the transcript records, so a repeated command is one task failed twice.
+const REPEATED_COMMAND = "pdftotext report.pdf -";
+const OTHER_COMMAND = "pdftotext appendix.pdf -";
+
+// The same shape as the branch above with one bash call and its error per command, in order: a branch built from a repeated
+// command carries two failures of one task, and one built from distinct commands carries two tasks. Two identical calls stay
+// under the retry threshold, so the failures of this fixture are tool errors and not a retry loop.
+function repeatedFailureBranch(commands: readonly string[]): SessionEntry[] {
+  const instant = (seconds: number): string => new Date(BASE_MS + seconds * 1000).toISOString();
+  const entries: SessionEntry[] = [
+    {
+      type: "message",
+      id: "entry-0",
+      parentId: null,
+      timestamp: instant(0),
+      message: {
+        role: "user",
+        content: "extract the merged-cell table from report.pdf",
+        timestamp: BASE_MS,
+      },
+    },
+  ];
+
+  commands.forEach((command, index) => {
+    const callId = `call-${index + 1}`;
+    const reply: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: callId, name: "bash", arguments: { command } }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      usage: USAGE,
+      stopReason: "toolUse",
+      timestamp: BASE_MS + (2 * index + 1) * 1000,
+    };
+
+    entries.push({
+      type: "message",
+      id: `entry-${2 * index + 1}`,
+      parentId: `entry-${2 * index}`,
+      timestamp: instant(2 * index + 1),
+      message: reply,
+    });
+    entries.push({
+      type: "message",
+      id: `entry-${2 * index + 2}`,
+      parentId: `entry-${2 * index + 1}`,
+      timestamp: instant(2 * index + 2),
+      message: {
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "bash",
+        content: [{ type: "text", text: "pdftotext: cannot open report.pdf" }],
+        isError: true,
+        timestamp: BASE_MS + (2 * index + 2) * 1000,
+      },
+    });
+  });
+
+  return entries;
 }
 
 function flowContext(branch: readonly SessionEntry[], model?: Model<Api>): ImproveFlowContext {
@@ -427,6 +491,66 @@ test("proposeSkill: the happy path keeps the candidate and joins the index", asy
     stagingPath: result.staged.stagingPath,
     decisionPath: result.staged.decisionPath,
   });
+});
+
+// S6, OA8: the plan of the gate is computed over the items the diagnosis carries, and two identical failures are one of them.
+// One item is under the floor of the paired design, so the gate abstains with `insufficient-items` and the record stays
+// `not-run`: the design over the item that survived is four runs, where the two items the transcript gave would have promised
+// eight, and the honest answer to a single item is that a run has nothing to be compared against.
+test("proposeSkill: two identical failures are one item, which the floor of the design refuses", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(repeatedFailureBranch([REPEATED_COMMAND, REPEATED_COMMAND])),
+    flowDeps(fixture),
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  // One task failed twice: the transcript gives two items and the diagnosis plans one.
+  assert.equal(result.evidence.length, 2);
+  assert.equal(result.diagnosis.replayItems.length, 1);
+
+  // The arithmetic the dedupe buys, over the count that survived and over the count of the transcript: four runs and not
+  // the eight the two items of the same command would have cost.
+  assert.equal(planDesign(result.diagnosis.replayItems.length, "replay").design.plannedRuns, 4);
+  assert.equal(planDesign(result.evidence.length, "replay").design.plannedRuns, 8);
+
+  // The floor refuses the pair before anything is preregistered.
+  assert.deepEqual(planGate(result.diagnosis.replayItems.map((item) => ({ item }))), {
+    abstain: "insufficient-items",
+    excluded: [],
+  });
+
+  // And the record the run wrote says the same: no gate ran, so the budget it promised is zero.
+  const record: DecisionRecord = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
+  assert.equal(record.gate.status, "not-run");
+  assert.deepEqual(record.gate.budget, { plannedRuns: 0, usedRuns: 0, interruptedAt: null });
+});
+
+// The other side of the same rule: a session that fails one task twice and another one once plans the two tasks. The design is
+// computed over the items that survived -- eight runs, and not the twelve the three failures of the transcript would promise.
+test("proposeSkill: the design of the run is computed over the deduplicated items", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(repeatedFailureBranch([REPEATED_COMMAND, REPEATED_COMMAND, OTHER_COMMAND])),
+    flowDeps(fixture),
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  assert.equal(result.evidence.length, 3);
+  assert.equal(result.diagnosis.replayItems.length, 2);
+
+  const plan = planGate(result.diagnosis.replayItems.map((item) => ({ item })));
+  if ("abstain" in plan) assert.fail(`two items spend a design, and the plan abstained with ${plan.abstain}`);
+  assert.deepEqual(plan.design, { reps: 2, items: 2, plannedRuns: 8, arms: ["incumbent", "candidate"] });
+  assert.equal(planDesign(result.evidence.length, "replay").design.plannedRuns, 12);
 });
 
 // The input of one record, built the way proposeSkill builds it: the draft serialized by the module that
@@ -1034,13 +1158,16 @@ test("proposeSkill: a defect enters as evidence that keeps its artifact and repl
   });
   assert.equal(result.entry.evidenceCount, 1);
 
-  // One item per case, and the predicate of each is the one its case declares.
+  // One item per case, and the predicate of each is the one its case declares. The list is read through the branch of the class:
+  // since M2 the union states which class carries `checks`.
   assert.deepEqual(
     record.diagnosis.replayItems.map((item) => item.prompt),
     ["rebase the branch onto main", "rebase the branch onto main keeping both commits"],
   );
   assert.deepEqual(
-    record.diagnosis.replayItems.map((item) => item.expectation.checks),
+    record.diagnosis.replayItems.map((item) =>
+      item.expectation.class === "quality_defect" ? item.expectation.checks : null,
+    ),
     [
       [{ kind: "not-contains", value: "--squash-all" }],
       [{ kind: "contains", value: "--interactive" }],

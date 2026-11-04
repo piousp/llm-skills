@@ -565,7 +565,9 @@ test("caseBankReason: every kind of refusal has its own prefix", () => {
 function schemaNode(schema: unknown, ...keys: string[]): Record<string, unknown> {
   let current: unknown = schema;
   for (const key of keys) {
-    current = isPlainObject(current) ? current[key] : undefined;
+    // Arrays are names too: a node under `oneOf` is reached by its position, because the branches of a union have
+    // no name of their own (M2, S5).
+    current = Array.isArray(current) ? current[Number(key)] : isPlainObject(current) ? current[key] : undefined;
   }
   if (!isPlainObject(current)) assert.fail(`the schema node ${keys.join(".")} is not an object`);
   return current;
@@ -595,6 +597,8 @@ test("case-bank.schema.json: the check of the bank is the check of decision@1", 
     "items",
     "properties",
     "expectation",
+    "oneOf",
+    "1",
     "properties",
     "checks",
     "items",

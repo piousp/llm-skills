@@ -114,6 +114,33 @@ quantiles.
 - The mechanics of a gate are a necessary condition and never a sufficient one. When a bank declares a
   rubric the judge is the second condition, it is asked only after the rule accepted, and an answer of
   the judge that nobody can read abstains the gate instead of accepting it.
+- A lesson state that no writer produces is still part of the contract. `retired` is a member of
+  `LESSON_STATUSES` (`src/types.ts:150`) and nothing in this version writes it: its writer is the retirement
+  by merit of M3 (`tmp/goal.md:88`). It is not deleted, because the closed set of states is what that
+  milestone needs, and a state removed from it is a validator that refuses the lesson the next version
+  writes.
+- A lesson accepted before M2 keeps the frontmatter it was written with -- `status: "proposed"` and
+  `gate: "pending"` -- and is not migrated: rewriting it would edit a skill with no gate in front of it,
+  which is the one thing this package does not do. The validator accepts it exactly as it accepts a lesson of
+  today (`src/lesson-frontmatter.ts:7-8`, status at `:166-168`, gate at `:179-181`), and `accepted@<ts>` stays
+  a valid gate value for a file already on disk (`src/types.ts:167-170`).
+- The floor of a paired design is two items, and equivalent failures are one. `MIN_ITEMS = 2`
+  (`src/gate/scorer.ts:56`) abstains with `insufficient-items` when the plan is short -- `:89` for the replay
+  base, `:179` for a bank -- and the item count that reaches it is already deduplicated:
+  `equivalentFailureKey` (`src/diagnosis.ts:343-348`) keys a failure by its class, by the tool or the digest
+  of the checks it watches, and by its arguments, or by its prompt when the arguments were not recorded. The
+  two constructors that build items apply it (`selectReplayable`, `:318`, and `buildDefectDiagnosis`, `:236`),
+  and the effect has to be expected instead of discovered: two identical `bash` orders are one task, so they
+  leave one item, one item is under the floor, and the attempt abstains with `insufficient-items` instead of
+  comparing a run against itself (`:226-230` states it where the dedupe happens).
+- The label `(M2)` names two different milestones, and no label is renamed. In `src/lesson-frontmatter.ts`
+  (`:7`, `:31`, `:50`, `:79`, `:143`) and in `src/types.ts` (`:147`, `:153`) it names M2 as the milestone of
+  the **frontmatter format of a lesson**; in `extensions/index.ts:108` and `src/command-skill-improve.ts`
+  (`:123`, `:134`) it names M2 as the milestone of **this reload**. The labels that carry a slice next to the
+  milestone -- `(M2, S5)` and `(M2, S7)` in `src/diagnosis.ts:451`, `src/checks.ts:51`, `src/gate/flow.ts:112`,
+  `:145`, `:982` and `src/gate/expectation.ts:36`, `:108`, `:146`, `:173` -- name the milestone whose slice
+  changed the code beside them. A rename would touch a dozen comments and change no line of behaviour; what
+  the next reader needs is to know that the words point at different things, and that is this bullet.
 
 ## Order of an acceptance
 
@@ -159,6 +186,31 @@ with a reachable lesson and no `accepted` line in the index. The record keeps `g
 that is what the gate decided, and the failure reaches the user as the error that stopped the acceptance,
 with the paths in it and nowhere else: what a reader has to compare is the index line against the
 snapshot.
+
+### The two hashes of a lesson
+
+`lessonHashes` (`src/writer.ts:88-105`) computes the pair from the one input that defines a candidate, the
+lesson text as it will be written. `contentHash` covers the whole file; `bodyHash` covers the body after
+`normalizeBody` (`src/writer.ts:668-672`), which trims it and collapses every run of whitespace into one
+space. **A change of frontmatter therefore leaves `bodyHash` identical and moves `contentHash`**, and two
+lessons with the same body under different dates share the body hash. The `accepted` line of the index
+carries both (`src/types.ts:648`, the pair at `:651-652`), and `bodyHash` is the join between the index and
+the disk: the acceptance writes `candidateHash` with the hash step 3 verified against the bytes it published
+(`src/gate/acceptance.ts:207-219`), so that line names the file the skill now holds.
+
+**What is measured is what lands.** The candidate is serialized with the frontmatter it will have inside the
+skill, `status: "accepted"` and `gate: "accepted"` (`src/proposer.ts:191-199`), so the candidate arm of the
+gate, the `contentHash` of the record and the published file are the same text, and nothing composes it a
+second time. The consequence is accepted and it is worth naming: a candidate the gate **rejects** stays in
+`staging/` under a frontmatter that says `accepted`. The verdict of an attempt lives in `outcome.status` and
+in the index, never in the frontmatter of a lesson, and `staging/` is not inside any skill.
+
+**And nobody reads that frontmatter as a verdict.** The verification at retrieval of M3 -- over skills that
+are already accepted -- reads `decision.json` and `state/attempts.jsonl`, never `lesson.status` nor
+`lesson.gate`. No module of `src/` reads the two fields to decide anything today: `src/lesson-frontmatter.ts`
+serializes them (`:101`, `:103`, `:131`, `:133`) and validates them (`:166-168`, `:179-181`), and that is all.
+The risk is the module of M3, which does not exist yet, so the limit is written here as a permanent
+constraint and not as a note about this version.
 
 ### The reload of the session
 
@@ -346,26 +398,44 @@ refuses a bank of another version instead of reading it as this one with fields 
 - **The reader resolves nothing.** `origin.path` travels as it was written; the branch that reads a defect
   resolves it against the working directory of the invocation, hashes the bytes and records the resolved
   path, and the gate re-reads that path before it spends (`origin-moved`).
+- **The adapter of an eval set is not in the package, and the reason is measured.** A reader of
+  `evals/prompt_set.json` was the contingent slice of M2, gated on at least three of the author's files
+  sharing one of two shapes: `{cases: [{prompt}]}` or `[string]`. Neither shape occurs. Of the eight files of
+  `/home/pablo/LLMs/skills/*/evals/` and `~/.pi/agent/evals/`, the seven that parse are an array of objects
+  carrying `id`, `prompt` and `expected_checks` -- plus `should_trigger` in most, and `seed` and `ctx` in two
+  -- and `pablo-code-philosophy` is not valid JSON at all (`Invalid \escape`, line 45). And the field that
+  would carry the predicates is not one: `expected_checks` names the checks of the author's own harness --
+  Python functions of a registry (`~/.pi/agent/evals/check_registry.py:275`), parameterized names such as
+  `mentions_keywords:yagni|kiss`, and in some sets a rubric a judge applies -- and not the `CaseCheck`
+  predicates a bank carries. A bank built by reading `prompt` alone would hold cases with no `checks`, and
+  `buildDefectDiagnosis` drops every case without a predicate (`src/diagnosis.ts:233`), so the gate would
+  abstain with `insufficient-items` every time: it would be a bank that costs a proposal and measures nothing.
 
 The reader hands back the bytes it parsed next to the data (`LoadedCaseBank`), because a preregistration that
 re-read the path could pin a file the runs were not about. One read, one parse, one digest.
 
 ### The expectation and its class
 
-- Two relations between an expectation and its class are not in the schema, because it ties no property to
-  another: `tool` is present exactly on the two tool classes, and `checks` is present and non-empty exactly
-  on `quality_defect`. `expectationViolation` (`src/diagnosis.ts`) owns both, and
-  `test/unit/diagnosis.test.ts` walks the whole product of class, tool and checks instead of a sample of it.
+- The relation between an expectation and its class is stated three times, and the three say the same
+  thing: `Expectation` is a union in `src/types.ts:112-115`, one branch per family of `KIND_RULES` -- `tool`
+  required on exactly the two tool classes, `checks` on the defect, neither on the correction --; the schema
+  declares the field with `oneOf` and a `required` closed per branch (`schemas/decision.schema.json:93-95`
+  and `:324-325`); and `expectationViolation` (`src/diagnosis.ts:484`) is the reading of the JSON the gate has
+  just parsed. `test/unit/diagnosis.test.ts` walks the whole product of class, tool and checks instead of a
+  sample of it.
 - Every writer satisfies it: `expectationFor` answers `{class, version}` for a class that needs no tool and
   adds `tool` only to the two that do, and the checks of a defect arrive with the bank, in
   `buildDefectDiagnosis`.
-- Two functions stay total over shapes this package does not write, and that is deliberate:
-  `describeExpectation` answers a sentence for any expectation, because a record read from disk has to be
-  describable whether or not it is well formed, and `isIntrinsicFailure` reads a `tool` that a correction does
-  not have. A test that builds a `user_correction` with a `tool` is therefore exercising that totality and not
-  a shape written by this version: the invariant is the rule, the sentence is derivable for a malformed record
-  too, and the schema declares `tool` and `checks` as optional keys of any class, so the invariant is not a
-  validation a foreign record has to pass either. It is what the writers obey.
+- The guard is not machinery for a shape this package never sees. `resolveStagedCandidate` reads the record
+  through `readStagedDecision` (`src/gate/flow.ts:954`), whose fifth guard (`:982`) judges the expectation of
+  every item it found with `expectationViolation` (`:1014`) before the gate plans a run over it, and refuses
+  the record with the reason instead of measuring it. A file on disk is not written by the union, and the
+  reader is what stands between the two.
+- `describeExpectation` (`src/diagnosis.ts:455`) answers one sentence per branch of the union and reads no
+  fallback: the branch is the whole input, so a tool class always carries the name the sentence prints and a
+  correction never carries one. A record whose payload belongs to another class never reaches it, because the
+  guard refuses it first -- which is what made the fallbacks of that function unnecessary instead of merely
+  unreachable.
 - The guard of an empty diagnosis follows the same split: `buildDiagnosis` still refuses a diagnosis with no
   replay item and the schema no longer does, because how many items are right is a property of the basis and
   each constructor owns its own answer.

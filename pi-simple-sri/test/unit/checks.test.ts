@@ -227,6 +227,73 @@ test("validateCheck: the 500 character limit is enforced and counted in code poi
   assert.match(overLimit.error, /^"value" of a "contains" check must be a string of 1 to 500 characters, got "a{10}/);
 });
 
+// M2, S7: a pattern of a bank cannot hang the process that replays it. The shape the validator refuses is a group
+// whose body already repeats something with an unbounded repetition applied to it, which is what makes the
+// backtracking engine try every split of the same text before it answers.
+const NESTED_QUANTIFIERS: readonly string[] = ["(a+)+$", "(a*)*$", "(a+)*$", "(a*)+$", "(?:a+)+$", "(a{2,})+$"];
+
+for (const pattern of NESTED_QUANTIFIERS) {
+  test(`validateCheck: refuses the nested quantifier of ${pattern}`, () => {
+    assert.deepEqual(validateCheck({ kind: "regex", pattern }), {
+      ok: false,
+      error: `the pattern "${pattern}" nests a quantifier: a quantified group followed by another quantifier makes the engine backtrack exponentially`,
+    });
+  });
+}
+
+// The rule is read once, on the pattern, so it cannot hold for one direction of the regex kinds and not for the other.
+test("validateCheck: the nested quantifier is refused for both regex kinds", () => {
+  const accepted = validateCheck({ kind: "not-regex", pattern: "(a+)+$" });
+  assert.equal(accepted.ok, false);
+  if (accepted.ok) return;
+  assert.match(accepted.error, /nests a quantifier/);
+});
+
+// The other direction, and the reason the rule is one shape and not any parenthesis: a quantified group with no
+// repetition in its body, a repetition over a character class, a bounded repetition, and the two escaped spellings
+// that are text and not syntax all keep validating.
+const VALID_QUANTIFIERS: readonly { pattern: string; flags?: "" | "i" }[] = [
+  { pattern: "^SRI-OK$", flags: "i" },
+  { pattern: "(foo|bar)+" },
+  { pattern: "a+b*" },
+  { pattern: "(?:\\d{2,4})-" },
+  { pattern: "[a-z]+-[a-z]+" },
+  { pattern: "\\(a+\\)\\+" },
+  { pattern: "[(+)]+" },
+];
+
+for (const row of VALID_QUANTIFIERS) {
+  const check: CaseCheck = { kind: "regex", ...row };
+
+  test(`validateCheck: accepts the pattern ${row.pattern}`, () => {
+    assert.deepEqual(validateCheck(check), { ok: true, value: check });
+  });
+}
+
+// The cap of MAX_CHECK_TEXT covers `pattern` as it covers `value`, and it is the first half of the bound: a pattern
+// over the cap is refused before the shape of the expression is read at all.
+test("validateCheck: a pattern over the 500 character limit is refused with the length reason", () => {
+  assert.equal(validateCheck({ kind: "regex", pattern: "a".repeat(500) }).ok, true);
+
+  const overLimit = validateCheck({ kind: "regex", pattern: "a".repeat(600) });
+  assert.equal(overLimit.ok, false);
+  if (overLimit.ok) return;
+  assert.match(overLimit.error, /^"pattern" of a "regex" check must be a string of 1 to 500 characters, got "a{10}/);
+});
+
+// The two substring kinds carry no pattern, so a value that spells the refused shape is an ordinary needle: the rule
+// is read on the field of the regex kinds and nowhere else.
+test("validateCheck: the quantifier shape is not read for the two substring kinds", () => {
+  assert.deepEqual(validateCheck({ kind: "contains", value: "(a+)+$" }), {
+    ok: true,
+    value: { kind: "contains", value: "(a+)+$" },
+  });
+  assert.deepEqual(validateCheck({ kind: "not-contains", value: "(a*)*$" }), {
+    ok: true,
+    value: { kind: "not-contains", value: "(a*)*$" },
+  });
+});
+
 // A regex that does not compile is refused when the check is validated, never when an answer is judged. The second
 // half of the test is the other direction of the same rule: every check the validator accepts is a check evaluation
 // can run, so a pattern that reaches a CaseCheck is a pattern that compiles.

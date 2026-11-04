@@ -92,30 +92,52 @@
               "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
               "expectation": {
                 "description": "What the replayed turn has to stop doing, as data the gate executes. version is the version of the check and not of the record: a checker that reads a version it does not implement refuses it instead of guessing.",
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["class", "version"],
-                "properties": {
-                  "class": { "enum": ["tool_error", "retry_loop", "user_correction", "quality_defect"] },
-                  "version": { "const": 1 },
-                  "tool": { "type": "string", "minLength": 1 },
-                  "checks": {
-                    "description": "The mechanical predicates of a quality_defect: every check has to pass on the final answer of the replayed turn. Which of value and pattern a check needs follows from its kind, and JSON Schema ties no property to another, so src/checks.ts validates that pair and is the one place a check is executed.",
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["kind"],
-                      "properties": {
-                        "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
-                        "value": { "type": "string", "minLength": 1, "maxLength": 500 },
-                        "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
-                        "flags": { "enum": ["", "i"] }
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["class", "version", "tool"],
+                    "properties": {
+                      "class": { "enum": ["tool_error", "retry_loop"] },
+                      "version": { "const": 1 },
+                      "tool": { "type": "string", "minLength": 1 }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["class", "version", "checks"],
+                    "properties": {
+                      "class": { "const": "quality_defect" },
+                      "version": { "const": 1 },
+                      "checks": {
+                        "description": "The mechanical predicates of a quality_defect: every check has to pass on the final answer of the replayed turn. Which of value and pattern a check needs follows from its kind, and JSON Schema ties no property to another, so src/checks.ts validates that pair and is the one place a check is executed.",
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": ["kind"],
+                          "properties": {
+                            "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                            "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                            "flags": { "enum": ["", "i"] }
+                          }
+                        }
                       }
                     }
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["class", "version"],
+                    "properties": {
+                      "class": { "const": "user_correction" },
+                      "version": { "const": 1 }
+                    }
                   }
-                }
+                ]
               }
             }
           }
@@ -300,29 +322,51 @@
                   "failureSignature": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
                   "model": { "type": "string", "minLength": 1 },
                   "expectation": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["class", "version"],
-                    "properties": {
-                      "class": { "enum": ["tool_error", "retry_loop", "user_correction", "quality_defect"] },
-                      "version": { "const": 1 },
-                      "tool": { "type": "string", "minLength": 1 },
-                      "checks": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                          "type": "object",
-                          "additionalProperties": false,
-                          "required": ["kind"],
-                          "properties": {
-                            "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
-                            "value": { "type": "string", "minLength": 1, "maxLength": 500 },
-                            "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
-                            "flags": { "enum": ["", "i"] }
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["class", "version", "tool"],
+                        "properties": {
+                          "class": { "enum": ["tool_error", "retry_loop"] },
+                          "version": { "const": 1 },
+                          "tool": { "type": "string", "minLength": 1 }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["class", "version", "checks"],
+                        "properties": {
+                          "class": { "const": "quality_defect" },
+                          "version": { "const": 1 },
+                          "checks": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": ["kind"],
+                              "properties": {
+                                "kind": { "enum": ["contains", "not-contains", "regex", "not-regex"] },
+                                "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+                                "pattern": { "type": "string", "minLength": 1, "maxLength": 500 },
+                                "flags": { "enum": ["", "i"] }
+                              }
+                            }
                           }
                         }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["class", "version"],
+                        "properties": {
+                          "class": { "const": "user_correction" },
+                          "version": { "const": 1 }
+                        }
                       }
-                    }
+                    ]
                   },
                   "reps": {
                     "type": "array",

@@ -5,8 +5,8 @@ import { isPlainObject } from "../../src/values.ts";
 
 // The reader the suites share: no JSON Schema validator is a dependency (ajv is not installed), so the
 // constraints of the schemas of the package are checked here, by hand, over the keywords they use -- type, const,
-// enum, pattern, format date-time, minLength, maxLength, minimum, minItems, maxItems, required, properties, items
-// and additionalProperties: false.
+// enum, oneOf, pattern, format date-time, minLength, maxLength, minimum, minItems, maxItems, required, properties,
+// items and additionalProperties: false.
 //
 // It lives in its own module because several suites validate the documents they produce (the flow of the gate, the
 // acceptance and the case bank), and copies of a validator can disagree. It is not a *.test.ts, so the runner does
@@ -56,8 +56,14 @@ export function validateAgainstBankSchema(document: unknown): string[] {
 }
 
 function violationsAgainst(schema: unknown, document: unknown, at: string): string[] {
+  return violationsOf(document, schema, at);
+}
+
+// The violations one node of a schema reports about one value. It is the unit both the whole validation and one branch of a
+// oneOf are read with, so a branch is judged by the same keywords as the rest of the file.
+function violationsOf(value: unknown, schemaNode: unknown, at: string): string[] {
   const violations: string[] = [];
-  collectViolations(document, schema, at, violations);
+  collectViolations(value, schemaNode, at, violations);
   return violations;
 }
 
@@ -73,7 +79,33 @@ function collectViolations(value: unknown, schemaNode: unknown, at: string, viol
   checkString(value, schemaNode, at, violations);
   checkNumber(value, schemaNode, at, violations);
   checkArray(value, schemaNode, at, violations);
+  checkOneOf(value, schemaNode, at, violations);
   checkObject(value, schemaNode, at, violations);
+}
+
+// oneOf, added with the expectation of schemas/decision.schema.json: the rule is the one JSON Schema states -- exactly one branch
+// has to hold -- so zero and two are both failures, and a value that carries the payload of another branch is refused instead of
+// being read as the branch closest to it.
+//
+// The violations of every branch are reported along with the count, prefixed by the position of the branch they came from: a
+// message that only said how many branches matched would hide which keyword refused the value, and the negative cases of
+// decision-schema.test.ts are one injected fault per case because of that detail.
+function checkOneOf(value: unknown, schemaNode: Record<string, unknown>, at: string, violations: string[]): void {
+  const declared = schemaNode.oneOf;
+  if (!Array.isArray(declared)) {
+    return;
+  }
+
+  const branches: readonly unknown[] = declared;
+  const matching = branches.filter((branch) => violationsOf(value, branch, at).length === 0);
+  if (matching.length === 1) {
+    return;
+  }
+
+  violations.push(`${at}: ${matching.length} branches of the oneOf matched and exactly one has to`);
+  branches.forEach((branch, index) => {
+    violations.push(...violationsOf(value, branch, `${at} (oneOf branch ${index})`));
+  });
 }
 
 function checkType(value: unknown, declared: unknown, at: string, violations: string[]): void {

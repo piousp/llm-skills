@@ -612,6 +612,67 @@ test("resolveStagedCandidate: a record of another schema is refused and left unt
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
 });
 
+// M2, S5: the relation between the class of an expectation and its payload is one a file can break and a type cannot state for
+// a file. The reader refuses the record, with the item and the reason in the detail, instead of planning a replay over a condition
+// it cannot read.
+test("resolveStagedCandidate: a record with an incoherent expectation is refused", async (t) => {
+  const fixture = createFixture(t);
+  // A tool class carrying the checks of a defect: the payload of one branch on the class of another, which is a shape no
+  // constructor of src/diagnosis.ts can build and any editor of decision.json can write.
+  const record = decisionRecord();
+  const [item] = record.diagnosis.replayItems;
+  const incoherent = {
+    ...record,
+    diagnosis: {
+      ...record.diagnosis,
+      replayItems: [{ ...item, expectation: { class: "tool_error", version: 1, tool: TOOL, checks: DEFECT_CHECKS } }],
+    },
+  };
+  fs.writeFileSync(fixture.decisionPath, `${JSON.stringify(incoherent, null, 2)}\n`, "utf8");
+
+  const rejection = rejectionOf(await resolveStagedCandidate(fixture.base, SKILL_NAME, fixture.candidateDir));
+
+  assert.equal(rejection.reason, "unreadable-record");
+  // The position and the failure signature of the item are the coordinate, and the reason is the one the guard answers with.
+  assert.equal(
+    rejection.detail.includes(`diagnosis.replayItems[0] (${sha256Digest(EVIDENCE[0].id)})`),
+    true,
+    rejection.detail,
+  );
+  assert.equal(rejection.detail.includes('a "tool_error" expectation carries no checks, got 1'), true, rejection.detail);
+});
+
+// The same guard over the other place an expectation travels: the items of a gate that already concluded, which a reader re-reads.
+// The block below is building blocks only -- the items are what this test is about -- because what resolveStagedCandidate reads is
+// the record and not the state of the gate it describes.
+test("resolveStagedCandidate: a concluded gate whose expectation is incoherent is refused", async (t) => {
+  const fixture = createFixture(t);
+  const record = decisionRecord();
+  const incoherent = {
+    ...record,
+    gate: {
+      ...record.gate,
+      replay: {
+        items: [
+          {
+            index: 0,
+            failureSignature: sha256Digest(EVIDENCE[0].id),
+            expectation: { class: "user_correction", version: 1, tool: TOOL },
+            reps: [],
+          },
+        ],
+      },
+    },
+  };
+  fs.writeFileSync(fixture.decisionPath, `${JSON.stringify(incoherent, null, 2)}\n`, "utf8");
+
+  const rejection = rejectionOf(await resolveStagedCandidate(fixture.base, SKILL_NAME, fixture.candidateDir));
+
+  assert.equal(rejection.reason, "unreadable-record");
+  assert.equal(rejection.detail.includes(`gate.replay.items[0] (${sha256Digest(EVIDENCE[0].id)})`), true, rejection.detail);
+  assert.equal(rejection.detail.includes('a "user_correction" expectation names no tool, got "bash"'), true, rejection.detail);
+});
+
 // ---------------------------------------------------------------------------------------------
 // The gate over the candidate
 // ---------------------------------------------------------------------------------------------
@@ -1154,8 +1215,10 @@ test("gateStagedCandidate: a record of the defect branch is gated by the same bu
     gate.replay.items.map((item) => item.expectation.class),
     ["quality_defect", "quality_defect"],
   );
+  // The list is read through the branch of the class: since M2 the union states which class carries `checks`, and the assertion
+  // above is what proves every item is of that class.
   assert.deepEqual(
-    gate.replay.items.map((item) => item.expectation.checks),
+    gate.replay.items.map((item) => (item.expectation.class === "quality_defect" ? item.expectation.checks : null)),
     [DEFECT_CHECKS, DEFECT_CHECKS],
   );
   // The exclusion by intrinsic failure needs the name of a tool and this class has none: nothing of the diagnosis was dropped.

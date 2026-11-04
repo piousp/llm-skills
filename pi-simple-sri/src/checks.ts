@@ -47,6 +47,14 @@ export interface ChecksResult {
 // The limit of the longest text a check may look for, the same 500 that schemas/decision.schema.json declares as
 // maxLength for `value` and for `pattern`: a limit the validator did not enforce would be a promise the schema
 // makes and the records of this package break.
+//
+// It is also the first half of the bound that keeps a pattern of a bank from hanging the process (M2, S7), and both
+// halves live in validation for the same reason: validation is the one moment the package can refuse a pattern
+// before a gate spends a replay on it. Evaluation is not the place for the bound -- evaluateChecks runs a pattern
+// this validator already accepted, over an answer that is already cut (MAX_FINAL_TEXT_CODE_POINTS,
+// src/gate/replay-runner.ts). The second half is nestedQuantifierProblem below, and neither half makes the engine
+// safe: a hostile pattern that passes both still reaches it, so what this file promises is which shapes it refuses
+// to carry, not that any pattern left in a bank runs in bounded time.
 const MAX_CHECK_TEXT = 500;
 
 // The fields each kind reads. It is the whole shape of a check: an unknown key is refused instead of dropped,
@@ -131,6 +139,11 @@ export function validateCheck(raw: unknown): Result<CaseCheck, string> {
       const pattern = raw.pattern;
       if (!isCheckText(pattern)) return { ok: false, error: textProblem(kind, "pattern", pattern) };
 
+      // The second half of the bound of MAX_CHECK_TEXT, and the same answer: the shape of the expression is refused
+      // here, so a bank cannot carry a pattern that a replay would never finish.
+      const nested = nestedQuantifierProblem(pattern);
+      if (nested !== undefined) return { ok: false, error: nested };
+
       const declaredFlags = raw.flags;
       if (declaredFlags !== undefined && declaredFlags !== "" && declaredFlags !== "i") {
         return {
@@ -174,4 +187,94 @@ function isCheckText(value: unknown): value is string {
 
 function textProblem(kind: CaseCheckKind, field: "value" | "pattern", value: unknown): string {
   return `${quote(field)} of a ${quote(kind)} check must be a string of 1 to ${MAX_CHECK_TEXT} characters, got ${describe(value)}`;
+}
+
+// A repetition starting at `at`: how long it is, and whether its count is unbounded. `?` is not one of them -- it
+// makes the atom before it optional, which is a bound of one and not a repeat -- and a `{...}` that does not hold a
+// count is the literal brace the engine reads as text.
+interface Repetition {
+  readonly length: number;
+  readonly unbounded: boolean;
+}
+
+function repetitionAt(pattern: string, at: number): Repetition | undefined {
+  const char = pattern[at];
+  if (char === "+" || char === "*") return { length: 1, unbounded: true };
+  if (char !== "{") return undefined;
+
+  const end = pattern.indexOf("}", at);
+  if (end === -1) return undefined;
+
+  const count = pattern.slice(at + 1, end);
+  if (!/^\d+(,\d*)?$/.test(count)) return undefined;
+
+  return { length: end - at + 1, unbounded: count.endsWith(",") };
+}
+
+// The shape of a quantifier nest: a group whose body already repeats something, followed by an unbounded repetition.
+// `(a+)+$` over a run of a's that ends in one other character makes the backtracking engine try every way of
+// splitting the run in two before it answers, and the work doubles per character, so a bank that carries the shape
+// carries a pattern a replay never finishes.
+//
+// The refusal belongs to validation, not to evaluation (see MAX_CHECK_TEXT above), and it is a shape and not a
+// proof: `(a|a)+` is the same explosion under another spelling and passes this scan, so the engine stays unsafe for
+// a pattern the filter lets through.
+//
+// The scan reads the pattern as the engine reads it -- an escaped character is text and a class is skipped whole --
+// so `\(a+\)+`, `[(+)]+` and `[a-z]+-[a-z]+` are not this shape. What it refuses is a group whose body repeats
+// something, followed by an unbounded repetition: `+`, `*` or `{n,}` outside; any repetition at all inside, because
+// a body that matches the same text in more than one way is what an unbounded repeat over it multiplies. A bounded
+// `{n}` or `{n,m}` outside does not repeat unboundedly and is left alone, and a `?` after a repetition only makes it
+// lazy.
+function nestedQuantifierProblem(pattern: string): string | undefined {
+  // One entry per open group: whether its body repeats something. A group is one atom of the group that encloses
+  // it, so the flag rises with it -- `((a+))+` is `(a+)+` with one parenthesis more.
+  const open: boolean[] = [];
+  let inClass = false;
+
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+
+    // The escape and the class are the two places where `(`, `)` and a repetition are text and not syntax.
+    if (char === "\\") {
+      index += 1;
+      continue;
+    }
+    if (inClass) {
+      if (char === "]") inClass = false;
+      continue;
+    }
+    if (char === "[") {
+      inClass = true;
+      continue;
+    }
+
+    if (char === "(") {
+      open.push(false);
+      continue;
+    }
+
+    if (char === ")") {
+      const repeated = open.pop();
+      // A `)` with no group open is a pattern that does not compile, and the compile step of validateCheck rejects
+      // it in its own words.
+      if (repeated === undefined) continue;
+
+      const after = repetitionAt(pattern, index + 1);
+      if (repeated && after !== undefined && after.unbounded) {
+        return `the pattern ${quote(pattern)} nests a quantifier: a quantified group followed by another quantifier makes the engine backtrack exponentially`;
+      }
+
+      if (repeated && open.length > 0) open[open.length - 1] = true;
+      continue;
+    }
+
+    const repetition = repetitionAt(pattern, index);
+    if (repetition === undefined || open.length === 0) continue;
+
+    open[open.length - 1] = true;
+    index += repetition.length - 1;
+  }
+
+  return undefined;
 }

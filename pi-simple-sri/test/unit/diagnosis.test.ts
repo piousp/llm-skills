@@ -13,7 +13,9 @@ import {
   SriDiagnosisError,
 } from "../../src/diagnosis.ts";
 import type { EvidenceContext } from "../../src/evidence.ts";
-import type { EvidenceItem, EvidenceKind, Expectation, SkillRef } from "../../src/types.ts";
+import type { EvidenceItem, EvidenceKind, SkillRef } from "../../src/types.ts";
+import { isPlainObject } from "../../src/values.ts";
+import { loadDecisionSchema } from "./schema-reader.ts";
 
 const SKILL: SkillRef = {
   name: "pdf-tools",
@@ -26,10 +28,14 @@ const SKILL: SkillRef = {
 const CWD = "/work/reports";
 const MODEL = "claude-sonnet-4-5";
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
+// S6: two digests of two different calls, in the spelling the evidence carries ("sha256:" + 64 hex).
+const SAME_CALL = `sha256:${"a".repeat(64)}`;
+const OTHER_CALL = `sha256:${"b".repeat(64)}`;
 
-function evidenceItem(id: string, kind: EvidenceKind, toolName?: string): EvidenceItem {
+function evidenceItem(id: string, kind: EvidenceKind, toolName?: string, argsHash?: string): EvidenceItem {
   const item: EvidenceItem = { id, kind, timestamp: 1_762_082_602_481, source: "transcript" };
   if (toolName !== undefined) item.toolName = toolName;
+  if (argsHash !== undefined) item.argsHash = argsHash;
   return item;
 }
 
@@ -322,6 +328,99 @@ test("buildDiagnosis: a user correction is replayed with the expectation of its 
   );
 });
 
+// S6, Q1: two failures of one call are one task. The same command failed twice measures nothing the first failure did not,
+// so the selection keeps the first of the equivalence and the order the evidence gave it -- and the diagnosis still signs
+// both ids, because the signature names the set of failures the record is about and not the items it replays.
+test("buildDiagnosis: two tool errors of the same call are one replay item", () => {
+  const first = evidenceItem("ev-00000001", "tool_error", "bash", SAME_CALL);
+  const second = evidenceItem("ev-00000002", "tool_error", "bash", SAME_CALL);
+  const contextById = contextsOf([
+    ["ev-00000001", { prompt: "extract the table" }],
+    ["ev-00000002", { prompt: "extract the table" }],
+  ]);
+
+  const diagnosis = buildDiagnosis([first, second], contextById, SKILL, CWD);
+
+  assert.equal(diagnosis.replayItems.length, 1);
+  // The first of the equivalence survives, so the gate replays the failure the evidence gave first.
+  assert.equal(diagnosis.replayItems[0].failureSignature, expectedSignature(["ev-00000001"]));
+  assert.equal(diagnosis.replayItems[0].prompt, "extract the table");
+  assert.equal(diagnosis.failureSignature, expectedSignature(["ev-00000001", "ev-00000002"]));
+});
+
+// The other side: the arguments are the place a tool failure happened, so two calls of one tool over different arguments are
+// two tasks and the gate has two things to measure.
+test("buildDiagnosis: two tool errors of different calls are two replay items", () => {
+  const first = evidenceItem("ev-00000001", "tool_error", "bash", SAME_CALL);
+  const second = evidenceItem("ev-00000002", "tool_error", "bash", OTHER_CALL);
+  const contextById = contextsOf([
+    ["ev-00000001", { prompt: "extract the table" }],
+    ["ev-00000002", { prompt: "extract the table" }],
+  ]);
+
+  const diagnosis = buildDiagnosis([first, second], contextById, SKILL, CWD);
+
+  assert.deepEqual(
+    diagnosis.replayItems.map((item) => item.failureSignature),
+    [expectedSignature(["ev-00000001"]), expectedSignature(["ev-00000002"])],
+  );
+});
+
+// A correction carries no arguments to compare, so its place is the prompt of the turn -- and the reading of that prompt is
+// part of the key: two corrections of the same task are one correction even when one of them was spaced differently.
+test("buildDiagnosis: two user corrections of one prompt are one replay item", () => {
+  const sameWorded = buildDiagnosis(
+    [evidenceItem("ev-00000001", "user_correction"), evidenceItem("ev-00000002", "user_correction")],
+    contextsOf([
+      ["ev-00000001", { prompt: "no, the table is on page 4" }],
+      ["ev-00000002", { prompt: "no, the table is on page 4" }],
+    ]),
+    SKILL,
+    CWD,
+  );
+  assert.equal(sameWorded.replayItems.length, 1);
+
+  const respaced = buildDiagnosis(
+    [evidenceItem("ev-00000003", "user_correction"), evidenceItem("ev-00000004", "user_correction")],
+    contextsOf([
+      ["ev-00000003", { prompt: "no, the  table is\n on page 4" }],
+      ["ev-00000004", { prompt: " no, the table is on page 4 " }],
+    ]),
+    SKILL,
+    CWD,
+  );
+  assert.equal(respaced.replayItems.length, 1);
+});
+
+// src/evidence.ts spells the arguments nobody recorded as "": that is no evidence of the same call, so the equivalence falls
+// back to the prompt like an absent one, where two turns that asked different things stay two tasks.
+test("buildDiagnosis: an empty argsHash is no evidence of the same call", () => {
+  const first = evidenceItem("ev-00000001", "tool_error", "bash", "");
+  const second = evidenceItem("ev-00000002", "tool_error", "bash", "");
+
+  const differentPrompts = buildDiagnosis(
+    [first, second],
+    contextsOf([
+      ["ev-00000001", { prompt: "extract the table" }],
+      ["ev-00000002", { prompt: "extract the totals" }],
+    ]),
+    SKILL,
+    CWD,
+  );
+  assert.equal(differentPrompts.replayItems.length, 2);
+
+  const onePrompt = buildDiagnosis(
+    [first, second],
+    contextsOf([
+      ["ev-00000001", { prompt: "extract the table" }],
+      ["ev-00000002", { prompt: "extract the table" }],
+    ]),
+    SKILL,
+    CWD,
+  );
+  assert.equal(onePrompt.replayItems.length, 1);
+});
+
 test("buildDiagnosis: the summary names the tool and the failure classes present", () => {
   const items = [
     evidenceItem("ev-00000006", "tool_error", "bash"),
@@ -421,21 +520,8 @@ test("describeExpectation: a correction is described without a tool", () => {
     describeExpectation({ class: "user_correction", version: 1 }),
     "the user does not correct the model again",
   );
-  // A correction whose record carries a tool keeps the sentence of its class: the check watches the turn
-  // and not the tool, so the name is not part of what the user is told.
-  assert.equal(
-    describeExpectation({ class: "user_correction", version: 1, tool: "bash" }),
-    "the user does not correct the model again",
-  );
-});
-
-test("describeExpectation: a tool class without a tool name still describes its class", () => {
-  // src/diagnosis.ts never writes this shape -- a tool class without a tool name is not replayable -- so
-  // the sentence exists for a record written by something else, and it names no tool it does not have.
-  assert.equal(
-    describeExpectation({ class: "tool_error", version: 1 }),
-    "the failing tool does not return an error again",
-  );
+  // A correction never carries a tool: since M2 the union of src/types.ts forbids it and expectationViolation refuses the
+  // record that has one, so the sentence of its class is the whole story -- the check watches the turn and not a tool.
 });
 
 // M1c: the fourth class is a row of the table like the other three, which is what "the table is the only place this
@@ -562,6 +648,44 @@ test("buildDefectDiagnosis: a case without checks produces no replay item", () =
   assert.equal(diagnosis.failureSignature, expectedSignature([defectItem().id]));
 });
 
+// S6, Q1: the condition of a case is the digest of its checks, so two cases that ask the same task and carry the same checks
+// are one measurement -- the case a user pasted twice -- and the first of them survives in the order of the file.
+test("buildDefectDiagnosis: two cases with the same prompt and the same checks are one replay item", () => {
+  const duplicated = defectBank([DEFECT_CASES[0], { ...DEFECT_CASES[0], id: "keeps-history-again" }]);
+
+  const diagnosis = buildDefectDiagnosis(defectItem(), duplicated, SKILL, CWD, MODEL);
+
+  assert.deepEqual(diagnosis.replayItems, [
+    {
+      prompt: "rebase the branch onto main",
+      cwd: CWD,
+      model: MODEL,
+      expectation: { class: "quality_defect", version: 1, checks: [{ kind: "not-contains", value: "--squash-all" }] },
+      skills: [SKILL.name],
+      failureSignature: expectedSignature([defectItem().id]),
+    },
+  ]);
+});
+
+// And the other side, which is why the condition and the place are two halves: one prompt under another predicate measures
+// another condition, so the two cases stay two. Collapsing them would lose a measurement instead of a repetition.
+test("buildDefectDiagnosis: two cases with the same prompt and different checks are two replay items", () => {
+  const otherPredicate = defectBank([
+    DEFECT_CASES[0],
+    { id: "interactive", prompt: DEFECT_CASES[0].prompt, checks: [{ kind: "contains", value: "--interactive" }] },
+  ]);
+
+  const diagnosis = buildDefectDiagnosis(defectItem(), otherPredicate, SKILL, CWD, MODEL);
+
+  assert.deepEqual(
+    diagnosis.replayItems.map((item) => (item.expectation.class === "quality_defect" ? item.expectation.checks : null)),
+    [
+      [{ kind: "not-contains", value: "--squash-all" }],
+      [{ kind: "contains", value: "--interactive" }],
+    ],
+  );
+});
+
 // The summary is the artifact and its entry, never an invented one: another kind of origin is another sentence, and an
 // artifact whose entry was not recorded says exactly that instead of describing a finding nobody wrote.
 test("buildDefectDiagnosis: the summary is the origin and is not invented", () => {
@@ -615,19 +739,18 @@ test("describeExpectation: a quality_defect names the condition of its class", (
     }),
     "the answer passes every check the defect carries",
   );
-  // The sentence does not read the checks: it says what the answer must satisfy, and the list is data the gate runs.
-  // As with the tool class without a tool name above, this package never writes the shape below -- the invariant at the
-  // end of this file refuses it -- so the sentence exists for a record written by something else.
-  assert.equal(
-    describeExpectation({ class: "quality_defect", version: 1 }),
-    "the answer passes every check the defect carries",
-  );
+  // The sentence does not read the checks: it says what the answer must satisfy, and the list is data the gate runs. A
+  // defect without a list is not an expectation any more (M2, S5): the branch requires it, and the guard at the end of this
+  // file refuses the record that spells one.
 });
 
-// The two relations between an expectation and its class that the schema cannot state: `tool` is present exactly on
-// the two tool classes, and `checks` is present and non-empty exactly on quality_defect. The product is small enough
-// to walk whole -- four classes, a tool or none, three shapes of checks -- and walking it whole is the difference
-// between a rule and a sample of one.
+// The two relations between an expectation and its class, stated three times and read here from the one that answers why: `tool`
+// is present exactly on the two tool classes, and a non-empty `checks` exactly on quality_defect. The product is small enough to
+// walk whole -- four classes, a tool or none, three shapes of checks -- and walking it whole is the difference between a rule and
+// a sample of one.
+//
+// The product is built as `unknown` on purpose (M2, S5): half of the combinations below are the ones the union of src/types.ts
+// refuses to construct, and they are exactly the ones a record read from disk can spell, which is what the guard is for.
 const TOOLS: readonly (string | undefined)[] = [undefined, "bash"];
 const CHECK_SHAPES: readonly (readonly CaseCheck[] | undefined)[] = [
   undefined,
@@ -641,7 +764,7 @@ test("expectationViolation: tool is present exactly on the tool classes and chec
   for (const kind of Object.values(EVERY_KIND)) {
     for (const tool of TOOLS) {
       for (const checks of CHECK_SHAPES) {
-        const expectation: Expectation = {
+        const expectation: unknown = {
           class: kind,
           version: 1,
           ...(tool === undefined ? {} : { tool }),
@@ -649,8 +772,10 @@ test("expectationViolation: tool is present exactly on the tool classes and chec
         };
         const toolClass = kind === "tool_error" || kind === "retry_loop";
         const wantsChecks = kind === "quality_defect";
-        const consistent =
-          (tool !== undefined) === toolClass && wantsChecks === (checks !== undefined && checks.length > 0);
+        // The defect needs a non-empty list, and every other class carries no `checks` key at all: the schema closes each
+        // branch of the oneOf, so an empty array is a field the class does not have.
+        const checksConsistent = wantsChecks ? checks !== undefined && checks.length > 0 : checks === undefined;
+        const consistent = (tool !== undefined) === toolClass && checksConsistent;
         const caseName = `${kind}, ${tool === undefined ? "no tool" : "with a tool"}, ${
           checks === undefined ? "no checks" : `${checks.length} checks`
         }`;
@@ -696,10 +821,91 @@ test("expectationViolation: names the class and what is missing or extra", () =>
     expectationViolation({ class: "tool_error", version: 1, tool: "bash", checks: [check] }),
     'a "tool_error" expectation carries no checks, got 1',
   );
+  // The schema closes each branch, so an empty list is a field the class does not have, not the absence of one: the guard
+  // and the oneOf say the same thing (M2, S5).
+  assert.equal(
+    expectationViolation({ class: "tool_error", version: 1, tool: "bash", checks: [] }),
+    'a "tool_error" expectation carries no checks, got 0',
+  );
 
   // The four well-formed shapes, one per class: nothing to report.
   assert.equal(expectationViolation({ class: "tool_error", version: 1, tool: "bash" }), undefined);
   assert.equal(expectationViolation({ class: "retry_loop", version: 1, tool: "bash" }), undefined);
   assert.equal(expectationViolation({ class: "user_correction", version: 1 }), undefined);
   assert.equal(expectationViolation({ class: "quality_defect", version: 1, checks: [check] }), undefined);
+});
+
+// M2, S5: the guard also reads the record itself, because a file can say anything -- it is not typed. The shape, the closed list
+// of fields, the class and the version are read before the relation, and each answer names what it got instead.
+test("expectationViolation: a record read from disk is refused for its shape before its relation", () => {
+  assert.equal(expectationViolation(null), "an expectation is a JSON object, got null");
+  assert.equal(
+    expectationViolation({ class: "latency", version: 1 }),
+    'an expectation names the class "latency", and no class of this package is one',
+  );
+  assert.equal(
+    expectationViolation({ class: "tool_error", version: 2, tool: "bash" }),
+    'a "tool_error" expectation implements the version 1, got 2',
+  );
+  assert.equal(
+    expectationViolation({ class: "tool_error", version: 1, tool: "bash", note: "a record of a later slice" }),
+    'an expectation has no "note" field',
+  );
+  assert.equal(
+    expectationViolation({ class: "user_correction", version: 1, tool: 42 }),
+    'a "user_correction" expectation names no tool, got 42',
+  );
+});
+
+// The two places a decision record carries an expectation: the items of the diagnosis, which the gate plans its replay over, and
+// the items of a gate that concluded, which a reader re-reads. The schema states the partition of the classes in both.
+const EXPECTATION_SITES: readonly (readonly string[])[] = [
+  ["properties", "diagnosis", "properties", "replayItems", "items", "properties", "expectation"],
+  ["properties", "gate", "properties", "replay", "properties", "items", "items", "properties", "expectation"],
+];
+
+// M2, S5: the partition the walk above states for the code has a second statement, the oneOf of schemas/decision.schema.json,
+// because JSON has no way to read the class table. This test derives the partition from the code -- a class carries a tool when
+// the guard accepts an expectation with a tool and nothing else, and checks when it accepts one with a non-empty list -- and
+// compares it with both appearances of the expectation in the schema. EVERY_KIND is the totality device: a class added to
+// EvidenceKind and nothing else fails here instead of leaving the schema behind.
+test("decision.schema.json: the branches of the expectation are the class table, payload by payload", () => {
+  const check: CaseCheck = { kind: "contains", value: "--interactive" };
+  const payloadOf = (kind: EvidenceKind): readonly string[] => [
+    ...(expectationViolation({ class: kind, version: 1, tool: "bash" }) === undefined ? ["tool"] : []),
+    ...(expectationViolation({ class: kind, version: 1, checks: [check] }) === undefined ? ["checks"] : []),
+  ];
+
+  // The classes a branch names: the enum of a branch of several classes, or the const of a branch of one.
+  const classesOf = (branch: Record<string, unknown>): readonly unknown[] => {
+    const properties = branch.properties;
+    const declared = isPlainObject(properties) ? properties.class : undefined;
+    if (!isPlainObject(declared)) return [];
+
+    const names = declared.enum;
+    if (Array.isArray(names)) return names;
+    const single = declared.const;
+    return Object.hasOwn(declared, "const") ? [single] : [];
+  };
+
+  for (const keys of EXPECTATION_SITES) {
+    let node: unknown = loadDecisionSchema();
+    for (const key of keys) node = isPlainObject(node) ? node[key] : undefined;
+
+    const declared = isPlainObject(node) ? node.oneOf : undefined;
+    if (!Array.isArray(declared)) assert.fail(`the expectation at ${keys.join(".")} is not a oneOf of branches`);
+    const branches: readonly unknown[] = declared;
+    const at = keys.join(".");
+
+    for (const kind of Object.values(EVERY_KIND)) {
+      const own = branches.filter((branch) => isPlainObject(branch) && classesOf(branch).includes(kind));
+      assert.equal(own.length, 1, `${at}: the branches that name ${kind}`);
+
+      const branch = own[0];
+      if (!isPlainObject(branch)) assert.fail(`${at}: the branch that names ${kind} is not an object`);
+      const declaredRequired = branch.required;
+      const required = Array.isArray(declaredRequired) ? [...declaredRequired] : [];
+      assert.deepEqual(required.sort(), ["class", "version", ...payloadOf(kind)].sort(), kind);
+    }
+  }
 });

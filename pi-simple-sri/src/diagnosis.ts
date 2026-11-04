@@ -2,8 +2,11 @@ import { attemptSignature } from "./attempts.ts";
 // Type-only, like the checks a case carries in src/types.ts: the contract of the bank is named here and the module that
 // reads the file is the one that compiles its regexes, so this module keeps no run time dependency on the reader.
 import type { CaseBank } from "./case-bank.ts";
+import type { CaseCheck } from "./checks.ts";
 import { SriDiagnosisError } from "./errors.ts";
-import type { EvidenceContext } from "./evidence.ts";
+// The one runtime dependency of this module on the evidence: the digest of a list of checks is the canonical digest the
+// evidence owns (hashOfArguments), so the key of a defect and the arguments of a tool call are hashed by one rule.
+import { hashOfArguments, type EvidenceContext } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
 import { assertNever } from "./types.ts";
 import type {
@@ -16,7 +19,7 @@ import type {
   ReplayItem,
   SkillRef,
 } from "./types.ts";
-import { cutCodePoints, quote } from "./values.ts";
+import { closedObjectProblemOf, cutCodePoints, describe, isPlainObject, quote } from "./values.ts";
 
 // Evidence becomes a diagnosis here: one summary, one signature, and the replay items the M1
 // gate runs (Q2, Q13). Everything enters through the parameters; nothing is read from disk and
@@ -32,7 +35,10 @@ import { cutCodePoints, quote } from "./values.ts";
 // Which class is replayable: the tool errors of the session. If the session has none, the retry
 // loops. If it has neither, the user corrections, whose expectation needs no tool name.
 // One replay item per selected failure, so the gate measures the failure that produced the
-// diagnosis and not a different one.
+// diagnosis and not a different one. Two selected failures that measure the same task are one item
+// (equivalentFailureKey), so the count the gate plans over is already the deduplicated one: the same
+// command failing twice is one task, and two identical failures leave an item count the floor of the
+// paired design refuses (OA8).
 //
 // The fourth class, quality_defect (M1c), is never selected here and that is the point: its evidence does not come
 // from a turn of the session but from an artifact, and what a replayed answer must satisfy is the list of checks
@@ -56,15 +62,22 @@ const ID_SEPARATOR = "\n";
 // summary hold a finding the record cuts.
 const MAX_EXCERPT_CODE_POINTS = 200;
 
+// What a row of the table can say about the expectation of its class before the evidence arrives: the class and the version of
+// the check, and no payload. Both payloads come from elsewhere -- the name of the tool from the evidence item (expectationFor),
+// the checks from the case bank whose cases the constructor of the defect branch replays (buildDefectDiagnosis) -- so a row that
+// carried a whole Expectation could only carry one branch of it, and the classes whose payload it did not carry would stop being
+// rows of one table.
+interface ExpectationSeed {
+  class: EvidenceKind;
+  version: 1;
+}
+
 interface KindRule {
   // Fallback order of the classes: the lower the number, the stronger the class.
   priority: number;
-  // What the replayed turn must stop doing, as the gate reads it, or null for a class whose condition cannot be
-  // derived from the evidence alone. The tool name is not in the table: a tool class is one row for every tool,
-  // and expectationFor adds the name the evidence item carries.
-  expectation: Expectation | null;
-  // Whether the expectation has to carry the name of the failing tool to say anything.
-  needsTool: boolean;
+  // The class and the version of what the replayed turn must stop doing. Which payload the branch needs is a property of the
+  // class, so it is stated once, by the union of src/types.ts and by expectationFor, and never here.
+  expectation: ExpectationSeed;
   // Singular form the summary uses; every label pluralizes with "s".
   label: string;
 }
@@ -72,24 +85,22 @@ interface KindRule {
 // One row per failure class: the single place this module names a class, so the two dispatch
 // chains and the two parallel lists that used to sit beside the type are gone (I2). The record
 // makes the kind set exhaustive by typecheck: a new EvidenceKind loses a member here and stops
-// compiling wherever a class is looked up, with no switch and no runtime fallback behind it.
+// compiling wherever a class is looked up, and the one switch that reads a class switches on the seed
+// of a row and on nothing else (expectationFor).
 const KIND_RULES: Record<EvidenceKind, KindRule> = {
   tool_error: {
     priority: 0,
     expectation: { class: "tool_error", version: 1 },
-    needsTool: true,
     label: "tool error",
   },
   retry_loop: {
     priority: 1,
     expectation: { class: "retry_loop", version: 1 },
-    needsTool: true,
     label: "retry loop",
   },
   user_correction: {
     priority: 2,
     expectation: { class: "user_correction", version: 1 },
-    needsTool: false,
     label: "user correction",
   },
   // M1c: the weakest class, and the only one whose expectation is not derivable from the evidence alone. It never
@@ -97,8 +108,7 @@ const KIND_RULES: Record<EvidenceKind, KindRule> = {
   // the one the replay measures -- and it has no tool to watch.
   quality_defect: {
     priority: 3,
-    expectation: null,
-    needsTool: false,
+    expectation: { class: "quality_defect", version: 1 },
     label: "quality defect",
   },
 };
@@ -185,10 +195,12 @@ function summaryOfAsk(trigger: DecisionTrigger, skill: SkillRef): string {
 // evidence is not read from a turn of the session, and what a replayed answer must satisfy is not a property of a class
 // but the list of checks each case carries (see expectationFor).
 //
-// One replay item per case of the bank, and the prompt of each item is the prompt of its case: the turns this base replays
-// are the ones the user wrote, and a prompt invented here would replay a task nobody asked for. Every item names the same
-// failure -- the one evidence item -- because every case measures the same defect, and the gate pairs the two by signing
-// the id of that evidence (src/gate/flow.ts, planItemsOf).
+// One replay item per distinct case of the bank, and the prompt of each item is the prompt of its case: the turns this base
+// replays are the ones the user wrote, and a prompt invented here would replay a task nobody asked for. Every item names the
+// same failure -- the one evidence item -- because every case measures the same defect, and the gate pairs the two by signing
+// the id of that evidence (src/gate/flow.ts, planItemsOf). Two cases that measure the same condition are one item (see
+// equivalentFailureKey): the copies a user pasted twice are one task, and the plan of the gate must be computed over what is
+// left, which is why the dedupe happens here and not in the scorer.
 //
 // A case whose checks are empty produces no item: an expectation of this class with no predicate is a condition nobody
 // wrote, and src/checks.ts would have nothing to execute. The reader of the bank refuses such a case, so this is a guard
@@ -212,15 +224,23 @@ export function buildDefectDiagnosis(
 
   const failureSignature = signatureOf([evidence.id]);
   const replayItems: ReplayItem[] = [];
+  // S6, OA8: the first case of an equivalence survives and the duplicates are dropped in the order the file gave them, so
+  // the count the gate plans over is already the deduplicated one. The consequence is honest and it is stated here: two
+  // identical cases leave one item, one item is under the floor of the paired design, and the gate abstains with
+  // `insufficient-items` instead of comparing a run against itself (src/gate/scorer.ts, MIN_ITEMS).
+  const seenKeys = new Set<string>();
   for (const entry of bank.cases) {
     if (entry.checks.length === 0) continue;
+
+    const expectation = defectExpectationOf(entry.checks);
+    const key = equivalentFailureKey(expectation, entry.prompt);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
 
     const item: ReplayItem = {
       prompt: entry.prompt,
       cwd,
-      // A fresh list every time: the case of the bank is data this record copies, and a caller that edited what it was
-      // handed would edit the bank the next case is read from.
-      expectation: { class: "quality_defect", version: 1, checks: [...entry.checks] },
+      expectation,
       skills: [skill.name],
       failureSignature,
     };
@@ -231,6 +251,13 @@ export function buildDefectDiagnosis(
   }
 
   return { summary: summaryOfDefect(evidence, origin, skill), failureSignature, replayItems };
+}
+
+// The expectation of one case of the bank, and the one owner of that branch: the key of the case and the item the case
+// becomes are built from this value, so they cannot describe two different conditions. A fresh list every time, because the
+// case is data this record copies and a caller that edited what it was handed would edit the bank the next case is read from.
+function defectExpectationOf(checks: readonly CaseCheck[]): Expectation {
+  return { class: "quality_defect", version: 1, checks: [...checks] };
 }
 
 // The sentence a human reads about a defect, derived from the artifact and never invented: how it was found, where it is,
@@ -260,7 +287,9 @@ interface Replayable {
 // replayable either and must not shadow a weaker class that is.
 //
 // One pass over the evidence: the buffer holds the strongest class seen so far and a stronger one
-// found later replaces it, so the items that survive keep the order the evidence gave them.
+// found later replaces it, so the items that survive keep the order the evidence gave them. Once the strongest class is
+// known, the failures that measure the same task are one item (S6, OA8): the first of an equivalence survives, the order of
+// the evidence is kept, and nothing is sorted -- so the same evidence always plans the same runs.
 function selectReplayable(
   evidence: readonly EvidenceItem[],
   contextById: ReadonlyMap<string, EvidenceContext>,
@@ -283,7 +312,65 @@ function selectReplayable(
     if (priority === strongestPriority) replayable.push({ item, prompt, expectation });
   }
 
-  return replayable;
+  const seenKeys = new Set<string>();
+  const distinct: Replayable[] = [];
+  for (const entry of replayable) {
+    const key = equivalentFailureKey(entry.expectation, entry.prompt, entry.item.argsHash);
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    distinct.push(entry);
+  }
+
+  return distinct;
+}
+
+// S6: the equivalence of two failures, and the only place this module says what "the same failure twice" is. Two failures
+// are one measurement when they share the class, the condition a replayed answer is judged by and the place the failure
+// happened: measuring one task twice adds no evidence and doubles what it costs.
+//
+// The condition and the place are two halves and are kept apart on purpose. The condition is what the replay watches -- the
+// tool of the two tool classes, the digest of the checks a defect must pass, nothing for a correction -- and the place is
+// the call the evidence already normalized (argsHash) or, when the evidence carries no arguments, the prompt of the turn.
+// Separating them is what keeps two cases of a bank with the same prompt and different checks apart: they measure different
+// conditions, and collapsing them would lose a measurement instead of a repetition.
+//
+// An empty argsHash is no evidence of the same call: src/evidence.ts and src/gate/types.ts spell the arguments nobody
+// recorded as "", a real digest always starts with "sha256:", and such a failure falls back to the prompt like one whose
+// arguments are absent.
+//
+// Exported because it is the package's one rule for what "an equivalent failure" is, and the two constructors of the
+// transcript and of the bank apply it here instead of each spelling it out.
+export function equivalentFailureKey(expectation: Expectation, prompt: string, argsHash?: string): string {
+  return JSON.stringify([
+    expectation.class,
+    conditionOf(expectation),
+    argsHash === undefined || argsHash === "" ? normalizePrompt(prompt) : argsHash,
+  ]);
+}
+
+// The condition of a class, per branch of the union: the tool the replay watches, the digest of the checks a defect's answer
+// must pass, or nothing at all. The digest is the canonical one the evidence owns (hashOfArguments, object keys sorted at
+// every level), and the list of checks keeps its order: two lists that differ only in order are not collapsed, because
+// keeping them apart costs a run and collapsing them could lose a condition the user wrote.
+function conditionOf(expectation: Expectation): string {
+  switch (expectation.class) {
+    case "tool_error":
+    case "retry_loop":
+      return expectation.tool;
+    case "quality_defect":
+      return hashOfArguments(expectation.checks);
+    case "user_correction":
+      return "";
+    default:
+      return assertNever(expectation);
+  }
+}
+
+// The prompt of a failure as the key reads it: trim plus the collapse of every run of whitespace, which is the reading
+// src/writer.ts gives the body of a lesson (normalizeBody). Two turns that differ only in how the prompt was spaced asked the
+// same task, so they are the same place and not two measurements.
+function normalizePrompt(prompt: string): string {
+  return prompt.trim().replace(/\s+/g, " ");
 }
 
 function buildReplayItem(
@@ -325,76 +412,116 @@ function promptOf(
   return prompt;
 }
 
-// The condition a replayed turn is judged by. A tool class needs the tool name to say what must stop
-// failing; a correction does not, because what must stop is the user objecting. A fresh object every
-// time: the row of the table is shared by every item of its class, and a caller that edited what it was
-// handed would edit the class.
+// The condition a replayed turn is judged by, built from the row of its class and from the payload the evidence carries. A fresh
+// object every time: the row of the table is shared by every item of its class, and a caller that edited what it was handed
+// would edit the class.
 //
-// A quality_defect yields no expectation here. What its replayed answer must satisfy is the list of checks the case
-// bank carries, and that list travels with the evidence and not with the class, so an expectation built from the
-// class alone would be a condition nobody wrote. The constructor that holds the bank builds that item and attaches
-// the checks (M1c, buildDefectDiagnosis); this function answers undefined so no caller mistakes the class for one a
-// transcript can replay.
+// The switch is exhaustive over the classes of the table (assertNever), so which payload a class carries is decided in one place
+// and a class added to EvidenceKind loses a case here instead of silently seeding nothing.
+//
+// A tool class without a tool name cannot say what must stop failing, so an item that does not carry the name is as unreplayable
+// as a class that seeds nothing: it answers undefined and must not shadow a weaker class that can be replayed.
+//
+// A quality_defect yields no expectation here either. What its replayed answer must satisfy is the list of checks the case bank
+// carries, and that list travels with the evidence and not with the class, so an expectation built from the class alone would be
+// a condition nobody wrote. The constructor that holds the bank builds that item and attaches the checks (M1c,
+// buildDefectDiagnosis); this function answers undefined so no caller mistakes the class for one a transcript can replay.
 function expectationFor(item: EvidenceItem): Expectation | undefined {
-  const rule = KIND_RULES[item.kind];
-  if (rule.expectation === null) return undefined;
-  if (!rule.needsTool) return { ...rule.expectation };
-  if (item.toolName === undefined) return undefined;
-  return { ...rule.expectation, tool: item.toolName };
+  const seed = KIND_RULES[item.kind].expectation;
+  switch (seed.class) {
+    case "tool_error":
+    case "retry_loop":
+      return item.toolName === undefined
+        ? undefined
+        : { class: seed.class, version: seed.version, tool: item.toolName };
+    case "user_correction":
+      return { class: "user_correction", version: seed.version };
+    case "quality_defect":
+      return undefined;
+    default:
+      return assertNever(seed.class);
+  }
 }
 
 // The sentence a human reads about an expectation, derived from the descriptor so the wording never
 // becomes the contract again: src/proposer.ts writes it into the prompt as "must-stop" and
 // src/tool-skill-improve.ts answers a diagnosis with it. The text is the one the prose predicate used to
 // carry, word for word: this function changes where the sentence comes from, not what it says.
+//
+// One sentence per branch of the union, and the branch is the whole input (M2, S5): a tool class always carries the name of the
+// tool, so the sentence names it with no fallback, and a correction never carries one, so nothing here has to decide what to say
+// about a name that cannot exist. A record that carries the wrong payload is refused by expectationViolation before any text is
+// derived from it, which is what made the fallbacks of this function unnecessary instead of merely unreachable.
 export function describeExpectation(expectation: Expectation): string {
   switch (expectation.class) {
     case "user_correction":
       return "the user does not correct the model again";
     case "tool_error":
     case "retry_loop":
-      // A tool class without a tool name is not replayable, so nothing this package writes reaches the
-      // fallback; the sentence still has to describe the class for a record written elsewhere.
-      return expectation.tool === undefined
-        ? "the failing tool does not return an error again"
-        : `the tool ${expectation.tool} does not return an error again`;
+      return `the tool ${expectation.tool} does not return an error again`;
     case "quality_defect":
       // The sentence names the class and not the checks: what the user reads is what the answer must satisfy, and
-      // the list itself is data the gate runs. It is worded for a record written elsewhere too, so a defect whose
-      // checks are missing still has a sentence.
+      // the list itself is data the gate runs.
       return "the answer passes every check the defect carries";
     default:
-      return assertNever(expectation.class);
+      return assertNever(expectation);
   }
 }
 
-// The two relations between an expectation and its class that JSON Schema cannot state, because it ties no property
-// to another: `tool` is present exactly on the two tool classes, and `checks` is present and non-empty exactly on
-// quality_defect. One function owns both, so a record written by a later slice and a record read from disk are
-// judged by the same rule, and test/unit/diagnosis.test.ts walks the whole product of the three dimensions (class,
-// tool, checks) instead of a sample of it.
+// The guard of a record read from disk. The relations between a class and its payload are stated three times, and the three have
+// to say the same thing: by the union of src/types.ts for the records this package writes, by the oneOf of
+// schemas/decision.schema.json for a file anybody may have edited, and by this function, which is the reading the gate applies to
+// the JSON it has just parsed. It is also the only one of the three that can answer why: `undefined` is the expectation that
+// holds, and any other value is the reason it does not.
 //
-// "Owner" is literal: describeExpectation is defined over any Expectation, because a sentence has to be derivable
-// from a record this package did not write, and that is a different question from whether the record is well formed.
-// `undefined` is the expectation that satisfies both relations.
-export function expectationViolation(expectation: Expectation): string | undefined {
-  const toolClass = expectation.class === "tool_error" || expectation.class === "retry_loop";
-  if (toolClass && expectation.tool === undefined) {
-    return `a ${quote(expectation.class)} expectation needs the name of the failing tool`;
+// What it checks, in this order: the value is a plain object, it declares no field outside the four the schema knows, `class` is
+// a class of KIND_RULES, `version` is exactly 1, `tool` is a non-empty string exactly on the two tool classes, and a non-empty
+// `checks` array exactly on the defect. The class set is not written again here: it is the set the table is keyed by, so a class
+// added to EvidenceKind is one this guard already knows. test/unit/diagnosis.test.ts walks the whole product of the three
+// dimensions (class, tool, checks) instead of a sample of it.
+const EXPECTATION_FIELDS: readonly string[] = ["class", "version", "tool", "checks"];
+
+export function expectationViolation(expectation: unknown): string | undefined {
+  if (!isPlainObject(expectation)) {
+    return `an expectation is a JSON object, got ${describe(expectation)}`;
   }
-  if (!toolClass && expectation.tool !== undefined) {
-    return `a ${quote(expectation.class)} expectation names no tool, got ${quote(expectation.tool)}`;
+  const unknownField = closedObjectProblemOf(expectation, EXPECTATION_FIELDS, "an expectation");
+  if (unknownField !== undefined) return unknownField;
+
+  const kind = expectation.class;
+  if (!isExpectationClass(kind)) {
+    return `an expectation names the class ${describe(kind)}, and no class of this package is one`;
+  }
+  if (expectation.version !== 1) {
+    return `a ${quote(kind)} expectation implements the version 1, got ${describe(expectation.version)}`;
   }
 
-  const checks = expectation.checks;
-  if (expectation.class === "quality_defect") {
-    return checks === undefined || checks.length === 0
-      ? `a ${quote(expectation.class)} expectation needs at least one check`
-      : undefined;
+  const tool = expectation.tool;
+  if (kind === "tool_error" || kind === "retry_loop") {
+    if (typeof tool !== "string" || tool === "") {
+      return `a ${quote(kind)} expectation needs the name of the failing tool`;
+    }
+  } else if (tool !== undefined) {
+    return `a ${quote(kind)} expectation names no tool, got ${describe(tool)}`;
   }
-  return checks === undefined || checks.length === 0
-    ? undefined
-    : `a ${quote(expectation.class)} expectation carries no checks, got ${checks.length}`;
+
+  // A list of no checks is no condition: the defect needs at least one, and no other class carries the field at all. The guard
+  // and the oneOf of schemas/decision.schema.json say the same thing, and that is the point: the schema closes each branch, so
+  // an empty array on a class that carries no checks is refused here too, instead of read as the absence it spells.
+  const checks = expectation.checks;
+  if (kind === "quality_defect") {
+    return Array.isArray(checks) && checks.length > 0
+      ? undefined
+      : `a ${quote(kind)} expectation needs at least one check`;
+  }
+  if (checks === undefined) return undefined;
+  return `a ${quote(kind)} expectation carries no checks, got ${Array.isArray(checks) ? checks.length : describe(checks)}`;
+}
+
+// The closed set of classes, derived from the table: a list of its own here would let a row be added without this guard knowing
+// it, and a class the guard does not know is a class no record may name.
+function isExpectationClass(value: unknown): value is EvidenceKind {
+  return typeof value === "string" && Object.hasOwn(KIND_RULES, value);
 }
 
 // Ids are sorted before hashing: the signature names the set of failures, so the same evidence

@@ -141,15 +141,6 @@ test("evaluateExpectation: the last stop reason decides whether the turn ended",
   }
 });
 
-test("evaluateExpectation: a tool class without a tool name cannot pass", () => {
-  // src/diagnosis.ts never builds such an item, because a class without a tool name cannot say what must stop
-  // failing. A pass would be a claim about no tool at all, and the closed vocabulary of invalid reasons has no
-  // slot for a defect of the diagnosis, so the reading is the safe one.
-  const verdict = evaluateExpectation({ class: "tool_error", version: 1 }, run({ toolCalls: [call("read", false)] }));
-
-  assert.equal(verdict.outcome, "fail");
-});
-
 test("evaluateExpectation: a user_correction passes with a normal stop and no tool error", () => {
   const verdict = evaluateExpectation(CORRECTION, run({ stopReason: "stop", toolCalls: [] }));
 
@@ -277,8 +268,9 @@ test("evaluateExpectation: a turn with no answer fails with its own coordinate (
 
 test("evaluateExpectation: a defect that carries no predicate cannot pass", () => {
   // src/diagnosis.ts refuses to build such an item, so this is the guard that keeps a hand-written record from reading
-  // as a pass: asserting nothing is not asserting a pass.
-  const verdict = evaluateExpectation({ class: "quality_defect", version: 1 }, run({ finalText: ANSWER }));
+  // as a pass: asserting nothing is not asserting a pass. Emptiness stays a property of the value and not of the type
+  // (M2, S5: the branch requires the list, and a list is not a tuple), which is why the guard is still here.
+  const verdict = evaluateExpectation({ class: "quality_defect", version: 1, checks: [] }, run({ finalText: ANSWER }));
 
   assert.equal(verdict.outcome, "fail");
   assert.equal(verdict.checkFailures, undefined);

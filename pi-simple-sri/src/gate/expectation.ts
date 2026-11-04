@@ -32,6 +32,12 @@ import type { ReplayRun, RunOutcome, RunVerdict } from "./types.ts";
 // turn that ended on its own, which is the reading OA2 asks for.
 const ABNORMAL_STOP_REASONS: ReadonlySet<string> = new Set(["error", "aborted"]);
 
+// The two branches of the expectation this module reads a payload from, named once: the union of src/types.ts decides which class
+// carries which field (M2, S5), so the readers below take the branch and never the whole union, and none of them has to ask again
+// whether the payload it needs is there.
+type ToolExpectation = Extract<Expectation, { class: "tool_error" | "retry_loop" }>;
+type DefectExpectation = Extract<Expectation, { class: "quality_defect" }>;
+
 // The stop a correction has to end with. Stricter than a tool class on purpose: the class is "the user does
 // not correct the model again", and a turn that did not finish on its own did not answer. It is the same
 // condition the proposer applies to the reply it accepts (src/proposer.ts).
@@ -99,13 +105,14 @@ export function evaluateExpectation(expectation: Expectation, run: ReplayRun): R
 }
 
 // Whether the failure of a replay item is intrinsic to the task (OA7). The tool is the one the expectation
-// watches, which is the failing tool of the item: a class without a tool name is a correction, and a
+// watches, which is the failing tool of the item: only the two tool classes carry a name (M2, S5), and a
 // correction is never intrinsic.
 export function isIntrinsicFailure(item: ReplayItem, excerpt: string | undefined): boolean {
   if (excerpt === undefined) return false;
 
-  const tool = item.expectation.tool;
-  if (tool === undefined || !READ_TOOLS.has(tool)) return false;
+  const { expectation } = item;
+  if (expectation.class !== "tool_error" && expectation.class !== "retry_loop") return false;
+  if (!READ_TOOLS.has(expectation.tool)) return false;
 
   return INTRINSIC_FAILURE_MARKERS.some((marker) => excerpt.includes(marker));
 }
@@ -122,7 +129,7 @@ function outcomeOf(expectation: Expectation, run: ReplayRun): RunReading {
     case "quality_defect":
       return checksOutcome(expectation, run);
     default:
-      return assertNever(expectation.class);
+      return assertNever(expectation);
   }
 }
 
@@ -135,15 +142,11 @@ function outcomeOf(expectation: Expectation, run: ReplayRun): RunReading {
 // error" is a property of the calls, not of their grouping. What the digest of the arguments buys is that
 // the repetition is visible in the record -- the same call twice is two entries with one argsHash, and a
 // call whose arguments are unknown carries an empty one, which never joins a real digest.
-function toolOutcome(expectation: Expectation, run: ReplayRun): RunOutcome {
-  const tool = expectation.tool;
-
-  // A tool class without a tool name cannot say what must stop failing, and src/diagnosis.ts refuses to build
-  // such an item. It cannot pass either: a pass would be a claim about no tool at all, and the closed
-  // vocabulary of invalid reasons has no slot for a defect of the diagnosis.
-  if (tool === undefined) return "fail";
-
-  const calls = run.toolCalls.filter((call) => call.toolName === tool);
+function toolOutcome(expectation: ToolExpectation, run: ReplayRun): RunOutcome {
+  // The name is part of the branch (M2, S5): a record that carries a tool class without one is refused by
+  // src/diagnosis.ts's expectationViolation before a run is planned over it, so the reading of "no tool at all" is not a
+  // case of this function any more.
+  const calls = run.toolCalls.filter((call) => call.toolName === expectation.tool);
   if (calls.some((call) => call.isError)) return "fail";
 
   const stopReason = run.stopReason;
@@ -166,16 +169,17 @@ function correctionOutcome(run: ReplayRun): RunOutcome {
 //              not a pardon: a turn that broke a tool did not answer, so a check that happened to match its text would
 //              count a broken turn as a corrected one.
 //   no checks  an item that carries no predicate has nothing to pass on. src/diagnosis.ts refuses to build such an
-//              item, so this is a guard and not a case: asserting nothing is not asserting a pass.
+//              item, so this is a guard and not a case: asserting nothing is not asserting a pass. Emptiness stays a
+//              property of the value and not of the type (M2, S5: a list is not a tuple), which is why the guard is here.
 //   no answer  an empty answer is a fail with its own coordinate. A `not-contains` over "" passes because "" does not
 //              contain the needle (src/checks.ts), which is the vacuous pass a turn nobody answered would otherwise
 //              turn into evidence. Whitespace is not an answer either: a blank line says as little as nothing, and the
 //              checks of a case are about content.
-function checksOutcome(expectation: Expectation, run: ReplayRun): RunReading {
+function checksOutcome(expectation: DefectExpectation, run: ReplayRun): RunReading {
   if (run.toolCalls.some((call) => call.isError)) return { outcome: "fail" };
 
   const checks = expectation.checks;
-  if (checks === undefined || checks.length === 0) return { outcome: "fail" };
+  if (checks.length === 0) return { outcome: "fail" };
 
   if (run.finalText.trim() === "") return { outcome: "fail", checkFailures: [NO_TEXT_FAILURE] };
 

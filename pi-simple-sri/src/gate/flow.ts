@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildAttemptLine, type AttemptEvent } from "../attempts.ts";
-import { signatureOf } from "../diagnosis.ts";
+import { expectationViolation, signatureOf } from "../diagnosis.ts";
 import { sha256Digest } from "../hash.ts";
 import { DECISION_FILE, LESSONS_DIR } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
@@ -108,7 +108,8 @@ export type CandidateRejectionReason =
   | "skill-mismatch"
   // decision.json, lessons/, or both: the staged candidate is not the pair the writer publishes.
   | "incomplete-candidate"
-  // decision.json is not a JSON object, or it cannot be read.
+  // decision.json is not a JSON object, or it cannot be read, or it carries an expectation whose class and payload disagree
+  // (M2, S5): the record parsed, and what it says is not a record this package can gate.
   | "unreadable-record"
   // The record declares a schema this version does not read (OA12).
   | "unsupported-schema"
@@ -141,7 +142,8 @@ export type StagedCandidateResult = Result<DecisionRecord, CandidateRejection>;
 //      describes a candidate nobody can replay, and an overlay of it would fail one step later, after the
 //      preregistration had already been written;
 //   4. the record declares the one schema this package reads (OA12), which is checked on the parsed JSON and
-//      before the record is handed to anyone.
+//      before the record is handed to anyone; the expectations it carries are judged in the same breath (M2, S5),
+//      because the relation between a class and its payload is one a file on disk can break.
 //
 // `stagingPath` may be absolute or relative to `base`: every path this package publishes in a record or in
 // a `details` block names a candidate relative to the base of the run, so a caller keeping one of those
@@ -977,6 +979,16 @@ async function readStagedDecision(decisionPath: string): Promise<StagedCandidate
     );
   }
 
+  // Guard 5 (M2, S5): the relation between the class of an expectation and its payload, which the union of src/types.ts states for
+  // the records this package writes and the oneOf of schemas/decision.schema.json states for a file anybody may have edited. A
+  // record read from disk is neither of those: it is JSON that parsed, so the relation is judged here, before the record is taken
+  // as the contract it declares and before any run is planned over it. The one function that owns it is src/diagnosis.ts's, so a
+  // record this package wrote and one somebody edited are refused by the same rule.
+  const incoherent = incoherentExpectationOf(parsed);
+  if (incoherent !== null) {
+    return reject("unreadable-record", `${quote(decisionPath)} ${incoherent}`);
+  }
+
   // The record as the contract it declares. The assertion is the price of not carrying a second
   // implementation of schemas/decision.schema.json in src/: the version guard above proves the file was
   // written by this package, and the fields the gate reads are checked where they are used -- the pair of
@@ -988,4 +1000,53 @@ async function readStagedDecision(decisionPath: string): Promise<StagedCandidate
 
 function reject(reason: CandidateRejectionReason, detail: string): StagedCandidateResult {
   return { ok: false, error: { reason, detail } };
+}
+
+// The first expectation of the record whose class and payload disagree, named by where it sits and why it is refused, or null when
+// every one of them holds.
+//
+// An expectation travels in two places, and both reach a consumer that trusts the record: the items of the diagnosis, which the
+// gate plans its replay over, and the items of a gate that already concluded, which a reader re-reads long after the run. The name
+// of the item is its position -- always there -- followed by its failure signature when it carries one, which is the coordinate the
+// record and the index already sign a failure with.
+function incoherentExpectationOf(record: Record<string, unknown>): string | null {
+  for (const recorded of recordedExpectations(record)) {
+    const violation = expectationViolation(recorded.expectation);
+    if (violation !== undefined) {
+      return `carries an expectation this package refuses at ${recorded.where}: ${violation}`;
+    }
+  }
+
+  return null;
+}
+
+interface RecordedExpectation {
+  where: string;
+  expectation: unknown;
+}
+
+function recordedExpectations(record: Record<string, unknown>): RecordedExpectation[] {
+  const found: RecordedExpectation[] = [];
+  appendExpectations(itemsOf(record.diagnosis, "replayItems"), "diagnosis.replayItems", found);
+  const gate = record.gate;
+  appendExpectations(itemsOf(isPlainObject(gate) ? gate.replay : undefined, "items"), "gate.replay.items", found);
+  return found;
+}
+
+// The items of a block of the record, or none: a block that is absent or of another shape is the schema's refusal and not this
+// guard's, which only knows about expectations. The key is named by the caller because the two blocks spell it differently.
+function itemsOf(container: unknown, key: string): readonly unknown[] {
+  if (!isPlainObject(container)) return [];
+  const items = container[key];
+  return Array.isArray(items) ? items : [];
+}
+
+function appendExpectations(items: readonly unknown[], where: string, found: RecordedExpectation[]): void {
+  items.forEach((item, index) => {
+    if (!isPlainObject(item)) return;
+
+    const signature = item.failureSignature;
+    const at = typeof signature === "string" ? `${where}[${index}] (${signature})` : `${where}[${index}]`;
+    found.push({ where: at, expectation: item.expectation });
+  });
 }

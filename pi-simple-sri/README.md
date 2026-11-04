@@ -333,7 +333,12 @@ the runs it did not get.
 
 `insufficient-items` is the floor of the design and not a failure of the run: a paired replay compares
 items, so it needs at least two distinct ones -- two different failures of the session, or two different
-cases of a bank -- and an attempt with fewer abstains instead of comparing one item against itself.
+cases of a bank -- and an attempt with fewer abstains instead of comparing one item against itself. Repeated
+failures are one item and not two: two evidence rows that measure the same task -- the same class, the same
+tool or the same checks, and the same arguments, or the same prompt when the arguments were not recorded --
+collapse before the gate plans the budget, because measuring the same task twice adds no evidence. Two
+identical orders that failed twice are therefore one item, and an attempt whose failures are all equivalent
+abstains on this same floor, with this same word.
 
 **The reload of the session comes after the acceptance.** The lesson and its reference line are written
 first, and the acceptance is reported before the reload starts: the reload is the last thing the accepting
