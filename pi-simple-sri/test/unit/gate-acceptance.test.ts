@@ -451,6 +451,29 @@ test("acceptCandidate: a history snapshot whose timestamp is taken is refused an
   assert.equal(fs.existsSync(attemptsPath(fixture)), false);
 });
 
+test("acceptCandidate: an invalid clock names no snapshot, fails closed and writes nothing", async (t) => {
+  const fixture = createFixture(t);
+
+  // No timestamp in the request, so the name of the snapshot comes from the clock: an invalid date has no name
+  // to give and the refusal is thrown instead of becoming a rejection of the candidate.
+  await assert.rejects(
+    () =>
+      acceptCandidate(
+        requestFor(fixture, LESSON_TEXT, { timestamp: undefined }),
+        seams({ now: () => new Date(Number.NaN) }),
+      ),
+    (error: unknown) =>
+      error instanceof SriWriterError &&
+      error.message.includes("cannot name a history snapshot after an invalid date"),
+  );
+
+  // The refusal happens before the first write: no snapshot, no lesson, no index line, and the skill keeps the
+  // text the gate saw.
+  assert.deepEqual(relativeTree(fixture.skillDir), [SKILL_FILE, "lessons/pdf-first.md"]);
+  assert.equal(readFile(fixture.skillFilePath), skillFile());
+  assert.equal(fs.existsSync(attemptsPath(fixture)), false);
+});
+
 test("acceptCandidate: the history record says accepted and the index line joins it to the gate", async (t) => {
   const fixture = createFixture(t);
   const request = requestFor(fixture, LESSON_TEXT);

@@ -111,7 +111,13 @@ test("planGate: 2x2x3 plans twelve runs, six per arm, with the rule and the floo
 test("planGate: the prefix of three items and the hard ceiling of twelve runs", () => {
   // OA13: more evidence does not buy more runs. The prefix keeps the order of the evidence, so the same
   // diagnosis always plans the same runs.
-  assert.deepEqual(planOf(5).design, { reps: 2, items: 3, plannedRuns: 12, arms: ["incumbent", "candidate"] });
+  const five = planOf(5);
+  assert.deepEqual(five.design, { reps: 2, items: 3, plannedRuns: 12, arms: ["incumbent", "candidate"] });
+
+  // And the list the gate spends is that prefix: three items and not the five that were eligible, which is
+  // what keeps the budget at twelve runs instead of twenty.
+  assert.equal(five.items.length, 3);
+  assert.deepEqual(five.items, [planItem(0), planItem(1), planItem(2)]);
 
   // The one option lowers the prefix, and the arithmetic follows it: two items are eight runs and four per arm.
   const shorter = planOf(3, { maxItems: 2 });
