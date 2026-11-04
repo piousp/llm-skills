@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, Context, ToolCall, Usage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Context, Model, ToolCall, Usage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { CASE_BANK_FORMAT } from "../../src/case-bank.ts";
 import { ProposerError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
 import {
   buildDecision,
@@ -168,10 +170,10 @@ function failingBranch(): SessionEntry[] {
   ];
 }
 
-function flowContext(branch: readonly SessionEntry[]): ImproveFlowContext {
+function flowContext(branch: readonly SessionEntry[], model?: Model<Api>): ImproveFlowContext {
   return {
     cwd: CWD,
-    model: undefined,
+    model,
     modelRegistry: {
       complete: async () => {
         throw new Error("the flow must not reach the registry while a proposer is injected");
@@ -272,6 +274,60 @@ function flowDeps(fixture: Fixture, appendAttempt?: (root: string, line: Attempt
 
 function candidatePath(pkg: string): string {
   return path.join(stagingDir(pkg), BASE_TIMESTAMP, SKILL.name);
+}
+
+// M1c, S8: the branch of the defect. The artifact lives in the temporary directory of the test and never in a skill, the
+// bank declares it in profile `origin`, and its two cases are the predicate a replayed answer is judged by.
+const ARTIFACT_FILE = "review.md";
+const ARTIFACT_TEXT = "rebase with --squash-all to leave one commit\n";
+const DEFECT_EXCERPT = "rebase with --squash-all";
+
+// The model of the invocation, which is the one a defect pins on every item: it has no failing turn to name its own.
+const DEFECT_MODEL: Model<Api> = {
+  id: "claude-sonnet-4-5",
+  name: "Claude Sonnet 4.5",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "https://api.anthropic.com",
+  input: ["text"],
+  cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+  reasoning: false,
+  contextWindow: 200_000,
+  maxTokens: 8_192,
+};
+const DEFECT_MODEL_ID = "anthropic/claude-sonnet-4-5";
+
+// The digest of the bytes on disk, computed here and not with src/hash.ts: what the record keeps has to agree with an
+// independent computation of the same bytes.
+function digestOf(text: string): string {
+  return `sha256:${createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex")}`;
+}
+
+// The bank of profile `origin`: the artifact the defect was read from and the two cases that measure it. The cases are the
+// floor the format declares (MIN_CASES), so the reader accepts it.
+function defectBank(artifactPath: string): string {
+  return JSON.stringify({
+    format: CASE_BANK_FORMAT,
+    origin: { kind: "review-finding", path: artifactPath, excerpt: DEFECT_EXCERPT },
+    cases: [
+      {
+        id: "keeps-history",
+        prompt: "rebase the branch onto main",
+        checks: [{ kind: "not-contains", value: "--squash-all" }],
+      },
+      {
+        id: "interactive",
+        prompt: "rebase the branch onto main keeping both commits",
+        checks: [{ kind: "contains", value: "--interactive" }],
+      },
+    ],
+  });
+}
+
+// A proposer that fails the test if it is reached: the refusals of this branch happen before the generation, and a double
+// that answered a candidate would hide a run that spent tokens on a defect it could not measure.
+function neverCalledProposer(): ProposeFn {
+  return async () => assert.fail("the run must refuse before the generation");
 }
 
 // Forward-slash relative paths, sorted: the shape of what is left under a directory.
@@ -937,4 +993,179 @@ test("proposeSkill: a directional run does not read the transcript", async (t) =
   // The draft lists no evidence id, which is what the frontmatter of the lesson carries too.
   assert.deepEqual(result.draft.sourceEvidence, []);
   assert.equal(model.calls.length, 1);
+});
+
+// M1c, S8: the branch of the defect. A defect with an observable truth enters as one evidence item of the fourth class that
+// keeps the artifact it was read from and its entry, and the cases of the bank are what the gate of M1 replays -- one item
+// per case, judged by the checks of that case. The session contributes nothing: the evidence comes from a file.
+test("proposeSkill: a defect enters as evidence that keeps its artifact and replays the cases of its bank", async (t) => {
+  const fixture = createFixture(t);
+  const artifactPath = path.join(fixture.pkg, ARTIFACT_FILE);
+  fs.writeFileSync(artifactPath, ARTIFACT_TEXT, "utf8");
+  const bankPath = path.join(fixture.pkg, "defect.json");
+  fs.writeFileSync(bankPath, defectBank(artifactPath), "utf8");
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name, bankPath, defect: true },
+    // A session that also carries a failed tool call: this branch reads the artifact and never the transcript, so the
+    // evidence below is the one item the defect gives and not the one the session would have given.
+    flowContext(failingBranch(), DEFECT_MODEL),
+    flowDeps(fixture),
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  const record: DecisionRecord = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
+
+  assert.equal(record.evidence.length, 1);
+  const [evidence] = record.evidence;
+  assert.equal(evidence.kind, "quality_defect");
+  // The value `source` already had: the evidence was read from a file and not from a turn of this session.
+  assert.equal(evidence.source, "persisted");
+  assert.match(evidence.id, /^ev-[0-9a-f]{8}$/);
+  assert.equal(evidence.excerpt, DEFECT_EXCERPT);
+  assert.deepEqual(evidence.origin, {
+    kind: "review-finding",
+    path: artifactPath,
+    contentHash: digestOf(ARTIFACT_TEXT),
+  });
+  assert.equal(result.entry.evidenceCount, 1);
+
+  // One item per case, and the predicate of each is the one its case declares.
+  assert.deepEqual(
+    record.diagnosis.replayItems.map((item) => item.prompt),
+    ["rebase the branch onto main", "rebase the branch onto main keeping both commits"],
+  );
+  assert.deepEqual(
+    record.diagnosis.replayItems.map((item) => item.expectation.checks),
+    [
+      [{ kind: "not-contains", value: "--squash-all" }],
+      [{ kind: "contains", value: "--interactive" }],
+    ],
+  );
+  for (const item of record.diagnosis.replayItems) {
+    assert.equal(item.expectation.class, "quality_defect");
+    assert.equal(item.expectation.version, 1);
+    assert.equal(item.cwd, CWD);
+    // The model of the invocation, which is the only one a defect can name: it has no failing turn of its own.
+    assert.equal(item.model, DEFECT_MODEL_ID);
+    assert.deepEqual(item.skills, [SKILL.name]);
+    // Every case measures the same defect, so every item names the one failure of the evidence.
+    assert.equal(item.failureSignature, digestOf(evidence.id));
+  }
+  assert.equal(record.diagnosis.failureSignature, digestOf(evidence.id));
+
+  // The branch adds no base to the gate: the candidate is measured by the paired replay of M1 (OA11).
+  assert.equal(record.gate.basis, "replay");
+  assert.equal(record.gate.status, "not-run");
+});
+
+// The artifact is a file the proposal reads, and one that is not there is a state of the attempt: the refusal costs no
+// generation and leaves its line in the index, with the problem in the reason instead of in an event of its own.
+test("proposeSkill: a defect whose artifact is not there answers no-evidence and spends no generation", async (t) => {
+  const fixture = createFixture(t);
+  const artifactPath = path.join(fixture.pkg, "missing-review.md");
+  const bankPath = path.join(fixture.pkg, "defect.json");
+  fs.writeFileSync(bankPath, defectBank(artifactPath), "utf8");
+  const attempts: AttemptLine[] = [];
+
+  const result = await proposeSkill(
+    { surface: "tool", skillName: SKILL.name, bankPath, defect: true },
+    flowContext([], DEFECT_MODEL),
+    {
+      ...flowDeps(fixture, async (_root, line) => {
+        attempts.push(line);
+      }),
+      propose: neverCalledProposer(),
+    },
+  );
+
+  if (result.kind !== "no-evidence") assert.fail(`expected no-evidence, got ${result.kind}`);
+  const reason = result.entry.reason;
+  if (reason === null) assert.fail("the refusal of the artifact kept no reason");
+  assert.equal(reason.startsWith("artifact-absent: "), true);
+  assert.equal(reason.includes(artifactPath), true);
+  assert.equal(result.entry.evidenceCount, 0);
+
+  // The line a refusal that cost nothing already writes, and no candidate anywhere.
+  assert.deepEqual(
+    attempts.map((line) => line.event),
+    ["no-evidence"],
+  );
+  assert.equal(fs.existsSync(candidatePath(fixture.pkg)), false);
+});
+
+// A defect with no bank has nothing to replay, and the request is the only place that says where the cases are: the refusal
+// is the same `no-evidence` of the branch, before the generation and before any file is read.
+test("proposeSkill: a defect without a bank answers no-evidence", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    { surface: "tool", skillName: SKILL.name, defect: true },
+    flowContext([], DEFECT_MODEL),
+    { ...flowDeps(fixture), propose: neverCalledProposer() },
+  );
+
+  if (result.kind !== "no-evidence") assert.fail(`expected no-evidence, got ${result.kind}`);
+  const reason = result.entry.reason;
+  if (reason === null) assert.fail("the refusal of the bank kept no reason");
+  assert.equal(reason.startsWith("bank-absent: "), true);
+  assert.equal(reason.includes(SKILL.name), true);
+  assert.equal(fs.existsSync(candidatePath(fixture.pkg)), false);
+});
+
+// The bank of the other profile is read by the one reader of the format and refused as the bank it is: a rubric is what a
+// directional bank declares, and a defect has an observable truth instead. The refusal is the `no-evidence` of the branch,
+// with the reason of the reader in it.
+test("proposeSkill: a bank of the other profile is refused as the bank it is", async (t) => {
+  const fixture = createFixture(t);
+  const bankPath = path.join(fixture.pkg, "cases.json");
+  fs.writeFileSync(
+    bankPath,
+    JSON.stringify({
+      format: CASE_BANK_FORMAT,
+      description: "the cases of a directional run",
+      rubric: "the answer names the tool it used",
+      cases: [
+        { id: "names-the-tool", prompt: "extract the table", checks: [{ kind: "contains", value: "pdftotext" }] },
+        { id: "keeps-the-flag", prompt: "list the flags", checks: [{ kind: "contains", value: "--interactive" }] },
+      ],
+    }),
+    "utf8",
+  );
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name, bankPath, defect: true },
+    flowContext([], DEFECT_MODEL),
+    { ...flowDeps(fixture), propose: neverCalledProposer() },
+  );
+
+  if (result.kind !== "no-evidence") assert.fail(`expected no-evidence, got ${result.kind}`);
+  const reason = result.entry.reason;
+  if (reason === null) assert.fail("the refusal of the bank kept no reason");
+  assert.equal(reason.startsWith("bank-invalid: "), true);
+  assert.equal(reason.includes("rubric"), true);
+  assert.equal(fs.existsSync(candidatePath(fixture.pkg)), false);
+});
+
+// The bank declares the artifact, so a relative path in it is resolved against the directory the run was asked from -- and
+// what the record keeps is the resolved path, which is the file the gate re-reads from wherever it runs.
+test("proposeSkill: a relative artifact is resolved against the directory of the invocation", async (t) => {
+  const fixture = createFixture(t);
+  const artifactPath = path.join(fixture.pkg, ARTIFACT_FILE);
+  fs.writeFileSync(artifactPath, ARTIFACT_TEXT, "utf8");
+  const bankPath = path.join(fixture.pkg, "defect.json");
+  fs.writeFileSync(bankPath, defectBank(ARTIFACT_FILE), "utf8");
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name, bankPath, defect: true },
+    { ...flowContext([], DEFECT_MODEL), cwd: fixture.pkg },
+    flowDeps(fixture),
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+  assert.equal(result.evidence[0].origin?.path, artifactPath);
+  assert.equal(result.evidence[0].origin?.contentHash, digestOf(ARTIFACT_TEXT));
 });

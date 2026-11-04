@@ -16,6 +16,7 @@ import {
   type StagedCandidateResult,
 } from "../../src/gate/flow.ts";
 import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
+import type { CaseCheck } from "../../src/checks.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
@@ -109,6 +110,19 @@ const INTRINSIC_EVIDENCE: EvidenceItem = {
 // the format and not by hand.
 const LESSON_TEXT = fixtureLesson();
 
+// M1c, S8: the branch of the defect. The artifact lives in the base of the run and never in the skill, the record keeps the
+// digest of the bytes it was read from, and the two cases of the bank are the items the replay measures.
+const ARTIFACT_FILE = "review.md";
+const ARTIFACT_TEXT = "rebase with --squash-all to leave one commit\n";
+const DEFECT_EXCERPT = "rebase with --squash-all";
+const DEFECT_EVIDENCE_ID = "ev-7d1e2f44";
+// The predicate of every case of the bank: one check, so a run that still does what the finding rejected fails it.
+const DEFECT_CHECKS: readonly CaseCheck[] = [{ kind: "not-contains", value: "--squash-all" }];
+const DEFECT_PROMPTS: readonly string[] = [
+  "rebase the branch onto main",
+  "rebase the branch onto main keeping both commits",
+];
+
 // The pair of hashes the record declares, from the same function the writer uses: the fixture is a candidate
 // whose bytes and record agree, which is what the gate checks before it writes anything (and what one test
 // breaks on purpose).
@@ -171,12 +185,19 @@ interface RecordOverrides {
   intrinsicItem?: boolean;
   // The skills the session of every item had (OA6).
   itemSkills?: readonly string[];
+  // M1c, S8: the record of the branch of the defect -- one evidence item of the fourth class, with the artifact it was read
+  // from, and one replay item per case of its bank. `artifactPath` is where that artifact is; the digest the evidence records
+  // is the one of the bytes on disk when the candidate was staged.
+  defect?: boolean;
+  artifactPath?: string;
 }
 
 // The record writeStagingCandidate publishes next to the lesson: schema @1, the candidate the gate will rewrite
 // and the diagnosis its index line names. It is a literal because nothing in this suite runs the propose flow --
 // what is under test is the reading, the rewriting and the gating of a file that flow already wrote.
 function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
+  if (overrides.defect === true) return defectRecord(overrides.artifactPath);
+
   const evidence = fixtureEvidence(overrides);
   const itemSkills = overrides.itemSkills ?? [SKILL_NAME];
 
@@ -237,6 +258,42 @@ function fixtureEvidence(overrides: RecordOverrides): EvidenceItem[] {
   return evidence;
 }
 
+// The record of the branch of the defect (M1c, S8): one evidence item of the fourth class, with the artifact it was read
+// from, and one replay item per case of its bank. The digest the evidence records is the one of the bytes on disk when the
+// candidate was staged, which is what the gate re-verifies before it spends a run.
+function defectRecord(artifactPath: string | undefined): DecisionRecord {
+  if (artifactPath === undefined) throw new Error("the record of a defect needs the artifact it was read from");
+
+  const evidence: EvidenceItem = {
+    id: DEFECT_EVIDENCE_ID,
+    kind: "quality_defect",
+    timestamp: 1762082606625,
+    source: "persisted",
+    excerpt: DEFECT_EXCERPT,
+    origin: { kind: "review-finding", path: artifactPath, contentHash: digestOf(ARTIFACT_TEXT) },
+  };
+
+  return {
+    ...decisionRecord(),
+    evidence: [evidence],
+    diagnosis: {
+      summary: "A review finding rejected the answer of the skill",
+      // The signature of the one evidence item, which is the rule the flow pairs an item with its excerpt by.
+      failureSignature: sha256Digest(evidence.id),
+      replayItems: DEFECT_PROMPTS.map(
+        (prompt): ReplayItem => ({
+          prompt,
+          cwd: "/work/reports",
+          expectation: { class: "quality_defect", version: 1, checks: DEFECT_CHECKS },
+          model: MODEL,
+          skills: [SKILL_NAME],
+          failureSignature: sha256Digest(evidence.id),
+        }),
+      ),
+    },
+  };
+}
+
 // A declared skill the way a user writes one: frontmatter, a body, and a script next to it. The `## Lessons`
 // section is absent on purpose -- the overlay completes it in both arms, which is the case of the first lesson
 // of a skill.
@@ -263,6 +320,9 @@ interface Fixture {
   base: string; // the write base of the run: <base>/staging holds the candidate
   candidateDir: string; // <base>/staging/<ts>/<skill>
   decisionPath: string;
+  // M1c: the artifact a defect was read from. It lives in the base and never in the skill, and it is written only for the
+  // record of that branch -- the one a test changes after the candidate was staged.
+  artifactPath: string;
   skill: SkillRef; // the skill the candidate was written for, as the inventory resolves it
   skillFilePath: string; // <base>/skills/<skill>/SKILL.md
 }
@@ -296,10 +356,13 @@ function createFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
   fs.mkdirSync(lessonsDir, { recursive: true });
   fs.writeFileSync(path.join(lessonsDir, `${SLUG}.md`), LESSON_TEXT, "utf8");
 
-  const decisionPath = path.join(candidateDir, DECISION_FILE);
-  fs.writeFileSync(decisionPath, `${JSON.stringify(decisionRecord(options), null, 2)}\n`, "utf8");
+  const artifactPath = path.join(base, ARTIFACT_FILE);
+  if (options.defect === true) fs.writeFileSync(artifactPath, ARTIFACT_TEXT, "utf8");
 
-  return { base, candidateDir, decisionPath, skill, skillFilePath };
+  const decisionPath = path.join(candidateDir, DECISION_FILE);
+  fs.writeFileSync(decisionPath, `${JSON.stringify(decisionRecord({ ...options, artifactPath }), null, 2)}\n`, "utf8");
+
+  return { base, candidateDir, decisionPath, artifactPath, skill, skillFilePath };
 }
 
 // The record a successful resolution answers with, or the reason the test expected none.
@@ -1056,4 +1119,115 @@ test("gateStagedCandidate: a decision@0 candidate is refused before it is read",
   assert.equal(harness.runs.length, 0);
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
   assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+});
+
+// M1c, S8: the branch of the defect does not add a base to the gate. The record carries items of the fourth class and the
+// gate spends the paired budget of M1 over them -- the same design, the same rule, the same order -- and the exclusion of
+// OA7 drops nothing: it needs a tool name, and the class carries none, so the cases the user wrote all run.
+test("gateStagedCandidate: a record of the defect branch is gated by the same budget", async (t) => {
+  const fixture = createFixture(t, { defect: true });
+  // The answer each arm gives: the incumbent still does what the finding rejected and the candidate answers what the check
+  // asks for. The fourth class is judged on the text of the turn and on nothing else.
+  const harness = createHarness({
+    behaviour: (request) => ({
+      ...completedRun(request, false),
+      finalText: request.arm === "incumbent" ? "rebase with --squash-all" : "rebase with --interactive",
+    }),
+  });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  // Two cases of the bank, two repetitions of each, in two arms.
+  assert.equal(result.plannedRuns, 8);
+  assert.equal(result.usedRuns, 8);
+  assert.equal(harness.runs.length, 8);
+
+  const record = readRecord(fixture.decisionPath);
+  assert.deepEqual(validateAgainstSchema(record), []);
+  const gate = concludedGate(record);
+  assert.equal(gate.status, "gate-accepted");
+  // The items are the cases of the bank, and the record says which predicate each run was judged by.
+  assert.deepEqual(
+    gate.replay.items.map((item) => item.expectation.class),
+    ["quality_defect", "quality_defect"],
+  );
+  assert.deepEqual(
+    gate.replay.items.map((item) => item.expectation.checks),
+    [DEFECT_CHECKS, DEFECT_CHECKS],
+  );
+  // The exclusion by intrinsic failure needs the name of a tool and this class has none: nothing of the diagnosis was dropped.
+  assert.deepEqual(gate.replay.excluded, []);
+  assert.equal(gate.replay.arms.candidate.passes, 4);
+  assert.equal(gate.replay.arms.incumbent.passes, 0);
+  // The order of the budget is the one of M1: item -> rep -> (incumbent, candidate).
+  assert.deepEqual(
+    harness.runs.map((run) => `${run.request.item}:${run.request.rep}:${run.request.arm}`),
+    [
+      "0:1:incumbent",
+      "0:1:candidate",
+      "0:2:incumbent",
+      "0:2:candidate",
+      "1:1:incumbent",
+      "1:1:candidate",
+      "1:2:incumbent",
+      "1:2:candidate",
+    ],
+  );
+});
+
+// M1c, S8: the one guard the branch adds. The record keeps the digest of the bytes the artifact had when the candidate was
+// staged, and a file that moved since then describes a failure nobody measured, so the gate abstains before the plan, spends
+// no run and writes nothing inside the skill.
+test("gateStagedCandidate: an artifact that moved since the proposal abstains with zero runs", async (t) => {
+  const fixture = createFixture(t, { defect: true });
+  const skillBefore = fs.readFileSync(fixture.skillFilePath, "utf8");
+  const decisionBefore = fs.readFileSync(fixture.decisionPath, "utf8");
+  // The finding was edited after the candidate was staged: the bytes are no longer the ones the evidence records.
+  fs.writeFileSync(fixture.artifactPath, "rebase with --interactive\n", "utf8");
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "origin-moved");
+  assert.equal(result.plannedRuns, 0);
+  assert.equal(result.usedRuns, 0);
+  assert.equal(result.overlays, null);
+  assert.equal(harness.runs.length, 0);
+
+  // Nothing inside the skill and nothing in the record: a gate that refused before the plan leaves the state it found.
+  assert.equal(fs.readFileSync(fixture.skillFilePath, "utf8"), skillBefore);
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), decisionBefore);
+
+  // The line of the index says what moved, after the reason every reader groups on.
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, "gate-abstained");
+  assert.equal(lines[0].failureSignature, sha256Digest(DEFECT_EVIDENCE_ID));
+  const reason = lines[0].reason;
+  if (reason === undefined) assert.fail("the abstention of the artifact kept no reason in the index");
+  assert.equal(reason.startsWith("origin-moved: "), true);
+  assert.equal(reason.includes(fixture.artifactPath), true);
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention answered without a detail");
+  assert.equal(reason, `origin-moved: ${detail}`);
+});
+
+// The other half of the same guard: an artifact that was deleted is not the bytes the evidence read either, and the detail
+// says that it could not be read instead of claiming a digest nobody computed.
+test("gateStagedCandidate: an artifact that is gone abstains as moved", async (t) => {
+  const fixture = createFixture(t, { defect: true });
+  fs.rmSync(fixture.artifactPath);
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "origin-moved");
+  assert.equal(harness.runs.length, 0);
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention answered without a detail");
+  assert.equal(detail.includes(fixture.artifactPath), true);
+  assert.equal(detail.includes("ENOENT"), true);
 });

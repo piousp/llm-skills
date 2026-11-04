@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { attemptSignature } from "../../src/attempts.ts";
+import { CASE_BANK_FORMAT, type CaseBank, type CaseBankCase } from "../../src/case-bank.ts";
 import type { CaseCheck } from "../../src/checks.ts";
 import {
   buildBaselineDiagnosis,
+  buildDefectDiagnosis,
   buildDiagnosis,
   describeExpectation,
   expectationViolation,
@@ -39,6 +41,50 @@ function contextsOf(entries: [string, EvidenceContext][]): ReadonlyMap<string, E
 function expectedSignature(ids: readonly string[]): string {
   const material = [...ids].sort().join("\n");
   return `sha256:${createHash("sha256").update(material, "utf8").digest("hex")}`;
+}
+
+// M1c, S8: the materials of the branch of the defect, as the two files give them -- the evidence read from an artifact and
+// the bank whose cases measure it. The bank is a literal because the reader of the format has its own suite: what is under
+// test here is the diagnosis built from it.
+const DEFECT_CASES: readonly CaseBankCase[] = [
+  {
+    id: "keeps-history",
+    prompt: "rebase the branch onto main",
+    checks: [{ kind: "not-contains", value: "--squash-all" }],
+  },
+  {
+    id: "interactive",
+    prompt: "rebase the branch onto main and keep both commits",
+    checks: [{ kind: "contains", value: "--interactive" }],
+  },
+];
+
+function defectItem(overrides: Partial<EvidenceItem> = {}): EvidenceItem {
+  return {
+    id: "ev-7d1e2f44",
+    kind: "quality_defect",
+    timestamp: 1_762_082_602_481,
+    source: "persisted",
+    excerpt: "the answer used --squash-all",
+    origin: {
+      kind: "review-finding",
+      path: "/work/reports/review.md",
+      contentHash: `sha256:${"d".repeat(64)}`,
+    },
+    ...overrides,
+  };
+}
+
+function defectBank(cases: readonly CaseBankCase[] = DEFECT_CASES): CaseBank {
+  return {
+    format: CASE_BANK_FORMAT,
+    origin: {
+      kind: "review-finding",
+      path: "/work/reports/review.md",
+      excerpt: "the answer used --squash-all",
+    },
+    cases,
+  };
 }
 
 test("buildDiagnosis: zero evidence throws instead of inventing a diagnosis", () => {
@@ -457,6 +503,106 @@ test("buildDiagnosis: a quality_defect does not shadow a replayable correction",
   assert.deepEqual(
     diagnosis.replayItems.map((item) => item.expectation),
     [{ class: "user_correction", version: 1 }],
+  );
+});
+
+// M1c, S8: the branch of the defect has a constructor of its own, because its items are the cases of a bank and not the
+// turns of a session. One item per case, the checks of the case are what the replayed answer is judged by, and every item
+// names the one failure the evidence declares -- which is the signature the gate pairs the two by.
+test("buildDefectDiagnosis: every case of the bank is one replay item judged by its checks", () => {
+  const evidence = defectItem();
+
+  const diagnosis = buildDefectDiagnosis(evidence, defectBank(), SKILL, CWD, MODEL);
+
+  assert.deepEqual(diagnosis, {
+    summary:
+      'Quality defect of skill "pdf-tools" read from "/work/reports/review.md" ("review-finding"): "the answer used --squash-all".',
+    failureSignature: expectedSignature([evidence.id]),
+    replayItems: [
+      {
+        prompt: "rebase the branch onto main",
+        cwd: CWD,
+        model: MODEL,
+        expectation: {
+          class: "quality_defect",
+          version: 1,
+          checks: [{ kind: "not-contains", value: "--squash-all" }],
+        },
+        skills: [SKILL.name],
+        failureSignature: expectedSignature([evidence.id]),
+      },
+      {
+        prompt: "rebase the branch onto main and keep both commits",
+        cwd: CWD,
+        model: MODEL,
+        expectation: {
+          class: "quality_defect",
+          version: 1,
+          checks: [{ kind: "contains", value: "--interactive" }],
+        },
+        skills: [SKILL.name],
+        failureSignature: expectedSignature([evidence.id]),
+      },
+    ],
+  });
+});
+
+// The predicate of a case is the list of checks it carries, so a case with no check is a condition nobody wrote: it yields
+// no item instead of an expectation src/checks.ts would have nothing to execute for.
+test("buildDefectDiagnosis: a case without checks produces no replay item", () => {
+  const bank = defectBank([{ id: "keeps-history", prompt: "rebase the branch onto main", checks: [] }, DEFECT_CASES[1]]);
+
+  const diagnosis = buildDefectDiagnosis(defectItem(), bank, SKILL, CWD, MODEL);
+
+  assert.deepEqual(
+    diagnosis.replayItems.map((item) => item.prompt),
+    ["rebase the branch onto main and keep both commits"],
+  );
+  // The failure is still the one evidence item, whatever the cases that survived say.
+  assert.equal(diagnosis.failureSignature, expectedSignature([defectItem().id]));
+});
+
+// The summary is the artifact and its entry, never an invented one: another kind of origin is another sentence, and an
+// artifact whose entry was not recorded says exactly that instead of describing a finding nobody wrote.
+test("buildDefectDiagnosis: the summary is the origin and is not invented", () => {
+  const review = buildDefectDiagnosis(defectItem(), defectBank(), SKILL, CWD);
+  const draft = buildDefectDiagnosis(
+    defectItem({
+      excerpt: "the draft dropped the second commit",
+      origin: { kind: "rejected-draft", path: "/work/reports/draft.md", contentHash: `sha256:${"e".repeat(64)}` },
+    }),
+    defectBank(),
+    SKILL,
+    CWD,
+  );
+  const silent = buildDefectDiagnosis(defectItem({ excerpt: undefined }), defectBank(), SKILL, CWD);
+
+  assert.equal(
+    review.summary,
+    'Quality defect of skill "pdf-tools" read from "/work/reports/review.md" ("review-finding"): "the answer used --squash-all".',
+  );
+  assert.equal(
+    draft.summary,
+    'Quality defect of skill "pdf-tools" read from "/work/reports/draft.md" ("rejected-draft"): "the draft dropped the second commit".',
+  );
+  assert.equal(
+    silent.summary,
+    'Quality defect of skill "pdf-tools" read from "/work/reports/review.md" ("review-finding"): no entry was recorded.',
+  );
+  // With no model of the invocation the item pins none, and the gate answers `no-model` instead of inventing one.
+  assert.equal(review.replayItems[0].model, undefined);
+});
+
+// The constructor belongs to the branch, so evidence of another class -- or a defect with no artifact behind it -- is
+// refused instead of being diagnosed as something it is not.
+test("buildDefectDiagnosis: evidence that is not a defect read from an artifact is refused", () => {
+  assert.throws(
+    () => buildDefectDiagnosis(evidenceItem("ev-00000071", "tool_error", "bash"), defectBank(), SKILL, CWD),
+    (thrown: unknown) => thrown instanceof SriDiagnosisError,
+  );
+  assert.throws(
+    () => buildDefectDiagnosis(defectItem({ origin: undefined }), defectBank(), SKILL, CWD),
+    (thrown: unknown) => thrown instanceof SriDiagnosisError,
   );
 });
 

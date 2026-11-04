@@ -3,11 +3,13 @@ import path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes } from "./attempts.ts";
+import { caseBankReason, loadCaseBank, type CaseBank } from "./case-bank.ts";
 import { readSriConfig } from "./config.ts";
-import { buildBaselineDiagnosis, buildDiagnosis } from "./diagnosis.ts";
+import { buildBaselineDiagnosis, buildDefectDiagnosis, buildDiagnosis } from "./diagnosis.ts";
 import { isEligibleUnderAnySpelling } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
+import { sha256Digest, sha256Hex } from "./hash.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { createModelCall, type ModelCallRegistry } from "./model-call.ts";
 import { SKILL_FILE } from "./names.ts";
@@ -28,10 +30,11 @@ import type {
   GateBudget,
   GateTokenTally,
   LessonDraft,
+  Result,
   SkillRef,
   SriConfig,
 } from "./types.ts";
-import { currentTime, quote, toErrorMessage } from "./values.ts";
+import { currentTime, isMissingPathError, quote, toErrorMessage } from "./values.ts";
 import { assertBaseOutsideSkill, relativeToBase, writeBase } from "./write-base.ts";
 import {
   appendAttemptLine,
@@ -59,7 +62,10 @@ import {
 //      attempt is recorded anyway so "nothing happened" is auditable (D5). A run that names a case
 //      bank asks for a direction instead (M1c): its failures are the cases the bank declares, so this
 //      step does not apply to it, the diagnosis is the ask itself, and the record says the gate of the
-//      bank will measure the candidate;
+//      bank will measure the candidate. A run that also names a defect reads the artifact the bank
+//      declares (M1c, S8): its evidence is one item of the fourth class, the cases of the bank are what
+//      the replay measures, and a bank or an artifact that cannot be read is the same refusal of this
+//      step, with the problem in the reason;
 //   4. the session model writes one lesson from a diagnosis of that evidence;
 //   5. the lesson and its decision.json go to the package staging tree and the attempt joins the
 //      index. The two writes are one unit: a candidate whose line cannot be appended is retired, so
@@ -375,15 +381,33 @@ export async function proposeSkill(
     };
   }
 
+  // The third branch of the run (M1c, S8): a request whose bank describes the artifact a defect came from reads that
+  // artifact instead of the transcript. Its evidence is one item of the fourth class, the cases of the bank are what the
+  // gate of M1 replays (OA11), and every material that cannot be read is the `no-evidence` refusal that already exists --
+  // with the problem in the reason of the entry and in its line of the index -- so a bank that is not there, a bank of the
+  // other profile and an artifact that is not there are states of the attempt and not events nobody has named yet.
+  const defect = request.defect === true ? await defectMaterialsOf(request, skill, ctx, now) : undefined;
+  if (defect !== undefined && !defect.ok) {
+    const hashes = attemptHashes("no-evidence", skill.name, focus);
+    await recordAttempt(seams, now, "no-evidence", skill, hashes);
+    return {
+      kind: "no-evidence",
+      skill,
+      entry: attemptEntry(request, skill, 0, "no-evidence", defect.error, hashes, null),
+    };
+  }
+  const materials = defect !== undefined && defect.ok ? defect.value : undefined;
+
   // Where the failures of this run are written down is a property of its base (M1c): a request that names a bank asks
   // for a direction and the bank is what measures it, so the transcript is not read at all -- a session with no
-  // failure is not a refusal in this base -- while a request that names none is the run of M1, unchanged.
+  // failure is not a refusal in this base -- while a request that names none is the run of M1, unchanged. The branch of
+  // the defect reads neither: its evidence is the artifact above, so the session is not read for it either.
   const basis = basisOf(request);
-  const derived = basis === "replay" ? sessionEvidence(ctx) : undefined;
+  const derived = basis === "replay" && materials === undefined ? sessionEvidence(ctx) : undefined;
 
   // Zero items is absence and not an empty result, and it is the refusal of the base that reads the transcript: a
   // summary of nothing would read like a diagnosis that found the skill healthy.
-  if (basis === "replay" && derived === undefined) {
+  if (basis === "replay" && materials === undefined && derived === undefined) {
     const hashes = attemptHashes("no-evidence", skill.name, focus);
     await recordAttempt(seams, now, "no-evidence", skill, hashes);
     return {
@@ -400,15 +424,23 @@ export async function proposeSkill(
     return { kind: "no-model", skill };
   }
 
-  // What the generation is written from, per base: the evidence the transcript gave and the diagnosis built from it, or
-  // the ask alone -- no evidence item and no replayed turn -- because the turns a directional attempt replays are the
-  // cases of the bank, which the gate reads when it runs and this run has not read yet. `derived` is undefined exactly
-  // in the second case: the replay base without evidence returned above.
-  const evidence = derived === undefined ? [] : derived.items;
-  const diagnosis =
-    derived === undefined
-      ? buildBaselineDiagnosis(triggerOf(request), skill)
-      : diagnoseEvidence(derived.items, derived.contextById, skill, ctx);
+  // What the generation is written from, per branch: the evidence the transcript gave and the diagnosis built from it, the
+  // ask alone -- no evidence item and no replayed turn, because the turns a directional attempt replays are the cases of
+  // the bank, which the gate reads when it runs and this run has not read yet --, or the artifact of a defect and the cases
+  // of its bank. The three are exclusive by construction: `materials` is undefined in the first two and `derived` in the
+  // last one.
+  let evidence: readonly EvidenceItem[];
+  let diagnosis: Diagnosis;
+  if (materials !== undefined) {
+    evidence = [materials.evidence];
+    diagnosis = buildDefectDiagnosis(materials.evidence, materials.bank, skill, ctx.cwd, sessionModelOf(ctx));
+  } else if (derived === undefined) {
+    evidence = [];
+    diagnosis = buildBaselineDiagnosis(triggerOf(request), skill);
+  } else {
+    evidence = derived.items;
+    diagnosis = diagnoseEvidence(derived.items, derived.contextById, skill, ctx);
+  }
   const skillText = await seams.readSkillText(skill);
 
   const proposal = await propose({
@@ -654,24 +686,112 @@ function spellingsOf(skill: SkillRef): string[] {
   return dirName === skill.name ? [skill.name] : [skill.name, dirName];
 }
 
+// OA5: the identity of the model of the invocation, in the "provider/model" spelling the evidence carries, so a replay item
+// never mixes one form with the other; the bare id is ambiguous between providers that serve it. The spelling itself
+// belongs to src/evidence.ts (modelIdentity), the module that owns it.
+//
+// It is the fallback of the base of the transcript -- the model of the failing turn wins (src/diagnosis.ts) -- and the only
+// answer for the branch of the defect, which has no turn of the session to name one.
+function sessionModelOf(ctx: ImproveFlowContext): string | undefined {
+  const model = ctx.model;
+  return model === undefined ? undefined : modelIdentity(model.provider, model.id);
+}
+
 function diagnoseEvidence(
   items: readonly EvidenceItem[],
   contextById: ReadonlyMap<string, EvidenceContext>,
   skill: SkillRef,
   ctx: ImproveFlowContext,
 ): Diagnosis {
-  const model = ctx.model;
-  // OA5: the fallback is written in the same "provider/model" spelling the evidence carries, so a
-  // replay item never mixes one form with the other; the bare id is ambiguous between providers
-  // that serve it. The spelling itself belongs to src/evidence.ts (modelIdentity), the module that owns
-  // it. This is only a fallback: the model of the failing turn wins (src/diagnosis.ts).
-  return buildDiagnosis(
-    items,
-    contextById,
-    skill,
-    ctx.cwd,
-    model === undefined ? {} : { model: modelIdentity(model.provider, model.id) },
-  );
+  const model = sessionModelOf(ctx);
+  return buildDiagnosis(items, contextById, skill, ctx.cwd, model === undefined ? {} : { model });
+}
+
+// The materials of the branch of the defect (M1c, S8): the bank of profile `origin` and the artifact it names, read and
+// hashed. The two travel together because neither is a diagnosis on its own -- the evidence is the truth and the bank the
+// cases that measure it -- and both are read before the generation, so a run that cannot measure refuses before spending.
+interface DefectMaterials {
+  evidence: EvidenceItem;
+  bank: CaseBank;
+}
+
+// The materials of the branch of the defect, or the problem that stops the run before it spends a generation.
+//
+// The three steps are the three reasons a run that cannot measure refuses:
+//
+//   1. the request names a bank: a defect with no bank has no case to replay, and nothing else in the request says where
+//      the cases that measure it are written down;
+//   2. the bank is a bank of profile `origin`, read by the one reader of the format (src/case-bank.ts) -- absent,
+//      unreadable, of another version, of the profile of a directional bank or with a case that does not validate are all
+//      refusals of that reader, and its reason travels as it is (caseBankReason);
+//   3. the artifact the origin names is a file this run can read, and the digest of its bytes is what the evidence keeps,
+//      so the gate can re-read the same bytes before it spends a run (src/gate/flow.ts, origin-moved).
+//
+// Nothing here compares a digest with another one: the bank declares the artifact and not its hash, so the only comparison
+// that exists is the one the gate makes against the record.
+//
+// The path of the artifact is resolved against the cwd of the invocation, and the resolved path is what the record keeps,
+// so the gate re-reads the same file from wherever it runs. A relative path in the bank is therefore relative to the
+// directory the run was asked from -- the one directory the proposal and the gate share.
+async function defectMaterialsOf(
+  request: ImproveRequest,
+  skill: SkillRef,
+  ctx: ImproveFlowContext,
+  now: Date,
+): Promise<Result<DefectMaterials, string>> {
+  const bankPath = request.bankPath;
+  if (bankPath === undefined) {
+    return {
+      ok: false,
+      error: `bank-absent: a defect of skill ${quote(skill.name)} needs a bank, and the request names none`,
+    };
+  }
+
+  const bank = await loadCaseBank(bankPath, "origin");
+  if (!bank.ok) return { ok: false, error: caseBankReason(bank.error) };
+
+  const origin = bank.value.origin;
+  if (origin === undefined) {
+    // Unreachable through the reader, which refuses a bank of this profile without an origin. The field is optional in the
+    // contract, so the branch is written instead of assumed away: a defect with no artifact has nothing to name.
+    return { ok: false, error: `bank-invalid: the bank ${quote(bankPath)} declares no origin` };
+  }
+
+  const artifactPath = path.resolve(ctx.cwd, origin.path);
+  const bytes = await readArtifact(artifactPath);
+  if (!bytes.ok) return bytes;
+
+  const contentHash = sha256Digest(bytes.value);
+  return {
+    ok: true,
+    value: {
+      bank: bank.value,
+      evidence: {
+        // The artifact and its bytes name the failure, the way the transcript names one (src/evidence.ts): two runs over the
+        // same defect agree, which is what makes their lines group on the failure signature of the diagnosis, and an
+        // artifact that moved is another item.
+        id: `ev-${sha256Hex(JSON.stringify(["quality_defect", origin.kind, artifactPath, contentHash])).slice(0, 8)}`,
+        kind: "quality_defect",
+        timestamp: now.getTime(),
+        // A defect is read from a file and not from a turn: the value `persisted` already had.
+        source: "persisted",
+        excerpt: origin.excerpt,
+        origin: { kind: origin.kind, path: artifactPath, contentHash },
+      },
+    },
+  };
+}
+
+// The artifact of a defect, read as bytes: the digest of the bytes and not of a re-serialization of them is what the
+// evidence records, so a file that differs in whitespace is a file that moved. Absence is a refusal with its own word and
+// not an exception, the reading src/case-bank.ts gives a bank that is not there.
+async function readArtifact(artifactPath: string): Promise<Result<Buffer, string>> {
+  try {
+    return { ok: true, value: await fs.promises.readFile(artifactPath) };
+  } catch (error) {
+    if (isMissingPathError(error)) return { ok: false, error: `artifact-absent: ${artifactPath}` };
+    return { ok: false, error: `artifact-unreadable: ${artifactPath}: ${toErrorMessage(error)}` };
+  }
 }
 
 // The generation seam: the injected proposer if there is one, and otherwise one built around the

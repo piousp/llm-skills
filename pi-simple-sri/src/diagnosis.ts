@@ -1,4 +1,7 @@
 import { attemptSignature } from "./attempts.ts";
+// Type-only, like the checks a case carries in src/types.ts: the contract of the bank is named here and the module that
+// reads the file is the one that compiles its regexes, so this module keeps no run time dependency on the reader.
+import type { CaseBank } from "./case-bank.ts";
 import { SriDiagnosisError } from "./errors.ts";
 import type { EvidenceContext } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
@@ -8,6 +11,7 @@ import type {
   Diagnosis,
   EvidenceItem,
   EvidenceKind,
+  EvidenceOrigin,
   Expectation,
   ReplayItem,
   SkillRef,
@@ -40,8 +44,17 @@ import { quote } from "./values.ts";
 // an attempt measured by a bank has no failure of the transcript to point at, so its diagnosis is the ask and it
 // carries no replay item. How many items a diagnosis must carry is a property of the base, and each constructor owns
 // the answer for its own.
+//
+// The defect of M1c has the third constructor, buildDefectDiagnosis, and it is the only place the checks of a case become
+// an expectation: its evidence comes from an artifact and its items are the cases of a bank, so neither the transcript
+// nor the class can say what a replayed answer must satisfy.
 
 const ID_SEPARATOR = "\n";
+
+// The cap of the excerpt the summary of a defect quotes: the 200 code points src/evidence.ts and src/case-bank.ts declare,
+// so the entry a defect was read from and the sentence a human reads quote the same text. A longer cap here would let the
+// summary hold a finding the record cuts.
+const MAX_EXCERPT_CODE_POINTS = 200;
 
 interface KindRule {
   // Fallback order of the classes: the lower the number, the stronger the class.
@@ -165,6 +178,73 @@ export function buildBaselineDiagnosis(trigger: DecisionTrigger, skill: SkillRef
 function summaryOfAsk(trigger: DecisionTrigger, skill: SkillRef): string {
   const ask = trigger.focus === null ? "no focus was asked for" : `the focus asked for was ${quote(trigger.focus)}`;
   return `Directional improvement of skill ${quote(skill.name)}: ${ask}.`;
+}
+
+// The third constructor of this module, for the third base (M1c, S8): the evidence a defect gives and the bank whose cases
+// measure it. A defect is a truth observable in an artifact -- a review finding, a draft that was rejected -- so its
+// evidence is not read from a turn of the session, and what a replayed answer must satisfy is not a property of a class
+// but the list of checks each case carries (see expectationFor).
+//
+// One replay item per case of the bank, and the prompt of each item is the prompt of its case: the turns this base replays
+// are the ones the user wrote, and a prompt invented here would replay a task nobody asked for. Every item names the same
+// failure -- the one evidence item -- because every case measures the same defect, and the gate pairs the two by signing
+// the id of that evidence (src/gate/flow.ts, planItemsOf).
+//
+// A case whose checks are empty produces no item: an expectation of this class with no predicate is a condition nobody
+// wrote, and src/checks.ts would have nothing to execute. The reader of the bank refuses such a case, so this is a guard
+// over a bank built somewhere else and not a case the flow can reach.
+//
+// The signature of the diagnosis is the signature of the one evidence item, which is also the signature of every item, so
+// the two cannot describe different failures.
+export function buildDefectDiagnosis(
+  evidence: EvidenceItem,
+  bank: CaseBank,
+  skill: SkillRef,
+  cwd: string,
+  model?: string,
+): Diagnosis {
+  const origin = evidence.origin;
+  if (evidence.kind !== "quality_defect" || origin === undefined) {
+    throw new SriDiagnosisError(
+      `cannot diagnose skill ${quote(skill.name)}: the evidence ${quote(evidence.id)} is not a defect read from an artifact`,
+    );
+  }
+
+  const failureSignature = signatureOf([evidence.id]);
+  const replayItems: ReplayItem[] = [];
+  for (const entry of bank.cases) {
+    if (entry.checks.length === 0) continue;
+
+    const item: ReplayItem = {
+      prompt: entry.prompt,
+      cwd,
+      // A fresh list every time: the case of the bank is data this record copies, and a caller that edited what it was
+      // handed would edit the bank the next case is read from.
+      expectation: { class: "quality_defect", version: 1, checks: [...entry.checks] },
+      skills: [skill.name],
+      failureSignature,
+    };
+    // Q13, OA5: the model the replay pins is the one of the invocation, because a defect has no failing turn to name its
+    // own. Absent when the session runs no model, and then the gate abstains with `no-model` instead of guessing one.
+    if (model !== undefined) item.model = model;
+    replayItems.push(item);
+  }
+
+  return { summary: summaryOfDefect(evidence, origin, skill), failureSignature, replayItems };
+}
+
+// The sentence a human reads about a defect, derived from the artifact and never invented: how it was found, where it is,
+// and the entry that does not hold. With no excerpt the sentence says exactly that, the way the summary of an ask says
+// there was no focus.
+function summaryOfDefect(evidence: EvidenceItem, origin: EvidenceOrigin, skill: SkillRef): string {
+  const entry = evidence.excerpt === undefined ? "no entry was recorded" : quote(cutExcerpt(evidence.excerpt));
+  return `Quality defect of skill ${quote(skill.name)} read from ${quote(origin.path)} (${quote(origin.kind)}): ${entry}.`;
+}
+
+// Array.from walks code points, so a surrogate pair is never cut in half: a lone surrogate is not valid UTF-8 and would
+// corrupt the record. The reading src/evidence.ts gives the excerpt of a failure.
+function cutExcerpt(text: string): string {
+  return Array.from(text).slice(0, MAX_EXCERPT_CODE_POINTS).join("");
 }
 
 // A failure that yields both values a replay item needs, read once from the evidence and its

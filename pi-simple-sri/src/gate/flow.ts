@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildAttemptLine, type AttemptEvent } from "../attempts.ts";
 import { signatureOf } from "../diagnosis.ts";
+import { sha256Digest } from "../hash.ts";
 import { DECISION_FILE, LESSONS_DIR } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "../skills-inventory.ts";
@@ -57,6 +58,11 @@ import type {
 // A gate that passes writes no line of the index and no byte outside the candidate: `gate-accepted` is a
 // state of decision.json, and the line of an accepted candidate is the `accepted` event the acceptance
 // writes when it edits the skill. That is why `gate-accepted` is not in the event vocabulary at all.
+//
+// M1c adds one guard and no branch: before step 3 plans anything, the artifact of every evidence item that names one is
+// re-read and hashed against the digest the evidence recorded, and bytes that no longer match abstain with
+// `origin-moved`. The items, the plan, the budget, the verdict and the line are the ones of M1, unchanged -- the branch
+// of the defect changes where the items come from and what judges them, and nothing about how the gate spends.
 //
 // It is here and not in the surface (src/tool-skill-improve.ts, src/command-skill-improve.ts) because both
 // surfaces run it and a candidate this module gates is one the whole package then trusts: one
@@ -242,6 +248,26 @@ export async function gateStagedCandidate(
   const resolved = await resolveStagedCandidate(request.base, request.skill.name, request.stagingPath);
   if (!resolved.ok) return { kind: "refused", rejection: resolved.error };
   const record = resolved.value;
+
+  // The artifact of a defect, re-verified before the plan and before any run (M1c, S8). The truth of a defect is a file,
+  // and the record keeps the digest of the bytes it read: a file that moved since the proposal describes a failure nobody
+  // measured, so the gate abstains instead of spending a budget against it. It is the one guard the branch adds, and it
+  // runs before the rest because a gate about nothing is the cheapest one to stop.
+  const moved = await movedOriginOf(record, request.cwd);
+  if (moved !== null) {
+    return await answered({
+      request,
+      seams,
+      record,
+      candidateDir,
+      verdict: "gate-abstained",
+      reason: "origin-moved",
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+      detail: moved,
+    });
+  }
 
   // Step 2. The bytes the record declares. A lesson that moved since it was staged is the one abstention
   // that writes nothing at all -- not even its line -- because neither the record nor the index may describe
@@ -700,6 +726,39 @@ function undeclaredBytes(lessonText: string, record: DecisionRecord): string | n
   const declared = record.candidate;
   if (hashes.value.contentHash !== declared.contentHash || hashes.value.bodyHash !== declared.bodyHash) {
     return `the lesson ${quote(declared.lessonPath)} hashes to ${hashes.value.contentHash}, not to the ${declared.contentHash} the record declares`;
+  }
+
+  return null;
+}
+
+// The first artifact of the record whose bytes are not the ones the evidence recorded, as the detail of the abstention, or
+// null when every artifact still hashes to its digest.
+//
+// The evidence of a defect keeps the path and the digest of the bytes it read (EvidenceOrigin), and nothing else in the
+// record can prove the file is still the same: a finding that was edited, a draft that was rewritten and an artifact that
+// was deleted are one answer here, and the detail says which of them happened. The path is resolved against the cwd of the
+// invocation, which is the directory the proposal resolved it against; the path a record keeps is already absolute, and
+// resolving it again answers the same file.
+//
+// The first discrepancy is the whole detail: a gate that refused for one moved artifact says nothing about the rest, and
+// reading them would spend the runs this guard exists to save.
+async function movedOriginOf(record: DecisionRecord, cwd: string): Promise<string | null> {
+  for (const item of record.evidence) {
+    const origin = item.origin;
+    if (origin === undefined) continue;
+
+    const artifactPath = path.resolve(cwd, origin.path);
+    let bytes: Buffer;
+    try {
+      bytes = await fs.promises.readFile(artifactPath);
+    } catch (error) {
+      return `the artifact ${quote(artifactPath)} of the evidence ${quote(item.id)} cannot be read: ${toErrorMessage(error)}`;
+    }
+
+    const digest = sha256Digest(bytes);
+    if (digest !== origin.contentHash) {
+      return `the artifact ${quote(artifactPath)} of the evidence ${quote(item.id)} hashes to ${digest}, not to the ${origin.contentHash} the evidence records`;
+    }
   }
 
   return null;
