@@ -16,7 +16,7 @@ import type {
   ReplayItem,
   SkillRef,
 } from "./types.ts";
-import { quote } from "./values.ts";
+import { cutCodePoints, quote } from "./values.ts";
 
 // Evidence becomes a diagnosis here: one summary, one signature, and the replay items the M1
 // gate runs (Q2, Q13). Everything enters through the parameters; nothing is read from disk and
@@ -237,14 +237,11 @@ export function buildDefectDiagnosis(
 // and the entry that does not hold. With no excerpt the sentence says exactly that, the way the summary of an ask says
 // there was no focus.
 function summaryOfDefect(evidence: EvidenceItem, origin: EvidenceOrigin, skill: SkillRef): string {
-  const entry = evidence.excerpt === undefined ? "no entry was recorded" : quote(cutExcerpt(evidence.excerpt));
+  const entry =
+    evidence.excerpt === undefined
+      ? "no entry was recorded"
+      : quote(cutCodePoints(evidence.excerpt, MAX_EXCERPT_CODE_POINTS));
   return `Quality defect of skill ${quote(skill.name)} read from ${quote(origin.path)} (${quote(origin.kind)}): ${entry}.`;
-}
-
-// Array.from walks code points, so a surrogate pair is never cut in half: a lone surrogate is not valid UTF-8 and would
-// corrupt the record. The reading src/evidence.ts gives the excerpt of a failure.
-function cutExcerpt(text: string): string {
-  return Array.from(text).slice(0, MAX_EXCERPT_CODE_POINTS).join("");
 }
 
 // A failure that yields both values a replay item needs, read once from the evidence and its

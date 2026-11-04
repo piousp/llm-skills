@@ -7,6 +7,11 @@
 // line it names. The import is type-only, so this module -- the contract root of the package -- keeps no run
 // time dependency on the module that reads and writes the lines.
 import type { KnownAttemptEvent } from "./attempts.ts";
+// The two values `EvidenceOrigin.kind` names are declared once, in the reader of the bank (src/case-bank.ts, next to the
+// validator that accepts them and the schema test that reads the file together with the schema), and the contract imports
+// the type instead of repeating the pair here. Type-only for the same reason as the two imports around it: the record
+// names the vocabulary and the module that reads it is the one that decides which values exist.
+import type { CaseBankOriginKind } from "./case-bank.ts";
 // The predicate of the fourth evidence class lives in src/checks.ts, next to the evaluator and the validator that
 // are its only producers and consumers. Type-only for the same reason: the contract names the shape, and the
 // module that executes it is the one that compiles its regexes.
@@ -64,7 +69,7 @@ export type EvidenceKind = "tool_error" | "user_correction" | "retry_loop" | "qu
 // the digest of its bytes, so the record can be re-read against the file that produced it and a moved file is a
 // fact and not a surprise. `kind` names how the defect was found and is a closed vocabulary of its own.
 export interface EvidenceOrigin {
-  kind: "review-finding" | "rejected-draft";
+  kind: CaseBankOriginKind;
   path: string;
   contentHash: string; // "sha256:" + 64 hex
 }

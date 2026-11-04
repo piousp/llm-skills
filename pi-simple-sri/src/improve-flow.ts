@@ -9,6 +9,7 @@ import { buildBaselineDiagnosis, buildDefectDiagnosis, buildDiagnosis } from "./
 import { isEligibleUnderAnySpelling } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
+import { notConcludedGateOf } from "./gate/flow.ts";
 import { sha256Digest, sha256Hex } from "./hash.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { createModelCall, type ModelCallRegistry } from "./model-call.ts";
@@ -27,14 +28,13 @@ import type {
   EvidenceItem,
   GateBasis,
   GateBlock,
-  GateBudget,
   GateTokenTally,
   LessonDraft,
   Result,
   SkillRef,
   SriConfig,
 } from "./types.ts";
-import { currentTime, isMissingPathError, quote, toErrorMessage } from "./values.ts";
+import { currentTime, quote, readBytes, toErrorMessage } from "./values.ts";
 import { assertBaseOutsideSkill, relativeToBase, writeBase } from "./write-base.ts";
 import {
   appendAttemptLine,
@@ -784,14 +784,14 @@ async function defectMaterialsOf(
 
 // The artifact of a defect, read as bytes: the digest of the bytes and not of a re-serialization of them is what the
 // evidence records, so a file that differs in whitespace is a file that moved. Absence is a refusal with its own word and
-// not an exception, the reading src/case-bank.ts gives a bank that is not there.
+// not an exception, the reading src/values.ts gives a read and src/case-bank.ts gives a bank that is not there; the two
+// words of that reading become the two of this flow.
 async function readArtifact(artifactPath: string): Promise<Result<Buffer, string>> {
-  try {
-    return { ok: true, value: await fs.promises.readFile(artifactPath) };
-  } catch (error) {
-    if (isMissingPathError(error)) return { ok: false, error: `artifact-absent: ${artifactPath}` };
-    return { ok: false, error: `artifact-unreadable: ${artifactPath}: ${toErrorMessage(error)}` };
-  }
+  const read = await readBytes(artifactPath);
+  if (read.ok) return read;
+
+  const word = read.error.error === "absent" ? "artifact-absent" : "artifact-unreadable";
+  return { ok: false, error: `${word}: ${read.error.detail}` };
 }
 
 // The generation seam: the injected proposer if there is one, and otherwise one built around the
@@ -867,12 +867,10 @@ function basisOf(request: ImproveRequest): GateBasis {
   return request.bankPath !== undefined && request.defect !== true ? "case-bank" : "replay";
 }
 
-// The gate block of a candidate that was proposed and not gated yet: a budget of zero runs, the tokens of the proposal and
-// no preregistration nor result, because neither is invented by a run that has not gated anything. The two bases share
-// every one of those fields and differ in the key named after the base -- the schema requires `replay` of every block
-// and leaves `caseBank` to the base that has one -- which is the whole difference this function states.
+// The gate block of a candidate that was proposed and not gated yet: no preregistration and no result, because neither is
+// invented by a run that has not gated anything, and the whole block is the one src/gate/flow.ts writes for any gate that
+// has not concluded -- the two bases and the two states of a gate before its runs are one constructor, not four literals.
 function proposedGateOf(basis: GateBasis, usage: GenerationUsage): GateBlock {
-  const budget: GateBudget = { plannedRuns: 0, usedRuns: 0, interruptedAt: null };
   const tokens: GateTokenTally = {
     proposal: { input: usage.input, output: usage.output },
     incumbent: { input: 0, output: 0 },
@@ -880,9 +878,7 @@ function proposedGateOf(basis: GateBasis, usage: GenerationUsage): GateBlock {
     total: { input: usage.input, output: usage.output },
   };
 
-  return basis === "case-bank"
-    ? { basis, status: "not-run", budget, tokens, preregistration: null, replay: null, caseBank: null }
-    : { basis, status: "not-run", budget, tokens, preregistration: null, replay: null };
+  return notConcludedGateOf(basis, tokens, 0, null);
 }
 
 // The index line of an attempt that produced no candidate: no evidence, a skill the settings exclude,

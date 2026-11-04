@@ -1,5 +1,5 @@
 import { assertNever, type Result } from "./types.ts";
-import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
+import { closedObjectProblemOf, codePointLength, describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 
 // The mechanical predicate of the fourth evidence class (M1c): the final answer of a replayed turn and the
 // checks of one case in, one verdict out. Nothing here reads a file, starts a process or looks at a clock, so a
@@ -114,9 +114,9 @@ export function validateCheck(raw: unknown): Result<CaseCheck, string> {
     return { ok: false, error: `"kind" must be one of ${CASE_CHECK_KINDS.join(", ")}, got ${describe(kind)}` };
   }
 
-  const unknownField = Object.keys(raw).find((key) => !FIELDS_BY_KIND[kind].includes(key));
-  if (unknownField !== undefined) {
-    return { ok: false, error: `a ${quote(kind)} check has no ${quote(unknownField)} field` };
+  const closed = closedObjectProblemOf(raw, FIELDS_BY_KIND[kind], `a ${quote(kind)} check`);
+  if (closed !== undefined) {
+    return { ok: false, error: closed };
   }
 
   switch (kind) {
@@ -164,11 +164,11 @@ function isCaseCheckKind(value: unknown): value is CaseCheckKind {
 }
 
 // JSON Schema counts the characters of a string as code points, so the limit is counted the same way here: an
-// emoji is one character for the schema and has to be one for the validator too, and Array.from walks code points
-// instead of UTF-16 units (the same reading src/evidence.ts uses for its excerpt).
+// emoji is one character for the schema and has to be one for the validator too (codePointLength, the measure
+// src/case-bank.ts uses for the text fields of a bank).
 function isCheckText(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  const length = Array.from(value).length;
+  const length = codePointLength(value);
   return length >= 1 && length <= MAX_CHECK_TEXT;
 }
 

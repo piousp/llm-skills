@@ -8,7 +8,7 @@ import type {
 import type { SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { sha256Digest, sha256Hex } from "./hash.ts";
 import type { EvidenceItem, EvidenceKind } from "./types.ts";
-import { isPlainObject } from "./values.ts";
+import { cutCodePoints, isPlainObject } from "./values.ts";
 
 // Q1: the three failure classes this module can prove from a session transcript.
 //
@@ -142,7 +142,7 @@ function handleUserMessage(derivation: Derivation, message: UserMessage, timesta
       source: TRANSCRIPT_SOURCE,
       toolName: pending.toolName,
       ...(pending.argsHash === undefined ? {} : { argsHash: pending.argsHash }),
-      excerpt: truncate(text),
+      excerpt: cutCodePoints(text, MAX_EXCERPT_CODE_POINTS),
     };
     derivation.collected.push(correction);
     rememberFailure(derivation, correction.id);
@@ -333,13 +333,7 @@ function textOf(content: string | readonly (TextContent | ImageContent)[]): stri
 
 function excerptOf(text: string): string | undefined {
   const trimmed = text.trim();
-  return trimmed === "" ? undefined : truncate(trimmed);
-}
-
-// Array.from walks code points, so a surrogate pair (an emoji, a rare CJK character) is never
-// cut in half: a lone surrogate is not valid UTF-8 and would corrupt the record.
-function truncate(text: string): string {
-  return Array.from(text).slice(0, MAX_EXCERPT_CODE_POINTS).join("");
+  return trimmed === "" ? undefined : cutCodePoints(trimmed, MAX_EXCERPT_CODE_POINTS);
 }
 
 // The entry timestamp is the record of when the transcript recorded the failure; the message

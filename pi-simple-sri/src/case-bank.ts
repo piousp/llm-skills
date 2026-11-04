@@ -2,7 +2,16 @@ import fs from "node:fs";
 import { validateCheck, type CaseCheck } from "./checks.ts";
 import { sha256Digest } from "./hash.ts";
 import type { Result } from "./types.ts";
-import { describe, isMissingPathError, isPlainObject, quote, toErrorMessage } from "./values.ts";
+import {
+  closedObjectProblemOf,
+  codePointLength,
+  describe,
+  isPlainObject,
+  quote,
+  readBytes,
+  readFailureOf,
+  toErrorMessage,
+} from "./values.ts";
 
 // The neutral bank of cases (M1c): the format a package ships its cases in, and the reader that turns the file into
 // data or into the reason it is not data.
@@ -51,9 +60,10 @@ export const MAX_CASES = 50;
 // `no-evidence` on the other.
 export type CaseBankProfile = "baseline" | "origin";
 
-// How a defect was found, the same two values EvidenceOrigin.kind declares in src/types.ts. Declared once and
-// derived to a type, the way CASE_CHECK_KINDS and LESSON_STATUSES are: the schema declares the same enum, and
-// test/unit/case-bank.test.ts is where the two files are read together.
+// How a defect was found: declared here and imported as a type by EvidenceOrigin.kind in src/types.ts, the way
+// CASE_CHECK_KINDS and LESSON_STATUSES are declared once and derived to a type, so the record and the file it was read from
+// cannot disagree about the two values. The schema declares the same enum, and test/unit/case-bank.test.ts is where the two
+// files are read together.
 export const CASE_BANK_ORIGIN_KINDS = ["review-finding", "rejected-draft"] as const;
 export type CaseBankOriginKind = (typeof CASE_BANK_ORIGIN_KINDS)[number];
 
@@ -196,10 +206,9 @@ export function caseBankReason(failure: CaseBankFailure): string {
 
 // Reading the bytes is the only place the file system is touched, and the size is consulted before them: the cap exists
 // so that a wrong path at a database or at a bundle is never loaded, and a read that happened before the comparison would
-// pay exactly the cost the cap promises not to pay. A file that is not there is a value, not a rejection: ENOTDIR is the
-// same absence one level down, the reading src/values.ts gives it. Anything else is a file the run cannot read, and the
-// message of the runtime travels next to the path because an EACCES and an EISDIR are different problems and the line that
-// reports it should say which one happened.
+// pay exactly the cost the cap promises not to pay. A file that is not there, and one that is there and cannot be read,
+// are the two failures src/values.ts reads from an error, and the bank names them in its own words (bank-absent,
+// bank-unreadable).
 async function readBankBytes(file: string): Promise<Result<Buffer, CaseBankFailure>> {
   try {
     const stats = await fs.promises.stat(file);
@@ -207,27 +216,10 @@ async function readBankBytes(file: string): Promise<Result<Buffer, CaseBankFailu
     // answers the problem it has, exactly as it answered it before the size was consulted.
     if (stats.isFile() && stats.size > MAX_CASE_BANK_BYTES) return tooLarge(stats.size);
   } catch (error) {
-    return readFailureOf(file, error);
+    return { ok: false, error: readFailureOf(file, error) };
   }
 
-  try {
-    return { ok: true, value: await fs.promises.readFile(file) };
-  } catch (error) {
-    return readFailureOf(file, error);
-  }
-}
-
-// The one reading of a failure of the file system, from the stat and from the read alike: absent for a path that is not
-// there, unreadable for one that is and cannot be read, with the message of the runtime next to the path.
-function readFailureOf(file: string, error: unknown): Result<never, CaseBankFailure> {
-  const absent = isMissingPathError(error);
-  return {
-    ok: false,
-    error: {
-      error: absent ? "absent" : "unreadable",
-      detail: absent ? file : `${file}: ${toErrorMessage(error)}`,
-    },
-  };
+  return await readBytes(file);
 }
 
 // The one refusal of the cap, from the size the stat answered and from the length of the bytes that were read: the two
@@ -247,8 +239,8 @@ function parseCaseBank(raw: unknown, profile: CaseBankProfile): Result<CaseBank,
     return problem(`"format" must be ${quote(CASE_BANK_FORMAT)}, got ${describe(raw.format)}`);
   }
 
-  const unknownField = Object.keys(raw).find((key) => !ROOT_FIELDS.includes(key));
-  if (unknownField !== undefined) return problem(`the bank has no ${quote(unknownField)} field`);
+  const closed = closedObjectProblemOf(raw, ROOT_FIELDS, "the bank");
+  if (closed !== undefined) return problem(closed);
 
   let description: string | undefined;
   if (Object.hasOwn(raw, "description")) {
@@ -299,8 +291,8 @@ function parseCaseBank(raw: unknown, profile: CaseBankProfile): Result<CaseBank,
 function parseOrigin(raw: unknown): Result<CaseBankOrigin, string> {
   if (!isPlainObject(raw)) return problem(`"origin" must be an object, got ${describe(raw)}`);
 
-  const unknownField = Object.keys(raw).find((key) => !ORIGIN_FIELDS.includes(key));
-  if (unknownField !== undefined) return problem(`"origin" has no ${quote(unknownField)} field`);
+  const closed = closedObjectProblemOf(raw, ORIGIN_FIELDS, quote("origin"));
+  if (closed !== undefined) return problem(closed);
 
   const kind = raw.kind;
   if (!isCaseBankOriginKind(kind)) {
@@ -350,8 +342,8 @@ function parseCase(raw: unknown, index: number): Result<CaseBankCase, string> {
   const at = `cases[${index}]`;
   if (!isPlainObject(raw)) return problem(`${quote(at)} must be an object, got ${describe(raw)}`);
 
-  const unknownField = Object.keys(raw).find((key) => !CASE_FIELDS.includes(key));
-  if (unknownField !== undefined) return problem(`${quote(at)} has no ${quote(unknownField)} field`);
+  const closed = closedObjectProblemOf(raw, CASE_FIELDS, quote(at));
+  if (closed !== undefined) return problem(closed);
 
   const id = caseId(`${at}.id`, raw.id);
   if (!id.ok) return id;
@@ -385,12 +377,12 @@ function parseChecks(raw: unknown, at: string): Result<readonly CaseCheck[], str
 }
 
 // One string field with the bounds the schema declares as minLength and maxLength. JSON Schema counts the characters
-// of a string as code points, so the length is counted with Array.from, the same reading src/checks.ts uses for the
-// text of a check: an emoji is one character for the schema and has to be one here.
+// of a string as code points, so the length is counted with codePointLength (src/values.ts), the same measure the text of
+// a check is counted with: an emoji is one character for the schema and has to be one here.
 function textField(field: string, value: unknown, max: number, min = 1): Result<string, string> {
   if (typeof value !== "string") return problem(`${quote(field)} must be a string, got ${describe(value)}`);
 
-  const length = Array.from(value).length;
+  const length = codePointLength(value);
   if (length < min || length > max) {
     // The count and not the text: a rubric over its limit would otherwise repeat eight thousand characters in the
     // sentence a user reads.
@@ -404,7 +396,7 @@ function textField(field: string, value: unknown, max: number, min = 1): Result<
 function caseId(field: string, value: unknown): Result<string, string> {
   if (typeof value !== "string") return problem(`${quote(field)} must be a string, got ${describe(value)}`);
 
-  if (Array.from(value).length > MAX_ID_CODE_POINTS || !CASE_ID_PATTERN.test(value)) {
+  if (codePointLength(value) > MAX_ID_CODE_POINTS || !CASE_ID_PATTERN.test(value)) {
     return problem(
       `${quote(field)} must match ${CASE_ID_PATTERN.source} and be at most ${MAX_ID_CODE_POINTS} characters, got ${describe(value)}`,
     );

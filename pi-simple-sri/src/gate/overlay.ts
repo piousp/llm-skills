@@ -5,9 +5,9 @@ import { sha256Digest } from "../hash.ts";
 import { LESSONS_DIR, SKILL_FILE } from "../names.ts";
 import { assertWritable } from "../perimeter.ts";
 import * as skillReference from "../skill-reference.ts";
-import type { Result, SkillRef } from "../types.ts";
+import type { GateOverlays, Result, SkillRef } from "../types.ts";
 import { quote, toErrorMessage } from "../values.ts";
-import { stagingDir } from "../write-base.ts";
+import { relativeToBase, stagingDir } from "../write-base.ts";
 import { copySkillTree, discardStagingCandidate, writeTextAtomically } from "../writer.ts";
 
 // The two arms of the gate (Q9): the skill as it stands and the skill plus the candidate lesson, each one
@@ -79,6 +79,18 @@ export interface OverlayAbstention {
 }
 
 export type OverlayResult = Result<OverlayArms, OverlayAbstention>;
+
+// The arms as the record keeps them: relative to the base of the run, which is what a preregistration and a result hold, so
+// a record stays readable after the agent directory moves. Which spelling of an arm the record carries is one decision about
+// these four fields, and both flows of the gate write the block, so it is made here once.
+export function gateOverlaysOf(base: string, arms: OverlayArms): GateOverlays {
+  return {
+    incumbent: relativeToBase(base, arms.incumbentDir),
+    candidate: relativeToBase(base, arms.candidateDir),
+    skillContentHash: arms.skillContentHash,
+    manifestHash: arms.manifestHash,
+  };
+}
 
 export async function buildArmOverlays(input: OverlayRequest): Promise<OverlayResult> {
   const stagingRoot = stagingDir(input.base);

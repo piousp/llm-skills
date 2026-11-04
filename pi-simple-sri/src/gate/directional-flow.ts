@@ -23,6 +23,7 @@ import { appendAttemptLine, rewriteStagingDecision, writeTextAtomically } from "
 import { spendBudget, tokenTallyOf, type PlannedItem } from "./budget.ts";
 import {
   appendGateAnswerLine,
+  preregisteredRecordOf,
   resolveStagedCandidate,
   verifiedStagedLesson,
   type CandidateRejectionReason,
@@ -33,7 +34,7 @@ import {
   type GateRequest,
 } from "./flow.ts";
 import type { JudgeError, JudgeRequest, JudgeVerdict } from "./judge.ts";
-import { buildArmOverlays } from "./overlay.ts";
+import { buildArmOverlays, gateOverlaysOf } from "./overlay.ts";
 import { createReplayRunner } from "./replay-runner.ts";
 import { evaluateCaseGate, evaluateGate, planCaseGate } from "./scorer.ts";
 import type { CaseGateJudgeAnswer, GateVerdict, NoBaselineResult } from "./types.ts";
@@ -90,10 +91,11 @@ import type { CaseGateJudgeAnswer, GateVerdict, NoBaselineResult } from "./types
 // the rule already -- so the second condition costs at most one call per case and never reads a repetition nobody ran.
 const JUDGED_REP = 1;
 
-// The zero of a component that spent nothing, written once: a judge that was not asked did not cost nothing by accident, it
-// cost zero because no call was made, and the record says so instead of leaving the component out (a clause without calls
-// and a bank without a clause are two different records).
-const ZERO_TOKENS: GateTokens = { input: 0, output: 0 };
+// The zero of a component that spent nothing, written once and frozen: a judge that was not asked did not cost nothing by
+// accident, it cost zero because no call was made, and the record says so instead of leaving the component out (a clause
+// without calls and a bank without a clause are two different records). The object is shared by every reading that spent
+// nothing, so it is frozen: a caller that wrote into it would rewrite the zero of the ones already recorded.
+const ZERO_TOKENS: GateTokens = Object.freeze({ input: 0, output: 0 });
 
 // What one call to the judge produced, as this flow records it: the verdict, the reason for it and what the call cost.
 //
@@ -282,7 +284,7 @@ export async function gateDirectionalCandidate(
   await seams.rewriteDecision(
     request.base,
     candidateDir,
-    preregisteredRecordOf(record, preregistration, plan.design.plannedRuns),
+    preregisteredRecordOf(record, "case-bank", preregistration, plan.design.plannedRuns),
   );
 
   // Step 7. The two arms, from the skill as it stands and from the skill plus the candidate lesson: the overlay of the replay
@@ -321,7 +323,7 @@ export async function gateDirectionalCandidate(
   await seams.rewriteDecision(
     request.base,
     candidateDir,
-    preregisteredRecordOf(record, measured, plan.design.plannedRuns),
+    preregisteredRecordOf(record, "case-bank", measured, plan.design.plannedRuns),
   );
 
   // Step 8. The budget of the replay base, over the cases instead of the turns: case (in the order of the file) -> rep ->
@@ -392,12 +394,7 @@ export async function gateDirectionalCandidate(
 
   // Step 10. The record, with the preregistration it was judged by next to the result it produced.
   const completedAt = seams.now();
-  const caseBankOverlays: GateOverlays = {
-    incumbent: relativeToBase(request.base, overlays.value.incumbentDir),
-    candidate: relativeToBase(request.base, overlays.value.candidateDir),
-    skillContentHash: overlays.value.skillContentHash,
-    manifestHash: overlays.value.manifestHash,
-  };
+  const caseBankOverlays: GateOverlays = gateOverlaysOf(request.base, overlays.value);
 
   // One entry per case the design ran, with the checks its runs were judged by: copied from the bank so the record stands
   // alone, exactly as the expectation of a replay item is.
@@ -585,29 +582,6 @@ function directionalSeamsOf(deps: DirectionalGateDeps): DirectionalGateSeams {
     writeStream: deps.writeStream ?? writeTextAtomically,
     listSkills: deps.listSkills ?? listSkills,
     judge: deps.judge,
-  };
-}
-
-// The record of a gate that has recorded its rule and has run nothing, in the base of the bank: the two moments the
-// preregistration is written -- the rule, and the hash of the SKILL.md the arms were copied from -- share one literal, so the
-// two writes cannot describe two different gates.
-function preregisteredRecordOf(
-  record: DecisionRecord,
-  preregistration: GatePreregistration,
-  plannedRuns: number,
-): DecisionRecord {
-  return {
-    ...record,
-    gate: {
-      basis: "case-bank",
-      status: "preregistered",
-      budget: { plannedRuns, usedRuns: 0, interruptedAt: null },
-      tokens: record.gate.tokens,
-      preregistration,
-      replay: null,
-      caseBank: null,
-    },
-    outcome: { ...record.outcome, status: outcomeStatusFor("preregistered") },
   };
 }
 

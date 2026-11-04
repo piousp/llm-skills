@@ -1,6 +1,7 @@
 import type { Context } from "@earendil-works/pi-ai";
 import { blockText, textOf, type CompleteFn } from "../proposer.ts";
 import type { Result } from "../types.ts";
+import { cutCodePoints } from "../values.ts";
 
 // The judge: the second condition of the directional gate (M1c, S5).
 //
@@ -144,7 +145,7 @@ export function parseJudgeReply(text: string): Result<JudgeVerdict, "unparseable
   if (verdict === undefined) return unparseable();
 
   const reason = lines.slice(opening + 1).join("\n").trim();
-  return { ok: true, value: { verdict, reason: truncateReason(reason) } };
+  return { ok: true, value: { verdict, reason: cutCodePoints(reason, JUDGE_MAX_REASON_CODE_POINTS) } };
 }
 
 // The judge as the gate uses it: a CompleteFn in, one verdict or one abstention out.
@@ -187,13 +188,6 @@ function verdictOf(line: string): JudgeVerdict["verdict"] | undefined {
   if (word === "PASS") return "pass";
   if (word === "FAIL") return "fail";
   return undefined;
-}
-
-// The cap, counted in code points: Array.from walks code points instead of UTF-16 units, so a reason of emoji is cut
-// between characters and never inside one.
-function truncateReason(reason: string): string {
-  const points = Array.from(reason);
-  return points.length <= JUDGE_MAX_REASON_CODE_POINTS ? reason : points.slice(0, JUDGE_MAX_REASON_CODE_POINTS).join("");
 }
 
 function unparseable(): Result<never, "unparseable"> {

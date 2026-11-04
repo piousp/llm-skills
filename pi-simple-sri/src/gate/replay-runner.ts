@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { hashOfArguments } from "../evidence.ts";
 import { REPLAY_ENV_VAR } from "../names.ts";
-import { isDirectory, isPlainObject, toErrorMessage } from "../values.ts";
+import { cutCodePoints, isDirectory, isPlainObject, toErrorMessage } from "../values.ts";
 import type {
   InvalidReason,
   ParsedStream,
@@ -504,14 +504,7 @@ function carriesSkillBlock(content: unknown, skillName: string): boolean {
 // A thinking block is not part of it -- the reasoning of the model is not what the user reads -- and neither is a
 // tool call: an answer split into parts is one text, so the parts are joined without a separator of their own.
 function finalTextOf(content: unknown): string {
-  return truncateCodePoints(textsOf(content).join(""));
-}
-
-// The cap, counted in code points: Array.from walks code points instead of UTF-16 units, so an answer of emoji is cut
-// between characters and never inside one.
-function truncateCodePoints(text: string): string {
-  const points = Array.from(text);
-  return points.length <= MAX_FINAL_TEXT_CODE_POINTS ? text : points.slice(0, MAX_FINAL_TEXT_CODE_POINTS).join("");
+  return cutCodePoints(textsOf(content).join(""), MAX_FINAL_TEXT_CODE_POINTS);
 }
 
 // A message holds either a bare string or parts; only text parts carry the injected block, and an

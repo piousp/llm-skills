@@ -10,9 +10,16 @@ import { assertNever, outcomeStatusFor } from "../types.ts";
 import type {
   DecisionRecord,
   DecisionSchema,
+  GateBasis,
+  GateBudget,
+  GateCaseBankNotRun,
+  GateCaseBankPreregistered,
+  GateNotRun,
   GateOverlays,
+  GatePreregistered,
   GatePreregistration,
   GateReplayResult,
+  GateTokenTally,
   ReplayItem,
   Result,
   SkillRef,
@@ -21,7 +28,7 @@ import { currentTime, describe, isDirectory, isPlainObject, isRegularFile, quote
 import { relativeToBase, stagingDir } from "../write-base.ts";
 import { appendAttemptLine, lessonHashes, rewriteStagingDecision, writeTextAtomically } from "../writer.ts";
 import { spendBudget, tokenTallyOf, type PlannedItem } from "./budget.ts";
-import { buildArmOverlays, type OverlayRequest, type OverlayResult } from "./overlay.ts";
+import { buildArmOverlays, gateOverlaysOf, type OverlayRequest, type OverlayResult } from "./overlay.ts";
 import { createReplayRunner } from "./replay-runner.ts";
 import { evaluateGate, planGate } from "./scorer.ts";
 import type {
@@ -409,7 +416,7 @@ export async function gateStagedCandidate(
   await seams.rewriteDecision(
     request.base,
     candidateDir,
-    preregisteredRecordOf(record, preregistration, plan.design.plannedRuns),
+    preregisteredRecordOf(record, "replay", preregistration, plan.design.plannedRuns),
   );
 
   // Step 4. The two arms, from the skill as it stands and from the skill plus the candidate lesson. The
@@ -452,7 +459,7 @@ export async function gateStagedCandidate(
   await seams.rewriteDecision(
     request.base,
     candidateDir,
-    preregisteredRecordOf(record, measured, plan.design.plannedRuns),
+    preregisteredRecordOf(record, "replay", measured, plan.design.plannedRuns),
   );
 
   // Steps 5 and 6. The budget, and the reading of it.
@@ -487,12 +494,7 @@ export async function gateStagedCandidate(
   const reason: GateConclusionReason | null = budget.interruptedAt === null ? evaluation.reason : "interrupted";
 
   const completedAt = seams.now();
-  const replayOverlays: GateOverlays = {
-    incumbent: relativeToBase(request.base, overlays.value.incumbentDir),
-    candidate: relativeToBase(request.base, overlays.value.candidateDir),
-    skillContentHash: overlays.value.skillContentHash,
-    manifestHash: overlays.value.manifestHash,
-  };
+  const replayOverlays: GateOverlays = gateOverlaysOf(request.base, overlays.value);
 
   // Step 6. The record, with the preregistration it was judged by next to the result it produced, so a
   // reader can check the rule against the numbers without trusting this module.
@@ -561,24 +563,53 @@ function gateSeamsOf(deps: GateDeps): GateSeams {
   };
 }
 
-// The record of a gate that has recorded its rule and has run nothing. It is one literal for the two moments the
-// preregistration is written -- the moment the rule is known and the moment the hash of the SKILL.md the arms were
-// copied from is known -- so the two writes cannot describe two different gates, and both happen before the first run.
-function preregisteredRecordOf(
+// The block of a gate that has not concluded, in either base and in either of the two states a gate has before its runs.
+// The fields neutral to the basis come first -- basis, status, the budget, the tokens and the rule -- and then the key the
+// base declares: `replay` is null in the two bases, because the schema requires the key of every block and ties it to no
+// basis, and `caseBank: null` is the one only the bank base declares. That single difference is the whole difference
+// between the four literals the flows used to write (the replay base, the bank base, and the candidate a proposal stages),
+// and `preregistration` is the rule when the gate has written one and null before it has, which is what tells
+// `preregistered` from `not-run`.
+export function notConcludedGateOf(
+  basis: GateBasis,
+  tokens: GateTokenTally,
+  plannedRuns: number,
+  preregistration: GatePreregistration | null,
+): GateNotRun | GatePreregistered | GateCaseBankNotRun | GateCaseBankPreregistered {
+  const budget: GateBudget = { plannedRuns, usedRuns: 0, interruptedAt: null };
+
+  if (preregistration === null) {
+    const block: GateNotRun = { basis: "replay", status: "not-run", budget, tokens, preregistration: null, replay: null };
+    const bankBlock: GateCaseBankNotRun = { ...block, basis: "case-bank", caseBank: null };
+    return basis === "replay" ? block : bankBlock;
+  }
+
+  const block: GatePreregistered = {
+    basis: "replay",
+    status: "preregistered",
+    budget,
+    tokens,
+    preregistration,
+    replay: null,
+  };
+  const bankBlock: GateCaseBankPreregistered = { ...block, basis: "case-bank", caseBank: null };
+  return basis === "replay" ? block : bankBlock;
+}
+
+// The record of a gate that has recorded its rule and has run nothing, in the base that measures it. It is one literal for
+// the two moments the preregistration is written -- the moment the rule is known and the moment the hash of the SKILL.md the
+// arms were copied from is known -- so the two writes cannot describe two different gates, and both happen before the first
+// run. The base is an argument because both bases of the gate write this record the same way and differ only in the key of
+// their block (notConcludedGateOf above).
+export function preregisteredRecordOf(
   record: DecisionRecord,
+  basis: GateBasis,
   preregistration: GatePreregistration,
   plannedRuns: number,
 ): DecisionRecord {
   return {
     ...record,
-    gate: {
-      basis: "replay",
-      status: "preregistered",
-      budget: { plannedRuns, usedRuns: 0, interruptedAt: null },
-      tokens: record.gate.tokens,
-      preregistration,
-      replay: null,
-    },
+    gate: notConcludedGateOf(basis, record.gate.tokens, plannedRuns, preregistration),
     outcome: { ...record.outcome, status: outcomeStatusFor("preregistered") },
   };
 }
