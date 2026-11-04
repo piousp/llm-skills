@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { hashOfArguments } from "../evidence.ts";
 import { REPLAY_ENV_VAR } from "../names.ts";
-import { isPlainObject } from "../values.ts";
+import { isPlainObject, toErrorMessage } from "../values.ts";
 import type {
   InvalidReason,
   ParsedStream,
@@ -33,7 +33,10 @@ import type {
 //             evidence of loading a run carries.
 //   caps      timeoutMs per run, SIGTERM at the deadline and SIGKILL five seconds later, an optional
 //             AbortSignal that aborts the same way, and the raw stream truncated to 2 MiB with the
-//             original length kept (OA9, OA10).
+//             original length kept (OA9, OA10). A stream the cap cut is an invalid run: the bytes that were
+//             lost can hold the error of the turn, so the prefix is read and never counted.
+//   failures  a run the process could not start says why. The message of the `error` event, of the exception
+//             spawn threw, or the tail of stderr travels as `invalidDetail`, so an ENOENT is not an EACCES.
 //
 // The seam is the spawn: `spawnFn` returns the narrow ReplayChild this module reads, so every test
 // below drives a run with a fake and no test starts `pi`, touches the network or spends a token.
@@ -54,6 +57,11 @@ const MAX_REPLAY_STREAM_BYTES = 2 * 1024 * 1024;
 
 // OA9: SIGTERM asks, SIGKILL insists. Five seconds is the grace the plan fixed, not a setting.
 const SIGKILL_DELAY_MS = 5000;
+
+// Why a run nobody can read broke, when the process said it. 500 characters is far more than an errno
+// message needs and small enough that the details of twelve runs travel in one decision next to their
+// streams: the point is to tell one failure from another, not to keep a log.
+const MAX_INVALID_DETAIL_CHARS = 500;
 
 // The argsHash of a tool result whose call is not in the stream: the arguments are unknown, and a
 // real digest always starts with "sha256:", so "" can never be confused with one or join a retry
@@ -208,11 +216,16 @@ async function runReplay(
 
   return await new Promise<ReplayRun>((resolve) => {
     // Bytes, not text: a multi-byte character split across two reads is only a character once the
-    // whole stream is joined.
+    // whole stream is joined. stderr is joined the same way and kept apart: it is not the record, it is
+    // where a child that refused says why.
     const chunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
     let settled = false;
     let child: ReplayChild | undefined;
     let escalation: ReturnType<typeof setTimeout> | undefined;
+    // The message of the `error` event or of the exception spawn threw, kept until the record is built:
+    // `settle` is reached from four paths and only one field explains a spawn that never happened.
+    let spawnFailure: string | undefined;
 
     // The deadline is the hard cap of the run, so it holds the event loop while it is pending: a child
     // that says nothing still has to be stopped, and clearTimeout in settle() releases it as soon as
@@ -233,6 +246,8 @@ async function runReplay(
           known,
           exitCode,
           stream: Buffer.concat(chunks).toString("utf8"),
+          stderr: Buffer.concat(errChunks).toString("utf8"),
+          ...(spawnFailure === undefined ? {} : { spawnFailure }),
           elapsed: now() - startedAt,
         }),
       );
@@ -267,12 +282,16 @@ async function runReplay(
     spawned.stdout?.on("data", (chunk) => {
       chunks.push(toBuffer(chunk));
     });
-    // stdout is the record; stderr is drained and dropped. The record has no field for it, and a pipe
-    // nobody reads blocks a child that writes more than its buffer.
-    spawned.stderr?.on("data", () => undefined);
-    spawned.onError(() => {
+    // stdout is the record; stderr is not, but it is where a binary that starts and then refuses says why,
+    // so it is drained into the detail of the record instead of dropped. It is drained whether or not the
+    // line below keeps anything: a pipe nobody reads blocks a child that writes more than its buffer.
+    spawned.stderr?.on("data", (chunk) => {
+      errChunks.push(toBuffer(chunk));
+    });
+    spawned.onError((error) => {
       // A child that never started (ENOENT) reports here and may also report a close with a null
-      // code; settle keeps the first verdict.
+      // code; settle keeps the first verdict, and the message is what tells ENOENT from EACCES.
+      spawnFailure = error.message;
       settle("spawn-error", null);
     });
     spawned.onClose((code) => {
@@ -292,7 +311,10 @@ async function runReplay(
           stdio: ["ignore", "pipe", "pipe"],
           env: replayEnv(),
         });
-      } catch {
+      } catch (error) {
+        // The exception is the only thing that says an argv could not be started, so it is the only thing
+        // that tells a bad binary path from a bad option.
+        spawnFailure = toErrorMessage(error);
         return undefined;
       }
     }
@@ -344,22 +366,30 @@ function replayEnv(): NodeJS.ProcessEnv {
 //
 // The parse runs over the truncated prefix and not over the whole stream, so the facts in the record
 // and the bytes the record keeps always describe the same input: a stored run can be re-read and it
-// says what it said.
+// says what it said. What the truncation does change is the verdict: a run whose stream the cap cut lost
+// bytes nobody read, so it is invalid and names `stream-truncated` (OA10).
 function finish(record: {
   request: ReplayRunRequest;
   known: InvalidReason | undefined;
   exitCode: number | null;
   stream: string;
+  stderr?: string;
+  spawnFailure?: string;
   elapsed: number;
 }): ReplayRun {
   const { rawStream, truncatedAt } = truncateStream(record.stream);
   const parsed = parseReplayStream(rawStream, record.request.skillName);
-  const verdict = verdictOf(record.known, record.exitCode, parsed);
+  const verdict = verdictOf(record.known, record.exitCode, parsed, truncatedAt);
+  // Only a run that proved nothing explains itself: a completed run that wrote a warning to stderr is still
+  // a run that answered, and its record says nothing it does not need to say.
+  const invalidDetail =
+    verdict.outcome === "invalid" ? invalidDetailOf(record.spawnFailure, record.stderr ?? "") : undefined;
 
   return {
     request: record.request,
     outcome: verdict.outcome,
     ...(verdict.invalidReason === undefined ? {} : { invalidReason: verdict.invalidReason }),
+    ...(invalidDetail === undefined ? {} : { invalidDetail }),
     stopReason: parsed.lastStopReason,
     toolCalls: parsed.toolCalls,
     usage: parsed.usage,
@@ -378,6 +408,7 @@ function verdictOf(
   known: InvalidReason | undefined,
   exitCode: number | null,
   parsed: ParsedStream,
+  truncatedAt: number | undefined,
 ): { outcome: RunOutcome; invalidReason?: InvalidReason } {
   if (known !== undefined) return { outcome: "invalid", invalidReason: known };
 
@@ -385,6 +416,11 @@ function verdictOf(
   // signal this module did not send: a null code with no timeout and no abort has still ended in a
   // way the run cannot account for.
   if (exitCode !== 0) return { outcome: "invalid", invalidReason: "exit-code" };
+
+  // OA10, fail-closed: the cap of the stream cut the bytes of the run, so every reading below is a reading of
+  // a prefix. The turn that re-read a file of more than 2 MiB carries its error past the cut, and a prefix
+  // that reads green would count a run nobody read whole towards the unanimity of the gate.
+  if (truncatedAt !== undefined) return { outcome: "invalid", invalidReason: "stream-truncated" };
 
   // The guard against a stream this module cannot read, which is what an event vocabulary of another
   // pi version would look like if it ever stopped emitting message_end: no assistant message means
@@ -409,6 +445,24 @@ function truncateStream(stream: string): { rawStream: string; truncatedAt?: numb
   const head = Buffer.from(stream, "utf8").subarray(0, MAX_REPLAY_STREAM_BYTES).toString("utf8");
   const lastBreak = head.lastIndexOf("\n");
   return { rawStream: lastBreak < 0 ? "" : head.slice(0, lastBreak + 1), truncatedAt: bytes };
+}
+
+// Why a run nobody can read broke, when the process said it: the message of the `error` event or of the
+// exception spawn threw, and otherwise the last line the child wrote to stderr -- where a binary that starts
+// and then refuses says why. Cut at MAX_INVALID_DETAIL_CHARS, and an empty answer is no field at all.
+function invalidDetailOf(spawnFailure: string | undefined, stderr: string): string | undefined {
+  const message = spawnFailure !== undefined && spawnFailure.trim() !== "" ? spawnFailure : undefined;
+  const text = message ?? lastNonEmptyLine(stderr);
+  if (text === undefined) return undefined;
+  return text.length > MAX_INVALID_DETAIL_CHARS ? text.slice(0, MAX_INVALID_DETAIL_CHARS) : text;
+}
+
+function lastNonEmptyLine(text: string): string | undefined {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  return lines.at(-1);
 }
 
 // A cwd that does not resolve to a directory is refused before a process exists. `statSync` follows

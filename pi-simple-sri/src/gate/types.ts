@@ -52,12 +52,17 @@ export type RunOutcome = "pass" | "fail" | "invalid";
 // Why a run proved nothing. The list is closed and every member is infrastructure: a run that broke
 // is never silently read as a pass, because an incumbent that passes by accident would make the
 // comparison meaningless.
+//
+// `stream-truncated` is the cap of OA10 speaking: the bytes the run wrote did not fit, so everything the
+// stream says is a reading of a prefix and what came after the cut -- the error of the turn among it -- is
+// not in it. A prefix that reads green is a prefix, never a pass.
 export type InvalidReason =
   | "interrupted"
   | "timeout"
   | "exit-code"
   | "spawn-error"
   | "stream-unparseable"
+  | "stream-truncated"
   | "cwd-missing"
   | "skill-not-loaded";
 
@@ -126,11 +131,17 @@ export interface ReplayToolCall {
 // `rawStream` is the JSONL the child wrote, verbatim, truncated to MAX_REPLAY_STREAM_BYTES: prefix
 // kept, cut at the last complete newline, and `truncatedAt` then holds the original byte length
 // (OA10). The flow persists it under gate/runs/, which is why it travels on the run and not in a
-// module-level map.
+// module-level map. A run whose stream was cut is `invalid` with `stream-truncated`, whatever the
+// prefix says.
+//
+// `invalidDetail` is why the run proved nothing when the process said it: the message of a spawn that
+// failed (ENOENT, EACCES, an argv that does not start) or the tail of stderr. It is present exactly on a
+// run that is invalid and had something to say, so an ENOENT stops looking like an EACCES.
 export interface ReplayRun {
   request: ReplayRunRequest;
   outcome: RunOutcome;
   invalidReason?: InvalidReason;
+  invalidDetail?: string;
   stopReason: string | null;
   toolCalls: readonly ReplayToolCall[];
   usage: { input: number; output: number };

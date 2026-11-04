@@ -102,6 +102,7 @@ interface FakeChild {
   spawns: SpawnRecord[];
   kills: (NodeJS.Signals | number | undefined)[];
   write(chunk: string): void;
+  writeStderr(chunk: string): void;
   close(code: number | null): void;
   fail(error: Error): void;
 }
@@ -111,6 +112,7 @@ interface FakeChild {
 // so a test writes and closes right after building the promise.
 function createFakeChild(): FakeChild {
   const data: ((chunk: string | Buffer) => void)[] = [];
+  const errData: ((chunk: string | Buffer) => void)[] = [];
   const closes: ((code: number | null) => void)[] = [];
   const errors: ((error: Error) => void)[] = [];
   const spawns: SpawnRecord[] = [];
@@ -123,7 +125,9 @@ function createFakeChild(): FakeChild {
       },
     },
     stderr: {
-      on: (_event: "data", _listener: (chunk: string | Buffer) => void) => undefined,
+      on: (_event: "data", listener: (chunk: string | Buffer) => void) => {
+        errData.push(listener);
+      },
     },
     kill: (signal) => {
       kills.push(signal);
@@ -146,6 +150,9 @@ function createFakeChild(): FakeChild {
     kills,
     write: (chunk) => {
       for (const listener of data) listener(chunk);
+    },
+    writeStderr: (chunk) => {
+      for (const listener of errData) listener(chunk);
     },
     close: (code) => {
       for (const listener of closes) listener(code);
@@ -397,6 +404,9 @@ test("a child that never started is a spawn error, not an exception", async (t) 
   assert.equal(result.outcome, "invalid");
   assert.equal(result.invalidReason, "spawn-error");
   assert.equal(result.exitCode, null);
+  // M2: the message node reported is what tells ENOENT from EACCES, so it is on the record instead of
+  // dropped with the listener that received it.
+  assert.equal(result.invalidDetail, "spawn pi ENOENT");
 });
 
 test("a spawn that throws is a spawn error, not an exception", async (t) => {
@@ -411,6 +421,25 @@ test("a spawn that throws is a spawn error, not an exception", async (t) => {
 
   assert.equal(result.outcome, "invalid");
   assert.equal(result.invalidReason, "spawn-error");
+  // M2: the exception is the whole cause of a spawn that never happened, and the record keeps it.
+  assert.equal(result.invalidDetail, "EINVAL: the argv cannot be started");
+});
+
+test("a run whose child wrote to stderr keeps the last line of it, cut at 500 characters", async (t) => {
+  const base = createFixture(t);
+  const fake = createFakeChild();
+  const run = runnerWith(fake)(request({ cwd: base }));
+
+  // Two lines and a trailing newline: the tail is where a child that refuses says why.
+  fake.writeStderr("warning: the model fell back to the default\n");
+  fake.writeStderr(`${"x".repeat(600)}\n`);
+  fake.write(fixture("turn-ok.jsonl"));
+  fake.close(2);
+  const result = await run;
+
+  assert.equal(result.outcome, "invalid");
+  assert.equal(result.invalidReason, "exit-code");
+  assert.equal(result.invalidDetail, "x".repeat(500));
 });
 
 test("an abort kills the child and the run is interrupted", async (t) => {
@@ -455,7 +484,7 @@ test("a cwd that does not exist is refused before anything is spawned", async (t
   assert.deepEqual(fake.kills, []);
 });
 
-test("a stream over 2 MiB is truncated at a line boundary and says how long it was", async (t) => {
+test("a stream over 2 MiB is truncated at a line boundary, says how long it was, and makes the run invalid", async (t) => {
   const base = createFixture(t);
   const fake = createFakeChild();
   const run = runnerWith(fake)(request({ cwd: base }));
@@ -478,5 +507,8 @@ test("a stream over 2 MiB is truncated at a line boundary and says how long it w
   }
   // What the truncated prefix holds is still read: the skill block is in the head.
   assert.equal(result.skillLoaded, true);
-  assert.equal(result.outcome, "pass");
+  // M3 (OA10), fail-closed: a prefix that reads green is a prefix. The error of the turn can be past the cut,
+  // so a truncated run never counts for the gate, whatever its head says.
+  assert.equal(result.outcome, "invalid");
+  assert.equal(result.invalidReason, "stream-truncated");
 });

@@ -229,6 +229,11 @@ export interface GateRefusedResult {
 // The paths are the ones this package publishes everywhere else: relative to the base of the run. `overlays`
 // is null until the two arms exist, which is exactly the case of an abstention that never built them; on an
 // acceptance it is what the acceptance compares against the skill before editing it.
+//
+// `detail` is what an abstention that cost no run is about, when the flow knows it: the file an overlay could
+// not copy, the skill of the item that no longer resolves, the lesson whose bytes moved. It is absent when the
+// reason is the whole story, and it is the same text the line of the index keeps, so the answer and the index
+// cannot describe two different refusals.
 export interface GateConcludedResult {
   kind: GateVerdict;
   reason: GateConclusionReason | null;
@@ -237,6 +242,7 @@ export interface GateConcludedResult {
   plannedRuns: number;
   usedRuns: number;
   overlays: GateOverlays | null;
+  detail?: string;
 }
 
 // The union the command switches on. It is its own and not ProposeFlowResult: a gate answers about a
@@ -259,7 +265,8 @@ export async function gateStagedCandidate(
 
   // Step 2. The bytes the record declares. A lesson that moved since it was staged is the one abstention
   // that writes nothing at all -- not even its line -- because neither the record nor the index may describe
-  // a candidate whose own bytes disagree with it, and the rewrite below would refuse the write anyway.
+  // a candidate whose own bytes disagree with it, and the rewrite below would refuse the write anyway. The
+  // detail travels in the answer, which is the only place it can be said (M4).
   const lesson = await readStagedLesson(candidateDir, record.candidate.lessonPath);
   const mismatch = lesson.ok ? undeclaredBytes(lesson.value, record) : lesson.error;
   if (!lesson.ok || mismatch !== null) {
@@ -271,6 +278,7 @@ export async function gateStagedCandidate(
       plannedRuns: 0,
       usedRuns: 0,
       overlays: null,
+      ...(mismatch === null ? {} : { detail: mismatch }),
     };
   }
   const lessonText = lesson.value;
@@ -332,6 +340,7 @@ export async function gateStagedCandidate(
         plannedRuns: plan.design.plannedRuns,
         usedRuns: 0,
         overlays: null,
+        detail: dirs.error,
       });
     }
     sharedDirs.push(dirs.value);
@@ -372,7 +381,8 @@ export async function gateStagedCandidate(
   });
   if (!overlays.ok) {
     // The preregistration stays on disk: the rule was recorded and the gate ended without a result, which is
-    // what a preregistered record means. The reason travels in the line and in this answer.
+    // what a preregistered record means. The reason travels in the line and in this answer, with the refusal of
+    // the copy in it -- which file of which skill stopped the overlay (M4).
     return await answered({
       request,
       seams,
@@ -383,6 +393,7 @@ export async function gateStagedCandidate(
       plannedRuns: plan.design.plannedRuns,
       usedRuns: 0,
       overlays: null,
+      detail: overlays.error.detail,
     });
   }
 
@@ -596,6 +607,10 @@ interface AnswerInput {
   plannedRuns: number;
   usedRuns: number;
   overlays: GateOverlays | null;
+  // What the reason is about, when the flow knows it: the file an overlay could not copy, the skill that no
+  // longer resolves. It reaches the line of the index and the answer, and it is absent when the reason is the
+  // whole story (M4).
+  detail?: string;
 }
 
 async function answered(input: AnswerInput): Promise<GateConcludedResult> {
@@ -604,6 +619,7 @@ async function answered(input: AnswerInput): Promise<GateConcludedResult> {
 
   const event = eventOf(input.verdict);
   if (event !== undefined) {
+    const reason = attemptReasonOf(input);
     await input.seams.appendAttempt(
       input.request.base,
       buildAttemptLine({
@@ -621,6 +637,7 @@ async function answered(input: AnswerInput): Promise<GateConcludedResult> {
         failureSignature: input.record.diagnosis.failureSignature,
         stagingPath,
         decisionPath,
+        ...(reason === undefined ? {} : { reason }),
       }),
     );
   }
@@ -633,7 +650,17 @@ async function answered(input: AnswerInput): Promise<GateConcludedResult> {
     plannedRuns: input.plannedRuns,
     usedRuns: input.usedRuns,
     overlays: input.overlays,
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
   };
+}
+
+// M4: the abstention names its reason, and the line names what the reason is about. The vocabulary word alone
+// leaves a reader without the file that stopped the gate, and the detail alone loses the word every reader
+// groups on, so the line carries both in one string. Absent when there is no detail to give: then the reason
+// is the whole story and the line says nothing more.
+function attemptReasonOf(input: AnswerInput): string | undefined {
+  if (input.reason === null || input.detail === undefined) return undefined;
+  return `${input.reason}: ${input.detail}`;
 }
 
 // An acceptance is the one verdict with no line: the index records what happened to the skill, and a gate
@@ -762,19 +789,22 @@ async function persistStream(input: {
 }
 
 // One run as the record shows it. The outcome is the verdict's and not the runner's: the runner can only say
-// the process answered, and whether that answer passes is the reading of the expectation.
+// the process answered, and whether that answer passes is the reading of the expectation. The two fields the
+// runner added are copied when it has them: the bytes the cap cut (OA10) and the cause the process gave.
 function runRecordOf(verdict: RunVerdict, run: ReplayRun, stream: string | undefined): ReplayRunRecord {
   return {
     arm: run.request.arm,
     rep: run.request.rep,
     outcome: verdict.outcome,
     ...(verdict.invalidReason === undefined ? {} : { invalidReason: verdict.invalidReason }),
+    ...(run.invalidDetail === undefined ? {} : { invalidDetail: run.invalidDetail }),
     stopReason: run.stopReason,
     skillLoaded: run.skillLoaded,
     usage: run.usage,
     durationMs: run.durationMs,
     exitCode: run.exitCode,
     ...(stream === undefined ? {} : { stream }),
+    ...(run.truncatedAt === undefined ? {} : { truncatedAt: run.truncatedAt }),
   };
 }
 

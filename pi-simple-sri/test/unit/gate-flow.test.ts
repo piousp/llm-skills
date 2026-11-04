@@ -732,6 +732,8 @@ test("gateStagedCandidate: a broken run abstains without spending the rest of th
       ...completedRun(request, true),
       outcome: "invalid",
       invalidReason: "cwd-missing",
+      // M2: what the process said about a run that never started, which the record keeps.
+      invalidDetail: "spawn pi ENOENT",
       exitCode: null,
       rawStream: "",
     }),
@@ -750,6 +752,47 @@ test("gateStagedCandidate: a broken run abstains without spending the rest of th
   assert.equal(gate.budget.interruptedAt, null);
   // A run that wrote nothing points at no stream.
   assert.equal(gate.replay.items[0].reps[0].stream, undefined);
+  // M2: and the cause of the run it could not read is on the record instead of thrown away with the process.
+  assert.equal(gate.replay.items[0].reps[0].invalidDetail, "spawn pi ENOENT");
+});
+
+// OA10, fail-closed: a run whose stream the cap cut lost bytes, so it proved nothing about the skill and the
+// gate abstains instead of counting a prefix that reads green. The record keeps the reason and how long the
+// stream was before it was cut, which is what makes the loss explainable after the fact.
+test("gateStagedCandidate: a truncated run is invalid and the record says how much was lost", async (t) => {
+  const fixture = createFixture(t);
+  // The runner is the one that cuts the stream; what this test drives is the flow, so the run reports the length
+  // the cap produced and the bytes it was allowed to keep.
+  const truncatedAt = 3 * 1024 * 1024 + 17;
+
+  const harness = createHarness({
+    behaviour: (request) => ({
+      ...completedRun(request, false),
+      outcome: "invalid",
+      invalidReason: "stream-truncated",
+      truncatedAt,
+    }),
+  });
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "invalid-run");
+  assert.equal(result.usedRuns, 1);
+  assert.equal(harness.runs.length, 1);
+
+  const record = readRecord(fixture.decisionPath);
+  // The two fields the run gained are additive, so the record of a truncated run is a record of the schema.
+  assert.deepEqual(validateAgainstSchema(record), []);
+  const gate = concludedGate(record);
+  assert.equal(gate.budget.usedRuns, 1);
+
+  const [run] = gate.replay.items[0].reps;
+  assert.equal(run.outcome, "invalid");
+  assert.equal(run.invalidReason, "stream-truncated");
+  assert.equal(run.truncatedAt, truncatedAt);
+  // The bytes it did write are still on disk: the prefix is the audit trail of a run whose tail is gone.
+  assert.equal(typeof run.stream, "string");
 });
 
 // The overlay is the fourth step and the last one before a run: a skill it cannot copy abstains the gate with the
@@ -772,6 +815,15 @@ test("gateStagedCandidate: a skill the overlay cannot copy abstains before the f
   assert.equal(lines.length, 1);
   assert.equal(lines[0].event, "gate-abstained");
   assert.equal(lines[0].failureSignature, SIGNATURE);
+  // M4: the detail the overlay computed -- the file it could not copy, with its path -- is not dropped. The line
+  // of the index names it after the reason, and the answer carries the same text.
+  const reason = lines[0].reason;
+  if (reason === undefined) assert.fail("the abstention of the overlay kept no reason in the index");
+  assert.equal(reason.startsWith("overlay-failed: "), true);
+  assert.equal(reason.includes("linked-skill.md"), true);
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention of the overlay answered without a detail");
+  assert.equal(reason, `overlay-failed: ${detail}`);
 });
 
 // Step 2: the candidate is the bytes its record declares, and a lesson that moved since it was staged is the one
@@ -791,6 +843,11 @@ test("gateStagedCandidate: a lesson that no longer matches the record abstains a
 
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
   assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+  // M4: this is the one abstention that writes no line, so the detail of the bytes that moved lives in the
+  // answer and nowhere else -- which is where a reader of the run finds it.
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the mismatch answered without the detail of the lesson");
+  assert.equal(detail.includes(`${SLUG}.md`), true);
 });
 
 // OA6 in the positive: a run loads the arm's copy of the skill first and then the real directories of the rest of
@@ -835,6 +892,14 @@ test("gateStagedCandidate: an item whose skill no longer resolves abstains witho
   assert.equal(lines.length, 1);
   assert.equal(lines[0].event, "gate-abstained");
   assert.equal(lines[0].failureSignature, SIGNATURE);
+  // M4: the skill that no longer resolves is named in the line of the index and in the answer.
+  const reason = lines[0].reason;
+  if (reason === undefined) assert.fail("the abstention kept no reason in the index");
+  assert.equal(reason.startsWith("skill-unavailable: "), true);
+  assert.equal(reason.includes(OTHER_SKILL), true);
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention answered without a detail");
+  assert.equal(reason, `skill-unavailable: ${detail}`);
 });
 
 // §8: fewer than two eligible items is not a smaller gate, it is a gate that cannot measure, so it answers before
@@ -854,6 +919,8 @@ test("gateStagedCandidate: fewer than two items abstains with zero runs", async 
   const record = readRecord(fixture.decisionPath);
   assert.equal(record.gate.status, "not-run");
   assert.equal(readLines(fixture.base)[0].event, "gate-abstained");
+  // M4: an abstention with no detail to give leaves the field out instead of writing an empty one.
+  assert.equal(Object.hasOwn(readLines(fixture.base)[0], "reason"), false);
 });
 
 // OA12, on the gate itself: a candidate of another version is refused before anything is read from it, so the

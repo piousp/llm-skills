@@ -97,6 +97,11 @@ export function attemptHashes(
 // that point: stagingPath and decisionPath for a staged candidate, historyPath for an accepted one. They are
 // spelled the way the caller resolved them, which for the fields of a record is relative to the base of the
 // run (src/write-base.ts).
+//
+// `reason` is what the attempt answered when it was not an event of the vocabulary alone: the reason of an
+// abstention with its detail (the file an overlay could not copy, the skill that no longer resolves). It is
+// additive and optional, like every other field a line gains, so a line written before it existed still
+// reads as the line it was.
 export interface AttemptLineInput {
   now: Date;
   event: AttemptEvent;
@@ -106,11 +111,12 @@ export interface AttemptLineInput {
   stagingPath?: string;
   decisionPath?: string;
   historyPath?: string;
+  reason?: string;
 }
 
-// The one constructor of a line of the index. The absent paths are left out of the object instead of being
-// written as undefined: a line is JSON, and a key with no value in it is a key no reader should have to
-// interpret.
+// The one constructor of a line of the index. The absent paths and the absent reason are left out of the
+// object instead of being written as undefined: a line is JSON, and a key with no value in it is a key no
+// reader should have to interpret.
 export function buildAttemptLine(input: AttemptLineInput): AttemptLine {
   return {
     ts: input.now.toISOString(),
@@ -122,5 +128,6 @@ export function buildAttemptLine(input: AttemptLineInput): AttemptLine {
     ...(input.stagingPath === undefined ? {} : { stagingPath: input.stagingPath }),
     ...(input.decisionPath === undefined ? {} : { decisionPath: input.decisionPath }),
     ...(input.historyPath === undefined ? {} : { historyPath: input.historyPath }),
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
   };
 }

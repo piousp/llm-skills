@@ -140,16 +140,17 @@ export const GATE_STATUSES = [
 ] as const;
 export type GateStatus = (typeof GATE_STATUSES)[number];
 
-// "accepted" and "accept-failed" are not implied by a gate status: the acceptance decides them after the
-// gate ran, and the record carries that moment in outcome.decidedAt.
+// "accepted" is not implied by a gate status: the acceptance decides it after the gate ran, and the record
+// carries that moment in outcome.decidedAt. A failed acceptance is not a status of the record: it writes
+// nothing, the staged record keeps the "gate-accepted" the gate decided, and the reason it refused is
+// reported to the caller and left out of decision.json -- which is why no member names it.
 export type DecisionOutcomeStatus =
   | "proposed"
   | "not-eligible"
   | "gate-accepted"
   | "gate-rejected"
   | "gate-abstained"
-  | "accepted"
-  | "accept-failed";
+  | "accepted";
 
 // The one mapping from what the gate decided to what the record's outcome says. The record is built
 // through it, so `outcome.status` and `gate.status` cannot disagree while this table is the only place
@@ -290,6 +291,10 @@ export interface ReplayRunRecord {
   // (src/gate/replay-runner.ts), so this field is a string and not an enum of the record contract: a reader
   // that does not know a reason still knows the run was discarded.
   invalidReason?: string;
+  // Why the run proved nothing, when the process said it: the message of a spawn that failed or the tail of
+  // stderr, cut at 500 characters. Present on an invalid run that had something to say, so an ENOENT stops
+  // looking like an EACCES.
+  invalidDetail?: string;
   stopReason: string | null;
   skillLoaded: boolean;
   usage: GateTokens;
@@ -298,6 +303,9 @@ export interface ReplayRunRecord {
   // Path of the raw JSONL of the run, when the flow persists it: the audit trail of a verdict, which is
   // what makes an abstention explainable after the fact.
   stream?: string;
+  // OA10: the byte length of the stream before the cap cut it, present exactly when it was cut. The run is
+  // then invalid with `stream-truncated`, and this is how much of it nobody read.
+  truncatedAt?: number;
 }
 
 // One replay item of the diagnosis and every run of it, with the expectation it was judged by. The
@@ -447,4 +455,8 @@ export interface AttemptLine {
   // inside the skill, present exactly on the line of an accepted candidate, which is the one event that
   // wrote a skill.
   historyPath?: string;
+  // Why the attempt answered nothing, when the flow knows it: the reason of the abstention with its detail --
+  // the file an overlay could not copy, the skill that no longer resolves. Additive and optional, so every
+  // line written before this field existed is still a line of this index.
+  reason?: string;
 }

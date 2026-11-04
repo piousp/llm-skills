@@ -94,8 +94,9 @@ export function gateAbstainedText(
   surface: DecisionSurface,
   skill: SkillRef,
   reason: string | null,
+  detail?: string,
 ): string {
-  const sentence = `the gate abstained for skill ${quote(skill.name)}: ${reasonText(reason)}`;
+  const sentence = `the gate abstained for skill ${quote(skill.name)}: ${abstentionReasonText(reason, detail)}`;
   // An abstention spent what it spent and concluded nothing, so there is no count in the sentence: the reason
   // is the whole answer, and the budget of the attempt is in decision.json.
   return surface === "tool"
@@ -115,6 +116,14 @@ export function acceptedText(skill: SkillRef, slug: string, lessonPath: string, 
 // absence is stated instead of rendered as an empty colon.
 function reasonText(reason: string | null): string {
   return reason ?? "no reason was recorded";
+}
+
+// M4: an abstention that cost no run is often a fact about a file -- an overlay that could not copy it, a
+// lesson whose bytes moved -- and the reason alone leaves the reader without it. The detail is the flow's
+// `detail`, in the same wording the line of the index keeps. Absent, the sentence is the one it always was.
+function abstentionReasonText(reason: string | null, detail: string | undefined): string {
+  if (detail === undefined) return reasonText(reason);
+  return `${reasonText(reason)}: ${detail}`;
 }
 
 function runsText(runs: number): string {

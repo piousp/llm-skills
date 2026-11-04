@@ -461,7 +461,7 @@ function verdictTextOf(skill: SkillRef, result: GateConcludedResult): string {
     case "gate-rejected":
       return gateRejectedText(SURFACE, skill, result.reason, result.usedRuns);
     case "gate-abstained":
-      return gateAbstainedText(SURFACE, skill, result.reason);
+      return gateAbstainedText(SURFACE, skill, result.reason, result.detail);
     default:
       return assertNever(result.kind);
   }

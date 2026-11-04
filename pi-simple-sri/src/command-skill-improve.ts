@@ -268,7 +268,7 @@ async function gateAndAccept(candidate: ProposedFlowResult, run: Run): Promise<v
       notify(gateRejectedText(SURFACE, candidate.skill, result.reason, result.usedRuns), "warning");
       return;
     case "gate-abstained":
-      notify(gateAbstainedText(SURFACE, candidate.skill, result.reason), "warning");
+      notify(gateAbstainedText(SURFACE, candidate.skill, result.reason, result.detail), "warning");
       return;
     case "gate-accepted":
       notify(gatePassedText(SURFACE, candidate.skill, result.plannedRuns, result.usedRuns), "info");

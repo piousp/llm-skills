@@ -251,11 +251,13 @@
                         "rep": { "type": "integer", "minimum": 1 },
                         "outcome": { "enum": ["pass", "fail", "invalid"] },
                         "invalidReason": { "type": "string", "minLength": 1 },
+                        "invalidDetail": { "type": "string", "minLength": 1 },
                         "stopReason": { "type": ["string", "null"] },
                         "skillLoaded": { "type": "boolean" },
                         "durationMs": { "type": "number", "minimum": 0 },
                         "exitCode": { "type": ["integer", "null"] },
                         "stream": { "type": "string", "minLength": 1 },
+                        "truncatedAt": { "type": "integer", "minimum": 0 },
                         "usage": {
                           "type": "object",
                           "additionalProperties": false,
@@ -386,7 +388,7 @@
       "additionalProperties": false,
       "required": ["status", "reason", "decidedAt"],
       "properties": {
-        "status": { "enum": ["proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", "accept-failed"] },
+        "status": { "enum": ["proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted"] },
         "reason": { "type": ["string", "null"] },
         "decidedAt": { "type": ["string", "null"], "format": "date-time" }
       }

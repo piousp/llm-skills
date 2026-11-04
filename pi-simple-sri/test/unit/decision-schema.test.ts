@@ -19,6 +19,7 @@ import type {
   GateStatus,
   GateTokenTally,
   LessonDraft,
+  ReplayRunRecord,
   SkillRef,
 } from "../../src/types.ts";
 import { isPlainObject } from "../../src/values.ts";
@@ -500,6 +501,46 @@ test("decision.schema.json: the basis of the gate block is replay", () => {
   assert.equal(schemaNode("properties", "gate", "properties", "basis").const, "replay");
 });
 
+// M2 and M3: the two fields a run gained are optional, so the schema of schema 1 accepts a run that carries
+// them and a run written before they existed. `truncatedAt` is the byte length the cap cut and `invalidDetail`
+// is what the process said, and neither is required by the record of a run nobody can read.
+test("decision.schema.json: truncatedAt and invalidDetail are optional and validate when they are there", () => {
+  const [item] = REPLAY.items;
+  const [first, ...rest] = item.reps;
+  // A run the cap cut and whose process said why: the two fields this version added, with the reason the
+  // runner gives for a truncated stream.
+  const broken: ReplayRunRecord = {
+    ...first,
+    outcome: "invalid",
+    invalidReason: "stream-truncated",
+    truncatedAt: 3 * 1024 * 1024,
+    invalidDetail: "spawn pi ENOENT",
+  };
+  const withTheFields: GateReplayResult = {
+    ...REPLAY,
+    // A truncated run is invalid, so the verdict of the block follows the reading: the schema ties no run to a
+    // verdict, and the records the flow writes are the ones the suites of the gate validate.
+    verdict: "gate-abstained",
+    items: [{ ...item, reps: [broken, ...rest] }],
+  };
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    gate: {
+      basis: "replay",
+      status: "gate-abstained",
+      budget: SPENT_BUDGET,
+      tokens: ZERO_TOKENS,
+      preregistration: PREREGISTRATION,
+      replay: withTheFields,
+    },
+    outcome: { status: "gate-abstained", reason: "invalid-run", decidedAt: "2026-11-02T14:20:00.000Z" },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+  // The same record without them, which every version wrote before these two fields existed.
+  assert.deepEqual(validateAgainstSchema({ ...VALID_RECORD, gate: gateWith("gate-abstained") }), []);
+});
+
 interface NegativeCase {
   name: string;
   build: () => unknown;
@@ -524,7 +565,17 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
     // the enum is what decides which statuses exist, and the negative has to stay outside it.
     build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "gate-passed" } }),
     expected: [
-      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", "accept-failed", got "gate-passed"',
+      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", got "gate-passed"',
+    ],
+  },
+  {
+    name: "an outcome status the vocabulary no longer declares",
+    // "accept-failed" was declared and never written: an acceptance that fails writes nothing, so the staged
+    // record keeps "gate-accepted" and the reason reaches the caller. The status is gone from both files, and
+    // this case is what keeps a writer from reintroducing it on one side only.
+    build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "accept-failed" } }),
+    expected: [
+      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", got "accept-failed"',
     ],
   },
   {
