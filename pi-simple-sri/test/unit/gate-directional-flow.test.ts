@@ -960,8 +960,43 @@ test("gateDirectionalCandidate: a lesson that no longer matches the record absta
   assert.equal(result.kind, "gate-abstained");
   assert.equal(result.reason, "candidate-mismatch");
   assert.equal(result.usedRuns, 0);
+  // The judge of this base was never asked about a candidate whose own bytes moved, and the answer says so in the word the
+  // record keeps for a second condition that did not speak.
+  assert.equal(result.judgeVerdict, "not-run");
   assert.equal(harness.runs.length, 0);
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
   assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
   assert.equal(fs.existsSync(path.join(fixture.candidateDir, CASE_BANK_FILE)), false);
+});
+
+// The overlay is the last step before the first run, and the one of this base is the overlay of the replay base: a skill it
+// cannot copy abstains with the bank and the rule already pinned, and the answer says the judge never spoke, which is the
+// word the record keeps for a second condition that was not asked.
+test("gateDirectionalCandidate: a skill the overlay cannot copy abstains without asking the judge", async (t) => {
+  const fixture = createFixture(t);
+  // A symlink inside the skill: the overlay refuses to copy it, the same way it refuses one in the replay base.
+  fs.symlinkSync(SKILL_FILE, path.join(fixture.skill.realDir, "linked-skill.md"));
+  const harness = createHarness(fixture);
+
+  const result = concluded(await gateDirectionalCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "overlay-failed");
+  assert.equal(result.plannedRuns, PLANNED_RUNS);
+  assert.equal(result.usedRuns, 0);
+  assert.equal(result.overlays, null);
+  // The judge of this base was never asked about a gate that never ran.
+  assert.equal(result.judgeVerdict, "not-run");
+  assert.equal(harness.runs.length, 0);
+  assert.equal(harness.judged.length, 0);
+
+  // The bank and the rule were pinned before the overlay, so the record stays preregistered: the gate ended without a result,
+  // which is what a preregistered record means.
+  assert.equal(readRecord(fixture.decisionPath).gate.status, "preregistered");
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, "gate-abstained");
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention of the overlay answered without its detail");
+  assert.equal(lines[0].reason, `overlay-failed: ${detail}`);
 });

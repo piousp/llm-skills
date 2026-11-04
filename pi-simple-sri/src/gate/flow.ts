@@ -573,10 +573,13 @@ function gateSeamsOf(deps: GateDeps): GateSeams {
 // The block of a gate that has not concluded, in either base and in either of the two states a gate has before its runs.
 // The fields neutral to the basis come first -- basis, status, the budget, the tokens and the rule -- and then the key the
 // base declares: `replay` is null in the two bases, because the schema requires the key of every block and ties it to no
-// basis, and `caseBank: null` is the one only the bank base declares. That single difference is the whole difference
-// between the four literals the flows used to write (the replay base, the bank base, and the candidate a proposal stages),
-// and `preregistration` is the rule when the gate has written one and null before it has, which is what tells
-// `preregistered` from `not-run`.
+// basis, and `caseBank: null` is the one only the bank base declares. `preregistration` is the rule when the gate has
+// written one and null before it has, which is what tells `preregistered` from `not-run`.
+//
+// The base is selected by a switch with one case per member of GateBasis and `assertNever` closing the list, the same shape
+// every other dispatch over a closed union of this package has: the equality the flow wrote before classified everything that
+// was not a replay as a bank, so a third basis would have reached decision.json as the block of a gate measured by a bank
+// nobody wrote. A third basis is a compile error here instead.
 export function notConcludedGateOf(
   basis: GateBasis,
   tokens: GateTokenTally,
@@ -585,22 +588,40 @@ export function notConcludedGateOf(
 ): GateNotRun | GatePreregistered | GateCaseBankNotRun | GateCaseBankPreregistered {
   const budget: GateBudget = { plannedRuns, usedRuns: 0, interruptedAt: null };
 
-  if (preregistration === null) {
-    const block: GateNotRun = { basis: "replay", status: "not-run", budget, tokens, preregistration: null, replay: null };
-    const bankBlock: GateCaseBankNotRun = { ...block, basis: "case-bank", caseBank: null };
-    return basis === "replay" ? block : bankBlock;
-  }
+  switch (basis) {
+    case "replay":
+      if (preregistration === null) {
+        const block: GateNotRun = { basis: "replay", status: "not-run", budget, tokens, preregistration: null, replay: null };
+        return block;
+      }
+      return { basis: "replay", status: "preregistered", budget, tokens, preregistration, replay: null };
 
-  const block: GatePreregistered = {
-    basis: "replay",
-    status: "preregistered",
-    budget,
-    tokens,
-    preregistration,
-    replay: null,
-  };
-  const bankBlock: GateCaseBankPreregistered = { ...block, basis: "case-bank", caseBank: null };
-  return basis === "replay" ? block : bankBlock;
+    case "case-bank":
+      if (preregistration === null) {
+        const bankBlock: GateCaseBankNotRun = {
+          basis: "case-bank",
+          status: "not-run",
+          budget,
+          tokens,
+          preregistration: null,
+          replay: null,
+          caseBank: null,
+        };
+        return bankBlock;
+      }
+      return {
+        basis: "case-bank",
+        status: "preregistered",
+        budget,
+        tokens,
+        preregistration,
+        replay: null,
+        caseBank: null,
+      };
+
+    default:
+      return assertNever(basis);
+  }
 }
 
 // The record of a gate that has recorded its rule and has run nothing, in the base that measures it. It is one literal for
