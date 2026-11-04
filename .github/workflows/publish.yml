@@ -1,0 +1,37 @@
+# Publishes pi-simple-agents to npm over OIDC (npm trusted publishing).
+#
+# There is no NPM_TOKEN: the npm CLI exchanges the runner's OIDC identity for a
+# short-lived publish token, and npm attaches the provenance attestation on its
+# own. The npm side of the trust relationship is configured per package on
+# npmjs.com (Trusted publisher → GitHub Actions) and names this exact workflow
+# filename, so renaming this file breaks publishing until the connection is
+# deleted and recreated.
+#
+# Triggered by hand only: the version published is whatever package.json says,
+# so the release is a version bump committed to main, a push, then a dispatch.
+name: publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi-simple-agents
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm publish
