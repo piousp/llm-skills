@@ -70,12 +70,14 @@ import { writeBase } from "./write-base.ts";
 // <package>/staging and <package>/state through the flow, and the acceptance that edits a skill is the one
 // step of M1, guarded by the snapshot, the drift check and the reference line of src/gate/acceptance.ts.
 //
-// M1c adds two branches and no second writer. A run that names a case bank (--bank=<path>, and --defect when that bank
-// describes the defect an artifact shows) is measured by the flow of src/gate/directional-flow.ts instead of by the replayed
-// turns of the session, and the presence of the bank is the whole dispatch. A run with --staged=<stagingPath> skips the
-// proposal and gates a candidate that already exists, so the acceptance has no draft to serialize: it reads the lesson the
-// candidate holds and verifies it against the hashes its record declares, which is the guard both gate bases run before they
-// spend a run. Both branches accept exactly where the gate accepts, which is the whole rule of this surface.
+// M1c adds two branches and no second writer. A run that names a case bank (--bank=<path>) is measured by the flow of
+// src/gate/directional-flow.ts instead of by the replayed turns of the session, and the bank without --defect is the whole
+// dispatch: --defect names a bank too -- it is the file the artifact and the cases are declared in, and the proposal reads it
+// -- but a defect is measured by the replay base (OA11), so the flag takes the run out of the bank's gate and not out of its
+// bank. A run with --staged=<stagingPath> skips the proposal and gates a candidate that already exists, so the acceptance has
+// no draft to serialize: it reads the lesson the candidate holds and verifies it against the hashes its record declares, which
+// is the guard both gate bases run before they spend a run. Both branches accept exactly where the gate accepts, which is the
+// whole rule of this surface.
 //
 // Importing this module reads nothing, registers nothing and starts nothing (rule 9 of the slice).
 // The clock, the settings file, the inventory, the model, the writer, the gate, the acceptance and the record
@@ -156,7 +158,8 @@ export interface SkillImproveArgs {
   skill?: string;
   focus?: string;
   // The bank that measures the candidate (M1c): a run that names one asks for a directional improvement and its failures
-  // are the cases the file declares, and the presence of the bank is what selects the flow of the gate.
+  // are the cases the file declares. It is the material of the run -- the proposal reads it -- and the flow of the gate is
+  // selected by it only when the run is not a defect (OA11): see measuredByBankOf below.
   bankPath?: string;
   // The bank describes the defect an artifact shows instead of the cases to measure. It is a property of the bank, and it
   // is spelled as a flag because the file itself cannot declare it (OA3): a bank that is not there cannot say what it is.
@@ -305,13 +308,15 @@ async function improve(args: string, run: Run): Promise<void> {
     return;
   }
 
-  const bankPath = bankOf(parsed);
+  // The proposal is written from the bank whenever the run names one, --defect included: the artifact the defect was read
+  // from and the cases that measure it are declared in that file, and the branch reads both before it generates. Which base
+  // measures the candidate is a separate question, and the answer is measuredByBankOf below.
   const result = await proposeSkill(
     {
       surface: SURFACE,
       skillName: parsed.skill,
       ...(parsed.focus === undefined ? {} : { focus: parsed.focus }),
-      ...(bankPath === undefined ? {} : { bankPath }),
+      ...bankFieldOf(parsed.bankPath),
       ...(parsed.defect === true ? { defect: true } : {}),
     },
     ctx,
@@ -347,7 +352,12 @@ async function improve(args: string, run: Run): Promise<void> {
       // M1: the candidate is gated here, and the acceptance below it is the only write into a skill this
       // package can reach.
       await gateAndAccept(
-        { base: result.base, skill: result.skill, stagingPath: result.staged.stagingPath, ...bankFieldOf(bankPath) },
+        {
+          base: result.base,
+          skill: result.skill,
+          stagingPath: result.staged.stagingPath,
+          ...bankFieldOf(measuredByBankOf(parsed)),
+        },
         run,
       );
       return;
@@ -359,11 +369,14 @@ async function improve(args: string, run: Run): Promise<void> {
   }
 }
 
-// The bank that measures a candidate (M1c): a run that named one and did not ask for a defect is measured by a case bank,
-// and every other run -- the session's failures, and the defect an artifact shows, which the replay base measures (OA11) --
-// by a replayed budget. The presence of the bank is the whole dispatch, and the record of the candidate is what catches a
-// surface that got it wrong: each flow refuses a record of the other base with `basis-mismatch`.
-function bankOf(parsed: SkillImproveArgs): string | undefined {
+// Whether a bank measures the candidate of this run (M1c): a run that named one and did not ask for a defect is measured by a
+// case bank, and every other run -- the session's failures, and the defect an artifact shows, which the replay base measures
+// (OA11) -- by a replayed budget. The answer is the bank to hand the gate, and undefined is the answer "by replay".
+//
+// It is read by the dispatch of the gate and by nothing else: the proposal of a defect is still written from the bank, and a
+// function that also emptied the request would take the material of the branch away from it. The record of the candidate is
+// what catches a surface that got it wrong: each flow refuses a record of the other base with `basis-mismatch`.
+function measuredByBankOf(parsed: SkillImproveArgs): string | undefined {
   return parsed.defect === true ? undefined : parsed.bankPath;
 }
 
@@ -408,7 +421,7 @@ async function gateStagedCandidateRun(
       base: deps.base ?? writeBase(agentDir),
       skill,
       stagingPath,
-      ...bankFieldOf(bankOf(parsed)),
+      ...bankFieldOf(measuredByBankOf(parsed)),
     },
     run,
   );
@@ -459,7 +472,8 @@ async function gateAndAccept(target: GateTarget, run: Run): Promise<void> {
 }
 
 // The gate of one candidate, in the flow of its base. The two flows answer about the same candidate and are pointed at it the
-// same way; what differs is the material, and the material is decided by the presence of the bank.
+// same way; what differs is the material, and the material is decided by the `bankPath` the caller put in the target -- which
+// the callers fill from measuredByBankOf, because a defect names a bank and is still measured by a replay.
 async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | DirectionalGateResult> {
   const { ctx, deps } = run;
   // The agent directory the loop read the settings and the inventory from, so the replay is measured against the skills

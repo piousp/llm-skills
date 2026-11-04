@@ -38,7 +38,9 @@ import type {
 //
 // The order is the contract, and each step exists to stop the next one:
 //
-//   1. resolveStagedCandidate names the record of the candidate, and refuses one this version cannot read;
+//   1. resolveStagedCandidate names the record of the candidate, and refuses one this version cannot read; the two guards
+//      of the base refuse, in the same breath, a record of the case-bank base (`basis-mismatch`) and one a gate already
+//      answered (`already-concluded`), before anything is written or run;
 //   2. the lesson on disk is hashed against the pair the record declares, so a candidate whose bytes moved
 //      since it was staged abstains before a byte is written into it;
 //   3. the plan -- the design, the rule and the floor of the design -- is computed from the diagnosis and
@@ -59,10 +61,14 @@ import type {
 // state of decision.json, and the line of an accepted candidate is the `accepted` event the acceptance
 // writes when it edits the skill. That is why `gate-accepted` is not in the event vocabulary at all.
 //
-// M1c adds one guard and no branch: before step 3 plans anything, the artifact of every evidence item that names one is
-// re-read and hashed against the digest the evidence recorded, and bytes that no longer match abstain with
-// `origin-moved`. The items, the plan, the budget, the verdict and the line are the ones of M1, unchanged -- the branch
-// of the defect changes where the items come from and what judges them, and nothing about how the gate spends.
+// M1c adds the two refusals of the base and one guard, and no branch. Right after step 1 the record says which base would
+// measure it and whether a gate already answered: a record of the `case-bank` base is refused with `basis-mismatch` -- its
+// items are the cases of a bank and this flow would plan over a `diagnosis.replayItems` that does not carry them -- and one
+// whose status is not `not-run` with `already-concluded`, because a verdict a reader may already have acted on is not
+// rewritten. Then, before step 3 plans anything, the artifact of every evidence item that names one is re-read and hashed
+// against the digest the evidence recorded, and bytes that no longer match abstain with `origin-moved`. The items, the plan,
+// the budget, the verdict and the line are the ones of M1, unchanged -- the branch of the defect changes where the items come
+// from and what judges them, and nothing about how the gate spends.
 //
 // It is here and not in the surface (src/tool-skill-improve.ts, src/command-skill-improve.ts) because both
 // surfaces run it and a candidate this module gates is one the whole package then trusts: one
@@ -261,6 +267,33 @@ export async function gateStagedCandidate(
   const resolved = await resolveStagedCandidate(request.base, request.skill.name, request.stagingPath);
   if (!resolved.ok) return { kind: "refused", rejection: resolved.error };
   const record = resolved.value;
+
+  // M1c: the two guards of the base, which the flow of the bank runs and this one owed. A record of another base names the
+  // material its own gate would measure -- the cases of a bank -- and a replay over it would plan from a diagnosis that does
+  // not carry those items, abstain `insufficient-items` and leave a line about a gate that never measured anything. A record
+  // whose gate already answered is refused for the reason the directional flow gives it: a candidate is gated once, and a
+  // second verdict would rewrite one a reader may already have acted on.
+  const basis = record.gate.basis;
+  if (basis !== "replay") {
+    return {
+      kind: "refused",
+      rejection: {
+        reason: "basis-mismatch",
+        detail: `${quote(relativeToBase(request.base, candidateDir))} announces a gate of the ${quote(basis)} base: a gate over a replayed diagnosis reads a record of the replay base`,
+      },
+    };
+  }
+
+  const status = record.gate.status;
+  if (status !== "not-run") {
+    return {
+      kind: "refused",
+      rejection: {
+        reason: "already-concluded",
+        detail: `${quote(relativeToBase(request.base, candidateDir))} is ${quote(status)}: a candidate is gated once, and the rule of a gate that already answered is not preregistered again`,
+      },
+    };
+  }
 
   // The artifact of a defect, re-verified before the plan and before any run (M1c, S8). The truth of a defect is a file,
   // and the record keeps the digest of the bytes it read: a file that moved since the proposal describes a failure nobody

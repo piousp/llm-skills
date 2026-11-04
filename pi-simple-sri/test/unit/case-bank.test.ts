@@ -197,11 +197,12 @@ test("loadCaseBank: a file that is not JSON is not-json with the message of the 
   assert.match(caseBankReason(loaded.error), /^bank-not-json: Unexpected/);
 });
 
-// The cap is checked on the bytes and before the JSON parser, so a file that points at a database does not become a
-// parsed database. The file below is a valid bank otherwise, which is what makes the order the thing under test.
+// The cap is checked on the bytes and before the JSON parser, so a file that points at a database does not become a parsed
+// database. The file below is one opening brace past the cap and is therefore not JSON at all, which is what makes the order the
+// thing under test: a reader that parsed first would answer `not-json` and never reach the cap.
 test("loadCaseBank: a file over the cap is too-large before it is parsed", async (t) => {
   const fixture = createFixture(t);
-  writeBank(fixture.file, { ...BASELINE_BANK, description: "d".repeat(MAX_CASE_BANK_BYTES) });
+  fs.writeFileSync(fixture.file, "{".repeat(MAX_CASE_BANK_BYTES + 1), "utf8");
   const written = fs.readFileSync(fixture.file);
   assert.equal(written.length > MAX_CASE_BANK_BYTES, true);
 

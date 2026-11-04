@@ -1232,3 +1232,70 @@ test("gateStagedCandidate: an artifact that is gone abstains as moved", async (t
   assert.equal(detail.includes(fixture.artifactPath), true);
   assert.equal(detail.includes("ENOENT"), true);
 });
+
+// M1c: the record says which base would measure the candidate, and this flow reads a record of the replay base. A candidate of
+// the case-bank base carries the cases of its bank and not a replay item of the diagnosis, so a gate over it would plan from a
+// `diagnosis.replayItems` the bank base never filled, abstain `insufficient-items` and leave a line about a gate that measured
+// nothing. It is refused instead: no run, no line, and the record exactly as it was.
+test("gateStagedCandidate: a record of the case-bank base is refused as another base", async (t) => {
+  const fixture = createFixture(t);
+  const record = decisionRecord();
+  // The block of a bank that was proposed and not gated yet: the base of the other flow, in the state that makes this refusal
+  // the only one it could answer -- the status is the one a record of this base starts in.
+  const before = `${JSON.stringify(
+    {
+      ...record,
+      gate: {
+        basis: "case-bank",
+        status: "not-run",
+        budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+        tokens: record.gate.tokens,
+        preregistration: null,
+        replay: null,
+        caseBank: null,
+      },
+    },
+    null,
+    2,
+  )}\n`;
+  fs.writeFileSync(fixture.decisionPath, before, "utf8");
+  const harness = createHarness();
+
+  const result = await gateStagedCandidate(gateRequest(fixture), harness.deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  assert.equal(result.rejection.reason, "basis-mismatch");
+  assert.equal(result.rejection.detail.includes("case-bank"), true);
+  assert.equal(result.rejection.detail.includes("replay"), true);
+  assert.equal(harness.runs.length, 0);
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.deepEqual(readLines(fixture.base), []);
+});
+
+// The other guard of the base: a candidate the gate already answered is not gated twice. The verdict of the first run is the
+// one a reader may already have acted on, so the second call is refused instead of preregistering a rule over it again -- and
+// neither a run nor a line of the index comes out of the refusal.
+test("gateStagedCandidate: a candidate whose gate already answered is refused", async (t) => {
+  const fixture = createFixture(t);
+  const first = createHarness();
+
+  const accepted = concluded(await gateStagedCandidate(gateRequest(fixture), first.deps));
+  assert.equal(accepted.kind, "gate-accepted");
+  assert.equal(first.runs.length, PLANNED_RUNS);
+  assert.equal(readRecord(fixture.decisionPath).gate.status, "gate-accepted");
+  // An accepted gate is a state of the record and no event of the index, so the emptiness below is the one the second call has
+  // to leave alone.
+  assert.deepEqual(readLines(fixture.base), []);
+  const before = fs.readFileSync(fixture.decisionPath, "utf8");
+
+  const second = createHarness();
+  const result = await gateStagedCandidate(gateRequest(fixture), second.deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  assert.equal(result.rejection.reason, "already-concluded");
+  assert.equal(result.rejection.detail.includes("gate-accepted"), true);
+  assert.equal(second.runs.length, 0);
+  // The verdict is the one of the first run: the record is not rewritten and the index gained nothing.
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.deepEqual(readLines(fixture.base), []);
+});

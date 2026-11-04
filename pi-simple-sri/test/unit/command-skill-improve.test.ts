@@ -25,6 +25,7 @@ import {
   type SkillImproveModelRegistry,
 } from "../../src/command-skill-improve.ts";
 import { SriFailClosedError } from "../../src/errors.ts";
+import { CASE_BANK_FORMAT } from "../../src/case-bank.ts";
 import { acceptCandidate, type AcceptDeps, type AcceptRequest } from "../../src/gate/acceptance.ts";
 import type {
   DirectionalGateDeps,
@@ -1560,4 +1561,85 @@ test("runSkillImprove: --bank without a model is refused before the gate is reac
   const report = harness.notified.at(-1);
   assert.equal(report?.type, "error");
   assert.equal(report?.message.includes("needs the model of this session"), true);
+});
+
+// The artifact and the bank of the branch of the defect: the proposal reads both before it generates, so the run below names
+// real files -- the artifact for its bytes and the bank of profile `origin` for the path of that artifact and the two cases
+// that measure it.
+const DEFECT_ARTIFACT_FILE = "review.md";
+const DEFECT_ARTIFACT_TEXT = "rebase with --squash-all to leave one commit\n";
+const DEFECT_EXCERPT = "rebase with --squash-all";
+const DEFECT_BANK_FILE = "defect.json";
+
+function defectBank(artifactPath: string): string {
+  return JSON.stringify({
+    format: CASE_BANK_FORMAT,
+    origin: { kind: "review-finding", path: artifactPath, excerpt: DEFECT_EXCERPT },
+    cases: [
+      {
+        id: "keeps-history",
+        prompt: "rebase the branch onto main",
+        checks: [{ kind: "not-contains", value: "--squash-all" }],
+      },
+      {
+        id: "interactive",
+        prompt: "rebase the branch onto main keeping both commits",
+        checks: [{ kind: "contains", value: "--interactive" }],
+      },
+    ],
+  });
+}
+
+// The pair of flags, end to end (M1c, S8): --defect says what the bank describes, so the bank is the material of the proposal
+// and the run cannot be written without it -- the artifact the defect was read from and the cases that measure it are declared
+// in that one file. The base of the gate is the other half of the rule: a defect is measured by the replay base (OA11), so the
+// candidate goes to the flow of the replayed turns and the engine of the bank is never entered.
+test("runSkillImprove: --bank with --defect proposes from the bank and gates with the replay base", async (t: TestContext) => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-defect-"));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const artifactPath = path.join(dir, DEFECT_ARTIFACT_FILE);
+  fs.writeFileSync(artifactPath, DEFECT_ARTIFACT_TEXT, "utf8");
+  const bankPath = path.join(dir, DEFECT_BANK_FILE);
+  fs.writeFileSync(bankPath, defectBank(artifactPath), "utf8");
+
+  const harness = createHarness({ model: MODEL });
+
+  await harness.run(`pdf-tools --bank=${bankPath} --defect`);
+
+  // One proposal, written from the bank and from the defect. The harness records the input of the proposer and not the request
+  // of the loop, so the proof is the record the flow wrote: a request without the bank answers `bank-absent` and stages
+  // nothing at all, and a request without the defect reads the transcript instead of the artifact.
+  assert.equal(harness.proposals.length, 1);
+  assert.equal(harness.proposals[0].input.basis, "replay");
+  assert.equal(harness.writes.length, 1);
+
+  const record = harness.writes[0].decision;
+  assert.equal(record.evidence.length, 1);
+  assert.equal(record.evidence[0].kind, "quality_defect");
+  assert.equal(record.evidence[0].excerpt, DEFECT_EXCERPT);
+  assert.equal(record.evidence[0].origin?.path, artifactPath);
+  // The two cases of the bank are the items the gate of the replay base will measure, which is the material the bank carried
+  // into the run.
+  assert.deepEqual(
+    record.diagnosis.replayItems.map((item) => item.prompt),
+    ["rebase the branch onto main", "rebase the branch onto main keeping both commits"],
+  );
+  // The base the record declares: a defect is measured by the replayed turns and not by the bank (OA11).
+  assert.equal(record.gate.basis, "replay");
+  assert.equal(record.gate.status, "not-run");
+
+  // And one gate, the replay one: the bank is the material and not the base, so the flow of the bank was never asked.
+  assert.equal(harness.gateRequests.length, 1);
+  assert.equal(harness.gateRequests[0].stagingPath, STAGING_RELATIVE);
+  assert.equal(harness.gateRequests[0].skill.name, SKILL.name);
+  assert.deepEqual(harness.directionalRequests, []);
+
+  // The reported outcome is the answer of that gate, and a gate that concluded nothing accepts nothing.
+  assert.deepEqual(harness.acceptRequests, []);
+  const abstention = harness.notified.at(-1);
+  assert.equal(abstention?.type, "warning");
+  assert.equal(abstention?.message.includes("insufficient-items"), true);
 });
