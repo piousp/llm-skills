@@ -39,6 +39,22 @@ export function countReferenceLines(text: string, slug: string): number {
   return lessonsSectionLines(text).filter((line) => pattern.test(line)).length;
 }
 
+// The section the two arms of the gate have to share (Q13): the incumbent is the skill with `## Lessons`
+// present but without the line the candidate would add, so a section the skill does not have yet is
+// appended empty and one that exists is returned untouched -- the same text, byte for byte. That is what
+// makes the two arms differ in the reference line and in nothing else: the line goes into this same
+// section afterwards, and an appended section takes it exactly where appending the line would have.
+//
+// Idempotent by construction: a text that already has the section is not rewritten, so a second call
+// answers the same text and no ### sub-section or surrounding prose is touched. Like the rest of this
+// module it never raises and never looks at the disk.
+export function ensureLessonsSection(text: string): string {
+  if (splitLines(text).some(isLessonsHeading)) {
+    return text;
+  }
+  return `${newSectionPrefix(text)}## ${LESSONS_HEADING}\n`;
+}
+
 // Idempotent by slug: a text that already carries the line is returned unchanged, so accepting a
 // lesson twice cannot add the line twice. Without the line a lesson is inert (Q10), which is why
 // acceptance writes it.
@@ -116,9 +132,16 @@ function lessonsSectionLines(text: string): string[] {
 }
 
 function appendLessonsSection(text: string, line: string): string {
+  return `${newSectionPrefix(text)}## ${LESSONS_HEADING}\n\n${line}\n`;
+}
+
+// The text the appended section is written onto: the file as it is plus the blank line that separates the
+// heading from what was there. An empty section and one that starts with the reference line follow the same
+// rule, because both are the same block at the end of the file and only their content differs.
+function newSectionPrefix(text: string): string {
   const base = text === "" || text.endsWith("\n") ? text : `${text}\n`;
   const separator = base === "" || base.endsWith("\n\n") ? "" : "\n";
-  return `${base}${separator}## ${LESSONS_HEADING}\n\n${line}\n`;
+  return `${base}${separator}`;
 }
 
 function isLessonsHeading(line: string): boolean {
