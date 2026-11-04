@@ -106,7 +106,9 @@ function createFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
 }
 
 // The record the gate leaves in staging: schema @1, the candidate it measured and the verdict it wrote. The
-// gate block is a concluded one, because that is the only status an acceptance can be looking at.
+// gate block is a concluded one, because that is the only status an acceptance can be looking at, and it declares
+// a plan of the shape src/gate/scorer.ts produces -- two items, two repetitions each, eight runs -- because a
+// design of one item is one that plan refuses to make.
 function decisionRecord(contentHash: string): DecisionRecord {
   return {
     schema: "pi-simple-sri/decision@1",
@@ -139,6 +141,11 @@ function decisionRecord(contentHash: string): DecisionRecord {
           cwd: "/work/reports",
           expectation: { class: "tool_error", version: 1, tool: "bash" },
         },
+        {
+          prompt: "extract the merged-cell table from appendix.pdf",
+          cwd: "/work/reports",
+          expectation: { class: "tool_error", version: 1, tool: "bash" },
+        },
       ],
     },
     candidate: {
@@ -153,7 +160,7 @@ function decisionRecord(contentHash: string): DecisionRecord {
     gate: {
       basis: "replay",
       status: "gate-accepted",
-      budget: { plannedRuns: 2, usedRuns: 2, interruptedAt: null },
+      budget: { plannedRuns: 8, usedRuns: 8, interruptedAt: null },
       tokens: {
         proposal: { input: 412, output: 137 },
         incumbent: { input: 210, output: 64 },
@@ -162,9 +169,9 @@ function decisionRecord(contentHash: string): DecisionRecord {
       },
       preregistration: {
         recordedAt: "2026-11-02T14:03:23.000Z",
-        threshold: { rule: "unanimous-and-strictly-better", candidatePasses: 2, incumbentPassesMax: 1, version: 1 },
-        design: { reps: 2, items: 1, plannedRuns: 2, arms: ["incumbent", "candidate"] },
-        mde: { basis: "1 item, 2 reps per arm", runsPerArm: 2, resolution: 0.5, requiredDifference: 1 },
+        threshold: { rule: "unanimous-and-strictly-better", candidatePasses: 4, incumbentPassesMax: 3, version: 1 },
+        design: { reps: 2, items: 2, plannedRuns: 8, arms: ["incumbent", "candidate"] },
+        mde: { basis: "replay", runsPerArm: 4, resolution: 0.25, requiredDifference: 1 },
       },
       replay: {
         completedAt: "2026-11-02T14:09:58.000Z",
@@ -172,15 +179,15 @@ function decisionRecord(contentHash: string): DecisionRecord {
         reason: null,
         items: [],
         arms: {
-          incumbent: { passes: 1, runs: 2, tokens: { input: 210, output: 64 } },
-          candidate: { passes: 2, runs: 2, tokens: { input: 205, output: 71 } },
+          incumbent: { passes: 3, runs: 4, tokens: { input: 210, output: 64 } },
+          candidate: { passes: 4, runs: 4, tokens: { input: 205, output: 71 } },
         },
         interval: {
           method: "wilson",
           alpha: 0.05,
-          incumbent: { low: 0.09, high: 0.91 },
-          candidate: { low: 0.34, high: 1 },
-          difference: { low: -0.5, high: 1 },
+          incumbent: { low: 0.3006, high: 0.9544 },
+          candidate: { low: 0.5101, high: 1 },
+          difference: { low: 0.0456, high: 0.6994 },
         },
         regressions: 0,
         excluded: [],

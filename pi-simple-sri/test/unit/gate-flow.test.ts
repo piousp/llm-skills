@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -90,6 +91,19 @@ const EVIDENCE: readonly EvidenceItem[] = [
   },
 ];
 
+// OA7: the failure of the task and not of the skill. A `read` of a file that is not there fails the same way
+// whatever the skill says, so the item it names measures nothing about the candidate -- and the tool and the
+// excerpt are the two fields the exclusion reads.
+const READ_TOOL = "read";
+const INTRINSIC_EVIDENCE: EvidenceItem = {
+  id: "ev-6c8d4f33",
+  kind: "tool_error",
+  toolName: READ_TOOL,
+  timestamp: 1762082605514,
+  source: "transcript",
+  excerpt: "read /work/reports/missing.pdf: ENOENT: no such file or directory",
+};
+
 // The candidate lesson, in the format src/lesson-frontmatter.ts owns: src/writer.ts reads the staged bytes back
 // with the parser of that module before it lets a record be replaced, so the fixture is built by the writer of
 // the format and not by hand.
@@ -120,15 +134,25 @@ function fixtureHashes(): { contentHash: string; bodyHash: string } {
   return hashes.value;
 }
 
+// The hashes of this suite are computed here and not with src/hash.ts: what the gate records has to agree with an
+// independent computation of the same bytes.
+function digestOf(text: string): string {
+  return `sha256:${createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex")}`;
+}
+
 // One replay item of the diagnosis. Its failure signature is the digest of one evidence id, which is the rule
 // src/diagnosis.ts applies and the reason the flow can pair an item with the excerpt it came from.
-function replayItem(index: number, skills: readonly string[]): ReplayItem {
-  const evidence = EVIDENCE[index] ?? EVIDENCE[0];
-
+function replayItem(
+  index: number,
+  skills: readonly string[],
+  evidence: EvidenceItem = EVIDENCE[index] ?? EVIDENCE[0],
+): ReplayItem {
   return {
     prompt: `extract the merged-cell table of report ${index}.pdf`,
     cwd: "/work/reports",
-    expectation: { class: "tool_error", version: 1, tool: TOOL },
+    // The tool of the failure the item replays: every item of this suite watches `bash` except the one the
+    // intrinsic-failure exclusion drops, which watches the `read` of a file that is not there.
+    expectation: { class: "tool_error", version: 1, tool: evidence.toolName ?? TOOL },
     model: MODEL,
     skills: [...skills],
     failureSignature: sha256Digest(evidence.id),
@@ -142,6 +166,9 @@ interface RecordOverrides {
   bodyHash?: string;
   // How many replay items the diagnosis carries, which is what decides the plan.
   items?: number;
+  // One item more, of the failure the gate cannot measure: a `read` of a file that is not there (OA7), appended
+  // after the ones the count above declares.
+  intrinsicItem?: boolean;
   // The skills the session of every item had (OA6).
   itemSkills?: readonly string[];
 }
@@ -150,7 +177,7 @@ interface RecordOverrides {
 // and the diagnosis its index line names. It is a literal because nothing in this suite runs the propose flow --
 // what is under test is the reading, the rewriting and the gating of a file that flow already wrote.
 function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
-  const count = overrides.items ?? 3;
+  const evidence = fixtureEvidence(overrides);
   const itemSkills = overrides.itemSkills ?? [SKILL_NAME];
 
   return {
@@ -165,11 +192,13 @@ function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
       eligible: true,
     },
     eligibility: { allow: [], deny: [] },
-    evidence: EVIDENCE.slice(0, count).map((item) => ({ ...item })),
+    evidence,
     diagnosis: {
       summary: "Table extraction loses merged cells",
       failureSignature: SIGNATURE,
-      replayItems: Array.from({ length: count }, (_unused, index) => replayItem(index, itemSkills)),
+      // One item per evidence entry, in the order the diagnosis measured them: the signature of each item is the
+      // digest of the id of its entry, which is how the flow pairs the two back together (OA7).
+      replayItems: evidence.map((item, index) => replayItem(index, itemSkills, item)),
     },
     candidate: {
       kind: "new-lesson",
@@ -195,6 +224,17 @@ function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
     },
     outcome: { status: "proposed", reason: null, decidedAt: null },
   };
+}
+
+// The evidence the record carries, in the order the diagnosis measured it: the count of the fixture and, when a
+// test asks for it, the item the intrinsic-failure exclusion drops.
+function fixtureEvidence(overrides: RecordOverrides): EvidenceItem[] {
+  const count = overrides.items ?? 3;
+  const evidence = EVIDENCE.slice(0, count).map((item) => ({ ...item }));
+
+  if (overrides.intrinsicItem === true) evidence.push({ ...INTRINSIC_EVIDENCE });
+
+  return evidence;
 }
 
 // A declared skill the way a user writes one: frontmatter, a body, and a script next to it. The `## Lessons`
@@ -576,6 +616,14 @@ test("gateStagedCandidate: an accepted gate rewrites the record and writes no li
   assert.equal(record.outcome.reason, null);
   assert.notEqual(record.outcome.decidedAt, null);
 
+  // The two hashes of the overlay, each of the bytes its own name says: `skillContentHash` is the SKILL.md the
+  // gate measured, computed here from the bytes the fixture wrote, and `manifestHash` is the digest of the
+  // manifest of the two copies and therefore not it. Swapped, the record would hand the acceptance the hash of a
+  // manifest as the preregistered hash of the skill (src/command-skill-improve.ts copies this field into
+  // `expectedSkillContentHash`), and every acceptance of a real gate would be refused as drift.
+  assert.equal(gate.replay.overlays.skillContentHash, digestOf(skillBefore));
+  assert.notEqual(gate.replay.overlays.manifestHash, gate.replay.overlays.skillContentHash);
+
   assert.equal(gate.replay.items.length, 3);
   for (const item of gate.replay.items) {
     assert.equal(item.reps.length, 4);
@@ -921,6 +969,54 @@ test("gateStagedCandidate: fewer than two items abstains with zero runs", async 
   assert.equal(readLines(fixture.base)[0].event, "gate-abstained");
   // M4: an abstention with no detail to give leaves the field out instead of writing an empty one.
   assert.equal(Object.hasOwn(readLines(fixture.base)[0], "reason"), false);
+});
+
+// OA7, end to end: the item whose failure is intrinsic to the task is dropped before the plan, and the pairing
+// that drops it is the excerpt of the evidence its signature names. Two of the three items are left, so the plan
+// is the eight runs of a two-item design and the record says which item did not run.
+test("gateStagedCandidate: an item whose failure is intrinsic is excluded before the plan", async (t) => {
+  const fixture = createFixture(t, { items: 2, intrinsicItem: true });
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  assert.equal(result.reason, null);
+  assert.equal(result.plannedRuns, 8);
+  assert.equal(result.usedRuns, 8);
+  assert.equal(harness.runs.length, 8);
+
+  // The order of §8 over the two items that were eligible: item -> rep -> (incumbent, candidate).
+  assert.deepEqual(
+    harness.runs.map((run) => `${run.request.item}:${run.request.rep}:${run.request.arm}`),
+    [
+      "0:1:incumbent",
+      "0:1:candidate",
+      "0:2:incumbent",
+      "0:2:candidate",
+      "1:1:incumbent",
+      "1:1:candidate",
+      "1:2:incumbent",
+      "1:2:candidate",
+    ],
+  );
+
+  const gate = concludedGate(readRecord(fixture.decisionPath));
+  assert.equal(gate.preregistration.design.items, 2);
+  assert.equal(gate.preregistration.design.plannedRuns, 8);
+  assert.equal(gate.preregistration.threshold.candidatePasses, 4);
+  assert.deepEqual(gate.budget, { plannedRuns: 8, usedRuns: 8, interruptedAt: null });
+
+  // The item that did not run is the one of the `read`, named by the failure of its own evidence. The exclusion
+  // happened because the excerpt paired with that signature carries the marker an intrinsic failure carries, so
+  // the item never took a slot of the plan and never spent a run.
+  assert.deepEqual(gate.replay.excluded, [
+    { failureSignature: sha256Digest(INTRINSIC_EVIDENCE.id), reason: "intrinsic-failure" },
+  ]);
+  assert.deepEqual(
+    gate.replay.items.map((item) => item.failureSignature),
+    [sha256Digest(EVIDENCE[0].id), sha256Digest(EVIDENCE[1].id)],
+  );
 });
 
 // OA12, on the gate itself: a candidate of another version is refused before anything is read from it, so the

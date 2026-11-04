@@ -595,8 +595,9 @@ async function spendBudget(input: BudgetInput): Promise<BudgetResult> {
   return { runs, items: input.items, usedRuns, interruptedAt: null };
 }
 
-// The verdict of the gate and the one line of the index it gains, in that order of ownership: the record was
-// already written by the caller and the line is the event about it.
+// The verdict of the gate and the one line of the index it gains. The record is the caller's and can be older
+// than this answer: the abstentions that end before the budget -- insufficient-items, no-model, skill-unavailable,
+// overlay-failed -- leave it in "not-run" or in "preregistered" while the line and the answer carry the result.
 interface AnswerInput {
   request: GateRequest;
   seams: GateSeams;
