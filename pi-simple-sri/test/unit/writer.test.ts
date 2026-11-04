@@ -10,11 +10,17 @@ import { stagingDir, stateDir } from "../../src/write-base.ts";
 import { SriPerimeterError } from "../../src/perimeter.ts";
 import {
   appendAttemptLine,
+  copySkillTree,
   discardStagingCandidate,
+  removeLessonFile,
+  rewriteStagingDecision,
   snapshotForHistory,
   SriWriterError,
   upsertReferenceLine,
+  writeHistoryDecision,
+  writeLessonFile,
   writeStagingCandidate,
+  writeTextAtomically,
   type StagingWriteInput,
 } from "../../src/writer.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef } from "../../src/types.ts";
@@ -206,6 +212,12 @@ function relativeTree(rootDir: string): string[] {
 
 function sha256File(filePath: string): string {
   return `sha256:${createHash("sha256").update(fs.readFileSync(filePath)).digest("hex")}`;
+}
+
+// The contentHash of a lesson text, computed here and not with the writer's own helper: the expected
+// hash of the M1 tests is the one an independent computation produces.
+function sha256Text(text: string): string {
+  return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
 }
 
 test("writeStagingCandidate: writes the lesson and decision.json under staging/<ts>/<skill>", async (t) => {
@@ -843,4 +855,344 @@ test("upsertReferenceLine: a SKILL.md that is a symlink is written through, not 
     fs.readdirSync(skill.realDir).filter((entry) => entry.startsWith(".sri-write-")),
     [],
   );
+});
+
+// ---------------------------------------------------------------------------------------------
+// M1 primitives. Each of them is exercised on a skill built in mkdtemp: no test names a real skill and
+// none reads or writes ~/.pi/agent/sri/.
+// ---------------------------------------------------------------------------------------------
+
+// A skill with two files, a sub-directory, its own history and a git directory: the tree the two arms of
+// the gate are copied from (S5), and the one a snapshot of it never receives whole.
+function populatedSkill(fixture: Fixture): SkillRef {
+  const skill = makeSkill(fixture);
+  fs.mkdirSync(path.join(skill.realDir, "lessons"), { recursive: true });
+  fs.mkdirSync(path.join(skill.realDir, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(skill.realDir, ".history", BASE_TIMESTAMP), { recursive: true });
+  fs.mkdirSync(path.join(skill.realDir, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(skill.realDir, "lessons", "first.md"), "first lesson\n", "utf8");
+  fs.writeFileSync(path.join(skill.realDir, "scripts", "run.sh"), "#!/bin/sh\necho hi\n", "utf8");
+  fs.writeFileSync(path.join(skill.realDir, ".history", BASE_TIMESTAMP, "SKILL.md"), "an older skill\n", "utf8");
+  fs.writeFileSync(path.join(skill.realDir, ".git", "config"), "[core]\n", "utf8");
+  return skill;
+}
+
+test("writeLessonFile: writes the lesson inside the skill and returns its path", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const text = lessonTextFor(makeDraft());
+
+  const lessonPath = await writeLessonFile(skill.realDir, LESSON_SLUG, text, sha256Text(text));
+
+  assert.equal(lessonPath, path.join(skill.realDir, "lessons", `${LESSON_SLUG}.md`));
+  assert.equal(fs.readFileSync(lessonPath, "utf8"), text);
+  assert.deepEqual(fs.readdirSync(path.join(skill.realDir, "lessons")), [`${LESSON_SLUG}.md`]);
+  assert.deepEqual(
+    fs.readdirSync(skill.realDir).filter((entry) => entry.startsWith(".sri-write-")),
+    [],
+  );
+});
+
+// Q11: a lesson path that is a symlink is written through, not replaced. A rename over the link would
+// leave a regular file where the link was, and a skill that links its lessons to a shared directory would
+// lose the link on the first acceptance.
+test("writeLessonFile: a lessons/<slug>.md that is a symlink is written through, not replaced", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const lessonsDir = path.join(skill.realDir, "lessons");
+  const targetPath = path.join(lessonsDir, "shared.md");
+  const lessonPath = path.join(lessonsDir, `${LESSON_SLUG}.md`);
+  fs.mkdirSync(lessonsDir, { recursive: true });
+  fs.writeFileSync(targetPath, "an older lesson\n", "utf8");
+  fs.symlinkSync(targetPath, lessonPath);
+  assert.equal(fs.lstatSync(lessonPath).isSymbolicLink(), true);
+
+  const text = lessonTextFor(makeDraft());
+  await writeLessonFile(skill.realDir, LESSON_SLUG, text, sha256Text(text));
+
+  assert.equal(fs.lstatSync(lessonPath).isSymbolicLink(), true);
+  assert.equal(fs.readlinkSync(lessonPath), targetPath);
+  assert.equal(fs.readFileSync(targetPath, "utf8"), text);
+  assert.deepEqual(
+    fs.readdirSync(lessonsDir).filter((entry) => entry.startsWith(".sri-write-")),
+    [],
+  );
+});
+
+// The text is not the candidate the gate ran against, so nothing is written: the directory that would
+// hold the lesson does not even exist afterwards.
+test("writeLessonFile: a text that does not hash to the expected candidate writes nothing", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const text = lessonTextFor(makeDraft());
+
+  await assert.rejects(
+    () => writeLessonFile(skill.realDir, LESSON_SLUG, text, HASH_PLACEHOLDER),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("hashes to"),
+  );
+
+  assert.equal(fs.existsSync(path.join(skill.realDir, "lessons")), false);
+});
+
+test("writeLessonFile: a slug that leaves lessons/ is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const text = lessonTextFor(makeDraft());
+
+  await assert.rejects(
+    () => writeLessonFile(skill.realDir, "../../escape", text, sha256Text(text)),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+
+  assert.equal(fs.existsSync(path.join(fixture.skillsDir, "escape.md")), false);
+  assert.deepEqual(relativeTree(skill.realDir), ["SKILL.md"]);
+});
+
+test("removeLessonFile: removes the lesson and answers that it is gone", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const text = lessonTextFor(makeDraft());
+  const lessonPath = await writeLessonFile(skill.realDir, LESSON_SLUG, text, sha256Text(text));
+
+  assert.equal(await removeLessonFile(skill.realDir, LESSON_SLUG), true);
+  assert.equal(fs.existsSync(lessonPath), false);
+  // The answer is "is it gone", not "did it exist": compensating a failed acceptance twice is not an
+  // error for the caller that is withdrawing a lesson.
+  assert.equal(await removeLessonFile(skill.realDir, LESSON_SLUG), true);
+});
+
+// Removal deletes, so it is guarded like the writes: a slug that reaches SKILL.md leaves the lessons
+// directory and is refused, and SKILL.md survives.
+test("removeLessonFile: a slug that leaves lessons/ is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const skillMdPath = path.join(skill.realDir, "SKILL.md");
+  fs.mkdirSync(path.join(skill.realDir, "lessons"), { recursive: true });
+
+  await assert.rejects(
+    () => removeLessonFile(skill.realDir, "../SKILL"),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+
+  assert.equal(fs.readFileSync(skillMdPath, "utf8"), skillFile());
+});
+
+test("rewriteStagingDecision: replaces the record of a candidate whose lesson is unchanged", async (t) => {
+  const fixture = createFixture(t);
+  const staged = await writeStagingCandidate(inputFor(fixture));
+  const next: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "gate-accepted" } };
+
+  const result = await rewriteStagingDecision(fixture.pkg, staged.stagingPath, next);
+
+  assert.equal(result.decisionPath, staged.decisionPath);
+  // The hashes answered are the ones on disk, and the record carries them instead of the placeholders it
+  // was built with.
+  assert.equal(result.contentHash, staged.contentHash);
+  assert.equal(result.bodyHash, staged.bodyHash);
+  const onDisk: unknown = JSON.parse(fs.readFileSync(staged.decisionPath, "utf8"));
+  assert.deepEqual(onDisk, {
+    ...next,
+    candidate: { ...next.candidate, contentHash: staged.contentHash, bodyHash: staged.bodyHash },
+  });
+  assert.equal(fs.readFileSync(staged.lessonPath, "utf8"), lessonTextFor(makeDraft()));
+});
+
+// The record declares the candidate the gate ran against. A lesson that changed after staging means the
+// record and the bytes on disk disagree, so the record is not replaced and the previous one stays.
+test("rewriteStagingDecision: a lesson altered after staging is refused and the record is left alone", async (t) => {
+  const fixture = createFixture(t);
+  const staged = await writeStagingCandidate(inputFor(fixture));
+  const before = fs.readFileSync(staged.decisionPath, "utf8");
+  fs.appendFileSync(staged.lessonPath, "\nOne more step.\n", "utf8");
+
+  await assert.rejects(
+    () => rewriteStagingDecision(fixture.pkg, staged.stagingPath, makeDecision()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("no longer hashes"),
+  );
+
+  assert.equal(fs.readFileSync(staged.decisionPath, "utf8"), before);
+});
+
+test("rewriteStagingDecision: a candidate outside staging is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  // staging/ exists, so the refusal is about where the path points and not about a missing root.
+  await writeStagingCandidate(inputFor(fixture));
+
+  await assert.rejects(
+    () => rewriteStagingDecision(fixture.pkg, skill.realDir, makeDecision()),
+    (error: unknown) => error instanceof SriPerimeterError && error.message.includes("outside every writable root"),
+  );
+
+  assert.deepEqual(relativeTree(skill.realDir), ["SKILL.md"]);
+});
+
+test("copySkillTree: copies the skill without .history/ or .git/ and answers a stable manifest hash", async (t) => {
+  const fixture = createFixture(t);
+  const skill = populatedSkill(fixture);
+  const stagingRoot = stagingDir(fixture.pkg);
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  const incumbent = path.join(stagingRoot, BASE_TIMESTAMP, "pdf-tools", "arms", "incumbent", "pdf-tools");
+  const candidate = path.join(stagingRoot, BASE_TIMESTAMP, "pdf-tools", "arms", "candidate", "pdf-tools");
+
+  const first = await copySkillTree(skill.realDir, incumbent, stagingRoot);
+  const second = await copySkillTree(skill.realDir, candidate, stagingRoot);
+
+  assert.deepEqual(relativeTree(incumbent), ["SKILL.md", "lessons/first.md", "scripts/run.sh"]);
+  assert.deepEqual(relativeTree(candidate), ["SKILL.md", "lessons/first.md", "scripts/run.sh"]);
+  assert.equal(first.files, 3);
+  // The manifest is the content of the copy: two copies of the same tree answer the same hash.
+  assert.match(first.manifestHash, HASH_PATTERN);
+  assert.equal(first.manifestHash, second.manifestHash);
+  // The skill keeps its own history and its git directory: only the copy leaves them behind.
+  assert.equal(fs.existsSync(path.join(skill.realDir, ".history", BASE_TIMESTAMP, "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(skill.realDir, ".git", "config")), true);
+});
+
+test("copySkillTree: one more lesson changes the manifest hash", async (t) => {
+  const fixture = createFixture(t);
+  const skill = populatedSkill(fixture);
+  const stagingRoot = stagingDir(fixture.pkg);
+  fs.mkdirSync(stagingRoot, { recursive: true });
+
+  const first = await copySkillTree(skill.realDir, path.join(stagingRoot, "incumbent"), stagingRoot);
+  // The candidate arm carries one lesson more than the incumbent: that difference is what the two hashes
+  // have to report.
+  fs.writeFileSync(path.join(skill.realDir, "lessons", "second.md"), "second lesson\n", "utf8");
+  const second = await copySkillTree(skill.realDir, path.join(stagingRoot, "candidate"), stagingRoot);
+
+  assert.equal(second.files, first.files + 1);
+  assert.notEqual(second.manifestHash, first.manifestHash);
+});
+
+// A symlink inside the skill can point anywhere, including out of the root the copy is guarded by, so the
+// copy refuses it instead of following it, and the destination is discarded instead of published.
+test("copySkillTree: a symlink inside the skill is refused and no copy is left behind", async (t) => {
+  const fixture = createFixture(t);
+  const skill = populatedSkill(fixture);
+  const stagingRoot = stagingDir(fixture.pkg);
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.symlinkSync(fixture.skillsDir, path.join(skill.realDir, "lessons", "linked"));
+  const destinationDir = path.join(stagingRoot, BASE_TIMESTAMP, "pdf-tools");
+
+  await assert.rejects(
+    () => copySkillTree(skill.realDir, destinationDir, stagingRoot),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("regular files"),
+  );
+
+  assert.equal(fs.existsSync(destinationDir), false);
+});
+
+test("copySkillTree: a destination outside the root is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const stagingRoot = stagingDir(fixture.pkg);
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  const outside = path.join(fixture.base, "escape");
+
+  await assert.rejects(
+    () => copySkillTree(skill.realDir, outside, stagingRoot),
+    (error: unknown) => error instanceof SriPerimeterError && error.message.includes("outside every writable root"),
+  );
+
+  assert.equal(fs.existsSync(outside), false);
+});
+
+test("writeTextAtomically: writes the text, reads it back and leaves no temporary file", async (t) => {
+  const fixture = createFixture(t);
+  const root = path.join(fixture.base, "runs");
+  fs.mkdirSync(root, { recursive: true });
+  const target = path.join(root, "run-1.jsonl");
+  const text = '{"type":"message_end"}\n';
+
+  await writeTextAtomically(target, text, root);
+
+  assert.equal(fs.readFileSync(target, "utf8"), text);
+  assert.deepEqual(fs.readdirSync(root), ["run-1.jsonl"]);
+});
+
+// No primitive creates a directory it has not validated, and this one creates none at all: the caller
+// names a directory that exists and gets a refusal instead of an implicit mkdir.
+test("writeTextAtomically: a target whose directory does not exist is refused", async (t) => {
+  const fixture = createFixture(t);
+  const root = path.join(fixture.base, "runs");
+  fs.mkdirSync(root, { recursive: true });
+  const target = path.join(root, "gate", "runs", "run-1.jsonl");
+
+  await assert.rejects(
+    () => writeTextAtomically(target, "x\n", root),
+    (error: unknown) => error instanceof SriWriterError,
+  );
+
+  assert.equal(fs.existsSync(path.join(root, "gate")), false);
+});
+
+// Both spellings of an escape: a relative one that walks out of the root and an absolute one that names a
+// directory somewhere else.
+test("writeTextAtomically: a target outside the root is refused, relative escape or absolute", async (t) => {
+  const fixture = createFixture(t);
+  const root = path.join(fixture.base, "runs");
+  fs.mkdirSync(root, { recursive: true });
+
+  for (const target of [path.join(root, "..", "escape.txt"), path.join(fixture.base, "elsewhere", "escape.txt")]) {
+    await assert.rejects(
+      () => writeTextAtomically(target, "text\n", root),
+      (error: unknown) => error instanceof SriPerimeterError,
+    );
+  }
+
+  assert.equal(fs.existsSync(path.join(fixture.base, "escape.txt")), false);
+  assert.equal(fs.existsSync(path.join(fixture.base, "elsewhere")), false);
+});
+
+// The record of an acceptance lands in the snapshot the acceptance took before touching the skill, which
+// is what makes "accepted" mean the bytes were written. History is never rewritten.
+test("writeHistoryDecision: writes the record into the snapshot that exists", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const snapshotPath = await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
+  const record: DecisionRecord = { ...makeDecision(), outcome: { status: "proposed", reason: "accepted" } };
+
+  const decisionPath = await writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, record);
+
+  assert.equal(decisionPath, path.join(snapshotPath, "decision.json"));
+  assert.equal(fs.readFileSync(decisionPath, "utf8").endsWith("}\n"), true);
+  const onDisk: unknown = JSON.parse(fs.readFileSync(decisionPath, "utf8"));
+  assert.deepEqual(onDisk, record);
+  await assert.rejects(
+    () => writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, record),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("already exists"),
+  );
+});
+
+test("writeHistoryDecision: a timestamp with no snapshot is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  // .history/ exists and holds no snapshot for this timestamp: what is missing is the copy, which the
+  // acceptance has to take before it can record one.
+  fs.mkdirSync(path.join(skill.realDir, ".history"), { recursive: true });
+
+  await assert.rejects(
+    () => writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, makeDecision()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("history snapshot"),
+  );
+
+  assert.deepEqual(fs.readdirSync(path.join(skill.realDir, ".history")), []);
+});
+
+// <skill>/.history/../lessons exists, so the escape is caught by the perimeter and not by the check that
+// the snapshot exists: that is why the root of this primitive is .history/ and not the timestamp
+// directory, which would move together with the timestamp.
+test("writeHistoryDecision: a timestamp that leaves .history/ is refused", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
+  fs.mkdirSync(path.join(skill.realDir, "lessons"), { recursive: true });
+
+  await assert.rejects(
+    () => writeHistoryDecision(skill.realDir, "../lessons", makeDecision()),
+    (error: unknown) => error instanceof SriPerimeterError && error.message.includes("outside every writable root"),
+  );
+
+  assert.deepEqual(fs.readdirSync(path.join(skill.realDir, "lessons")), []);
 });
