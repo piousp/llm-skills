@@ -66,11 +66,13 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
 
 Several optionals in `runAgentViaSdk`/`runSingleTask`/`loadSettings` are always passed by the only
 production caller yet stay optional deliberately (Q5): `tracker`/`onProgressEvent` (runSingleTask),
-`getModel` (run options), `cache`/`projectSettingsPath` (loadSettings). Each dead-in-production
-branch is a pinned test seam — a unit test exercises it and pins a guarantee (e.g. the run still
-settles with an accurate usage snapshot when no event collector is passed; settings load works
-without a cache). Removing the optionality would delete the branch the corresponding test exercises
-and lose the guarantee; don't make them required without re-cutting those test plans.
+`getModel` (run options), `cache`/`projectSettingsPath` (loadSettings). `findModel` (run options) is
+optional under the same rule, even though the extension always passes it when its `ctx` carries a
+`modelRegistry`. Each dead-in-production branch is a pinned test seam — a unit test exercises it
+and pins a guarantee (e.g. the run still settles with an accurate usage snapshot when no event
+collector is passed; settings load works without a cache). Removing the optionality would delete the
+branch the corresponding test exercises and lose the guarantee; don't make them required without
+re-cutting those test plans.
 
 ### SubagentJobMessageDetails union (1.2.0)
 
@@ -424,6 +426,7 @@ export interface RunAgentViaSdkOptions {
   signal?: AbortSignal;
   onProgressEvent?: (event: SubagentProgressEvent) => void;
   getModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
+  findModel?: (provider: string, modelId: string) => CreateAgentSessionOptions["model"];
   mode?: "tui" | "rpc" | "json" | "print";
 }
 ```
@@ -439,7 +442,12 @@ export interface RunAgentViaSdkOptions {
   `{ ok: false, error }` and `runAgentViaSdk` settles the error before `createSession` — no
   session, no tokens). There is no silent fallback (Q1/1.2.0): the only way to the session default
   model is no `model` value or `"inherit"`. A malformed `model` value (no `/`, empty side) fails
-  the same way, with an error naming the agent and the expected form.
+  the same way, with an error naming the agent and the expected form. The lookup has two sources,
+  tried in order: `getModel` first, then `findModel` — the host's registry
+  (`ctx.modelRegistry.find` in the extension), which already sees providers registered by other
+  extensions while this package's own `ModelRuntime` does not. `findModel` is consulted only when
+  `getModel` returns `undefined`; if both miss, the run fails with the same error as above, still
+  with no fallback to the session default model.
 - `signal` — `AbortSignal` for cancellation. Aborting before the session starts resolves immediately with an error.
 - `onProgressEvent` — receives `SubagentProgressEvent`s from the run's single subscription (`src/progress.ts` for the type): tool lifecycle via `toSubagentToolEvent` (`tool_start` carries a `summary: string` pre-formatted by `formatToolCall` in `src/format-tool-call.ts`), the model's streaming phase via `toStreamPhaseEvent` (one event per `thinking_*`/`text_*` delta, deduplicated downstream), and a live `{ type: "usage" }` snapshot whenever the usage accumulator changed (at most one per `message_end`). Every event passes the tracker's single `onEvent`, which owns the post-`done` guard. The events never capture results: `toolName` and the formatted `args` summary are all that flow through, so a long-running subagent's tool output (e.g. a full `read`'s file contents) never accumulates in `TaskProgress.history` (`src/progress.ts`).
 - `mode` — the top-level host's run mode (pi's `ExtensionContext.mode`, not re-exported at the SDK's package root so it's inlined here as a literal union, `ExtensionMode` in `src/extension-binding.ts`). Passed through to the subagent's nested `bindExtensions({ mode })` call (see `bindExtensionsIfNeeded`/`shutdownExtensionsIfBound` below) so a nested subagent that itself invokes another subagent (depth 2+) sees the real host mode, not the SDK's own default. Optional; when omitted, `bindExtensions({ mode: undefined })` is still called (binding no longer depends on `mode` at all — see the mode-gate removal note below), and the SDK's own default applies downstream. The extension itself always passes the real `ctx.mode` through `RunTaskOptions`/`runSingleTask`.
@@ -882,14 +890,17 @@ function createMinimalResourceLoader(agent: AgentConfig, cwd: string): DefaultRe
 }
 ```
 
-6. Resolves the model via `modelRuntime.getModel(provider, modelId)` (passed through as `getModel`)
-   and runs the agent via `runAgentViaSdk`. Every call runs as its own independent background job
+6. Resolves the model via `modelRuntime.getModel(provider, modelId)` (passed through as `getModel`,
+   with `ctx.modelRegistry.find` as the second source, `findModel`) and runs the agent via
+   `runAgentViaSdk`. Every call runs as its own independent background job
    — there is no batch/concurrency layer anymore. A separate, extension-level `ModelRuntime` — built once,
    eagerly, via `ModelRuntime.create()` at extension load — is what's forwarded to
    `runAgentViaSdk`/`createSession` as `modelRuntime`, and is also used to build the `getModel`
    resolver (resolving `"provider/modelId"` config strings) passed to `createSession`. Because
    this `ModelRuntime` snapshot is frozen at extension-load time, a `/login` performed later in
-   the session requires a `/reload` before subagents pick up the new credentials.
+   the session requires a `/reload` before subagents pick up the new credentials. Model resolution
+   itself is no longer bound to that snapshot: a `provider/modelId` ref this runtime misses is
+   retried against the host's registry, which sees a provider registered after the load.
 7. **Does not await step 6 to completion.** Instead, it hands the actual run (everything step 6
    describes) to `jobs.start({ runId: toolCallId, task, run })` (`src/background-jobs.ts`,
    `createJobRegistry`), a per-session, in-memory registry living in the extension factory's
