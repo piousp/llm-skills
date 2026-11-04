@@ -396,6 +396,16 @@ test("skillImproveParams: gate is an action and its stagingPath is a string the 
   assert.equal(Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools", stagingPath: 7 }), false);
 });
 
+// M2: the description of the action is the one line a model reads before choosing it, and the floor of the
+// design -- two distinct items, below which the answer is an abstention -- is the cost that decides whether
+// the call is worth making. The schema is read as the JSON it is, because TUnion does not carry `description`
+// in its type and the description travels to the model all the same.
+test("skillImproveParams: the description of the action names the floor of two distinct items", () => {
+  const schema = JSON.stringify(skillImproveParams);
+  assert.equal(schema.includes("at least two distinct items"), true);
+  assert.equal(schema.includes("insufficient-items"), true);
+});
+
 test("skillImproveParams: the skill name is required", () => {
   assert.equal(Value.Check(skillImproveParams, { action: "diagnose" }), false);
   assert.equal(Value.Check(skillImproveParams, { action: "propose", skill: 7 }), false);

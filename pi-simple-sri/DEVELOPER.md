@@ -137,7 +137,13 @@ the next one:
    write that did not happen.
 6. The `accepted` event is appended to the index with the `historyPath` of that record. This is the line
    that joins `gate-accepted` in the staged record with the write, by `candidateHash`.
-7. The reload of the session. **Not implemented: M2.**
+7. The reload of the session, at the end of the command handler and not of this protocol: the notice that
+   names the two paths is written to the frame that still has a context, then `await ctx.waitForIdle()`, then
+   `await ctx.reload()`, then `return`. The idle wait is not defensive -- pi warns and returns without
+   reloading while the agent is streaming, and the handler sees no rejection, so a reload without it is lost
+   in silence. Nothing runs after the reload, which invalidates the frame. A reload that fails is neither
+   reverted nor retried -- a publication has no undo -- and it is reported through a channel that reads no
+   member of the context (`src/command-skill-improve.ts:578-596`).
 
 The staged `decision.json` is never rewritten to `accepted`: it keeps the `gate-accepted` the gate
 decided, and the index line is what tells the two states apart.
@@ -154,18 +160,20 @@ that is what the gate decided, and the failure reaches the user as the error tha
 with the paths in it and nowhere else: what a reader has to compare is the index line against the
 snapshot.
 
-### Where M2 enters
+### The reload of the session
 
-M2 inserts two calls at the end of the command handler, after `acceptCandidate` has returned its
-answer: `await ctx.waitForIdle()` and then `await ctx.reload()`. Order matters -- a reload while the
-session is still producing a message is a reload of the wrong state -- and queueing `/reload` is not an
-alternative, because it is a TUI command and not an extension command.
+The two calls are at the end of the command handler, after `acceptCandidate` has returned its answer and the
+notice of the acceptance has been written: `await ctx.waitForIdle()` and then `await ctx.reload()`. Order
+matters -- a reload while the session is still producing a message is a reload of the wrong state, and pi
+warns and returns without reloading instead of rejecting -- and queueing `/reload` is not an alternative,
+because it is a TUI command and not an extension command.
 
-The contract has to widen for it. `SkillImproveContext` (`src/command-skill-improve.ts`) declares
-neither call today; M2 adds `waitForIdle(): Promise<void>` and `reload(): Promise<void>` to it. pi's own
-command context already provides both, so the widening is a compile-time assertion that the wiring
-passes a context which can do the two things, and not a runtime probe. The marker for the insertion
-point is the `// M2:` comment at the end of `acceptCandidate`.
+Both are members of `SkillImproveContext` (`src/command-skill-improve.ts`), required and not seams of
+`SkillImproveDeps`: pi exposes them on the context of a command and not on the context of a tool, and a fake
+that left one out would lose the reload with nothing saying so. pi's own command context provides both, so the
+contract is a compile-time assertion that the wiring passes a context which can do the two things, and not a
+runtime probe. `src/gate/acceptance.ts` has neither the calls nor the context they read; the invariant at the
+end of `acceptCandidate` records why the step is not there.
 
 ## Order of a directional gate
 

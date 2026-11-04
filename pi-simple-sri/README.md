@@ -20,10 +20,13 @@ the candidate against that file instead of against a turn of the session. The ba
 format, one versioned contract, so an improvement can be asked for, re-run and audited after the session
 that wanted it is gone.
 
-Two things are explicitly not in this release. The session reload after an acceptance is not here:
-a lesson accepted mid-session is on disk and takes effect from the next session. And the recursive
-step, where the generator itself is versioned and evaluated, is not built; retirement by merit and the
-metrics of a longer loop are later milestones too.
+This release also reloads the session after an acceptance. The lesson and its reference line are on disk
+before the reload starts, so the skill the session reads afterwards is the skill on disk: the reload is
+the last thing the accepting run does, after the acceptance has answered, and a reload that fails leaves
+the acceptance standing and is reported on its own.
+
+One thing is explicitly not in this release: the recursive step, where the generator itself is versioned
+and evaluated. Retirement by merit and the metrics of a longer loop are later milestones too.
 
 The design follows the 2026 literature on skill self-improvement. [REFERENCES.md](REFERENCES.md)
 lists the papers behind each rule, with their identifiers and what each one supports.
@@ -328,9 +331,15 @@ line the index gains and in the answer, and the record is rewritten with a verdi
 gone on to spend its budget -- the abstention of an interrupted gate included, which is a verdict about
 the runs it did not get.
 
-**The reload of the session is not in this version.** After an acceptance the lesson is on disk and the
-`SKILL.md` references it, but the session that accepted it keeps the skill it loaded at start: the new
-lesson is active from the next session. Reloading the session in place is M2 and is not implemented.
+`insufficient-items` is the floor of the design and not a failure of the run: a paired replay compares
+items, so it needs at least two distinct ones -- two different failures of the session, or two different
+cases of a bank -- and an attempt with fewer abstains instead of comparing one item against itself.
+
+**The reload of the session comes after the acceptance.** The lesson and its reference line are written
+first, and the acceptance is reported before the reload starts: the reload is the last thing the accepting
+run does, so nothing of the run continues in the frame it invalidates. A reload that fails does not undo the
+acceptance -- no write is reverted -- and the user is told; the lesson then takes effect from the next
+session start.
 
 ### What running the gate costs
 
@@ -541,7 +550,8 @@ directory name, because pi accepts that the two differ. The file is only read.
 - The gate is expensive and hard to satisfy. A lesson has to pass every run of its arm -- four with two
   items, six with three -- while the skill it replaces misses at least one, so a rejection or an
   abstention is a normal answer and not a defect of the run.
-- The session is not reloaded after an acceptance, so the lesson is active from the next session.
+- The reload after an acceptance belongs to the run that accepted: it is the last thing that run does, so a
+  proposal or a gate never reloads, and a reload that fails leaves the lesson active from the next session.
 - The proposal is one model call capped at 2048 tokens. A longer lesson fails validation instead of
   arriving truncated.
 - The audit index is append-only and per installation: every event is a line, and there is no rotation
@@ -560,7 +570,6 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 ## Roadmap
 
-- M2: reload after acceptance so the new lesson is active in the same session.
 - Later: automatic evidence collection, typed diagnosis, acceptance, rejection and regression metrics,
   retirement of lessons by merit, and the recursive step where the generator is versioned and evaluated
   the same way.

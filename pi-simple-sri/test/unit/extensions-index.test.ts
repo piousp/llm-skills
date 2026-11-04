@@ -486,6 +486,10 @@ test("the factory registers the command and the tool, exactly once each", () => 
   assert.equal(command.description?.includes("--defect"), true);
   assert.equal(command.description?.includes("--staged=<stagingPath>"), true);
   assert.equal(command.description?.includes("retryable"), true);
+  // M2 (S4): the description names the floor of the design as well as its cost -- two distinct items, and the word the
+  // answer carries when the budget has nothing to compare.
+  assert.equal(command.description?.includes("at least two distinct items"), true);
+  assert.equal(command.description?.includes("insufficient-items"), true);
 
   // The registered tool is the one src/tool-skill-improve.ts builds: the same schema object, so the
   // tool the model calls and the tool the P9 tests exercised cannot drift apart.
@@ -528,13 +532,14 @@ test("the session_start handler reports the feedback notice once, as info", () =
   startSession(harness, "startup");
 
   assert.deepEqual(harness.notified, [{ message: feedbackNoticeText(), type: "info" }]);
-  // The notice names both surfaces of the package and the one cost of the gate, and promises nothing else: this
-  // version does not reload a session, so the line does not say it will.
+  // The notice names both surfaces of the package and the two costs of the gate, and promises nothing else: the tokens a
+  // run spends and the floor of two distinct failures below which the replay base has nothing to measure.
   const notice = harness.notified[0].message;
   assert.equal(notice.includes("/skill-improve"), true);
   assert.equal(notice.includes(SKILL_IMPROVE_TOOL_NAME), true);
   assert.equal(notice.includes("--bank=<path>"), true);
   assert.equal(notice.includes("spends tokens"), true);
+  assert.equal(notice.includes("at least two distinct tool failures"), true);
   // It is one line, and it reports and returns: no file, no model and no candidate behind it.
   assert.equal(notice.includes("\n"), false);
   assert.deepEqual(harness.log.settingsReads, []);

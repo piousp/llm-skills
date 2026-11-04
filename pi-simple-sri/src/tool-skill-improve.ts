@@ -98,7 +98,7 @@ export type SkillImproveAction = "diagnose" | "propose" | "gate";
 export const skillImproveParams = Type.Object({
   action: Type.Union([Type.Literal("diagnose"), Type.Literal("propose"), Type.Literal("gate")], {
     description:
-      "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens",
+      "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens: a budget needs at least two distinct items, and below that the answer is insufficient-items",
   }),
   skill: Type.String({ description: "Exact skill name, as listed by the inventory" }),
   focus: Type.Optional(Type.String({ description: "Optional hint about what to improve" })),

@@ -37,6 +37,7 @@ import {
   notEligibleText,
   proposedText,
   refusedText,
+  reloadFailedText,
   unknownSkillText,
 } from "./messages.ts";
 import { wireDirectionalGate } from "./model-call.ts";
@@ -527,7 +528,7 @@ async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | D
 // needs comes from two places and no third one: the candidate the gate measured, and the record the gate rewrote,
 // which carries the candidate it measured and the hashes of the skill it measured it against.
 async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, run: Run): Promise<void> {
-  const { deps, notify } = run;
+  const { ctx, deps, notify } = run;
   const { record, skillContentHash } = await stagedRecordOf(target, gate);
 
   // The bytes the acceptance writes are the bytes the candidate holds, read from the lesson the record names and verified
@@ -574,14 +575,25 @@ async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, ru
     "info",
   );
 
-  // M2: await ctx.waitForIdle(); await ctx.reload();
+  // Step 8, and the last thing an accepting run does: the acceptance has answered and its writes are on disk, so the
+  // session reads the skill again here instead of at the next session start. The reload is a call on the context pi
+  // hands a command -- the two members it needs are declared on SkillImproveContext, at the top of this file -- and
+  // not a step of the acceptance, which sees no context at all. The notice above comes first because it is the last
+  // line the frame that still has a context can write.
   //
-  // Step 8 and not a step of this module: the reload is a call on the context pi hands a command, and the two
-  // members it needs are declared on SkillImproveContext, at the top of this file. What is missing here is the two
-  // calls and nothing else: the acceptance has answered and its writes are on disk, so the reload cannot lose a
-  // line. waitForIdle first, because pi warns and returns without reloading while the agent is streaming, and the
-  // handler never sees a rejection. Nothing may run after reload: the code that follows lands in the frame the
-  // reload invalidated.
+  // waitForIdle first: pi warns and returns without reloading while the agent is streaming, and the handler never
+  // sees a rejection, so without this call the reload would be lost in silence.
+  //
+  // Nothing may run after reload -- the code that followed lands in the frame the reload invalidated, where every
+  // getter of the context throws. That is an invariant of this site, not a note about one version of it, and it is
+  // the reason the warning below reads no member of the context.
+  await ctx.waitForIdle();
+  try {
+    await ctx.reload();
+  } catch (error) {
+    warnAfterReload(run, reloadFailedText(toErrorMessage(error)));
+  }
+  return;
 }
 
 // The record the gate left in the candidate, with the hash of the skill it measured. The acceptance writes the
@@ -644,6 +656,25 @@ function channelOf(ctx: SkillImproveContext, deps: SkillImproveDeps): NotifyFn {
 
     console.error(`${COMMAND_NAME}: ${message}`);
   };
+}
+
+// The reload can fail with the runner already gone, so the warning that reports it reads no member of the
+// context: deps.notify is the channel a test replaces and it touches no context, sendMessage goes through the
+// extension API, and console.error is the last one.
+function warnAfterReload(run: Run, message: string): void {
+  const notify = run.deps.notify;
+  if (notify !== undefined) {
+    notify(message, "warning");
+    return;
+  }
+
+  const sendMessage = run.deps.sendMessage;
+  if (sendMessage !== undefined) {
+    sendMessage({ customType: ENTRY_TYPE, content: message, display: true });
+    return;
+  }
+
+  console.error(`${COMMAND_NAME}: ${message}`);
 }
 
 function recordEntry(run: Run, entry: ImprovementEntry): void {

@@ -34,7 +34,8 @@ import type {
 } from "../../src/gate/directional-flow.ts";
 import type { GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
+import { acceptedText, reloadFailedText } from "../../src/messages.ts";
+import { ATTEMPTS_FILE, COMMAND_NAME, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import { countReferenceLines } from "../../src/skill-reference.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
@@ -250,6 +251,8 @@ interface HarnessOptions {
   gateDirectional?: (request: DirectionalGateRequest, gateDeps: DirectionalGateDeps) => Promise<DirectionalGateResult>;
   accept?: typeof acceptCandidate;
   acceptDeps?: AcceptDeps;
+  // The reload of M2 that fails, with the runner already gone: the run has to report it and still resolve.
+  reloadFailure?: Error;
 }
 
 interface Harness {
@@ -266,8 +269,9 @@ interface Harness {
   gateRequests: GateRequest[];
   directionalRequests: DirectionalGateRequest[];
   acceptRequests: AcceptRequest[];
-  // The two calls of the reload (M2), counted instead of recorded: nothing in this slice calls them, and the slice
-  // that does (S3) asserts how often the context was asked to go idle and to reload.
+  // The calls of one run in the order they happened (M2, S3): "notify" for every report of the context, "waitForIdle" and
+  // "reload" for the two members of it. The protocol of the acceptance is an order, so the array is what proves it.
+  calls: string[];
   idleCalls: number;
   reloadCalls: number;
   run: (args: string) => Promise<void>;
@@ -309,6 +313,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const gateRequests: GateRequest[] = [];
   const directionalRequests: DirectionalGateRequest[] = [];
   const acceptRequests: AcceptRequest[] = [];
+  const calls: string[] = [];
   let idleCalls = 0;
   let reloadCalls = 0;
 
@@ -327,16 +332,21 @@ function createHarness(options: HarnessOptions = {}): Harness {
     modelRegistry,
     ui: {
       notify: (message, type) => {
+        calls.push("notify");
         notified.push({ message, type: type ?? "info" });
       },
     },
-    // The two members of the command context that M2 needs. Both resolve instead of acting, and each one is counted so a
-    // test can order them without replacing the context.
+    // The two members of the command context that M2 needs. Both resolve instead of acting, and each one is counted and
+    // recorded in `calls` so a test can assert the order of the three calls without replacing the context. A reload of
+    // `reloadFailure` is recorded before it rejects: the call happened, whatever it answered.
     waitForIdle: async () => {
       idleCalls += 1;
+      calls.push("waitForIdle");
     },
     reload: async () => {
       reloadCalls += 1;
+      calls.push("reload");
+      if (options.reloadFailure !== undefined) throw options.reloadFailure;
     },
   };
 
@@ -452,6 +462,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     gateRequests,
     directionalRequests,
     acceptRequests,
+    calls,
     // Read when the caller reads them: the run increments them after this object was built.
     get idleCalls() {
       return idleCalls;
@@ -1381,6 +1392,10 @@ test("runSkillImprove: a gate that abstains reports the reason and leaves the sk
   await harness.run("pdf-tools");
 
   assert.deepEqual(harness.acceptRequests, []);
+  // An abstention is not a reload either (M2, S3): nothing was written into the skill, so there is no new version of it for
+  // the session to read, and the context is neither asked to go idle nor asked to reload.
+  assert.equal(harness.idleCalls, 0);
+  assert.equal(harness.reloadCalls, 0);
   const abstention = harness.notified.at(-1);
   assert.equal(abstention?.type, "warning");
   assert.equal(abstention?.message.includes("abstained"), true);
@@ -1712,4 +1727,154 @@ test("runSkillImprove: --bank with --defect proposes from the bank and gates wit
   const abstention = harness.notified.at(-1);
   assert.equal(abstention?.type, "warning");
   assert.equal(abstention?.message.includes("insufficient-items"), true);
+});
+
+// ---------------------------------------------------------------------------------------------
+// M2: the reload of the session
+// ---------------------------------------------------------------------------------------------
+
+// The harness of the tests below: a candidate the gate accepted is on disk, the gate answers that it passed, and the real
+// acceptance writes it into the skill, so the run reaches the point where the session reloads. The reports and the two
+// calls of the context land in `calls`, in the order they happened, which is what the protocol is asserted on.
+function createAcceptingHarness(t: TestContext, options: HarnessOptions = {}): { harness: Harness; skillDir: string } {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-reload-"));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const { lessonText } = stageAcceptedCandidate(base, skillDir);
+
+  const harness = createHarness({
+    base,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    propose: async () => ({
+      ok: true,
+      value: { draft: FIXED_DRAFT, lessonText, usage: { input: 412, output: 137 } },
+    }),
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 8,
+      usedRuns: 8,
+      overlays: null,
+    }),
+    acceptDeps: { now: () => NOW },
+    ...options,
+  });
+
+  return { harness, skillDir };
+}
+
+// The protocol of the accepting run, in order (M2, S3): the acceptance is reported, then the session is asked to go idle, and
+// only then does it reload. The notice comes first because it is the last line the frame that still has a context can write,
+// and waitForIdle before the reload because pi warns and returns without reloading while the agent is streaming -- a reload
+// lost in silence is exactly the defect this step closes.
+test("runSkillImprove: an accepting run notifies the acceptance, waits for idle and reloads, in that order", async (t: TestContext) => {
+  const { harness, skillDir } = createAcceptingHarness(t);
+
+  await harness.run("pdf-tools");
+
+  // The three last calls of the run are the three of the protocol and nothing else, and everything before them is a report.
+  assert.deepEqual(harness.calls.slice(-3), ["notify", "waitForIdle", "reload"]);
+  assert.equal(harness.calls.slice(0, -3).every((call) => call === "notify"), true);
+  assert.equal(harness.idleCalls, 1);
+  assert.equal(harness.reloadCalls, 1);
+
+  // The report that precedes the reload is the acceptance itself, with the two paths the acceptance wrote.
+  const accepted = harness.notified.at(-1);
+  assert.equal(accepted?.type, "info");
+  assert.equal(
+    accepted?.message,
+    acceptedText(
+      SKILL,
+      LESSON_SLUG,
+      path.join(skillDir, LESSONS_DIR, `${LESSON_SLUG}.md`),
+      path.join(skillDir, HISTORY_DIR, TIMESTAMP, DECISION_FILE),
+    ),
+  );
+  // M2 (S4): the sentence names the reload as the step this run takes next and not as something already done -- the
+  // clause is the one that stops a reader from believing the old skill is still the loaded one.
+  assert.equal(accepted?.message.includes("The session reloads next"), true);
+  assert.equal(accepted?.message.includes("a reload that fails leaves this acceptance standing"), true);
+});
+
+// Nothing runs after the reload (M2, S3): the code that followed would land in the frame the reload invalidated, where every
+// getter of the context throws. The fake records every report and the two calls of the reload, so a report or one of those
+// two calls after it would leave a trace at the end of one of the two lists; a context read that is none of the three is out
+// of its reach, and the invariant written at the site is what covers it.
+test("runSkillImprove: nothing is called and nothing is reported after the reload", async (t: TestContext) => {
+  const { harness } = createAcceptingHarness(t);
+
+  await harness.run("pdf-tools");
+
+  assert.equal(harness.calls.at(-1), "reload");
+  assert.equal(harness.calls.filter((call) => call === "reload").length, 1);
+  // The last report of the run is the acceptance and the last session entry is the one of the proposal: nothing was said or
+  // recorded after the reload.
+  assert.equal(harness.notified.at(-1)?.type, "info");
+  assert.equal(harness.notified.at(-1)?.message.includes("accepted"), true);
+  assert.equal(harness.entries.length, 1);
+  assert.equal(harness.entries.at(-1)?.data.outcome, "proposed");
+});
+
+// A rejected acceptance is not a reload either (M2, S3, OA5): the protocol refused the candidate and wrote nothing, so there
+// is no new version of the skill to read, and the detail the acceptance named is the whole answer.
+test("runSkillImprove: an acceptance that rejects with skill-drift does not reload the session", async (t: TestContext) => {
+  const detail = `"/tmp/skills/pdf-tools/SKILL.md" hashes to sha256:${"d".repeat(64)}, not to the ${CONTENT_HASH} the gate preregistered for "/tmp/skills/pdf-tools": the candidate describes a skill that no longer exists`;
+  const { harness } = createAcceptingHarness(t, {
+    accept: async () => ({ ok: false, error: { reason: "skill-drift", detail } }),
+  });
+
+  await harness.run("pdf-tools");
+
+  // Neither of the two calls, and no report of a reload that did not happen.
+  assert.equal(harness.idleCalls, 0);
+  assert.equal(harness.reloadCalls, 0);
+  assert.deepEqual(
+    harness.calls.filter((call) => call !== "notify"),
+    [],
+  );
+
+  // The detail of the rejection is reported as the error it is, and it is the last thing the run says.
+  const rejection = harness.notified.at(-1);
+  assert.equal(rejection?.type, "error");
+  assert.equal(rejection?.message, detail);
+});
+
+// A reload that fails does not undo the acceptance and does not fail the run (M2, S3): no operation reverts a publication,
+// so the run keeps the skill it wrote and reports the one thing that did not happen. The warning reads no member of the
+// context -- after a reload the runner is gone and ctx.ui and ctx.hasUI throw -- which is why it reaches the harness through
+// the last channel of the chain, the one the report of the run does not use here.
+test("runSkillImprove: a reload that fails leaves the acceptance standing and reports one warning", async (t: TestContext) => {
+  const written: string[] = [];
+  const original = console.error;
+  console.error = (message: string) => {
+    written.push(message);
+  };
+  t.after(() => {
+    console.error = original;
+  });
+
+  const failure = new Error("the runner is not there to reload");
+  const { harness, skillDir } = createAcceptingHarness(t, { reloadFailure: failure });
+
+  // The run resolves: a reload that failed is a warning, not the outcome of the run.
+  await harness.run("pdf-tools");
+
+  assert.equal(harness.idleCalls, 1);
+  assert.equal(harness.reloadCalls, 1);
+  // The reload is still the last call of the context: the warning did not go through it, because that is the branch that
+  // needs the runner the reload invalidated.
+  assert.equal(harness.calls.at(-1), "reload");
+
+  // Exactly one warning, and the reason it carries is the one the reload failed with.
+  assert.equal(written.length, 1);
+  assert.equal(written[0], `${COMMAND_NAME}: ${reloadFailedText(failure.message)}`);
+
+  // And the acceptance stands: the lesson is where the acceptance put it and the last report is its own.
+  assert.equal(fs.existsSync(path.join(skillDir, LESSONS_DIR, `${LESSON_SLUG}.md`)), true);
+  assert.equal(harness.notified.at(-1)?.message.includes("accepted"), true);
 });

@@ -24,8 +24,8 @@
 //      a write that did not happen.
 //   6. the event of the index is appended with the `historyPath` of the record, which is what joins the
 //      "gate-accepted" of the staged record with the "accepted" of the write by `candidateHash`.
-//   7. the reload of the session belongs to M2 and is not implemented here (see the marker at the end of
-//      acceptCandidate).
+//   7. the reload of the session is not a step of this protocol: it is a call on the context pi hands a command,
+//      and it lives at the end of the command's handler (see the invariant at the end of acceptCandidate).
 //
 // The staged `decision.json` is never rewritten to "accepted": it keeps the "gate-accepted" the gate
 // decided, and the line of the index is what tells both states apart.
@@ -221,13 +221,12 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
     }),
   );
 
-  // M2: await ctx.waitForIdle(); await ctx.reload();
-  //
-  // Step 7 and not a step of this module: the reload is a call the command makes on the context pi hands
-  // it, and that context (SkillImproveContext in src/command-skill-improve.ts) declares neither
-  // `waitForIdle` nor `reload`. M2 will have to widen that contract with `waitForIdle(): Promise<void>`
-  // and `reload(): Promise<void>` -- pi exposes both in the command context -- and put the two calls
-  // after the acceptance returns its answer.
+  // Step 7 of the protocol is not a step of this module, and that is an invariant rather than a note about one
+  // version of it: the reload of the session is a call on the context pi hands a command, and this function receives
+  // AcceptDeps -- writes and seams, no context at all. The file that declares `waitForIdle` and `reload` is the
+  // command's (SkillImproveContext, src/command-skill-improve.ts), and the two calls live at the end of its handler,
+  // after this answer has returned and its writes are on disk. A reload written here would have to hand this module a
+  // context it is built not to see, which is why the step is absent here now that it exists.
   //
   // `referenceAdded` is true whenever this answer is an acceptance, and that is not an assumption: step 0
   // refused a slug whose line was already there, and src/writer.ts proves after its write that the section

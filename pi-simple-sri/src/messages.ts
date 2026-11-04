@@ -38,10 +38,11 @@ import { quote } from "./values.ts";
 // package fail differently: the description of the tool is what a model reads and a session notice is what a user reads,
 // and neither reader is guaranteed to see the other. So the line names what can be recorded and through which surface --
 // the failures of the session, the two profiles of a bank, and the tool a correction or a rejection is registered with --
-// and the one cost that has to be known before running any of them. It promises nothing beyond that: this version does
-// not reload a session (M2), and the line names no skill and no path.
+// and the two costs of the gate that have to be known before running it: the tokens a run spends, and the floor of two
+// distinct items below which the paired replay has nothing to compare (MIN_ITEMS, src/gate/scorer.ts). It promises
+// nothing beyond them, and the line names no skill and no path.
 export function feedbackNoticeText(): string {
-  return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from a tool failure of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows, and the ${SKILL_IMPROVE_TOOL_NAME} tool registers a correction; the gate spends tokens before a skill is edited.`;
+  return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from at least two distinct tool failures of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows, and the ${SKILL_IMPROVE_TOOL_NAME} tool registers a correction; the gate spends tokens before a skill is edited.`;
 }
 
 // The set of skills offered for improvement, as the names of the eligible ones in one comma-separated
@@ -167,10 +168,19 @@ export function noModelGateText(surface: DecisionSurface, skill: SkillRef): stri
 
 // The one sentence of the acceptance, and the only builder here without a per-surface variant: the tool never
 // accepts (Q12), so a variant for it would be a branch nothing reaches. Both paths are absolute -- the lesson
-// inside the skill and the record inside its history -- because they are what a human opens, and M2 is not
-// promised: the session is not reloaded by this version.
+// inside the skill and the record inside its history -- because they are what a human opens. What the sentence promises
+// about the session is the step the run takes next and not its outcome: the reload comes after this notice
+// (src/command-skill-improve.ts:578-596), and a reload that fails has the sentence of reloadFailedText below.
 export function acceptedText(skill: SkillRef, slug: string, lessonPath: string, historyPath: string): string {
-  return `accepted ${lessonReferencePath(slug)} into skill ${quote(skill.name)} at ${quote(lessonPath)}, and its SKILL.md now references it; the record of the acceptance is ${quote(historyPath)}.`;
+  return `accepted ${lessonReferencePath(slug)} into skill ${quote(skill.name)} at ${quote(lessonPath)}, and its SKILL.md now references it; the record of the acceptance is ${quote(historyPath)}. The session reloads next, with the lesson already on disk, and a reload that fails leaves this acceptance standing and is reported on its own.`;
+}
+
+// The one sentence of a reload that did not happen over a skill that did change: the acceptance is a write and no
+// operation undoes it, so the sentence says the two facts -- the skill is accepted on disk, the reload of the session
+// failed -- and the reason, and promises nothing beyond the next session start. One variant and no surface,
+// for the reason acceptedText has none: the reload is a call of the command's context and the tool never has one.
+export function reloadFailedText(reason: string): string {
+  return `the skill was accepted and its lesson is already on disk, but the reload of this session failed: ${reason}. The acceptance stands -- nothing was reverted -- and the next session start reads the skill as it is now.`;
 }
 
 // A concluded gate always has a reason, except on an acceptance, where there was nothing to explain. The
