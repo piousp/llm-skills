@@ -13,7 +13,7 @@ Working notes for this package. Not part of the published documentation.
 | `src/checks.ts` | The mechanical predicate of the fourth class: the four kinds of check, and the one place a check is executed |
 | `src/gate/` | The paired replay gate: execution contracts, expectation evaluator, arm overlays, replay runner, budget, scorer, the two flows, judge, acceptance |
 | `schemas/` | Versioned JSON schemas: `decision.json` and the case bank, validated by tests |
-| `test/unit/` | Unit tests, `node --experimental-strip-types --test` |
+| `test/unit/` | Unit tests, `node --test` (type stripping is the Node default from 22.18) |
 | `test/fixtures/` | Settings files and skill trees, including symlinks |
 | `tmp/` | Local design notes: goal, decisions, plan, review. Gitignored |
 

@@ -35,7 +35,7 @@
   ],
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/unit/*.test.ts",
+    "test": "node --test test/unit/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:types": "npm run typecheck"
   },
