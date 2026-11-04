@@ -2001,6 +2001,41 @@ Two live cases cover MCP:
 Either one runs alone with `--test-name-pattern`, or by passing the single file to
 `node --experimental-strip-types --test`.
 
+## Releasing
+
+Publishing runs on GitHub Actions through npm trusted publishing (OIDC); there is no `NPM_TOKEN`
+secret anywhere. The workflow is `.github/workflows/publish.yml` at the repository root, and its
+run steps use `pi-simple-agents/` as the working directory, since this package lives in a monorepo
+without a root `package.json`.
+
+The npm side is a trust relationship configured per package (npmjs.com → the package → Settings →
+Trusted publishing → GitHub Actions): owner `piousp`, repository `llm-skills`, workflow filename
+`publish.yml`, environment left empty, and both direct publishing and dist-tag management allowed.
+Three consequences drive the process:
+
+- The connection is immutable. Its required fields (owner, repository, workflow filename) cannot be
+  edited, and a declared environment must also be declared in the workflow job. Changing any of
+  them means deleting the connection and creating a new one.
+- A new connection expires if it does not complete a successful publish within two days, so create
+  it only when a publish is ready to run.
+- `npm publish` is allowed directly, so there is no staged-publish approval step. The human gate is
+  the manual `workflow_dispatch` itself.
+
+Publish procedure, in order:
+
+1. Bump `version` in `package.json` and `package-lock.json`, and add the matching
+   `CHANGELOG.md` entry.
+2. Commit and push to `main`. The workflow file and the package it publishes must be on `main`
+   before the dispatch, because the provenance attestation points at that commit.
+3. Run the `publish` workflow by hand on `main`. It installs with `npm ci`, runs `npm run typecheck`
+   and `npm test`, then `npm publish` — a failing test or type error stops it before the publish.
+
+Requirements npm enforces on the run: npm CLI 11.5.1 or later (Node 24 ships a compatible one),
+`id-token: write`, a GitHub-hosted runner, a public repository and a public package, and a
+`repository.url` in `package.json` matching the GitHub repository that publishes. Provenance is
+attached automatically and needs no `--provenance` flag. Managing dist-tags from the same workflow
+needs npm CLI 11.21.0 or later; the workflow does not move tags.
+
 ## License
 
 MIT
