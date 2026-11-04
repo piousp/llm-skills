@@ -316,11 +316,17 @@ function dataValue(value: string): string {
 // The text of a block that is not one quoted value: the skill arrives as the Markdown the model has
 // to read, so its line breaks, its indentation and its code fences stay exactly as they are. What
 // cannot survive verbatim is a marker, so the escape is of the marker and not of the content (F4):
-// every literal occurrence of one of the four markers is written with one space inside its leading
-// "<<<", which nobody reads as a different sentence and the prompt cannot use to close a block.
-function blockText(value: string): string {
+// every literal occurrence of one of the markers `markers` names is written with one space inside its
+// leading "<<<", which nobody reads as a different sentence and the prompt cannot use to close a
+// block. The default is the four markers this module's own prompt declares; the judge of the gate
+// passes the three pairs it delimits its data with (src/gate/judge.ts), so the rule lives here once
+// and not in a second copy that could drift.
+export function blockText(
+  value: string,
+  markers: readonly string[] = Object.values(PROMPT_MARKERS),
+): string {
   let escaped = value;
-  for (const marker of Object.values(PROMPT_MARKERS)) {
+  for (const marker of markers) {
     escaped = escaped.split(marker).join(breakMarker(marker));
   }
   return escaped;
@@ -332,8 +338,10 @@ function breakMarker(marker: string): string {
   return marker.replace("<<<", "<< <");
 }
 
-// Every text part of the answer, in order. A provider may split one answer into several parts.
-function textOf(message: AssistantMessage): string {
+// Every text part of the answer, in order. A provider may split one answer into several parts. It is
+// exported because the judge of the gate reads a verdict off the same text (src/gate/judge.ts), and a
+// second copy of "what an answer says" would be a second answer to what the model wrote.
+export function textOf(message: AssistantMessage): string {
   return message.content
     .filter((part): part is TextContent => part.type === "text")
     .map((part: TextContent) => part.text)

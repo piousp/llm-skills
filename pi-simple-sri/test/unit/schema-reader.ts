@@ -4,41 +4,60 @@ import { fileURLToPath } from "node:url";
 import { isPlainObject } from "../../src/values.ts";
 
 // The reader the suites share: no JSON Schema validator is a dependency (ajv is not installed), so the
-// constraints schemas/decision.schema.json declares are checked here, by hand, over the keywords that
-// schema uses -- type, const, enum, pattern, format date-time, minLength, maxLength, minimum, minItems,
-// required, properties, items and additionalProperties: false.
+// constraints of the schemas of the package are checked here, by hand, over the keywords they use -- type, const,
+// enum, pattern, format date-time, minLength, maxLength, minimum, minItems, maxItems, required, properties, items
+// and additionalProperties: false.
 //
-// It lives in its own module because two more suites validate records they produce (the flow of the gate
-// and the acceptance), and three copies of a validator can disagree. It is not a *.test.ts, so the runner
-// does not execute it as a suite; tsconfig includes test/**/*, so it is typechecked like everything else.
+// It lives in its own module because several suites validate the documents they produce (the flow of the gate, the
+// acceptance and the case bank), and copies of a validator can disagree. It is not a *.test.ts, so the runner does
+// not execute it as a suite; tsconfig includes test/**/*, so it is typechecked like everything else.
 //
-// test/unit/decision-schema.test.ts keeps the negative cases: it is the file that fixes what this reader
-// catches, one injected fault per case, so a keyword the schema adds later and this reader does not know
-// shows up there as a case nobody could make fail.
+// Two contracts are read here, one per schema, and each answer names the document it validated: the path of a
+// violation starts with "decision" or with "case-bank", so a failure says which file it came from.
+// test/unit/decision-schema.test.ts keeps the negative cases of the first, and test/unit/case-bank.test.ts the ones of
+// the second: they are the files that fix what this reader catches, one injected fault per case, so a keyword the
+// schema adds later and this reader does not know shows up there as a case nobody could make fail.
 
-const SCHEMA_PATH = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "schemas",
-  "decision.schema.json",
-);
+const SCHEMAS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
 
-// The schema as it is on disk, untyped on purpose: every read of it narrows a field to a keyword, and a
-// cast to a shape of our own invention would be the one thing the reader cannot check.
-export function loadDecisionSchema(): unknown {
-  return JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8"));
+const DECISION_SCHEMA_FILE = "decision.schema.json";
+const CASE_BANK_SCHEMA_FILE = "case-bank.schema.json";
+
+// A schema as it is on disk, untyped on purpose: every read of it narrows a field to a keyword, and a cast to a
+// shape of our own invention would be the one thing the reader cannot check.
+function readSchema(fileName: string): unknown {
+  return JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, fileName), "utf8"));
 }
 
-// Read once: the schema is a file of the package and not of the run, and every validation below reads the
-// same bytes the negative cases in decision-schema.test.ts describe.
-const DECISION_SCHEMA: unknown = loadDecisionSchema();
+export function loadDecisionSchema(): unknown {
+  return readSchema(DECISION_SCHEMA_FILE);
+}
 
-// The violations of `document` against schemas/decision.schema.json, with the JSON pointer of each one.
-// An empty list is the record satisfying the schema.
+// M1c: the case bank is a contract of its own, versioned by its `format` const, and it is read with the same
+// keywords as the record of a decision.
+export function loadBankSchema(): unknown {
+  return readSchema(CASE_BANK_SCHEMA_FILE);
+}
+
+// Read once each: a schema is a file of the package and not of the run, and every validation below reads the same
+// bytes the negative cases of the two suites describe.
+const DECISION_SCHEMA: unknown = loadDecisionSchema();
+const CASE_BANK_SCHEMA: unknown = loadBankSchema();
+
+// The violations of `document` against schemas/decision.schema.json, with the JSON pointer of each one. An empty
+// list is the record satisfying the schema.
 export function validateAgainstSchema(document: unknown): string[] {
+  return violationsAgainst(DECISION_SCHEMA, document, "decision");
+}
+
+// The same reading over schemas/case-bank.schema.json.
+export function validateAgainstBankSchema(document: unknown): string[] {
+  return violationsAgainst(CASE_BANK_SCHEMA, document, "case-bank");
+}
+
+function violationsAgainst(schema: unknown, document: unknown, at: string): string[] {
   const violations: string[] = [];
-  collectViolations(document, DECISION_SCHEMA, "decision", violations);
+  collectViolations(document, schema, at, violations);
   return violations;
 }
 
@@ -166,6 +185,13 @@ function checkArray(value: unknown, schemaNode: Record<string, unknown>, at: str
   const minItems = schemaNode.minItems;
   if (typeof minItems === "number" && elements.length < minItems) {
     violations.push(`${at}: the array has ${elements.length} items, fewer than ${minItems}`);
+  }
+
+  // Added with schemas/case-bank.schema.json, the first schema of the package that declares a ceiling: the cases of
+  // a bank are at most fifty.
+  const maxItems = schemaNode.maxItems;
+  if (typeof maxItems === "number" && elements.length > maxItems) {
+    violations.push(`${at}: the array has ${elements.length} items, more than ${maxItems}`);
   }
 
   const items = schemaNode.items;

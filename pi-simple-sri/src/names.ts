@@ -20,6 +20,10 @@ export const HISTORY_DIR = ".history";
 export const DECISION_FILE = "decision.json";
 // The append-only index of attempts, one JSON line per event (Q14).
 export const ATTEMPTS_FILE = "attempts.jsonl";
+// The neutral bank of cases of M1c: the file a `--bank=<path>` names, and the name of the copy the gate leaves next
+// to the staged candidate so the cases it ran travel with it (Q24). Two modules build a path from this literal, which
+// is why it lives here; the versioned id of the format is not a file name and stays in src/case-bank.ts.
+export const CASE_BANK_FILE = "case-bank.json";
 
 // The environment variable a replay sets for its child (OA8), and the one the extension reads to
 // register nothing inside a replay. Two modules agree on this literal and one of them is what stops

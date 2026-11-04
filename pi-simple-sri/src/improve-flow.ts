@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Api, AssistantMessage, Context, Model, ModelsApiStreamOptions } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes } from "./attempts.ts";
 import { readSriConfig } from "./config.ts";
@@ -9,8 +9,9 @@ import { isEligibleUnderAnySpelling } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
+import { createModelCall, type ModelCallRegistry } from "./model-call.ts";
 import { SKILL_FILE } from "./names.ts";
-import { createProposer, type CompleteFn, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
+import { createProposer, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "./skills-inventory.ts";
 import { outcomeStatusFor, toDecisionSkill } from "./types.ts";
@@ -131,16 +132,11 @@ export interface ImproveFlowSession {
   getSessionId(): string;
 }
 
-// The one model call this package makes, typed exactly after the registry method it forwards to:
-// a ModelRegistry satisfies this interface without a conversion, and a test fake only has to
-// provide one method.
-export interface ImproveFlowModelRegistry {
-  complete(
-    model: Model<Api>,
-    context: Context,
-    options?: ModelsApiStreamOptions<Api>,
-  ): Promise<AssistantMessage>;
-}
+// The one model call this package makes, typed exactly after the registry method it forwards to: a ModelRegistry
+// satisfies this interface without a conversion, and a test fake only has to provide one method. The contract moved
+// to src/model-call.ts with the construction that consumes it -- the judge of the gate is its second caller -- and the
+// name stays exported here for the callers that already import it.
+export type ImproveFlowModelRegistry = ModelCallRegistry;
 
 // The part of a pi context the loop reads, spelled out instead of taking the whole
 // ExtensionToolContext or ExtensionCommandContext: a fake in the tests then costs four fields, and
@@ -654,15 +650,12 @@ function resolvePropose(seams: FlowSeams, ctx: ImproveFlowContext): ProposeFn | 
   const model = ctx.model;
   if (model === undefined) return undefined;
 
-  // sessionId travels with every request, not only with the session's own turns: the registry
-  // resolves credentials and forwards the options untouched, and the routing header of a
-  // session-affine provider is built from this field alone.
-  const complete: CompleteFn = (context, options) =>
-    ctx.modelRegistry.complete(model, context, {
-      ...options,
-      sessionId: ctx.sessionManager.getSessionId(),
-    });
-  const proposer = createProposer(complete);
+  // The construction is the one every model call of this package shares (src/model-call.ts): it bounds the call with
+  // the proposer's budget and puts the identifier of the session on every request, so the judge of the gate cannot
+  // wire either of them differently.
+  const proposer = createProposer(
+    createModelCall({ registry: ctx.modelRegistry, model, sessionId: ctx.sessionManager.getSessionId() }),
+  );
   return (input) => proposer.propose(input);
 }
 
