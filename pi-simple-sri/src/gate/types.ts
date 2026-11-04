@@ -15,6 +15,32 @@
 // Nothing here reads a clock, a file or the environment: these are the shapes the runner and the
 // scorer trade, and every module of src/gate/ that fills one of them is another file.
 
+import type {
+  GateArmTally,
+  GateBounds,
+  GateDesign,
+  GateInterval,
+  GateMde,
+  GateReplayExclusion,
+  GateStatus,
+  GateThreshold,
+  ReplayItem,
+} from "../types.ts";
+
+// The blocks the scorer produces are the blocks a decision record holds, so they are the record's own
+// contracts and not a second copy of them: src/types.ts declares them next to the schema that validates
+// them, and this module re-exports them so every module of src/gate/ trades one import path. A second
+// declaration here would be a contract that can disagree with the record it is written into.
+export type {
+  GateArmTally,
+  GateBounds,
+  GateDesign,
+  GateInterval,
+  GateMde,
+  GateReplayExclusion,
+  GateThreshold,
+};
+
 export type GateArm = "incumbent" | "candidate";
 
 // What one run proved. `pass` and `fail` are the reading of a completed run against the expectation
@@ -135,4 +161,83 @@ export interface ParsedStream {
   skillLoaded: boolean;
   assistantMessages: number;
   unparsedLines: number;
+}
+
+// The reading of one run against the expectation of its item, and the unit the gate decides on
+// (src/gate/expectation.ts).
+//
+// It carries the coordinates of the run and its cost because the scorer aggregates verdicts and never
+// re-reads a stream: the item, the repetition and the arm are the request's own fields, and the usage is
+// what the tally of the arms sums. A verdict is therefore enough to write a run into the record.
+//
+// `outcome` is `pass` or `fail` when the run was judged against its expectation, and `invalid` when the run
+// broke: a broken run proved nothing about the skill, so the gate abstains instead of counting it either
+// way (OA3). `invalidReason` is present exactly when the run is invalid, and it is the runner's reason,
+// never a second reading of it.
+export interface RunVerdict {
+  item: number;
+  rep: number;
+  arm: GateArm;
+  outcome: RunOutcome;
+  invalidReason?: InvalidReason;
+  usage: { input: number; output: number };
+}
+
+// One replay item of the diagnosis with the excerpt of the evidence it was built from, which is the only
+// text the intrinsic-failure exclusion reads (OA7). ReplayItem cannot carry the excerpt -- the schema of
+// decision@1 closes that block -- so the pairing travels as data and the record keeps only the exclusion it
+// produces. An item the caller cannot pair keeps the field absent, and then nothing is excluded on its
+// behalf.
+export interface GatePlanItem {
+  item: ReplayItem;
+  excerpt?: string;
+}
+
+// The design of the plan is fixed by §8 and not by the caller. The one option can only lower the prefix of
+// items, never raise it: the twelve runs are a hard ceiling of the budget, and an option that could lift it
+// would be a way to spend without asking.
+export interface GatePlanOptions {
+  maxItems?: number;
+}
+
+// A gate that concluded answers with one of the three statuses GATE_STATUSES reserves for it: the two
+// decisions and the abstention, without the two states of a gate that has not concluded yet.
+export type GateVerdict = Exclude<GateStatus, "not-run" | "preregistered">;
+
+// Why a concluded gate says what it says. `below-threshold` is the only reason the rule produces; the other
+// three are the abstention vocabulary of the gate, shared with the reasons the flow abstains for without
+// spending a run.
+export type GateVerdictReason =
+  | "below-threshold"
+  | Extract<GateAbstentionReason, "no-improvement" | "invalid-run" | "interrupted">;
+
+// What the gate will spend, recorded before the first run: the design, the rule it will be judged by and the
+// floor of the design. The exclusions travel with it because a gate that ran fewer items than the diagnosis
+// offered has to say which ones it dropped and why (OA7).
+export interface GatePlan {
+  design: GateDesign;
+  threshold: GateThreshold;
+  mde: GateMde;
+  excluded: GateReplayExclusion[];
+}
+
+// Fewer eligible items than the paired design needs: the gate answers before spending anything. The
+// exclusions still travel, because they are part of why so few items were left.
+export interface GatePlanAbstained {
+  abstain: "insufficient-items";
+  excluded: GateReplayExclusion[];
+}
+
+export type GatePlanResult = GatePlan | GatePlanAbstained;
+
+// What the budget proved, and nothing about how it was spent: the two arms, the interval that describes how
+// little the design resolves, and the count of regressions. The flow adds the moment, the items with their
+// runs, the overlays and the raw streams when it writes the record.
+export interface GateEvaluation {
+  verdict: GateVerdict;
+  // null only on an acceptance: nothing stopped it.
+  reason: GateVerdictReason | null;
+  arms: { incumbent: GateArmTally; candidate: GateArmTally };
+  interval: GateInterval;
+  regressions: number;
 }
