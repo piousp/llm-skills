@@ -450,7 +450,9 @@ async function gateAndAccept(target: GateTarget, run: Run): Promise<void> {
         target.stagingPath,
       );
     case "gate-rejected":
-      notify(gateRejectedText(SURFACE, target.skill, result.reason, result.usedRuns), "warning");
+      // A rejection the judge produced names the case and its sentence, and the flow keeps both in the detail of the result,
+      // which is the same text the line of the index carries (M4).
+      notify(gateRejectedText(SURFACE, target.skill, result.reason, result.usedRuns, result.detail), "warning");
       return;
     case "gate-abstained":
       notify(gateAbstainedText(SURFACE, target.skill, result.reason, result.detail), "warning");

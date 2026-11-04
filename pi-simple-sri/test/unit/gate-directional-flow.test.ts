@@ -12,9 +12,11 @@ import {
   type DirectionalGateRequest,
   type DirectionalGateResult,
   type DirectionalJudgeFn,
+  type JudgeAnswer,
+  type JudgeFailure,
 } from "../../src/gate/directional-flow.ts";
 import type { GateConcludedResult } from "../../src/gate/flow.ts";
-import type { JudgeError, JudgeRequest } from "../../src/gate/judge.ts";
+import type { JudgeRequest } from "../../src/gate/judge.ts";
 import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
@@ -57,6 +59,10 @@ const CLOCK_STEP_MS = 1000;
 // What one run of the budget and one call to the judge cost, small enough to add up in an assertion.
 const RUN_USAGE: GateTokens = { input: 10, output: 2 };
 const JUDGE_USAGE: GateTokens = { input: 30, output: 5 };
+// The case whose reply nobody can read, and the cause the seam reports for it: the two facts the abstention of the second
+// condition has to name, next to the cost of the call that produced that reply.
+const UNREADABLE_CASE = "no-squash-all";
+const CAUSE = "the provider answered 500";
 // The tokens the generation that produced the candidate already spent, as the record arrived with them.
 const PROPOSAL_TOKENS: GateTokens = { input: 412, output: 137 };
 // The design of §8 over two cases: two repetitions of each case in two arms.
@@ -397,9 +403,9 @@ function judgeRejecting(caseId: string): DirectionalJudgeFn {
 
 // The judge that cannot answer one case: the call failed, which is the abstention of the second condition.
 function judgeFailing(caseId: string): DirectionalJudgeFn {
-  return async (request): Promise<Result<{ verdict: "pass" | "fail"; reason: string; usage: GateTokens }, JudgeError>> =>
+  return async (request): Promise<Result<JudgeAnswer, JudgeFailure>> =>
     request.caseId === caseId
-      ? { ok: false, error: "unavailable" }
+      ? { ok: false, error: { error: "unavailable" } }
       : { ok: true, value: { verdict: "pass", reason: "the answer meets the rubric", usage: JUDGE_USAGE } };
 }
 
@@ -785,6 +791,52 @@ test("gateDirectionalCandidate: a judge that cannot answer abstains and keeps th
   assert.equal(lines.length, 1);
   assert.equal(lines[0].event, "gate-abstained");
   assert.equal(String(lines[0].reason).startsWith("judge-unavailable: "), true);
+});
+
+// A call nobody could read is a call that was paid for (OA10, M1c review R1): the second condition does not stop speaking for
+// free, so the cost of the reply that could not be read is in `tokens.judge` and in the total -- and the abstention names the
+// cause the seam could tell, which is what a user has to act on.
+test("gateDirectionalCandidate: a judge that cannot answer still pays for the call and says why", async (t) => {
+  const fixture = createFixture(t);
+  const unreadable: GateTokens = { input: 7, output: 3 };
+  const harness = createHarness(fixture, {
+    judge: async (request): Promise<Result<JudgeAnswer, JudgeFailure>> =>
+      request.caseId === UNREADABLE_CASE
+        ? { ok: false, error: { error: "unparseable", usage: unreadable, detail: CAUSE } }
+        : { ok: true, value: { verdict: "pass", reason: "the answer meets the rubric", usage: JUDGE_USAGE } },
+  });
+
+  const result = concluded(await gateDirectionalCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-abstained");
+  assert.equal(result.reason, "judge-unavailable");
+  assert.equal(harness.judged.length, 2);
+
+  // Both calls happened: the one that answered and the one nobody could read. The component is the two of them, and the total
+  // adds it once.
+  const record = readRecord(fixture.decisionPath);
+  assert.deepEqual(validateAgainstSchema(record), []);
+  const judged = {
+    input: JUDGE_USAGE.input + unreadable.input,
+    output: JUDGE_USAGE.output + unreadable.output,
+  };
+  assert.deepEqual(record.gate.tokens.judge, judged);
+  assert.deepEqual(record.gate.tokens.total, {
+    input: PROPOSAL_TOKENS.input + 40 + 40 + judged.input,
+    output: PROPOSAL_TOKENS.output + 8 + 8 + judged.output,
+  });
+
+  // What the judge could not answer, with the case it was asked about and the cause it carried, in the answer and in the line
+  // of the index alike.
+  const detail = result.detail;
+  if (detail === undefined) assert.fail("the abstention of the judge answered without its cause");
+  assert.equal(detail.includes(UNREADABLE_CASE), true);
+  assert.equal(detail.includes(CAUSE), true);
+
+  const lines = readLines(fixture.base);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].event, "gate-abstained");
+  assert.equal(lines[0].reason, `judge-unavailable: ${detail}`);
 });
 
 // OA1, OA9: a bank that is not a baseline leaves the candidate staged and the record where it was, and the line of the index

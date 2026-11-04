@@ -34,9 +34,11 @@ import { describe, isMissingPathError, isPlainObject, quote, toErrorMessage } fr
 // is a different contract and is refused whole instead of being read as this one with fields missing.
 export const CASE_BANK_FORMAT = "pi-simple-sri/case-bank@1";
 
-// The cap of the whole file, checked before a byte is parsed. Fifty cases of a few hundred bytes each fit in a
+// The cap of the whole file, checked before a byte is parsed and before the bytes are read: the size is consulted with
+// one stat, and a file over the limit is refused without being loaded. Fifty cases of a few hundred bytes each fit in a
 // fraction of it, so the cap is not a budget on the cases: it is what stops a wrong path that points at a database
-// or at a bundle from being read into memory and then rejected by the JSON parser.
+// or at a bundle from being read into memory and then rejected by the JSON parser. The length of the bytes is compared
+// again after the read, because a file can grow between the two calls.
 export const MAX_CASE_BANK_BYTES = 1_048_576;
 
 // Q23: fewer cases than this cannot tell a candidate from the incumbent, so the bank declares its floor instead of
@@ -127,7 +129,7 @@ const ROOT_FIELDS: readonly string[] = ["format", "description", "rubric", "orig
 const ORIGIN_FIELDS: readonly string[] = ["kind", "path", "excerpt"];
 const CASE_FIELDS: readonly string[] = ["id", "prompt", "checks"];
 
-// The reader. The file is read as bytes, the cap is checked on the bytes, and the same bytes are what
+// The reader. The size is consulted before the bytes, the cap is checked on both, and the same bytes are what
 // caseBankDigest hashes: the bank a preregistration pins is the bank this call read, not a re-serialization of it.
 //
 // It answers the data alone, which is what a caller that only wants to know whether the file is a bank needs. A caller
@@ -150,9 +152,9 @@ export async function readCaseBank(
   const bytes = await readBankBytes(file);
   if (!bytes.ok) return bytes;
 
-  if (bytes.value.length > MAX_CASE_BANK_BYTES) {
-    return refuse("too-large", `${bytes.value.length} bytes, over the ${MAX_CASE_BANK_BYTES} byte limit`);
-  }
+  // The net of a file that grew between the stat of readBankBytes and this read: the cap is on the bytes as well, so the
+  // limit holds whichever of the two readings saw the file last.
+  if (bytes.value.length > MAX_CASE_BANK_BYTES) return tooLarge(bytes.value.length);
 
   let raw: unknown;
   try {
@@ -192,23 +194,46 @@ export function caseBankReason(failure: CaseBankFailure): string {
   return `${REASON_PREFIX[failure.error]}: ${failure.detail}`;
 }
 
-// Reading the bytes is the only place the file system is touched. A file that is not there is a value, not a
-// rejection: ENOTDIR is the same absence one level down, the reading src/values.ts gives it. Anything else is a file
-// the run cannot read, and the message of the runtime travels next to the path because an EACCES and an EISDIR are
-// different problems and the line that reports it should say which one happened.
+// Reading the bytes is the only place the file system is touched, and the size is consulted before them: the cap exists
+// so that a wrong path at a database or at a bundle is never loaded, and a read that happened before the comparison would
+// pay exactly the cost the cap promises not to pay. A file that is not there is a value, not a rejection: ENOTDIR is the
+// same absence one level down, the reading src/values.ts gives it. Anything else is a file the run cannot read, and the
+// message of the runtime travels next to the path because an EACCES and an EISDIR are different problems and the line that
+// reports it should say which one happened.
 async function readBankBytes(file: string): Promise<Result<Buffer, CaseBankFailure>> {
+  try {
+    const stats = await fs.promises.stat(file);
+    // The cap is on the bytes of a file: a path that is not one -- a directory, a device -- is left to the read below, which
+    // answers the problem it has, exactly as it answered it before the size was consulted.
+    if (stats.isFile() && stats.size > MAX_CASE_BANK_BYTES) return tooLarge(stats.size);
+  } catch (error) {
+    return readFailureOf(file, error);
+  }
+
   try {
     return { ok: true, value: await fs.promises.readFile(file) };
   } catch (error) {
-    const absent = isMissingPathError(error);
-    return {
-      ok: false,
-      error: {
-        error: absent ? "absent" : "unreadable",
-        detail: absent ? file : `${file}: ${toErrorMessage(error)}`,
-      },
-    };
+    return readFailureOf(file, error);
   }
+}
+
+// The one reading of a failure of the file system, from the stat and from the read alike: absent for a path that is not
+// there, unreadable for one that is and cannot be read, with the message of the runtime next to the path.
+function readFailureOf(file: string, error: unknown): Result<never, CaseBankFailure> {
+  const absent = isMissingPathError(error);
+  return {
+    ok: false,
+    error: {
+      error: absent ? "absent" : "unreadable",
+      detail: absent ? file : `${file}: ${toErrorMessage(error)}`,
+    },
+  };
+}
+
+// The one refusal of the cap, from the size the stat answered and from the length of the bytes that were read: the two
+// readings name the same limit in the same words, so a caller decides by `too-large` whichever one stopped it.
+function tooLarge(size: number): Result<never, CaseBankFailure> {
+  return refuse("too-large", `${size} bytes, over the ${MAX_CASE_BANK_BYTES} byte limit`);
 }
 
 // The body of the reader, over the value JSON.parse answered. The order of the checks is the order of this list, and

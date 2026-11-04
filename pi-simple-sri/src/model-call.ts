@@ -3,6 +3,7 @@ import type { DirectionalJudgeFn } from "./gate/directional-flow.ts";
 import { createJudge } from "./gate/judge.ts";
 import type { CompleteFn } from "./proposer.ts";
 import type { GateTokens } from "./types.ts";
+import { toErrorMessage } from "./values.ts";
 
 // The construction of the one model call this package makes (M1c, S5).
 //
@@ -81,23 +82,48 @@ export function createModelCall(input: ModelCallInput): CompleteFn {
 // A verdict whose message cannot be priced -- a seam built by someone else, a call that answered nothing -- leaves as the
 // abstention of the second condition instead of as a verdict with an invented zero: the gate cannot accept on a cost it
 // could not record.
+//
+// The same rule read the other way is why the abstention carries what the call spent (M1c review, R1): the second
+// condition does not stop speaking for free. A reply nobody could read and a provider that failed are both a call the run
+// paid for, so the cost of the message travels in the error and the flow adds it to `tokens.judge` -- a record that
+// dropped it would underestimate the decision, which is exactly what the comment of tokenTallyOf (src/gate/budget.ts)
+// refuses. The cause of a failed call travels too, in `detail`: `createJudge` answers the abstention and forgets the
+// exception, so the one place that can still see it is the CompleteFn this wrapper owns.
 export function createDirectionalJudge(complete: CompleteFn): DirectionalJudgeFn {
   return async (request) => {
     // The cost of the one call this judgement makes, written by the CompleteFn below and read after the judge answered.
     // A holder and not a local: the assignment happens inside a closure, and the read has to happen after it ran.
     const measured: { usage?: GateTokens } = {};
+    // Why the call failed, when it did. Empty for a call that answered a message, whatever the judge made of it.
+    const cause: { detail?: string } = {};
 
     const judge = createJudge(async (context, options) => {
-      const message = await complete(context, options);
-      measured.usage = { input: message.usage.input, output: message.usage.output };
-      return message;
+      try {
+        const message = await complete(context, options);
+        measured.usage = { input: message.usage.input, output: message.usage.output };
+        return message;
+      } catch (error) {
+        // The message of the runtime is the only fact that tells a provider that is down from one that refused the
+        // request, so it is kept before the judge turns the error into its abstention.
+        cause.detail = toErrorMessage(error);
+        throw error;
+      }
     });
 
     const verdict = await judge(request);
-    if (!verdict.ok) return verdict;
+    if (!verdict.ok) {
+      return {
+        ok: false,
+        error: {
+          error: verdict.error,
+          ...(measured.usage === undefined ? {} : { usage: measured.usage }),
+          ...(cause.detail === undefined ? {} : { detail: cause.detail }),
+        },
+      };
+    }
 
     const usage = measured.usage;
-    if (usage === undefined) return { ok: false, error: "unavailable" };
+    if (usage === undefined) return { ok: false, error: { error: "unavailable" } };
 
     return { ok: true, value: { verdict: verdict.value.verdict, reason: verdict.value.reason, usage } };
   };

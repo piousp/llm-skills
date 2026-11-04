@@ -90,6 +90,22 @@ function writeBank(file: string, document: unknown): void {
   fs.writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`, "utf8");
 }
 
+// The size is consulted before the bytes, so the only way to observe the order is to replace the fs method that produces the
+// bytes: the original property descriptor goes back in a t.after hook, the same shape test/unit/writer.test.ts uses, and no
+// permission of the machine is touched.
+function stubReadFile(t: TestContext, stub: (target: unknown) => never): void {
+  const original = Object.getOwnPropertyDescriptor(fs.promises, "readFile");
+  t.after(() => {
+    if (original) {
+      Object.defineProperty(fs.promises, "readFile", original);
+    } else {
+      Reflect.deleteProperty(fs.promises, "readFile");
+    }
+  });
+
+  Object.defineProperty(fs.promises, "readFile", { configurable: true, writable: true, value: stub });
+}
+
 // A bank of `count` cases, all of them valid, so a test of the number of cases is a test of the number and of nothing
 // else.
 function bankWithCases(count: number): Record<string, unknown> {
@@ -211,6 +227,28 @@ test("loadCaseBank: a file over the cap is too-large before it is parsed", async
   assert.deepEqual(loaded, {
     ok: false,
     error: { error: "too-large", detail: `${written.length} bytes, over the ${MAX_CASE_BANK_BYTES} byte limit` },
+  });
+});
+
+// The cap is consulted before the bytes: the size of the file is read with one stat, and a file over the limit is refused
+// without ever being loaded. The stub below is what makes the order observable -- a reader that read the bytes first would
+// answer `unreadable` with the message this readFile throws instead of `too-large` -- and the size the refusal names is the
+// one the file has, which is the one the stat answered.
+test("loadCaseBank: a file over the cap is refused without being read", async (t) => {
+  const fixture = createFixture(t);
+  fs.writeFileSync(fixture.file, "{".repeat(MAX_CASE_BANK_BYTES + 1), "utf8");
+  stubReadFile(t, () => {
+    throw new Error("the bytes of a bank over the cap must not be read");
+  });
+
+  const loaded = await loadCaseBank(fixture.file, "baseline");
+
+  assert.deepEqual(loaded, {
+    ok: false,
+    error: {
+      error: "too-large",
+      detail: `${MAX_CASE_BANK_BYTES + 1} bytes, over the ${MAX_CASE_BANK_BYTES} byte limit`,
+    },
   });
 });
 

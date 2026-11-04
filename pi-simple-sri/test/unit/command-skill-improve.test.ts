@@ -1293,6 +1293,36 @@ test("runSkillImprove: a gate that rejects the candidate reports the reason and 
   assert.equal(rejection?.message.includes("the skill was not edited"), true);
 });
 
+// M4: a rejection the judge produced is a rejection with a case and the judge's sentence, and the flow carries both in the
+// detail of the result. The command prints it, so the user reads which case failed and why instead of the bare word of the
+// vocabulary that stopped the gate.
+test("runSkillImprove: a rejection of the judge prints the case and its sentence", async () => {
+  const detail = "no-squash-all: the answer keeps the destructive command";
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-rejected",
+      reason: "judge-failed",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 8,
+      usedRuns: 8,
+      overlays: null,
+      detail,
+    }),
+    accept: async () => assert.fail("a rejected candidate must not reach the acceptance"),
+  });
+
+  await harness.run("pdf-tools");
+
+  assert.deepEqual(harness.acceptRequests, []);
+  const rejection = harness.notified.at(-1);
+  assert.equal(rejection?.type, "warning");
+  assert.equal(rejection?.message.includes("judge-failed"), true);
+  assert.equal(rejection?.message.includes("no-squash-all"), true);
+  assert.equal(rejection?.message.includes("the answer keeps the destructive command"), true);
+  assert.equal(rejection?.message.includes("the skill was not edited"), true);
+});
+
 // The same with an abstention: a verdict that concluded nothing is not a write either.
 test("runSkillImprove: a gate that abstains reports the reason and leaves the skill alone", async () => {
   const harness = createHarness({

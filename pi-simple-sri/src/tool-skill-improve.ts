@@ -485,9 +485,12 @@ async function runGate(
   // every other call -- the failures of the session, and the defect an artifact shows, which the replay base measures (OA11) --
   // by the replayed turns of the diagnosis. The record of the candidate is what catches a surface that guessed wrong: each flow
   // refuses a record of the other base with `basis-mismatch`.
-  const bankPath = params.defect === true ? undefined : params.bankPath;
+  //
+  // The name says what the value decides and not what it is copied from: it is the bank that measures the candidate, and a
+  // defect names a bank without being measured by it. It is the same answer measuredByBankOf gives the command.
+  const measuringBankPath = params.defect === true ? undefined : params.bankPath;
 
-  if (bankPath === undefined) {
+  if (measuringBankPath === undefined) {
     return answerOf(action, skill, base, params, {
       result: await (deps.gate ?? gateStagedCandidate)(request, deps.gateDeps),
     });
@@ -506,7 +509,7 @@ async function runGate(
   // and the record of the bank keeps it in the same three words (CaseGateEvaluation.judge).
   const judged: JudgeTally = { answer: "not-run" };
   const result = await (deps.gateDirectional ?? gateDirectionalCandidate)(
-    { ...request, bankPath, model: identity },
+    { ...request, bankPath: measuringBankPath, model: identity },
     {
       ...deps.gateDeps,
       judge: watchingJudge(
@@ -629,7 +632,9 @@ function verdictTextOf(skill: SkillRef, result: GateConcludedResult | NoBaseline
     case "gate-accepted":
       return gatePassedText(SURFACE, skill, result.plannedRuns, result.usedRuns);
     case "gate-rejected":
-      return gateRejectedText(SURFACE, skill, result.reason, result.usedRuns);
+      // A rejection the judge produced names the case and its sentence, which the flow carries in the detail of the result
+      // (M4): the reason alone is the word of the vocabulary and nothing a user could act on.
+      return gateRejectedText(SURFACE, skill, result.reason, result.usedRuns, result.detail);
     case "gate-abstained":
       return gateAbstainedText(SURFACE, skill, result.reason, result.detail);
     case "no-baseline":

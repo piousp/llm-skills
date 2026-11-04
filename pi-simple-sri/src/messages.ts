@@ -115,13 +115,18 @@ export function gatePassedText(
   return `${sentence}${withClause(surface, { tool: TOOL_NOT_ACCEPTED, command: "." })}`;
 }
 
+// A rejection below the rule is its whole story, and a rejection the judge produced is not (M4): the flow computes a detail
+// with the case and the judge's sentence, and the reason alone -- `judge-failed` -- leaves the user without either. The
+// detail is printed the way an abstention prints it, in the same wording the line of the index keeps, and a rejection
+// without one reads as it always did.
 export function gateRejectedText(
   surface: DecisionSurface,
   skill: SkillRef,
   reason: string | null,
   usedRuns: number,
+  detail?: string,
 ): string {
-  const sentence = `the gate rejected the candidate for skill ${quote(skill.name)} after ${runsText(usedRuns)}: ${reasonText(reason)}`;
+  const sentence = `the gate rejected the candidate for skill ${quote(skill.name)} after ${runsText(usedRuns)}: ${reasonText(reason, detail)}`;
   return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 

@@ -69,7 +69,8 @@ import type { CaseGateJudgeAnswer, GateVerdict, NoBaselineResult } from "./types
 //   9. evaluate: any invalid run abstains; a candidate under the rule is rejected; a perfect tie abstains on
 //      `no-improvement`; and when the mechanics accepted and the rule announces the judge, one call per case of the
 //      candidate arm. Every case accepted by the judge is an acceptance, one rejected is `judge-failed`, and a judge
-//      nobody could read abstains with `judge-unavailable` and the partial result written. The conjunction is the scorer's;
+//      nobody could read abstains with `judge-unavailable`, the partial result written and the cost of the call it could not
+//      read counted all the same. The conjunction is the scorer's;
 //   10. rewrite the record with the verdict, the tokens of the three components plus the judge, and the moment it decided;
 //   11. write one line of the index -- `gate-rejected` or `gate-abstained`, never `gate-accepted` -- and never a byte inside
 //       the skill.
@@ -105,9 +106,22 @@ export interface JudgeAnswer extends JudgeVerdict {
   usage: GateTokens;
 }
 
-// The second condition as a seam: a request in, one verdict with its cost or one abstention out. Every test of this flow
-// hands a fake and no test reaches a provider, which is what makes the judge a condition the suite can drive.
-export type DirectionalJudgeFn = (request: JudgeRequest) => Promise<Result<JudgeAnswer, JudgeError>>;
+// The second condition as a seam: a request in, one verdict with its cost or the abstention that says why it has none out.
+// Every test of this flow hands a fake and no test reaches a provider, which is what makes the judge a condition the suite
+// can drive.
+//
+// Why the second condition did not speak, with the two facts the flow cannot derive on its own. `detail` is the cause a
+// failed call carries -- the message of the runtime, which only the module that made the call can see -- and `usage` is what
+// that call cost, present whenever a call happened and absent when nobody made one (an aborted run spends nothing). The
+// flow reads both: the cost of every call it paid for goes into `tokens.judge` (OA10), and the cause travels in the detail
+// of the abstention, the way the judge's own sentence does when it rejects.
+export interface JudgeFailure {
+  error: JudgeError;
+  detail?: string;
+  usage?: GateTokens;
+}
+
+export type DirectionalJudgeFn = (request: JudgeRequest) => Promise<Result<JudgeAnswer, JudgeFailure>>;
 
 // What the gate is pointed at: the candidate of the replay base (its base, its skill, its cwd and its abort signal) plus the
 // two facts only this base has.
@@ -372,8 +386,8 @@ export async function gateDirectionalCandidate(
   // unreadable one, and "the gate ran out of its twenty minutes" is the answer a person needs.
   const verdict: GateVerdict = budget.interruptedAt === null ? evaluation.verdict : "gate-abstained";
   const reason: GateConclusionReason | null = budget.interruptedAt === null ? evaluation.reason : "interrupted";
-  // What the index and the answer add after the vocabulary word: the judge's own sentence when the second condition is what
-  // stopped the gate, and nothing when the record already says it (M4).
+  // What the index and the answer add after the vocabulary word: the judge's own sentence when it rejected a case, the case
+  // and the cause when it could not answer, and nothing when the record already says it (M4).
   const detail = budget.interruptedAt === null ? judged.detail : undefined;
 
   // Step 10. The record, with the preregistration it was judged by next to the result it produced.
@@ -516,19 +530,18 @@ async function judgeCases(input: {
       ...(input.request.signal === undefined ? {} : { signal: input.request.signal }),
     });
     if (!asked.ok) {
+      // The call happened, so its cost belongs to the record even though the verdict does not exist: an abstention of the
+      // second condition is not a free condition.
       return {
         answer: "unavailable",
         calls,
-        tokens,
-        detail: `the judge of the case ${quote(entry.id)} answered ${quote(asked.error)}`,
+        tokens: tokensPlus(tokens, asked.error.usage),
+        detail: judgeFailureDetail(entry.id, asked.error),
       };
     }
 
     calls.push({ caseId: entry.id, verdict: asked.value.verdict, reason: asked.value.reason, usage: asked.value.usage });
-    tokens = {
-      input: tokens.input + asked.value.usage.input,
-      output: tokens.output + asked.value.usage.output,
-    };
+    tokens = tokensPlus(tokens, asked.value.usage);
 
     if (asked.value.verdict === "fail") {
       return {
@@ -541,6 +554,19 @@ async function judgeCases(input: {
   }
 
   return { answer: "pass", calls, tokens };
+}
+
+// What the judge could not answer, in the one sentence the line of the index and the answer keep: the case it was asked
+// about, the word it answered, and -- when the seam could tell -- why the call failed.
+function judgeFailureDetail(caseId: string, failure: JudgeFailure): string {
+  const answered = `the judge of the case ${quote(caseId)} answered ${quote(failure.error)}`;
+  return failure.detail === undefined ? answered : `${answered}: ${failure.detail}`;
+}
+
+// The sum of two costs, with the absent one as the identity: a call that never happened adds nothing, and the component of a
+// judge that only answered some of its cases is the sum of the ones it did.
+function tokensPlus(tokens: GateTokens, extra: GateTokens | undefined): GateTokens {
+  return extra === undefined ? tokens : { input: tokens.input + extra.input, output: tokens.output + extra.output };
 }
 
 // The seams with their production default, resolved once per call. `runReplay` opens a runner that starts nothing until a run

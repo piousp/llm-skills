@@ -886,6 +886,36 @@ test("gate: a staged candidate is gated and the answer carries the verdict and t
   assert.deepEqual(harness.entries, []);
 });
 
+// M4: a rejection the judge produced names the case and the judge's sentence, and the flow carries both in the detail of the
+// result. The tool prints it in its sentence, which is the only surface a model reads, and details keeps the documented shape.
+test("gate: a rejection of the judge prints the case and its sentence", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-rejected",
+      reason: "judge-failed",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 8,
+      usedRuns: 8,
+      overlays: null,
+      detail: "no-squash-all: the answer keeps the destructive command",
+    }),
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE });
+
+  assert.equal(result.isError, true);
+  const text = textOf(result);
+  assert.equal(text.includes("judge-failed"), true);
+  assert.equal(text.includes("no-squash-all"), true);
+  assert.equal(text.includes("the answer keeps the destructive command"), true);
+  assert.equal(text.includes("the skill is untouched"), true);
+
+  // The detail is the sentence's, not a field of details: the shape of details is closed and this test keeps it that way.
+  assert.equal(Object.hasOwn(result.details, "detail"), false);
+  assert.deepEqual(harness.writes, []);
+});
+
 test("gate: a gate that passes is not an error and says the candidate was not accepted", async () => {
   const harness = createHarness({
     gate: async () => ({

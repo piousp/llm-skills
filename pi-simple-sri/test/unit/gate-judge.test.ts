@@ -468,9 +468,10 @@ test("createDirectionalJudge: the verdict carries the usage of the call that pro
   });
 });
 
-// A reply nobody could read is the abstention of the second condition, and it carries no cost: the flow stops there, and the
-// record keeps the calls it made instead of a verdict it does not have.
-test("createDirectionalJudge: a reply that is not a verdict answers unparseable", async () => {
+// A reply nobody could read is the abstention of the second condition, and the call that produced it was paid for: the cost
+// of the message travels with the abstention instead of being dropped with the verdict it does not have, because a record
+// that forgot it would underestimate the decision (OA10).
+test("createDirectionalJudge: a reply that is not a verdict answers unparseable and keeps the cost", async () => {
   const registry: ModelCallRegistry = {
     complete: async () => assistantMessage("I would say the answer is acceptable.", "stop"),
   };
@@ -479,7 +480,24 @@ test("createDirectionalJudge: a reply that is not a verdict answers unparseable"
     createModelCall({ registry, model: CHAT_MODEL, sessionId: SESSION_ID }),
   )(request());
 
-  assert.deepEqual(result, { ok: false, error: "unparseable" });
+  assert.deepEqual(result, {
+    ok: false,
+    error: { error: "unparseable", usage: { input: USAGE.input, output: USAGE.output } },
+  });
+});
+
+// A call the provider failed is the same abstention with a cause: `createJudge` answers `unavailable` and forgets the
+// exception, so the message of the runtime is kept by the one module that made the call. It is the fact that tells a provider
+// that is down from one that refused the request, and the flow prints it in the detail of the abstention.
+test("createDirectionalJudge: a failure of the provider answers unavailable with its cause", async () => {
+  const fake = fakeComplete({ failure: new Error("400 MissingSessionID") });
+
+  const result = await createDirectionalJudge(fake.complete)(request());
+
+  // A call was made, so it was paid for -- but the message never arrived, so there is no usage to record: the cause is all
+  // this abstention can say about it.
+  assert.deepEqual(result, { ok: false, error: { error: "unavailable", detail: "400 MissingSessionID" } });
+  assert.equal(fake.calls.length, 1);
 });
 
 // The call behind the judge is the shared one: the session of the run travels on it and the budget is the judge's, so the bank
@@ -532,6 +550,7 @@ test("createDirectionalJudge: an aborted call answers unavailable and spends not
 
   const result = await createDirectionalJudge(fake.complete)(request({ signal: controller.signal }));
 
-  assert.deepEqual(result, { ok: false, error: "unavailable" });
+  // Nobody was waiting for the verdict, so no call exists: the abstention carries neither a cost nor a cause.
+  assert.deepEqual(result, { ok: false, error: { error: "unavailable" } });
   assert.deepEqual(fake.calls, []);
 });
