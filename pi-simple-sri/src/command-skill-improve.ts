@@ -1,4 +1,12 @@
-import { SriFailClosedError } from "./errors.ts";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { SriFailClosedError, SriWriterError } from "./errors.ts";
+import { acceptCandidate, type AcceptDeps } from "./gate/acceptance.ts";
+import {
+  gateStagedCandidate,
+  resolveStagedCandidate,
+  type GateConcludedResult,
+  type GateDeps,
+} from "./gate/flow.ts";
 import {
   ENTRY_TYPE,
   listEligibleSkills,
@@ -8,8 +16,14 @@ import {
   type ImproveFlowModelRegistry,
   type ImprovementEntry,
   type ProposeFn,
+  type ProposedFlowResult,
 } from "./improve-flow.ts";
+import { serializeLesson } from "./lesson-frontmatter.ts";
 import {
+  acceptedText,
+  gateAbstainedText,
+  gatePassedText,
+  gateRejectedText,
   listedSkills,
   noEvidenceText,
   noModelText,
@@ -19,31 +33,35 @@ import {
   unknownSkillText,
 } from "./messages.ts";
 import { COMMAND_NAME } from "./names.ts";
-import { assertNever, type DecisionSurface, type SkillRef } from "./types.ts";
-import { toErrorMessage } from "./values.ts";
+import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef } from "./types.ts";
+import { quote, toErrorMessage } from "./values.ts";
 
-// The /skill-improve command: one run of the loop over one named skill (P8).
+// The /skill-improve command: one run of the loop over one named skill (P8), and from M1 the one surface of
+// the package that may edit a skill.
 //
 // The loop itself -- settings, inventory, eligibility, evidence, diagnosis, one generation, the
 // staging write and the index line -- lives in src/improve-flow.ts, because the skill_improve tool
-// runs the same pipeline (P9) and two copies of it would drift. What stays here is what only a user
-// command does: parse the arguments, report every outcome as a notification, record the session
-// entry with its degradation warning, and answer through another channel when there is no UI.
+// runs the same pipeline (P9) and two copies of it would drift. The gate lives in src/gate/flow.ts and the
+// acceptance in src/gate/acceptance.ts for the same reason: the tool runs the first, and what stays here is
+// what only a user command does -- parse the arguments, report every outcome as a notification, record the
+// session entry with its degradation warning, and answer through another channel when there is no UI.
 //
 // The sentences it reports are src/messages.ts, shared with the tool: the two surfaces say the same
 // things about the same outcomes, and a surface that no longer matched the other was a bug nobody
 // could see.
 //
-// The difference between the two surfaces is explicit and small: the command reports, and it is the
-// one that accepts (M1, M2). The tool never accepts, so acceptance never lands here by accident.
+// The difference between the two surfaces is explicit and small: the command reports, and it is the one that
+// accepts (M1, M2). It accepts exactly where the gate says it may -- the chain is propose, gate, accept, and
+// the third step runs only on a `gate-accepted` -- so the tool can gate a candidate of the same skill and the
+// skill stays untouched until the command runs.
 //
-// M0 never touches a skill: every path taken here writes inside <package>/staging and
-// <package>/state through the flow, and the acceptance that edits a skill is M1 and lives in its
-// own slice.
+// The command never touches a skill before an acceptance: every path taken here writes inside
+// <package>/staging and <package>/state through the flow, and the acceptance that edits a skill is the one
+// step of M1, guarded by the snapshot, the drift check and the reference line of src/gate/acceptance.ts.
 //
 // Importing this module reads nothing, registers nothing and starts nothing (rule 9 of the slice).
-// The clock, the settings file, the inventory, the model, the writer and the two record channels are
-// all resolved inside runSkillImprove, which is the only entry point.
+// The clock, the settings file, the inventory, the model, the writer, the gate, the acceptance and the record
+// channels are all resolved inside runSkillImprove, which is the only entry point.
 
 // The surface this module reports for, in the vocabulary of decision.json (src/types.ts): the same
 // value it hands proposeSkill as the trigger of the record, and the one the shared sentences use to
@@ -86,9 +104,9 @@ export interface SkillImproveContext extends ImproveFlowContext {
   readonly ui: SkillImproveUi;
 }
 
-// Every dependency the command touches: the seams of the loop, plus the two report channels and the
-// entry channel. Each one is optional -- the loop resolves what it is not given -- and a test replaces
-// what it needs.
+// Every dependency the command touches: the seams of the loop, the two steps M1 chains after it, plus the two
+// report channels and the entry channel. Each one is optional -- the loop, the gate and the acceptance resolve
+// what they are not given -- and a test replaces what it needs.
 //
 // `notify` replaces the whole report of the run, which is what a test that only counts notifications
 // wants. `sendMessage` is the channel the wiring connects: without a UI the runner hands the handler a
@@ -100,6 +118,14 @@ export interface SkillImproveDeps extends ImproveFlowDeps {
   appendEntry?: (customType: string, data: ImprovementEntry) => void;
   notify?: NotifyFn;
   sendMessage?: (message: SkillImproveMessage) => void;
+  // The two steps M1 chains after the loop, each one a seam for the same reason the loop's own are: a test
+  // proves the order of the chain without spending a replay or editing a skill. `gateDeps` and `acceptDeps`
+  // are the seams of those steps, passed through untouched, so a test can also keep the real gate or the real
+  // acceptance and replace one read or one write inside it.
+  gate?: typeof gateStagedCandidate;
+  gateDeps?: GateDeps;
+  accept?: typeof acceptCandidate;
+  acceptDeps?: AcceptDeps;
 }
 
 export interface SkillImproveArgs {
@@ -192,13 +218,158 @@ async function improve(args: string, run: Run): Promise<void> {
     case "proposed":
       recordEntry(run, result.entry);
       notify(proposedText(SURFACE, result.skill, result.draft.slug, result.staged.stagingPath, result.base), "info");
+      // M1: the candidate is gated here, and the acceptance below it is the only write into a skill this
+      // package can reach.
+      await gateAndAccept(result, run);
       return;
     default:
       // The six outcomes of the flow are the whole switch: a variant added to ProposeFlowResult makes
       // this line the first thing that stops compiling, instead of reaching the user as a run that
-      // reported nothing.
+      // reported nothing. The gate's own union is switched on in gateAndAccept, under its own assertNever.
       return assertNever(result);
   }
+}
+
+// The chain M1 adds (Q12, OA1): a candidate the loop staged is gated, and it is written into the skill only
+// when the gate passes. This function decides nothing about either step -- it reports, and it calls the
+// acceptance exactly where the gate said it may.
+async function gateAndAccept(candidate: ProposedFlowResult, run: Run): Promise<void> {
+  const { ctx, deps, notify } = run;
+
+  // The gate spends tokens, and this is the last moment at which nothing has been spent. The budget itself is
+  // fixed inside the gate (planGate, from the design and the items of the diagnosis), so the sentence says
+  // what is about to happen instead of a count this surface would have to recompute for itself.
+  notify(gateStartedText(candidate.skill), "info");
+
+  const result = await (deps.gate ?? gateStagedCandidate)(
+    {
+      base: candidate.base,
+      // The agent directory the loop read the settings and the inventory from, so the replay is measured against
+      // the skills this session had (OA6).
+      agentDir: deps.agentDir ?? getAgentDir(),
+      cwd: ctx.cwd,
+      stagingPath: candidate.staged.stagingPath,
+      // The skill the loop resolved and wrote the candidate for, not a second lookup by name: the two steps must
+      // be about the same directory, and the gate refuses a candidate named after another skill.
+      skill: candidate.skill,
+    },
+    deps.gateDeps,
+  );
+
+  switch (result.kind) {
+    case "refused":
+      // A candidate this version cannot gate is a refusal of the whole run: nothing was written and no run was
+      // spent, so the reason has to reach the user as the error it is instead of as a verdict of the gate.
+      throw new SriWriterError(
+        `the gate refused the candidate for skill ${quote(candidate.skill.name)}: ${result.rejection.detail}`,
+        candidate.staged.decisionPath,
+      );
+    case "gate-rejected":
+      notify(gateRejectedText(SURFACE, candidate.skill, result.reason, result.usedRuns), "warning");
+      return;
+    case "gate-abstained":
+      notify(gateAbstainedText(SURFACE, candidate.skill, result.reason), "warning");
+      return;
+    case "gate-accepted":
+      notify(gatePassedText(SURFACE, candidate.skill, result.plannedRuns, result.usedRuns), "info");
+      await acceptIntoSkill(candidate, result, run);
+      return;
+    default:
+      // The three verdicts and the refusal are the whole GateFlowResult: a variant added there stops compiling
+      // here, instead of reaching the user as a gate that reported nothing.
+      return assertNever(result);
+  }
+}
+
+// Step 7 of the protocol of §7, and the only path of this package that writes inside a skill. Everything it
+// needs comes from two places and no third one: the candidate the loop staged, and the record the gate rewrote,
+// which carries the candidate it measured and the hashes of the skill it measured it against.
+async function acceptIntoSkill(
+  candidate: ProposedFlowResult,
+  gate: GateConcludedResult,
+  run: Run,
+): Promise<void> {
+  const { deps, notify } = run;
+  const { record, skillContentHash } = await stagedRecordOf(candidate, gate);
+
+  // The bytes the acceptance writes are the candidate's: the draft is serialized again by the one function that
+  // produced the file in staging, so the two calls answer the same text -- the equality src/improve-flow.ts
+  // already relies on to publish the bytes it validated -- and the writer verifies the result against the hash
+  // the record declares before it writes a byte into the skill.
+  const lesson = serializeLesson(candidate.draft);
+  if (!lesson.ok) {
+    throw new SriWriterError(
+      `the lesson for ${quote(candidate.skill.name)} no longer serializes: ${lesson.error}`,
+      gate.decisionPath,
+    );
+  }
+
+  const outcome = await (deps.accept ?? acceptCandidate)(
+    {
+      base: candidate.base,
+      // realDir and not dir: the acceptance writes through the real path of a skill reached by a symlink (Q11).
+      skill: { name: candidate.skill.name, realDir: candidate.skill.realDir },
+      candidate: {
+        slug: record.candidate.slug,
+        title: record.candidate.title,
+        lessonText: lesson.value,
+        contentHash: record.candidate.contentHash,
+      },
+      decision: record,
+      // The SKILL.md the gate measured: an edit between the gate and this call is refused as drift instead of
+      // being published under a verdict about a skill that no longer exists.
+      expectedSkillContentHash: skillContentHash,
+      failureSignature: record.diagnosis.failureSignature,
+    },
+    deps.acceptDeps,
+  );
+
+  if (!outcome.ok) {
+    // A candidate the protocol refused wrote nothing: the snapshot is taken before the first edit and the lesson
+    // is withdrawn when the reference line cannot land, so the detail is the whole answer and the run stops here.
+    notify(outcome.error.detail, "error");
+    return;
+  }
+
+  notify(
+    acceptedText(candidate.skill, record.candidate.slug, outcome.value.lessonPath, outcome.value.historyPath),
+    "info",
+  );
+
+  // M2: await ctx.waitForIdle(); await ctx.reload();
+  //
+  // Step 8 and not a step of this module: the reload is a call on the context pi hands a command, and
+  // SkillImproveContext declares neither `waitForIdle` nor `reload`. M2 will have to widen that contract with
+  // `waitForIdle(): Promise<void>` and `reload(): Promise<void>` -- pi exposes both on the command context -- and
+  // put the two calls here, after the acceptance answered and before the run reports the task done.
+}
+
+// The record the gate left in the candidate, with the hash of the skill it measured. The acceptance writes the
+// first into the history of the skill and compares the second with the SKILL.md on disk, so both come from the
+// file the gate rewrote instead of from a second reading of the candidate built here.
+async function stagedRecordOf(
+  candidate: ProposedFlowResult,
+  gate: GateConcludedResult,
+): Promise<{ record: DecisionRecord; skillContentHash: string }> {
+  const resolved = await resolveStagedCandidate(candidate.base, candidate.skill.name, gate.stagingPath);
+  if (!resolved.ok) {
+    throw new SriWriterError(
+      `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and its record cannot be read: ${resolved.error.detail}`,
+      gate.decisionPath,
+    );
+  }
+
+  const record = resolved.value;
+  // The record is the authority of the two steps: a gate that answered one verdict and a record that carries
+  // another describe two runs, and the acceptance is the one step that must never guess between them.
+  if (record.gate.status !== "gate-accepted") {
+    throw new SriWriterError(
+      `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and the record says ${quote(record.gate.status)}: nothing was accepted`,
+      gate.decisionPath,
+    );
+  }
+
+  return { record, skillContentHash: record.gate.replay.overlays.skillContentHash };
 }
 
 // The report channel. With UI the notification is the result; without it the runner hands the
@@ -249,12 +420,18 @@ function recordEntry(run: Run, entry: ImprovementEntry): void {
   }
 }
 
+// The command's own sentence: what is about to be spent, said before it is (no other surface spends it, and a
+// gate of twelve runs is a long silence otherwise).
+function gateStartedText(skill: SkillRef): string {
+  return `gating the candidate for skill ${quote(skill.name)} with a paired replay of the skill against the skill plus the lesson; the gate spends tokens on every run, and the candidate is written into the skill only if it passes.`;
+}
+
 // The command's own sentence: the usage line and the offer of the eligible set, which no other
 // surface prints.
 function usageText(eligible: readonly SkillRef[]): string {
   return [
     `Usage: /${COMMAND_NAME} <skill> [focus]`,
-    "Stages a lesson candidate for one skill from the failures of this session and leaves the skill untouched.",
+    "Stages a lesson candidate for one skill from the failures of this session, gates it with a paired replay and accepts it into the skill only when the gate passes; the gate spends tokens.",
     "Eligible skills:",
     ...listedSkills(eligible),
   ].join("\n");

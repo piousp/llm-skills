@@ -11,7 +11,7 @@ import {
   type SkillImproveMessage,
 } from "../src/command-skill-improve.ts";
 import type { ImproveFlowContext, ImproveFlowDeps } from "../src/improve-flow.ts";
-import { COMMAND_NAME, REPLAY_ENV_VAR } from "../src/names.ts";
+import { COMMAND_NAME, REPLAY_ENV_VAR, SKILL_IMPROVE_TOOL_NAME } from "../src/names.ts";
 import {
   createSkillImproveTool,
   skillImproveParams,
@@ -24,12 +24,14 @@ import {
 // Every decision this package makes lives in src/; this file decides only which surface is called
 // and which dependencies it is called with.
 //
-//   /skill-improve <skill> [focus]         -> runSkillImprove (src/command-skill-improve.ts)
-//   skill_improve { action, skill, focus } -> createSkillImproveTool (src/tool-skill-improve.ts)
+//   /skill-improve <skill> [focus]            -> runSkillImprove (src/command-skill-improve.ts)
+//   skill_improve { action, skill, focus }    -> createSkillImproveTool (src/tool-skill-improve.ts)
 //
 // Both run the same loop (src/improve-flow.ts), so the command and the tool cannot disagree about
-// what is eligible, what counts as evidence or what a candidate looks like. The tool receives its
-// dependencies at registration time and the command receives the same ones at call time.
+// what is eligible, what counts as evidence or what a candidate looks like; both can gate a candidate
+// (src/gate/flow.ts), and only the command carries a gate that passes into the acceptance
+// (src/gate/acceptance.ts). The tool receives its dependencies at registration time and the command receives
+// the same ones at call time.
 //
 // What the factory does not do is as much part of the contract as what it does: no process, no
 // socket, no timer, no file read (docs/extensions.md:58-60). The root below is path arithmetic; the
@@ -47,13 +49,18 @@ import {
 // cannot start another propose or gate over itself. The variable is read when the factory is called,
 // never when the module is imported, which keeps the import free of environment reads.
 
-// The description is what the command list shows, so it names the syntax and the one thing a user
-// must know before running it: the skill is staged, never edited and never accepted.
-const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill from the failures of this session: /${COMMAND_NAME} <skill> [focus]. It never edits the skill and never accepts a candidate.`;
+// The description is what the command list shows, so it names the syntax and the two things a user
+// must know before running it: the candidate is gated before anything is written, and the gate spends
+// tokens. This command is also the only surface that may accept a candidate (Q12), and the description
+// says so instead of promising that nothing is ever edited.
+const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill from the failures of this session, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus]. The gate spends tokens on every run, and this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
 
-// The seams a test may replace: everything the loop resolves for itself. No path travels through the
-// wiring: the write base follows the agent directory, so the factory passes nothing of its own.
-export type SriSeams = ImproveFlowDeps;
+// The seams a test may replace: everything the loop resolves for itself, plus the gate the command chains
+// after it and the tool runs on its own. The gate's own seams are the tool's, and the acceptance's are not here
+// at all -- only the command accepts (Q12), every test of that step drives the command directly, and the
+// wiring is what keeps the tool's dependencies free of any seam that could write a skill. No path travels
+// through the wiring: the write base follows the agent directory, so the factory passes nothing of its own.
+export type SriSeams = ImproveFlowDeps & Pick<SkillImproveToolDeps, "gate" | "gateDeps">;
 
 // The command registration as this factory writes it, with the handler's context narrowed to the
 // fields the command reads (SkillImproveContext, src/command-skill-improve.ts). pi's own
@@ -114,10 +121,10 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   // never registered cannot be offered to the model either.
   if (isReplayChild()) return;
 
-  // The dependencies both surfaces share, resolved once per extension instance: the flow's seams
-  // (absent in production, where the loop resolves each one) and the entry channel. Where a run writes
-  // is not here: the base follows the agent directory the loop resolves itself, so the wiring holds no
-  // path of the package's own.
+  // The dependencies both surfaces share, resolved once per extension instance: the flow's seams and the
+  // gate's (absent in production, where the loop and the gate resolve each one) and the entry channel. Where a
+  // run writes is not here: the base follows the agent directory the loop resolves itself, so the wiring holds
+  // no path of the package's own.
   const deps: SkillImproveToolDeps = {
     ...seams,
     // The entry channel is the session record of an attempt and lives on the extension API, not on

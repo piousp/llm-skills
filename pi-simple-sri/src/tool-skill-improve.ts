@@ -1,15 +1,26 @@
-import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import path from "node:path";
+import { getAgentDir, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { describeExpectation } from "./diagnosis.ts";
 import {
+  gateStagedCandidate,
+  type GateConcludedResult,
+  type GateDeps,
+} from "./gate/flow.ts";
+import type { GateVerdict } from "./gate/types.ts";
+import {
   ENTRY_TYPE,
   diagnoseSkill,
+  listEligibleSkills,
   proposeSkill,
   type ImproveFlowContext,
   type ImproveFlowDeps,
   type ImprovementEntry,
 } from "./improve-flow.ts";
 import {
+  gateAbstainedText,
+  gatePassedText,
+  gateRejectedText,
   noEvidenceText,
   noModelText,
   notEligibleText,
@@ -19,19 +30,25 @@ import {
 } from "./messages.ts";
 import { SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import type { GenerationUsage } from "./proposer.ts";
+import { findSkill, listSkills } from "./skills-inventory.ts";
 import { assertNever, type DecisionSurface, type Diagnosis, type Eligibility, type SkillRef } from "./types.ts";
 import { quote, toErrorMessage } from "./values.ts";
+import { writeBase } from "./write-base.ts";
 
-// The skill_improve tool, the second surface of the loop (P9, Q7). It answers two questions the
+// The skill_improve tool, the second surface of the loop (P9, Q7, M1). It answers three questions the
 // model can ask mid-session:
 //
 //   diagnose  what failed in this session, and what would a replay have to test? Read-only.
-//   propose   the same, plus one generation and the staging write. It never accepts.
+//   propose   the same, plus one generation and the staging write.
+//   gate      run the replay budget over a candidate already in staging, which spends tokens.
 //
-// Both actions run the pipeline of src/improve-flow.ts, the same one /skill-improve runs, so the
+// diagnose and propose run the pipeline of src/improve-flow.ts, the same one /skill-improve runs, so the
 // command and the tool cannot disagree about what is eligible, what counts as evidence or what the
-// candidate looks like. What differs is the answer: the command notifies, the tool returns a tool
-// result, and neither accepts -- acceptance edits a skill and belongs to the command alone (Q12).
+// candidate looks like. gate runs src/gate/flow.ts, which the command then carries into the acceptance.
+// What differs is the answer: the command notifies, the tool returns a tool result, and the tool never
+// accepts -- acceptance edits a skill and belongs to the command alone (Q12). That is why the action
+// vocabulary has three values and no fourth: a candidate this action gates stays in staging, untouched,
+// until whoever runs the command decides to accept it.
 //
 // Rule 3: the description below travels in every session that loads this tool, so it says in one
 // sentence that the tool never edits the skill. The rest of the promise is in the code: the only
@@ -46,10 +63,10 @@ import { quote, toErrorMessage } from "./values.ts";
 // cost of the call is visible where the call was made.
 //
 // Rule 6: details has the documented shape { action, skill, outcome, reason?, base?, stagingPath?,
-// decisionPath?, usage? } and nothing else. A caller that logs it never has to guess. The session entry
-// is not part of that shape: when it cannot be recorded the answer says so in its text and details keeps
-// the outcome of the work itself, because the entry is the /tree view of an attempt whose record is the
-// candidate and its index line (F2).
+// decisionPath?, usage?, verdict?, plannedRuns?, usedRuns?, gatePath? } and nothing else. A caller that logs
+// it never has to guess. The session entry is not part of that shape: when it cannot be recorded the answer
+// says so in its text and details keeps the outcome of the work itself, because the entry is the /tree view of
+// an attempt whose record is the candidate and its index line (F2).
 //
 // Rule 7: importing this module reads nothing and starts nothing; createSkillImproveTool only
 // captures the dependencies the flow and the entry channel need.
@@ -63,24 +80,41 @@ export { SKILL_IMPROVE_TOOL_NAME };
 // pick the wording of a surface that never accepts.
 const SURFACE: DecisionSurface = "tool";
 
-export type SkillImproveAction = "diagnose" | "propose";
+// The name of the gate's own directory inside a candidate (src/gate/flow.ts keeps the raw stream of every run
+// there). It is the one literal this module shares with that layout, and it is here because details hands a
+// caller the path of those bytes instead of making it guess.
+const GATE_DIR = "gate";
 
-// The action names the two entry points of the flow, and the schema accepts nothing else: a tool
-// call outside this union is refused by the runtime before execute() runs.
+export type SkillImproveAction = "diagnose" | "propose" | "gate";
+
+// The action names the three entry points of the surfaces, and the schema accepts nothing else: a tool call
+// outside this union is refused by the runtime before execute() runs. There is no acceptance action (Q12).
 export const skillImproveParams = Type.Object({
-  action: Type.Union([Type.Literal("diagnose"), Type.Literal("propose")], {
-    description: "diagnose reports what failed and what the replay would test; propose stages a lesson candidate",
+  action: Type.Union([Type.Literal("diagnose"), Type.Literal("propose"), Type.Literal("gate")], {
+    description:
+      "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens",
   }),
   skill: Type.String({ description: "Exact skill name, as listed by the inventory" }),
   focus: Type.Optional(Type.String({ description: "Optional hint about what to improve" })),
+  // Typebox has no conditional without oneOf, so "gate needs a candidate" cannot live in the schema. It lives
+  // in runGate as a typed refusal with stable details, and this description is the only warning the model gets
+  // from the schema: the rule enforced, not merely documented, is the check before the first read.
+  stagingPath: Type.Optional(
+    Type.String({
+      description:
+        "Candidate directory inside staging/, as propose answered it (stagingPath, absolute or relative to the base): required by gate, ignored by the other actions",
+    }),
+  ),
 });
 
 export type SkillImproveParams = Static<typeof skillImproveParams>;
 
-// What became of the call, in a closed set. "diagnosed" and "proposed" are the successes;
-// "not-eligible", "no-evidence", "unknown-skill" and "no-model" are the refusals a caller can
-// predict and handle by name; "error" is everything else: a generation that refused to produce a
-// lesson, a lesson that does not validate, a write the perimeter refused, or a bug.
+// What became of the call, in a closed set. "diagnosed", "proposed" and "gate-accepted" are the successes;
+// "not-eligible", "no-evidence", "unknown-skill" and "no-model" are the refusals a caller can predict and
+// handle by name; "gate-rejected" and "gate-abstained" are the two verdicts that are answers and not failures
+// of the run, and they report with isError because nothing was accepted; "error" is everything else: a
+// generation that refused to produce a lesson, a lesson that does not validate, a write the perimeter refused,
+// a candidate the gate cannot read, or a bug.
 export type SkillImproveOutcome =
   | "diagnosed"
   | "proposed"
@@ -88,12 +122,22 @@ export type SkillImproveOutcome =
   | "no-evidence"
   | "unknown-skill"
   | "no-model"
+  | "gate-accepted"
+  | "gate-rejected"
+  | "gate-abstained"
   | "error";
 
-// The documented shape of `details` (rule 6). `reason` is the vocabulary of the refusal for the
-// predictable ones and the refusal message for "error"; the two paths and the base are present exactly
-// when a candidate was staged. The paths are relative to that base, the way the records name them, so a
-// consumer opens the candidate by joining the two fields instead of guessing a prefix.
+// The documented shape of `details` (rule 6). `reason` is the vocabulary of the refusal for the predictable
+// ones, the refusal message for "error", and the gate's own vocabulary on a gate -- the reason a rejection
+// produced or the reason the gate abstained for. The two paths and the base are present exactly when a
+// candidate was named. The paths are relative to that base, the way the records name them, so a consumer opens
+// the candidate by joining the two fields instead of guessing a prefix.
+//
+// The four gate fields are present exactly on "gate-accepted", "gate-rejected" and "gate-abstained":
+// `verdict` repeats the outcome in the vocabulary of decision.json so a consumer does not have to know this
+// tool's outcome names, `plannedRuns` and `usedRuns` are the budget the gate preregistered and what it cost,
+// and `gatePath` is the directory of the raw run streams inside the candidate (the same relative spelling as
+// the two paths below).
 export interface ToolDetails {
   action: SkillImproveAction;
   skill: string;
@@ -103,21 +147,31 @@ export interface ToolDetails {
   stagingPath?: string;
   decisionPath?: string;
   usage?: GenerationUsage;
+  verdict?: GateVerdict;
+  plannedRuns?: number;
+  usedRuns?: number;
+  gatePath?: string;
 }
 
-// The seams of the flow plus the one channel a tool context does not carry: appendEntry lives on the
-// extension API, so the wiring passes it in and a test replaces it.
+// The seams of the flow, the gate the third action runs, and the one channel a tool context does not carry:
+// appendEntry lives on the extension API, so the wiring passes it in and a test replaces it. `gate` is a seam
+// because the answer of a gate is what this module maps into details, and a test proves that mapping without
+// spending a replay; `gateDeps` are the gate's own seams, passed through untouched. There is no acceptance
+// seam: this surface has no path that writes a skill (Q12).
 export interface SkillImproveToolDeps extends ImproveFlowDeps {
   appendEntry?: (customType: string, data: ImprovementEntry) => void;
+  gate?: typeof gateStagedCandidate;
+  gateDeps?: GateDeps;
 }
 
 const TOOL_LABEL = "Skill improve";
 
 const TOOL_DESCRIPTION = [
-  "Diagnose a failure of this session and stage a lesson candidate for one installed skill.",
-  "It never edits the skill and never accepts a candidate: the only writes are the package staging",
-  "tree, the attempt index and the session entry, and acceptance belongs to the /skill-improve",
-  "command.",
+  "Diagnose a failure of this session, stage a lesson candidate for one installed skill, or gate a candidate",
+  "that is already in staging. gate spends the replay budget of the paired design it preregisters, and every",
+  "run of that budget spends tokens. It never edits the skill and never accepts a candidate: the only writes",
+  "are the package staging tree, the attempt index and the session entry, and acceptance belongs to the",
+  "/skill-improve command.",
 ].join(" ");
 
 export function createSkillImproveTool(
@@ -151,9 +205,18 @@ export async function runSkillImproveTool(
   signal: AbortSignal | undefined = undefined,
 ): Promise<AgentToolResult<ToolDetails>> {
   try {
-    return params.action === "diagnose"
-      ? await runDiagnose(params, ctx, deps)
-      : await runPropose(params, ctx, deps, signal);
+    // The three actions are the whole union, and the switch is total: a fourth one stops compiling here
+    // instead of falling through to a handler that would run a different action.
+    switch (params.action) {
+      case "diagnose":
+        return await runDiagnose(params, ctx, deps);
+      case "propose":
+        return await runPropose(params, ctx, deps, signal);
+      case "gate":
+        return await runGate(params, ctx, deps, signal);
+      default:
+        return assertNever(params.action);
+    }
   } catch (error) {
     // The refusal this package raises and a bug both matter to the model, and neither may escape:
     // the reason and the skill travel in details, the sentence in content.
@@ -298,6 +361,112 @@ async function runPropose(
   }
 }
 
+// The gate over a candidate that is already in staging (M1). This action never stages and never accepts: it
+// resolves the skill a replay would load, names the candidate by the stagingPath the call carries, and maps the
+// verdict of src/gate/flow.ts into the documented answer. Nothing here writes: the gate's own writes are the
+// record it rewrites inside the candidate and the line of the index, both under the base of the run, and the
+// skill itself is only read -- the overlay copies it into staging.
+async function runGate(
+  params: SkillImproveParams,
+  ctx: ImproveFlowContext,
+  deps: SkillImproveToolDeps,
+  signal: AbortSignal | undefined,
+): Promise<AgentToolResult<ToolDetails>> {
+  const action: SkillImproveAction = "gate";
+  const stagingPath = params.stagingPath;
+
+  // The one rule the schema cannot express (amendment 3 of S10): gate with no candidate is a refusal before the
+  // first read, with the same stable details as every other error of this action.
+  if (stagingPath === undefined) {
+    return failure(action, params.skill, "error", "missing-staging-path", missingStagingPathText(params.skill));
+  }
+
+  // The two halves the gate reads the candidate and the inventory from, resolved the way the flow resolves them:
+  // the replay runs against the skills this session had (OA6), and the candidate sits under the base this package
+  // writes to.
+  const agentDir = deps.agentDir ?? getAgentDir();
+  const base = deps.base ?? writeBase(agentDir);
+  const skills = await (deps.listSkills ?? listSkills)({ cwd: ctx.cwd, agentDir });
+  const skill = findSkill(skills, params.skill);
+  if (skill === undefined) {
+    // A name nobody knows, answered the way the other two actions answer it: the standalone the name may be, and
+    // the eligible set the caller can ask for instead (F6). The second read of the inventory is the price of that
+    // sentence, and it happens only on a refusal.
+    const standalone = skills.find((entry) => entry.kind === "standalone" && entry.name === params.skill) ?? null;
+    const eligible = await listEligibleSkills(ctx, deps);
+    return failure(
+      action,
+      params.skill,
+      "unknown-skill",
+      "unknown-skill",
+      unknownSkillText(SURFACE, params.skill, standalone, eligible),
+    );
+  }
+
+  const result = await (deps.gate ?? gateStagedCandidate)(
+    {
+      base,
+      agentDir,
+      cwd: ctx.cwd,
+      stagingPath,
+      skill,
+      // The signal pi aborts the call with reaches every run of the budget, so a cancelled call stops between runs
+      // instead of spending the rest of them.
+      ...(signal === undefined ? {} : { signal }),
+    },
+    deps.gateDeps,
+  );
+
+  if (result.kind === "refused") {
+    // The candidate cannot be gated at all -- it is not inside staging, it belongs to another skill, or its record
+    // is unreadable or from a version this package does not read -- and nothing was written, so the refusal and
+    // the path in it are the whole answer.
+    return failure(
+      action,
+      skill.name,
+      "error",
+      result.rejection.reason,
+      failedText(skill.name, result.rejection.detail),
+    );
+  }
+
+  // A concluded gate: one key set for the three verdicts, and only an acceptance is not an error of the call.
+  return {
+    content: [{ type: "text", text: verdictTextOf(skill, result) }],
+    details: {
+      action,
+      skill: skill.name,
+      outcome: result.kind,
+      // The verdict of the gate in the vocabulary of decision.json: a consumer reads the status the record keeps
+      // without having to know this tool's outcome names, and one value means the two fields cannot disagree.
+      verdict: result.kind,
+      ...(result.reason === null ? {} : { reason: result.reason }),
+      base,
+      stagingPath: result.stagingPath,
+      decisionPath: result.decisionPath,
+      gatePath: path.join(result.stagingPath, GATE_DIR),
+      plannedRuns: result.plannedRuns,
+      usedRuns: result.usedRuns,
+    },
+    ...(result.kind === "gate-accepted" ? {} : { isError: true }),
+  };
+}
+
+// The sentence of a concluded gate, from the vocabulary of src/messages.ts: three verdicts and no fourth, so a
+// verdict added to src/gate/types.ts stops compiling here.
+function verdictTextOf(skill: SkillRef, result: GateConcludedResult): string {
+  switch (result.kind) {
+    case "gate-accepted":
+      return gatePassedText(SURFACE, skill, result.plannedRuns, result.usedRuns);
+    case "gate-rejected":
+      return gateRejectedText(SURFACE, skill, result.reason, result.usedRuns);
+    case "gate-abstained":
+      return gateAbstainedText(SURFACE, skill, result.reason);
+    default:
+      return assertNever(result.kind);
+  }
+}
+
 // The session entry is the /tree view of the attempt, and a tool carries no warning channel of its own:
 // the sentence this function answers with is added to the text of the result instead of replacing it. A
 // run with no channel at all says nothing -- there is no channel to blame -- and a channel that throws
@@ -354,4 +523,9 @@ function noEvidenceDiagnosisText(skill: SkillRef): string {
 
 function failedText(skill: string, reason: string): string {
   return `${SKILL_IMPROVE_TOOL_NAME} could not finish for skill ${quote(skill)}: ${reason}`;
+}
+
+// The tool's own sentence: what the call lacked, and that it cost nothing at all.
+function missingStagingPathText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: gate needs the stagingPath of the candidate for skill ${quote(skill)}, and the call carried none; nothing was read and no run was spent.`;
 }

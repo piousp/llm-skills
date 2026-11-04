@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { Value } from "typebox/value";
 import type { AgentToolResult, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import type {
@@ -18,6 +19,8 @@ import {
   type ImprovementEntry,
   type ProposeFn,
 } from "../../src/improve-flow.ts";
+import type { GateDeps, GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
+import type { ReplayRunRequest } from "../../src/gate/types.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import {
@@ -44,6 +47,9 @@ import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from 
 const NOW = new Date("2026-11-02T14:03:22.481Z");
 const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
+// The agent directory the harness hands over: the gate request carries it, so a constant keeps the expected
+// object of the gate request stable.
+const AGENT_DIR = "/agent";
 // The base of the run: the bytes land under <base>/staging and every record names them relative to it.
 const BASE = "/pkg";
 const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
@@ -200,15 +206,22 @@ interface HarnessOptions {
   useRealProposer?: boolean;
   writeFailure?: Error;
   entryFailure?: Error;
+  // The gate the action runs, and the seams of the real one, which is what a test uses when it wants the
+  // candidate resolution of src/gate/flow.ts instead of a verdict.
+  gate?: (request: GateRequest) => Promise<GateFlowResult>;
+  gateDeps?: GateDeps;
+  useRealGate?: boolean;
 }
 
 interface Harness {
+  deps: SkillImproveToolDeps;
   entries: EntryCall[];
   attempts: AttemptLine[];
   attemptBases: string[];
   writes: StagingWriteInput[];
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
+  gateRequests: GateRequest[];
   run: (params: SkillImproveParams, signal?: AbortSignal) => Promise<AgentToolResult<ToolDetails>>;
 }
 
@@ -243,6 +256,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const writes: StagingWriteInput[] = [];
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
+  const gateRequests: GateRequest[] = [];
 
   const modelRegistry: ImproveFlowModelRegistry = {
     complete: async (model, context, request) => {
@@ -275,6 +289,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
   const deps: SkillImproveToolDeps = {
     now: () => NOW,
+    agentDir: AGENT_DIR,
     readConfig: () => options.config ?? { allow: [], deny: [] },
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
@@ -284,22 +299,44 @@ function createHarness(options: HarnessOptions = {}): Harness {
       attempts.push(line);
     },
     base: BASE,
+    // The gate of the run: the one a test names, or the real one when the test is about the candidate
+    // resolution. The default concludes nothing, so a test that does not say which verdict it wants gets the
+    // one that writes nothing.
+    gate:
+      options.useRealGate === true
+        ? undefined
+        : async (request: GateRequest): Promise<GateFlowResult> => {
+            gateRequests.push(request);
+            if (options.gate !== undefined) return await options.gate(request);
+            return {
+              kind: "gate-abstained",
+              reason: "insufficient-items",
+              stagingPath: request.stagingPath,
+              decisionPath: path.join(request.stagingPath, "decision.json"),
+              plannedRuns: 0,
+              usedRuns: 0,
+              overlays: null,
+            };
+          },
     appendEntry: (customType: string, data: ImprovementEntry) => {
       if (options.entryFailure !== undefined) throw options.entryFailure;
       entries.push({ customType, data });
     },
+    ...(options.gateDeps === undefined ? {} : { gateDeps: options.gateDeps }),
     ...(options.useRealProposer === true
       ? {}
       : { propose: options.propose ?? successfulProposer(proposals) }),
   };
 
   return {
+    deps,
     entries,
     attempts,
     attemptBases,
     writes,
     proposals,
     completed,
+    gateRequests,
     run: (params, signal) => runSkillImproveTool(params, ctx, deps, signal),
   };
 }
@@ -314,9 +351,20 @@ function textOf(result: AgentToolResult<ToolDetails>): string {
 
 // Rule 1 of P9: the schema refuses an action the tool does not run and a call with no skill, and
 // the focus stays optional.
-test("skillImproveParams: an action outside the two the tool runs is rejected", () => {
+test("skillImproveParams: an action outside the three the tool runs is rejected", () => {
   assert.equal(Value.Check(skillImproveParams, { action: "apply", skill: "pdf-tools" }), false);
   assert.equal(Value.Check(skillImproveParams, { action: "accept", skill: "pdf-tools" }), false);
+});
+
+// Amendment 3 of S10: gate identifies the candidate the call is about, and typebox has no conditional, so the
+// schema accepts a gate with no stagingPath and the action refuses it in code.
+test("skillImproveParams: gate is an action and its stagingPath is a string the schema keeps optional", () => {
+  assert.equal(Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools" }), true);
+  assert.equal(
+    Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE }),
+    true,
+  );
+  assert.equal(Value.Check(skillImproveParams, { action: "gate", skill: "pdf-tools", stagingPath: 7 }), false);
 });
 
 test("skillImproveParams: the skill name is required", () => {
@@ -324,7 +372,7 @@ test("skillImproveParams: the skill name is required", () => {
   assert.equal(Value.Check(skillImproveParams, { action: "propose", skill: 7 }), false);
 });
 
-test("skillImproveParams: the focus is optional and both actions are accepted", () => {
+test("skillImproveParams: the focus is optional and every action is accepted", () => {
   assert.equal(Value.Check(skillImproveParams, { action: "diagnose", skill: "pdf-tools" }), true);
   assert.equal(
     Value.Check(skillImproveParams, { action: "propose", skill: "pdf-tools", focus: "merged cells" }),
@@ -345,6 +393,9 @@ test("createSkillImproveTool: the definition carries the schema and the promise 
   assert.equal(tool.description.includes("never edits the skill"), true);
   assert.equal(tool.description.includes("never accepts a candidate"), true);
   assert.equal(tool.description.includes("/skill-improve"), true);
+  // M1: the third action is declared where the model reads it, together with the tokens it spends.
+  assert.equal(tool.description.includes("gate"), true);
+  assert.equal(tool.description.includes("spends tokens"), true);
 });
 
 // Rule 1: diagnose is read-only. No model, no staging, no index line, no session entry.
@@ -750,4 +801,206 @@ test("propose: a blank focus is no focus in the record and in the entry", async 
   assert.deepEqual(harness.writes[0].decision.trigger, { surface: "tool", focus: null });
   assert.equal(harness.entries.length, 1);
   assert.equal(harness.entries[0].data.focus, null);
+});
+
+// The gate over a staged candidate (M1): the verdict the gate answered, the budget it cost and the two paths of the
+// candidate travel in details, and nothing of the run touches the skill -- the tool never accepts (Q12). The gate is
+// a double here, because the verdicts and the guards of a candidate belong to src/gate/flow.ts; the real one is
+// driven by the two tests below.
+test("gate: a staged candidate is gated and the answer carries the verdict and the budget", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-rejected",
+      reason: "below-threshold",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 4,
+      usedRuns: 4,
+      overlays: null,
+    }),
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "gate-rejected",
+    verdict: "gate-rejected",
+    reason: "below-threshold",
+    base: BASE,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
+    gatePath: path.join(STAGING_RELATIVE, "gate"),
+    plannedRuns: 4,
+    usedRuns: 4,
+  });
+
+  const text = textOf(result);
+  assert.equal(text.includes("below-threshold"), true);
+  assert.equal(text.includes("the skill is untouched"), true);
+
+  // The request names the candidate of the call and the skill the inventory resolved, under the base and the
+  // agent directory of the run, in the directory of the session.
+  assert.equal(harness.gateRequests.length, 1);
+  assert.deepEqual(harness.gateRequests[0], {
+    base: BASE,
+    agentDir: AGENT_DIR,
+    cwd: CWD,
+    stagingPath: STAGING_RELATIVE,
+    skill: SKILL,
+  });
+
+  // Nothing of this action writes: no candidate, no index line, no entry.
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+test("gate: a gate that passes is not an error and says the candidate was not accepted", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 2,
+      usedRuns: 2,
+      overlays: null,
+    }),
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE });
+
+  // A verdict is an answer: the call succeeded and the candidate stays in staging.
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "gate-accepted",
+    verdict: "gate-accepted",
+    base: BASE,
+    stagingPath: STAGING_RELATIVE,
+    decisionPath: DECISION_RELATIVE,
+    gatePath: path.join(STAGING_RELATIVE, "gate"),
+    plannedRuns: 2,
+    usedRuns: 2,
+  });
+  assert.equal(Object.hasOwn(result.details, "reason"), false);
+
+  const text = textOf(result);
+  assert.equal(text.includes("passed after 2 runs of the 2 it planned"), true);
+  assert.equal(text.includes("the candidate is not accepted"), true);
+
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// Amendment 3 of S10: the one rule the schema cannot express. The refusal happens before the first read, so the
+// gate is never asked for anything and the details keep the keys of every other error of this action.
+test("gate: without a stagingPath the call is refused before the gate is reached", async () => {
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "error",
+    reason: "missing-staging-path",
+  });
+  assert.equal(textOf(result).includes("stagingPath"), true);
+  assert.equal(textOf(result).includes("no run was spent"), true);
+
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// A name the inventory does not know is refused before the gate is asked for anything, with the same sentence the
+// other two actions answer with.
+test("gate: a name the inventory does not know is refused before the gate is asked", async () => {
+  const harness = createHarness({ skills: [SKILL, STANDALONE_SKILL] });
+
+  const result = await harness.run({ action: "gate", skill: "ghost-skill", stagingPath: STAGING_RELATIVE });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "ghost-skill",
+    outcome: "unknown-skill",
+    reason: "unknown-skill",
+  });
+  assert.equal(textOf(result).includes('No skill named "ghost-skill"'), true);
+  assert.equal(textOf(result).includes("Eligible skills: pdf-tools."), true);
+
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.writes, []);
+});
+
+// The guard of src/gate/flow.ts, reached through the real gate and not a double: a candidate this package did
+// not stage is refused before a byte is read and before a run is spent.
+test("gate: a stagingPath outside staging/ is refused before a run is spent", async () => {
+  const runs: ReplayRunRequest[] = [];
+  const harness = createHarness({
+    useRealGate: true,
+    gateDeps: {
+      runReplay: async (request) => {
+        runs.push(request);
+        throw new Error("the gate must not start a run over a candidate outside staging/");
+      },
+    },
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: "/elsewhere/pdf-tools" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "gate",
+    skill: "pdf-tools",
+    outcome: "error",
+    reason: "outside-staging",
+  });
+  assert.equal(textOf(result).includes("/elsewhere/pdf-tools"), true);
+
+  assert.deepEqual(runs, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// Q12, from the side of the seams: no action of this tool can accept, because the dependencies it receives hold
+// no seam that writes a skill and the module exports no entry point that would.
+test("gate: no action of the tool accepts a candidate", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 2,
+      usedRuns: 2,
+      overlays: null,
+    }),
+  });
+
+  const result = await harness.run({ action: "gate", skill: "pdf-tools", stagingPath: STAGING_RELATIVE });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(Object.hasOwn(harness.deps, "accept"), false);
+
+  // The runtime exports of the module, in full: the schema, the factory, the body of execute and the name.
+  const toolModule = await import("../../src/tool-skill-improve.ts");
+  assert.deepEqual(Object.keys(toolModule).sort(), [
+    "SKILL_IMPROVE_TOOL_NAME",
+    "createSkillImproveTool",
+    "runSkillImproveTool",
+    "skillImproveParams",
+  ]);
+
+  // And a gate that passed left the skill alone: no write of any kind happened.
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
 });

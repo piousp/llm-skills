@@ -17,6 +17,13 @@ import { quote } from "./values.ts";
 // vocabulary decision.json uses for its trigger (src/types.ts), so a sentence can never claim to come
 // from the surface that did not report it. What a surface formats for itself -- the command's usage
 // line, the tool's diagnosis -- stays in its own module.
+//
+// M1 adds the gate to both surfaces and three answers with it: the gate passed, the gate rejected the
+// candidate, the gate abstained. They are here for the same reason as the six above -- the two surfaces
+// report the same verdict, and the tool has to add that it never accepts -- and they carry the budget of
+// the gate, because a verdict over twelve runs that does not say how many it cost is a verdict a reader
+// cannot audit. The acceptance is the command's alone (Q12), so acceptedText has no per-surface variant: a
+// branch the tool can never reach would be a sentence nobody prints.
 
 // The set of skills offered for improvement, one line per skill, with the description that says what
 // the skill does. Exported because the command's usage line offers the same list under a
@@ -51,6 +58,67 @@ export function noModelText(surface: DecisionSurface): string {
   return surface === "command"
     ? `no model is available in this session: /${COMMAND_NAME} needs one to write the lesson, and no candidate was generated.`
     : `no model is available in this session: ${SKILL_IMPROVE_TOOL_NAME} needs one to write the lesson, so no candidate was generated.`;
+}
+
+export function gatePassedText(
+  surface: DecisionSurface,
+  skill: SkillRef,
+  plannedRuns: number,
+  usedRuns: number,
+): string {
+  // Both numbers, because they are two different facts: what the preregistered design promised to spend and
+  // what the budget actually cost. The rule itself stays in decision.json, which is where a reader checks it.
+  const sentence = `the gate for skill ${quote(skill.name)} passed after ${runsText(usedRuns)} of the ${plannedRuns} it planned`;
+  // The tool never accepts, and it says so where the verdict is: acceptance edits a skill and belongs to the
+  // command alone (Q12).
+  return surface === "tool"
+    ? `${sentence}; the skill is untouched and the candidate is not accepted, which belongs to the /${COMMAND_NAME} command.`
+    : `${sentence}.`;
+}
+
+export function gateRejectedText(
+  surface: DecisionSurface,
+  skill: SkillRef,
+  reason: string | null,
+  usedRuns: number,
+): string {
+  const sentence = `the gate rejected the candidate for skill ${quote(skill.name)} after ${runsText(usedRuns)}: ${reasonText(reason)}`;
+  // A rejection is not a failure of the run: the candidate lost to the skill as it stands, and the skill is
+  // the one thing the answer has to report about.
+  return surface === "tool"
+    ? `${sentence}; the skill is untouched and the candidate stays in staging.`
+    : `${sentence}; the skill was not edited.`;
+}
+
+export function gateAbstainedText(
+  surface: DecisionSurface,
+  skill: SkillRef,
+  reason: string | null,
+): string {
+  const sentence = `the gate abstained for skill ${quote(skill.name)}: ${reasonText(reason)}`;
+  // An abstention spent what it spent and concluded nothing, so there is no count in the sentence: the reason
+  // is the whole answer, and the budget of the attempt is in decision.json.
+  return surface === "tool"
+    ? `${sentence}; the skill is untouched and the candidate stays in staging.`
+    : `${sentence}; the skill was not edited.`;
+}
+
+// The one sentence of the acceptance, and the only builder here without a per-surface variant: the tool never
+// accepts (Q12), so a variant for it would be a branch nothing reaches. Both paths are absolute -- the lesson
+// inside the skill and the record inside its history -- because they are what a human opens, and M2 is not
+// promised: the session is not reloaded by this version.
+export function acceptedText(skill: SkillRef, slug: string, lessonPath: string, historyPath: string): string {
+  return `accepted ${lessonReferencePath(slug)} into skill ${quote(skill.name)} at ${quote(lessonPath)}, and its SKILL.md now references it; the record of the acceptance is ${quote(historyPath)}.`;
+}
+
+// A concluded gate always has a reason, except on an acceptance, where there was nothing to explain. The
+// absence is stated instead of rendered as an empty colon.
+function reasonText(reason: string | null): string {
+  return reason ?? "no reason was recorded";
+}
+
+function runsText(runs: number): string {
+  return runs === 1 ? "1 run" : `${runs} runs`;
 }
 
 export function proposedText(

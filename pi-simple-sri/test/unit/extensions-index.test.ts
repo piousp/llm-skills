@@ -20,6 +20,7 @@ import {
   type NotifyType,
 } from "../../src/command-skill-improve.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
+import type { GateRequest } from "../../src/gate/flow.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR } from "../../src/names.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
 import {
@@ -433,8 +434,12 @@ test("the factory registers the command and the tool, exactly once each", () => 
 
   const command = harness.command();
   assert.equal(typeof command.handler, "function");
+  // M1: the description no longer promises that nothing is ever edited -- this command is the one surface that
+  // accepts -- and it says where the acceptance happens and what the gate costs.
   assert.equal(command.description?.includes("/skill-improve <skill> [focus]"), true);
-  assert.equal(command.description?.includes("never accepts a candidate"), true);
+  assert.equal(command.description?.includes("only when the gate passes"), true);
+  assert.equal(command.description?.includes("spends tokens"), true);
+  assert.equal(command.description?.includes("never accepts"), false);
 
   // The registered tool is the one src/tool-skill-improve.ts builds: the same schema object, so the
   // tool the model calls and the tool the P9 tests exercised cannot drift apart.
@@ -570,6 +575,43 @@ test("the context reaches the loop untouched: a run with UI reads its ui when it
 
   assert.equal(harness.notified.length, 1);
   assert.deepEqual(harness.uiReads, ["ui"]);
+});
+
+// M1: the wiring passes the gate's seam to both surfaces, so a candidate the command staged is gated under the base
+// the loop derived and not under one of the factory's own. The gate is a double here: the verdicts belong to its own
+// suite, and this test is about the chain the wiring connects.
+test("the command handler gates the candidate it staged, under the base of the run", async () => {
+  const harness = makeHarness();
+  const requests: GateRequest[] = [];
+  registerSurfaces(harness.pi, {
+    ...harness.seams,
+    gate: async (request) => {
+      requests.push(request);
+      return {
+        kind: "gate-abstained",
+        reason: "insufficient-items",
+        stagingPath: request.stagingPath,
+        decisionPath: DECISION_RELATIVE,
+        plannedRuns: 0,
+        usedRuns: 0,
+        overlays: null,
+      };
+    },
+  });
+
+  await harness.command().handler("pdf-tools", harness.ctx);
+
+  assert.equal(harness.log.writes.length, 1);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].stagingPath, STAGING_RELATIVE);
+  assert.equal(requests[0].base, BASE);
+  assert.equal(requests[0].cwd, CWD);
+  assert.equal(requests[0].skill.name, SKILL.name);
+
+  // And the run ended reporting the abstention instead of a candidate the wiring accepted on its own.
+  const report = harness.notified.at(-1);
+  assert.equal(report?.type, "warning");
+  assert.equal(report?.message.includes("abstained"), true);
 });
 
 // The wiring owns no path: the base of a run follows the agent directory, so it is asserted through the

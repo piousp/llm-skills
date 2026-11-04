@@ -1,5 +1,8 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   Api,
   AssistantMessage,
@@ -21,10 +24,15 @@ import {
   type SkillImproveDeps,
   type SkillImproveModelRegistry,
 } from "../../src/command-skill-improve.ts";
+import { acceptCandidate, type AcceptDeps, type AcceptRequest } from "../../src/gate/acceptance.ts";
+import type { GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
-import type { AttemptLine, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
+import { countReferenceLines } from "../../src/skill-reference.ts";
+import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
+import { stateDir } from "../../src/write-base.ts";
 import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from "../../src/writer.ts";
 
 // The command is exercised end to end with doubles: one fake context, one fake model registry and
@@ -35,11 +43,13 @@ import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from 
 const NOW = new Date("2026-11-02T14:03:22.481Z");
 const NOW_ISO = "2026-11-02T14:03:22.481Z";
 const CWD = "/work/reports";
+// The agent directory the harness hands over: the gate request carries it, and it is where a run would read its
+// settings from if the seams did not answer for it.
+const AGENT_DIR = "/agent";
 // The base of the run: the package root before the write-base slice, and now the base a test injects.
 // The bytes land under <base>/staging; the records and the answers name them relative to the base.
 const BASE = "/pkg";
 const STAGING_PATH = "/pkg/staging/20261102T140322481Z/pdf-tools";
-const DECISION_PATH = `${STAGING_PATH}/decision.json`;
 const STAGING_RELATIVE = "staging/20261102T140322481Z/pdf-tools";
 const DECISION_RELATIVE = `${STAGING_RELATIVE}/decision.json`;
 const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
@@ -221,6 +231,14 @@ interface HarnessOptions {
   useRealProposer?: boolean;
   writeFailure?: Error;
   reply?: string;
+  // The base of the run, when a test needs the candidate and the skill to exist on disk. The default is a path
+  // that names nothing, which is what a run driving the seams of staging needs.
+  base?: string;
+  // The gate and the acceptance the chain runs. The gate defaults to an abstention that writes nothing; the
+  // acceptance defaults to the real one, so a test that wants it records what it wrote instead of a double.
+  gate?: (request: GateRequest) => Promise<GateFlowResult>;
+  accept?: typeof acceptCandidate;
+  acceptDeps?: AcceptDeps;
 }
 
 interface Harness {
@@ -234,6 +252,8 @@ interface Harness {
   writes: StagingWriteInput[];
   proposals: { input: Parameters<ProposeFn>[0] }[];
   completed: CompletedCall[];
+  gateRequests: GateRequest[];
+  acceptRequests: AcceptRequest[];
   run: (args: string) => Promise<void>;
 }
 
@@ -262,6 +282,7 @@ function successfulProposer(proposals: Harness["proposals"]): ProposeFn {
 }
 
 function createHarness(options: HarnessOptions = {}): Harness {
+  const base = options.base ?? BASE;
   const notified: NotifyCall[] = [];
   const sent: SentMessage[] = [];
   const entries: EntryCall[] = [];
@@ -270,6 +291,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const writes: StagingWriteInput[] = [];
   const proposals: Harness["proposals"] = [];
   const completed: CompletedCall[] = [];
+  const gateRequests: GateRequest[] = [];
+  const acceptRequests: AcceptRequest[] = [];
 
   const modelRegistry: SkillImproveModelRegistry = {
     complete: async (model, context, request) => {
@@ -295,16 +318,39 @@ function createHarness(options: HarnessOptions = {}): Harness {
     if (options.writeFailure !== undefined) throw options.writeFailure;
     writes.push(input);
     return {
-      stagingPath: STAGING_PATH,
-      lessonPath: `${STAGING_PATH}/lessons/${LESSON_SLUG}.md`,
-      decisionPath: DECISION_PATH,
+      stagingPath: path.join(base, STAGING_RELATIVE),
+      lessonPath: path.join(base, STAGING_RELATIVE, LESSONS_DIR, `${LESSON_SLUG}.md`),
+      decisionPath: path.join(base, STAGING_RELATIVE, DECISION_FILE),
       contentHash: CONTENT_HASH,
       bodyHash: BODY_HASH,
     };
   };
 
+  // The two steps M1 chains after the loop, recorded before they are delegated. The gate defaults to an
+  // abstention -- the verdict of a gate that spends nothing -- so no run of this suite ever starts a replay; the
+  // acceptance defaults to the real one, so a test that reaches it gets the bytes on disk as its proof.
+  const gate = async (request: GateRequest): Promise<GateFlowResult> => {
+    gateRequests.push(request);
+    if (options.gate !== undefined) return await options.gate(request);
+    return {
+      kind: "gate-abstained",
+      reason: "insufficient-items",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+    };
+  };
+
+  const accept: typeof acceptCandidate = async (request, acceptDeps) => {
+    acceptRequests.push(request);
+    return await (options.accept ?? acceptCandidate)(request, acceptDeps);
+  };
+
   const deps: SkillImproveDeps = {
     now: () => NOW,
+    agentDir: AGENT_DIR,
     readConfig: () => options.config ?? { allow: [], deny: [] },
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
@@ -313,7 +359,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
       attemptBases.push(base);
       attempts.push(line);
     },
-    base: BASE,
+    base,
+    gate,
+    accept,
+    ...(options.acceptDeps === undefined ? {} : { acceptDeps: options.acceptDeps }),
     // The message channel is a seam of the dependencies and not a member of the context: pi's command
     // context carries no sendMessage, so the wiring connects it here and a run without it degrades to
     // stderr.
@@ -346,6 +395,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
     writes,
     proposals,
     completed,
+    gateRequests,
+    acceptRequests,
     run: (args: string) => runSkillImprove(args, ctx, deps),
   };
 }
@@ -627,10 +678,17 @@ test("runSkillImprove: the happy path stages the lesson, the record and the atte
     },
   ]);
 
-  assert.equal(harness.notified.length, 1);
+  // Three reports: the candidate that was staged, the gate that is about to spend tokens, and the gate that
+  // concluded nothing. The gate is a seam here, so its verdict is the abstention of a run that spends nothing.
+  assert.equal(harness.notified.length, 3);
   assert.equal(harness.notified[0].type, "info");
   assert.equal(harness.notified[0].message.includes(STAGING_PATH), true);
   assert.equal(harness.notified[0].message.includes(LESSON_SLUG), true);
+  assert.equal(harness.notified[1].type, "info");
+  assert.equal(harness.notified[1].message.includes("spends tokens"), true);
+  assert.equal(harness.notified[2].type, "warning");
+  assert.equal(harness.notified[2].message.includes("abstained"), true);
+  assert.equal(harness.notified[2].message.includes("the skill was not edited"), true);
 });
 
 // Rule 4: the single generation goes through the session model, with the token budget of the
@@ -715,7 +773,7 @@ test("runSkillImprove: a run without an entry channel reports the entry was not 
   assert.equal(harness.attempts.length, 1);
   assert.deepEqual(harness.entries, []);
 
-  assert.equal(harness.notified.length, 2);
+  assert.equal(harness.notified.length, 4);
   // The degradation is reported where it happens, before the result line.
   assert.equal(harness.notified[0].type, "warning");
   assert.equal(harness.notified[0].message.includes("not recorded"), true);
@@ -738,7 +796,7 @@ test("runSkillImprove: an entry channel that throws does not degrade a staged ca
   assert.equal(harness.attempts[0].event, "proposed");
   assert.deepEqual(harness.entries, []);
 
-  assert.equal(harness.notified.length, 2);
+  assert.equal(harness.notified.length, 4);
   assert.equal(harness.notified[0].type, "warning");
   assert.equal(harness.notified[0].message.includes("not recorded"), true);
   assert.equal(harness.notified[0].message.includes("EACCES"), true);
@@ -789,7 +847,7 @@ test("runSkillImprove: an allow that names the frontmatter name admits the skill
   await harness.run("system-config");
 
   assert.equal(harness.writes.length, 1);
-  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified.length, 3);
   assert.equal(harness.notified[0].type, "info");
   assert.equal(harness.notified[0].message.includes(STAGING_PATH), true);
 });
@@ -834,4 +892,336 @@ test("runSkillImprove: a name nobody knows still gets the not-installed message"
 
   assert.equal(harness.notified[0].type, "warning");
   assert.match(harness.notified[0].message, /No skill named "ghost-skill"/);
+});
+
+// --- the chain of M1: propose, gate, accept ---
+
+// The candidate of the accepting test: one fixed draft, so the lesson text and its hash are known before the run and
+// the fixture can declare them in the record the gate would have written.
+const FIXED_DRAFT: LessonDraft = {
+  slug: LESSON_SLUG,
+  title: LESSON_TITLE,
+  date: "2026-11-02",
+  status: "proposed",
+  sourceEvidence: ["ev-3f9a1c02"],
+  gate: "pending",
+  body: LESSON_BODY,
+};
+
+const FAILURE_SIGNATURE = `sha256:${"c".repeat(64)}`;
+// 2026-11-02T14:03:22.481Z in the spelling src/writer.ts gives a history snapshot: UTC, no separators.
+const TIMESTAMP = "20261102T140322481Z";
+
+function fixedLessonText(): string {
+  const lesson = serializeLesson(FIXED_DRAFT);
+  if (!lesson.ok) assert.fail(`the lesson of this test must serialize: ${lesson.error}`);
+  return lesson.value;
+}
+
+// The skill of the accepting test, written the way a user writes one: frontmatter and a body, with no `## Lessons`
+// section, so the acceptance creates it.
+function skillFile(name: string): string {
+  return [
+    "---",
+    `name: ${name}`,
+    "description: Extract tables from PDFs",
+    "---",
+    "",
+    `# ${name}`,
+    "",
+    "Use the scripts in this directory.",
+    "",
+  ].join("\n");
+}
+
+// The record the gate leaves in staging when it passes: schema @1, the candidate it measured and the verdict it wrote.
+// The gate block is a concluded one, because that is the only status an acceptance looks at.
+function gateAcceptedRecord(input: {
+  skillName: string;
+  skillDir: string;
+  contentHash: string;
+  skillContentHash: string;
+}): DecisionRecord {
+  return {
+    schema: "pi-simple-sri/decision@1",
+    createdAt: NOW_ISO,
+    trigger: { surface: "command", focus: null },
+    skill: {
+      name: input.skillName,
+      dir: input.skillDir,
+      realDir: input.skillDir,
+      wasSymlink: false,
+      eligible: true,
+    },
+    eligibility: { allow: [], deny: [] },
+    evidence: [
+      {
+        id: "ev-3f9a1c02",
+        kind: "tool_error",
+        toolName: "bash",
+        timestamp: BASE_MS + 2000,
+        source: "transcript",
+        excerpt: "pdftotext: cannot open report.pdf",
+      },
+    ],
+    diagnosis: {
+      summary: "Table extraction loses merged cells",
+      failureSignature: FAILURE_SIGNATURE,
+      replayItems: [
+        {
+          prompt: "extract the merged-cell table from report.pdf",
+          cwd: CWD,
+          expectation: { class: "tool_error", version: 1, tool: "bash" },
+        },
+      ],
+    },
+    candidate: {
+      kind: "new-lesson",
+      slug: LESSON_SLUG,
+      title: LESSON_TITLE,
+      targetLesson: null,
+      lessonPath: `${LESSONS_DIR}/${LESSON_SLUG}.md`,
+      contentHash: input.contentHash,
+      bodyHash: sha256Digest(LESSON_BODY),
+    },
+    gate: {
+      basis: "replay",
+      status: "gate-accepted",
+      budget: { plannedRuns: 2, usedRuns: 2, interruptedAt: null },
+      tokens: {
+        proposal: { input: 412, output: 137 },
+        incumbent: { input: 210, output: 64 },
+        candidate: { input: 205, output: 71 },
+        total: { input: 827, output: 272 },
+      },
+      preregistration: {
+        recordedAt: NOW_ISO,
+        threshold: {
+          rule: "unanimous-and-strictly-better",
+          candidatePasses: 2,
+          incumbentPassesMax: 1,
+          version: 1,
+        },
+        design: { reps: 2, items: 1, plannedRuns: 2, arms: ["incumbent", "candidate"] },
+        mde: { basis: "1 item, 2 reps per arm", runsPerArm: 2, resolution: 0.5, requiredDifference: 1 },
+      },
+      replay: {
+        completedAt: NOW_ISO,
+        verdict: "gate-accepted",
+        reason: null,
+        items: [],
+        arms: {
+          incumbent: { passes: 1, runs: 2, tokens: { input: 210, output: 64 } },
+          candidate: { passes: 2, runs: 2, tokens: { input: 205, output: 71 } },
+        },
+        interval: {
+          method: "wilson",
+          alpha: 0.05,
+          incumbent: { low: 0.09, high: 0.91 },
+          candidate: { low: 0.34, high: 1 },
+          difference: { low: -0.5, high: 1 },
+        },
+        regressions: 0,
+        excluded: [],
+        overlays: {
+          incumbent: `${STAGING_RELATIVE}/arms/incumbent/${input.skillName}`,
+          candidate: `${STAGING_RELATIVE}/arms/candidate/${input.skillName}`,
+          skillContentHash: input.skillContentHash,
+          manifestHash: sha256Digest("the manifest of the two copies"),
+        },
+      },
+    },
+    outcome: { status: "gate-accepted", reason: null, decidedAt: NOW_ISO },
+  };
+}
+
+// The outcome of a record read back, narrowed by hand: the test reads JSON, so the field is unknown until something
+// says what it is.
+function outcomeOf(value: unknown): DecisionRecord["outcome"] {
+  if (typeof value !== "object" || value === null) assert.fail("the history record is not a JSON object");
+  const outcome: unknown = (value as Record<string, unknown>).outcome;
+  if (typeof outcome !== "object" || outcome === null) assert.fail("the history record carries no outcome");
+  return outcome as DecisionRecord["outcome"];
+}
+
+// The accepting path (M1), end to end: the loop stages a candidate, the gate answers that it passed, and the command
+// writes it into the skill through the acceptance it owns. The gate is a seam here -- its own suite proves the verdicts
+// -- and the acceptance is the real one, so the bytes in the skill and in its history are the proof of the write.
+test("runSkillImprove: a gate that passes writes the candidate into the skill and reports the history", async (t: TestContext) => {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-gate-"));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const skillText = skillFile(SKILL.name);
+  fs.mkdirSync(path.join(skillDir, LESSONS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(skillDir, SKILL_FILE), skillText, "utf8");
+
+  // The candidate the gate passes is the one the loop staged: the same lesson text, so the hash the record declares is
+  // the hash of the bytes the acceptance writes into the skill.
+  const lessonText = fixedLessonText();
+  const stagingDirPath = path.join(base, STAGING_RELATIVE);
+  fs.mkdirSync(path.join(stagingDirPath, LESSONS_DIR), { recursive: true });
+  fs.writeFileSync(path.join(stagingDirPath, LESSONS_DIR, `${LESSON_SLUG}.md`), lessonText, "utf8");
+  fs.writeFileSync(
+    path.join(stagingDirPath, DECISION_FILE),
+    JSON.stringify(
+      gateAcceptedRecord({
+        skillName: SKILL.name,
+        skillDir,
+        contentHash: sha256Digest(lessonText),
+        skillContentHash: sha256Digest(skillText),
+      }),
+    ),
+    "utf8",
+  );
+
+  const harness = createHarness({
+    base,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    propose: async () => ({
+      ok: true,
+      value: { draft: FIXED_DRAFT, lessonText, usage: { input: 412, output: 137 } },
+    }),
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 2,
+      usedRuns: 2,
+      overlays: null,
+    }),
+    acceptDeps: { now: () => NOW },
+  });
+
+  await harness.run("pdf-tools");
+
+  // The gate saw the candidate the loop staged, under the base and the agent directory of the run.
+  assert.equal(harness.gateRequests.length, 1);
+  assert.equal(harness.gateRequests[0].stagingPath, STAGING_RELATIVE);
+  assert.equal(harness.gateRequests[0].base, base);
+  assert.equal(harness.gateRequests[0].agentDir, AGENT_DIR);
+
+  // The lesson is in the skill, and SKILL.md references it exactly once.
+  const lessonPath = path.join(skillDir, LESSONS_DIR, `${LESSON_SLUG}.md`);
+  assert.equal(fs.readFileSync(lessonPath, "utf8"), lessonText);
+  assert.equal(countReferenceLines(fs.readFileSync(path.join(skillDir, SKILL_FILE), "utf8"), LESSON_SLUG), 1);
+
+  // The record of the acceptance is inside the history of the skill, named after the clock of the seam.
+  const historyPath = path.join(skillDir, HISTORY_DIR, TIMESTAMP, DECISION_FILE);
+  assert.deepEqual(outcomeOf(JSON.parse(fs.readFileSync(historyPath, "utf8"))), {
+    status: "accepted",
+    reason: null,
+    decidedAt: NOW_ISO,
+  });
+
+  // The request the acceptance answered, built by the command from the record the gate wrote.
+  assert.equal(harness.acceptRequests.length, 1);
+  const [request] = harness.acceptRequests;
+  assert.equal(request.skill.realDir, skillDir);
+  assert.equal(request.candidate.slug, LESSON_SLUG);
+  assert.equal(request.candidate.contentHash, sha256Digest(lessonText));
+  assert.equal(request.expectedSkillContentHash, sha256Digest(skillText));
+  assert.equal(request.failureSignature, FAILURE_SIGNATURE);
+
+  // The answer names both absolute paths, and the index gained the one line the acceptance appends.
+  const accepted = harness.notified.at(-1);
+  assert.equal(accepted?.type, "info");
+  assert.equal(accepted?.message.includes(lessonPath), true);
+  assert.equal(accepted?.message.includes(historyPath), true);
+
+  const lines = fs
+    .readFileSync(path.join(stateDir(base), ATTEMPTS_FILE), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].includes('"event":"accepted"'), true);
+  assert.equal(lines[0].includes(historyPath), true);
+});
+
+// A candidate the gate rejects is reported with its reason and the skill is not touched: the acceptance is never
+// reached, which the seam below fails the test for.
+test("runSkillImprove: a gate that rejects the candidate reports the reason and leaves the skill alone", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-rejected",
+      reason: "below-threshold",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 4,
+      usedRuns: 4,
+      overlays: null,
+    }),
+    accept: async () => assert.fail("a rejected candidate must not reach the acceptance"),
+  });
+
+  await harness.run("pdf-tools");
+
+  assert.equal(harness.gateRequests.length, 1);
+  assert.deepEqual(harness.acceptRequests, []);
+
+  const rejection = harness.notified.at(-1);
+  assert.equal(rejection?.type, "warning");
+  assert.equal(rejection?.message.includes("below-threshold"), true);
+  assert.equal(rejection?.message.includes("after 4 runs"), true);
+  assert.equal(rejection?.message.includes("the skill was not edited"), true);
+});
+
+// The same with an abstention: a verdict that concluded nothing is not a write either.
+test("runSkillImprove: a gate that abstains reports the reason and leaves the skill alone", async () => {
+  const harness = createHarness({
+    gate: async () => ({
+      kind: "gate-abstained",
+      reason: "no-model",
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 3,
+      usedRuns: 0,
+      overlays: null,
+    }),
+    accept: async () => assert.fail("an abstention must not reach the acceptance"),
+  });
+
+  await harness.run("pdf-tools");
+
+  assert.deepEqual(harness.acceptRequests, []);
+  const abstention = harness.notified.at(-1);
+  assert.equal(abstention?.type, "warning");
+  assert.equal(abstention?.message.includes("abstained"), true);
+  assert.equal(abstention?.message.includes("no-model"), true);
+  assert.equal(abstention?.message.includes("the skill was not edited"), true);
+});
+
+// A candidate the gate cannot even read is a refusal of the run and not a verdict: it is reported as the error it is,
+// and nothing is accepted.
+test("runSkillImprove: a candidate the gate refuses is reported as an error", async () => {
+  const detail = 'cannot read "/pkg/staging/candidate/decision.json": it is not JSON';
+  const harness = createHarness({
+    gate: async () => ({ kind: "refused", rejection: { reason: "unreadable-record", detail } }),
+    accept: async () => assert.fail("a refused candidate must not reach the acceptance"),
+  });
+
+  await harness.run("pdf-tools");
+
+  assert.deepEqual(harness.acceptRequests, []);
+  const report = harness.notified.at(-1);
+  assert.equal(report?.type, "error");
+  assert.equal(report?.message.includes("the gate refused the candidate"), true);
+  assert.equal(report?.message.includes(detail), true);
+});
+
+// Steps 1 to 3 of the run are the whole chain's condition: a run with no evidence and a skill the settings exclude
+// stage nothing, so there is no candidate to gate and no skill to write.
+test("runSkillImprove: a run that stages nothing never reaches the gate", async () => {
+  const withoutEvidence = createHarness({ branch: [] });
+  await withoutEvidence.run("pdf-tools");
+  assert.deepEqual(withoutEvidence.gateRequests, []);
+  assert.deepEqual(withoutEvidence.acceptRequests, []);
+
+  const denied = createHarness({ config: { allow: [], deny: ["pdf-tools"] } });
+  await denied.run("pdf-tools");
+  assert.deepEqual(denied.gateRequests, []);
+  assert.deepEqual(denied.acceptRequests, []);
 });
