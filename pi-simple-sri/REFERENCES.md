@@ -54,6 +54,7 @@ suffixes are the ones the report pinned.
 | Evidence is derived from the session branch and deduplicated by id | 10.48550/arXiv.2609.24663 |
 | The proposal never becomes an accepted change on its own | 10.48550/arXiv.2610.24630 |
 | Acceptance needs a paired replay from the same starting state, two repetitions, a preregistered threshold and abstention | 10.48550/arXiv.2609.36043, 10.48550/arXiv.2610.07979, 10.48550/arXiv.2610.25114 |
+| A gate over material whose truth is not mechanical adds a judge with a preregistered rubric, and keeps the mechanical rule as a necessary condition | 10.48550/arXiv.2610.11464, 10.48550/arXiv.2610.25114 |
 | The acceptance signal is not the signal that guided the proposal | 10.48550/arXiv.2609.33867 |
 | Tool output, including error excerpts, travels delimited as data | 10.48550/arXiv.2610.39122 |
 | Successful tool calls are not treated as proof that a lesson is good | 10.48550/arXiv.2610.07645 |

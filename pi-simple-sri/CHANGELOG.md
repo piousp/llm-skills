@@ -78,6 +78,76 @@ lesson accepted mid-session is on disk and active from the next session; M2 is
 the reload.
 - Needs pi 1.4 or newer, with the `pi` binary on `PATH` for the gate.
 
+### Milestone M1c: measuring without a failure
+
+Measuring an improvement that has no failure behind it. A case bank -- a JSON
+file the user writes -- declares the cases a skill has to answer and what a good
+answer contains, and the gate measures the candidate against that file instead
+of against a turn of the session. `version` in `package.json` is untouched, and
+this section is folded into a release when the milestone is published.
+
+#### Added
+
+- The fourth evidence class, `quality_defect`: evidence read from an artifact
+  instead of from a turn of the session, carrying the `origin` of the finding
+  (how it was found, the resolved path, the digest of its bytes) and the entry
+  that does not hold.
+- The case bank, format `pi-simple-sri/case-bank@1`, published as
+  `schemas/case-bank.schema.json`: one format read under two profiles chosen by
+  the invocation -- `baseline` for a directional improvement, which may declare
+  the rubric the judge applies to every case, and `origin` for a defect, which
+  requires the artifact and forbids a rubric. The file is read once, its bytes
+  are hashed, and it is copied next to the candidate before the first run, so
+  the cases and the rubric travel with the attempt.
+- The directional gate: the design, the rule, the floor of the design and the
+  materials of the bank are preregistered in `decision.json` before the first
+  run, and the budget is the paired one -- `2 x 2 x min(cases, 3)` runs, eight
+  with two cases and twelve with three or more.
+- The judge as the second condition of a gate whose bank declared a rubric: one
+  call per case on the first repetition of the candidate arm, the preregistered
+  rubric as its only criterion, the answer delimited as data, and the verdict
+  read off the first line of the reply. A `FAIL` rejects (`judge-failed`) and a
+  reply nobody can read abstains (`judge-unavailable`). The mechanical rule stays
+  a necessary condition, so the judge never decides on its own.
+- `no-baseline`, the event of a gate that found no bank to measure against. It
+  was the one reserved name of the index and is now written: nothing is spent,
+  the candidate stays in staging and the record keeps `not-run`.
+- `--bank=<path>`, `--defect` and `--staged=<stagingPath>` on `/skill-improve`,
+  and `bankPath` and `defect` on the `propose` and `gate` actions of the tool,
+  which still never accepts. Each flag is one token and `--` ends them, so a
+  focus with spaces still arrives whole.
+- A notice at the start of a session naming the ways to give feedback and the
+  cost of the gate, silent in a session pi reloaded. The description of the tool
+  and the usage line of the command name the same material, so a reader who
+  misses one channel meets the other.
+- `gate.preregistration.skillContentHash`, neutral to the basis: both gates write
+  the digest of the `SKILL.md` they measured and the acceptance reads it there,
+  because the result of one basis is `null` in the block of the other.
+
+#### Changed
+
+- `decision@1` grew branches and enums additively: `gate.basis` widened from a
+  `const` to an enum, `gate.caseBank` and `gate.preregistration.caseBank` added,
+  `threshold.judge` and `tokens.judge` added, `checkFailures` on a run of a bank,
+  and the fourth evidence class with its `origin`.
+- `diagnosis.replayItems.minItems` relaxed from 1 to 0. No record written before
+  stops validating, and the guard that refuses an empty diagnosis of the
+  transcript became a property of each basis instead of a keyword of the schema.
+
+#### Notes
+
+- A bank is a file the user owns and its checks run on the JavaScript
+  regular-expression engine: a pattern with catastrophic backtracking can hang
+  the evaluation of a run. The text under judgement is cut at 16 000 code points
+  and a pattern at 500 characters, and neither makes that engine safe.
+- Without a readable bank there is no directional acceptance. Nothing is spent,
+  the candidate stays in staging and the record keeps `not-run`, so the retry is
+  the same candidate through `--staged`.
+- The gate of a bank needs the model of the session twice, once to replay the
+  cases and once to judge the answers; a session with no model is refused
+  before the bank is read and no run is spent.
+- The reload of the session after an acceptance is still M2.
+
 ## [0.0.1] - 2026-11-03
 
 First release. It stages lesson candidates and records every decision; it does
