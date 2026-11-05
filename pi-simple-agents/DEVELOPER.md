@@ -2062,7 +2062,8 @@ without a root `package.json`.
 
 The npm side is a trust relationship configured per package (npmjs.com → the package → Settings →
 Trusted publishing → GitHub Actions): owner `piousp`, repository `llm-skills`, workflow filename
-`publish.yml`, environment left empty, and both direct publishing and dist-tag management allowed.
+`publish.yml`, environment left empty, and the allowed actions `npm stage publish` and
+`npm dist-tag` (a direct `npm publish` is not allowed).
 Three consequences drive the process:
 
 - The connection is immutable. Its required fields (owner, repository, workflow filename) cannot be
@@ -2070,8 +2071,9 @@ Three consequences drive the process:
   them means deleting the connection and creating a new one.
 - A new connection expires if it does not complete a successful publish within two days, so create
   it only when a publish is ready to run.
-- `npm publish` is allowed directly, so there is no staged-publish approval step. The human gate is
-  the manual `workflow_dispatch` itself.
+- The connection allows `npm stage publish` and `npm dist-tag`, not a direct publish. The workflow
+  therefore stages the tarball and a human approves it afterwards on npmjs.com, which is where the
+  2FA proof-of-presence happens; the dispatch alone publishes nothing.
 
 Publish procedure, in order:
 
@@ -2080,7 +2082,12 @@ Publish procedure, in order:
 2. Commit and push to `main`. The workflow file and the package it publishes must be on `main`
    before the dispatch, because the provenance attestation points at that commit.
 3. Run the `publish` workflow by hand on `main`. It installs with `npm ci`, runs `npm run typecheck`
-   and `npm test`, then `npm publish` — a failing test or type error stops it before the publish.
+   and `npm test`, then `npm stage publish` — a failing test or type error stops it before anything
+   is staged.
+4. Approve the staged version on npmjs.com (`npm stage list` prints the stage id). Nothing is
+   installable until then, and `latest` only moves on approval. Re-dispatching the same version
+   before approving fails, because that version is already staged; `npm stage reject <stage-id>`
+   clears it.
 
 Requirements npm enforces on the run: npm CLI 11.5.1 or later (Node 24 ships a compatible one),
 `id-token: write`, a GitHub-hosted runner, a public repository and a public package, and a

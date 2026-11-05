@@ -7,6 +7,10 @@
 # filename, so renaming this file breaks publishing until the connection is
 # deleted and recreated.
 #
+# The connection allows `npm stage publish` and `npm dist-tag` but not a direct
+# publish, so this job only stages: the version goes live when a human approves
+# it on npmjs.com, which is where the 2FA proof-of-presence happens.
+#
 # Triggered by hand only: the version published is whatever package.json says,
 # so the release is a version bump committed to main, a push, then a dispatch.
 name: publish
@@ -29,9 +33,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm publish
+      - run: npm stage publish
