@@ -735,6 +735,12 @@ test("the turn_end handler reports one notice for a rewritten draft and answers 
   // have rewritten the draft by choice.
   assert.equal(expected.includes(subject), true);
   assert.equal(expected.includes("suspicion"), true);
+  // S12: the notice prints the id a confirmation names and the command it is typed with, because the id is the one part of a
+  // suspicion the user can type and the file it lives in is not where the user should have to look for it.
+  const id = rewrittenDraftSuspicion(2, subject).id;
+  assert.equal(expected.includes(id), true);
+  assert.equal(expected.includes(`--signal=${id}`), true);
+  assert.equal(expected.includes(`/${COMMAND_NAME}`), true);
 
   // The turn is pi's: no entry, no message, no candidate and no gate.
   assert.deepEqual(harness.entries, []);

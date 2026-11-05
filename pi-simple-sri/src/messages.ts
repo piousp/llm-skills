@@ -201,13 +201,13 @@ export function noModelGateText(surface: DecisionSurface, skill: SkillRef): stri
   return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 
-// The line the extension reports when the collector of signals raises a suspicion (M3, S5). It names the fact, the
-// subject, and the one thing that turns a suspicion into a measurable attempt: the confirmation of the user. It promises
-// nothing about the skill, because a suspicion is not a defect (Q25) -- the user may have rewritten the draft by choice,
-// or asked twice on purpose -- and nothing was read, spent or edited behind it.
+// The line the extension reports when the collector of signals raises a suspicion (M3, S5). It names the fact, the subject, the
+// id the confirmation of the user names and the form that confirmation takes. It promises nothing about the skill, because a
+// suspicion is not a defect (Q25) -- the user may have rewritten the draft by choice, or asked twice on purpose -- and names
+// no skill either: a suspicion lives outside the index and carries none. Nothing was read, spent or edited behind it.
 export function signalText(suspicion: Suspicion): string {
   const tail =
-    "Nothing was spent and the skill was not touched: only a confirmation of the user turns a suspicion into a measurable attempt.";
+    `Nothing was spent and the skill was not touched: only a confirmation of the user turns a suspicion into a measurable attempt. Confirm it with /${COMMAND_NAME} <skill> --signal=${suspicion.id} --bank=<path>, naming the skill it applies to; without a bank nothing is spent and the suspicion stays open.`;
 
   switch (suspicion.kind) {
     case "rewritten-draft":

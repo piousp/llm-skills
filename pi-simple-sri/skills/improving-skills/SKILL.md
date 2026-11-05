@@ -217,7 +217,8 @@ notice names the occurrence and nothing else: it does not edit the skill, it doe
 touch the turn. What it does do is keep the suspicion: it is written to `state/signals.jsonl`, under the write base,
 with the id `sg-...` that names it, so a suspicion one session raised is still there in the next one and a suspicion
 nobody confirmed does not disappear. The same rewrite in another session is a new occurrence, with its own id, and it
-is reported again.
+is reported again. The notice carries that id and the form of the confirmation, and the confirmation names the
+skill because the suspicion does not: a suspicion lives outside the index and carries no skill of its own.
 
 The only thing that turns a suspicion into a measurable attempt is the confirmation of the user:
 `/skill-improve <skill> --signal=<id> --bank=<path>`. A confirmed suspicion opens the directional attempt this

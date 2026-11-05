@@ -426,7 +426,9 @@ ask and an empty list there is its correct value.
 
 The list below is the loop of the replay base -- a run that learns from a failure of the session. A run
 that names a bank follows the order in [Improving without a failure](#improving-without-a-failure): it reads
-no transcript, derives no evidence from it, and the bank supplies the items the gate spends.
+no transcript, derives no evidence from it, and the bank supplies the items the gate spends. A lesson that was
+accepted is also the one a retirement can take back, with its reason on file: that path is in
+[Use it](#use-it) and it is not a step of this list.
 
 1. Read `settings.json` and the skill inventory. A skill is eligible unless the configuration says
    otherwise.

@@ -7,7 +7,7 @@ Working notes for this package. Not part of the published documentation.
 | Path | Contents |
 |---|---|
 | `extensions/index.ts` | Entry point loaded by pi. Stays thin: registers the command and the tool, no logic |
-| `src/` | One module per responsibility: config, eligibility, inventory, evidence, diagnosis, frontmatter, proposer, perimeter, writer, messages, command, tool |
+| `src/` | One module per responsibility: config, eligibility, inventory, evidence, diagnosis, frontmatter, proposer, perimeter, writer, ledger, metrics, standing, retirement, signals, messages, command, tool |
 | `src/attempts.ts` | The event vocabulary of the index, the reserved names, the attempt hashes and the one constructor of a line |
 | `src/case-bank.ts` | The neutral bank of cases: the versioned format, its two profiles and the one reader of the file |
 | `src/checks.ts` | The mechanical predicate of the fourth class: the four kinds of check, and the one place a check is executed |
@@ -200,9 +200,9 @@ snapshot.
 
 ### The two hashes of a lesson
 
-`lessonHashes` (`src/writer.ts:88-105`) computes the pair from the one input that defines a candidate, the
+`lessonHashes` (`src/writer.ts:99-112`) computes the pair from the one input that defines a candidate, the
 lesson text as it will be written. `contentHash` covers the whole file; `bodyHash` covers the body after
-`normalizeBody` (`src/writer.ts:668-672`), which trims it and collapses every run of whitespace into one
+`normalizeBody` (`src/writer.ts:850-852`), which trims it and collapses every run of whitespace into one
 space. **A change of frontmatter therefore leaves `bodyHash` identical and moves `contentHash`**, and two
 lessons with the same body under different dates share the body hash. The `accepted` line of the index
 carries both (`src/types.ts:648`, the pair at `:651-652`), and `bodyHash` is the join between the index and
@@ -520,8 +520,8 @@ and no adapter changes the format, the profile or the flow.
   adds `tool` only to the two that do, and the checks of a defect arrive with the bank, in
   `buildDefectDiagnosis`.
 - The guard is not machinery for a shape this package never sees. `resolveStagedCandidate` reads the record
-  through `readStagedDecision` (`src/gate/flow.ts:954`), whose fifth guard (`:982`) judges the expectation of
-  every item it found with `expectationViolation` (`:1014`) before the gate plans a run over it, and refuses
+  through `readStagedDecision` (`src/gate/flow.ts:1004`), whose fifth guard (`:1032`) judges the expectation of
+  every item it found with `expectationViolation` (`:1064`) before the gate plans a run over it, and refuses
   the record with the reason instead of measuring it. A file on disk is not written by the union, and the
   reader is what stands between the two.
 - `describeExpectation` (`src/diagnosis.ts:455`) answers one sentence per branch of the union and reads no
