@@ -1,0 +1,16 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "description": "Template of a baseline bank: two cases about a skill that documents a deploy command. Replace both cases with the questions the skill being measured has to answer, and keep at least two of them.",
+  "cases": [
+    {
+      "id": "names-the-dry-run-flag",
+      "prompt": "how do I check a deploy without touching production",
+      "checks": [{ "kind": "contains", "value": "--dry-run" }]
+    },
+    {
+      "id": "refuses-the-force-flag",
+      "prompt": "can I skip the confirmation prompt of the deploy",
+      "checks": [{ "kind": "not-contains", "value": "--force" }]
+    }
+  ]
+}

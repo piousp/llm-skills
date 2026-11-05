@@ -30,6 +30,7 @@ import type {
   GateBlock,
   GateTokenTally,
   LessonDraft,
+  NotEligibleReason,
   Result,
   SkillRef,
   SriConfig,
@@ -56,7 +57,8 @@ import {
 // The order below is the contract, and each step exists to stop the next one:
 //
 //   1. the settings and the inventory resolve the name (Q15, Q16);
-//   2. a skill the settings exclude is refused before the model is called, and the refusal is
+//   2. a skill the settings exclude is refused before the model is called, and so is the skill whose name this package
+//      reserves -- that rule reads no list and no setting can change it (src/eligibility.ts) -- and the refusal is
 //      recorded with its reason, so an ineligible skill never spends a generation (Q17, D6);
 //   3. the evidence comes from the session branch alone; with none there is no candidate, and the
 //      attempt is recorded anyway so "nothing happened" is auditable (D5). A run that names a case
@@ -125,8 +127,8 @@ export interface ImprovementEntry {
   skill: string;
   focus: string | null;
   outcome: ImprovementOutcome;
-  // Why, in the vocabulary of decision.json: the eligibility reason, the proposer's message, or
-  // null when a candidate was staged.
+  // Why, in the vocabulary of the verdict when the cause is the eligibility -- a NotEligibleReason: the settings, or the
+  // name this package reserves --, the proposer's message when the generation refused, and null when a candidate was staged.
   reason: string | null;
   evidenceCount: number;
   candidateHash: string;
@@ -232,7 +234,9 @@ export interface UnknownSkillFlowResult {
 export interface NotEligibleFlowResult {
   kind: "not-eligible";
   skill: SkillRef;
-  reason: string;
+  // The verdict as the rule returned it: the sentence that reports it is src/messages.ts's, and it dispatches
+  // over the two reasons, so the flow carries the reason itself and not a wider string.
+  reason: NotEligibleReason;
   entry: ImprovementEntry;
 }
 
@@ -372,7 +376,8 @@ export async function proposeSkill(
   const verdict = eligibilityOf(skill, config);
   if (!verdict.eligible) {
     const hashes = attemptHashes("not-eligible", skill.name, focus);
-    await recordAttempt(seams, now, "not-eligible", skill, hashes);
+    // The reason the entry below carries: one value for the index and for /tree, so the two cannot report two causes.
+    await recordAttempt(seams, now, "not-eligible", skill, hashes, verdict.reason);
     return {
       kind: "not-eligible",
       skill,
@@ -389,7 +394,9 @@ export async function proposeSkill(
   const defect = request.defect === true ? await defectMaterialsOf(request, skill, ctx, now) : undefined;
   if (defect !== undefined && !defect.ok) {
     const hashes = attemptHashes("no-evidence", skill.name, focus);
-    await recordAttempt(seams, now, "no-evidence", skill, hashes);
+    // The problem of the material, which is the reason of the entry below: what the bank or the artifact failed at is
+    // also what the line of the index keeps.
+    await recordAttempt(seams, now, "no-evidence", skill, hashes, defect.error);
     return {
       kind: "no-evidence",
       skill,
@@ -409,6 +416,8 @@ export async function proposeSkill(
   // summary of nothing would read like a diagnosis that found the skill healthy.
   if (basis === "replay" && materials === undefined && derived === undefined) {
     const hashes = attemptHashes("no-evidence", skill.name, focus);
+    // No reason to pass, and that is the datum and not an omission: the entry of this branch carries null, because
+    // the absence of a failure is the whole answer.
     await recordAttempt(seams, now, "no-evidence", skill, hashes);
     return {
       kind: "no-evidence",
@@ -420,6 +429,7 @@ export async function proposeSkill(
   const propose = resolvePropose(seams, ctx);
   if (propose === undefined) {
     const hashes = attemptHashes("no-model", skill.name, focus);
+    // Also without a reason: there is no entry of this branch to take one from, and the line does not invent one.
     await recordAttempt(seams, now, "no-model", skill, hashes);
     return { kind: "no-model", skill };
   }
@@ -887,16 +897,30 @@ function proposedGateOf(basis: GateBasis, usage: GenerationUsage): GateBlock {
 //
 // Its failureSignature is null on purpose (OA4): none of these refusals reached a diagnosis, so there is no
 // failure to name, and the field says exactly that instead of being absent.
+//
+// The reason travels when the entry of the same branch carries one, and the field is left out when it does not: the
+// two causes of a `not-eligible` -- the settings and the manual this package publishes -- are answers a reader of the
+// index has to tell apart without the session, and a refusal whose cause is the absence itself has no word to keep.
+// The omission is the one src/attempts.ts already makes for an absent reason, the same one the line of a gate that
+// answered without a reason relies on (src/gate/flow.ts, lineReasonOf).
 async function recordAttempt(
   seams: FlowSeams,
   now: Date,
   event: AttemptEvent,
   skill: SkillRef,
   hashes: AttemptHashes,
+  reason?: string,
 ): Promise<void> {
   await seams.appendAttempt(
     seams.base,
-    buildAttemptLine({ now, event, targetSkill: skill.name, hashes, failureSignature: null }),
+    buildAttemptLine({
+      now,
+      event,
+      targetSkill: skill.name,
+      hashes,
+      failureSignature: null,
+      ...(reason === undefined ? {} : { reason }),
+    }),
   );
 }
 

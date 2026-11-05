@@ -23,12 +23,16 @@
     "image": "https://raw.githubusercontent.com/piousp/llm-skills/main/pi-simple-sri/assets/icon.png",
     "extensions": [
       "./extensions"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "files": [
     "extensions",
     "src",
     "schemas",
+    "skills",
     "README.md",
     "CHANGELOG.md",
     "REFERENCES.md"

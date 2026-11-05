@@ -25,10 +25,17 @@ export interface SriConfig {
   deny: string[];
 }
 
-// Q15: `deny` wins over `allow`; an empty `allow` admits everything.
+// Why a skill is not a candidate. `not-eligible` is the verdict of the settings; `published-by-this-package` is a fact
+// of the package and not a preference of the user -- it names the skill name this package reserves for the manual it
+// publishes, whose file an update of the package replaces -- so it is its own reason and not a wider reading of the
+// first one.
+export type NotEligibleReason = "not-eligible" | "published-by-this-package";
+
+// Q15: `deny` wins over `allow`; an empty `allow` admits everything except the name this package reserves
+// for its own manual (PUBLISHED_SKILL_NAME, src/names.ts).
 export type Eligibility =
   | { eligible: true }
-  | { eligible: false; reason: "not-eligible" };
+  | { eligible: false; reason: NotEligibleReason };
 
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
@@ -658,8 +665,10 @@ export interface AttemptLine {
   // inside the skill, present exactly on the line of an accepted candidate, which is the one event that
   // wrote a skill.
   historyPath?: string;
-  // Why the attempt answered nothing, when the flow knows it: the reason of the abstention with its detail --
-  // the file an overlay could not copy, the skill that no longer resolves. Additive and optional, so every
-  // line written before this field existed is still a line of this index.
+  // Why the attempt answered nothing, when the flow knows it: it is the reason of an abstention with its detail -- the file
+  // an overlay could not copy, the skill that no longer resolves --, the reason of an eligibility verdict
+  // (NotEligibleReason, which tells the settings apart from the name this package reserves), and the problem of the material
+  // of a defect (a bank or an artifact that could not be read). Additive and optional, so every line written before this
+  // field existed is still a line of this index.
   reason?: string;
 }

@@ -25,6 +25,13 @@ export const ATTEMPTS_FILE = "attempts.jsonl";
 // is why it lives here; the versioned id of the format is not a file name and stays in src/case-bank.ts.
 export const CASE_BANK_FILE = "case-bank.json";
 
+// The name this package reserves for the manual it publishes (skills/improving-skills). It is the one name the loop refuses
+// to improve whatever the settings say: a lesson written in a skill of that name does not survive an update of the package, so
+// the name is a constant the rule and the tests read from one place. The packaging is not one of them: what the package ships
+// is declared in package.json, which does not read this constant, and the edit of that list and of this literal travel
+// together by hand.
+export const PUBLISHED_SKILL_NAME = "improving-skills";
+
 // The environment variable a replay sets for its child (OA8), and the one the extension reads to
 // register nothing inside a replay. Two modules agree on this literal and one of them is what stops
 // the child from starting another propose or gate over itself, so it is a constant and not a string

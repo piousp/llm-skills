@@ -71,7 +71,8 @@ export function parseSriConfig(raw: unknown): SriConfig {
 
 // Reads the settings file given by the caller (the agent dir path comes from
 // getAgentDir() at the call site, never hardcoded here). A missing file is the
-// default config: every skill eligible except what `deny` removes.
+// default config: every skill eligible except the name this package reserves (src/names.ts) and what
+// `deny` removes.
 export function readSriConfig(settingsPath: string): SriConfig {
   if (!fs.existsSync(settingsPath)) return emptyConfig();
 

@@ -575,6 +575,8 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 ## Roadmap
 
+- This version (M2c): the package publishes its own skill, `/skill:improving-skills`, which teaches the
+  loop and the case bank, and the tool gains a read-only check of a bank before a gate reads it.
 - Later: automatic evidence collection, typed diagnosis, acceptance, rejection and regression metrics,
   retirement of lessons by merit, and the recursive step where the generator is versioned and evaluated
   the same way.

@@ -1,0 +1,21 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "description": "Template of an origin bank: two cases about a skill that documents a deploy command, read from the defect a review finding shows. Replace the origin and both cases with the artifact and the questions of the defect being measured.",
+  "origin": {
+    "kind": "review-finding",
+    "path": "reports/review-example.md",
+    "excerpt": "The finding that does not hold: the review recommends --force, which skips the confirmation prompt the deploy script requires."
+  },
+  "cases": [
+    {
+      "id": "names-the-dry-run-flag",
+      "prompt": "how do I check a deploy without touching production",
+      "checks": [{ "kind": "contains", "value": "--dry-run" }]
+    },
+    {
+      "id": "refuses-the-force-flag",
+      "prompt": "can I skip the confirmation prompt of the deploy",
+      "checks": [{ "kind": "regex", "pattern": "\\b(no|not|never)\\b", "flags": "i" }]
+    }
+  ]
+}

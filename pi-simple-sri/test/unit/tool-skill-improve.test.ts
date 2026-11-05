@@ -1,5 +1,8 @@
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import type { AgentToolResult, SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
@@ -12,6 +15,7 @@ import type {
   Usage,
   UserMessage,
 } from "@earendil-works/pi-ai";
+import { CASE_BANK_FORMAT, MAX_CASE_BANK_BYTES } from "../../src/case-bank.ts";
 import {
   ENTRY_TYPE,
   type ImproveFlowContext,
@@ -28,6 +32,7 @@ import type { GateDeps, GateFlowResult, GateRequest } from "../../src/gate/flow.
 import { JUDGE_MAX_TOKENS } from "../../src/gate/judge.ts";
 import type { ReplayRunRequest } from "../../src/gate/types.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
+import { PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import {
   createSkillImproveTool,
@@ -46,6 +51,8 @@ import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from 
 // one fake per seam. Nothing here reads the settings file, walks a skill directory, reaches a
 // provider or writes a byte: the writer, the index and the session entry are recorders, so every
 // assertion below is about what the tool answered and what the flow decided, not about the disk.
+// The one exception is the fourth action (M2c): what validate calls is the reader of src/case-bank.ts,
+// so the tests of it write their bank into a temporary directory and read it back through the tool.
 //
 // The body of execute is called through runSkillImproveTool, the exported seam, the same way the
 // command test calls runSkillImprove: the alternative is a fake ExtensionToolContext with four
@@ -214,6 +221,9 @@ interface HarnessOptions {
   useRealProposer?: boolean;
   writeFailure?: Error;
   entryFailure?: Error;
+  // The directory the session runs in, for the tests of the bank path of M2c: the default is a path that names nothing, and
+  // no test of this suite runs in the process directory, which is what proves a relative bank is resolved against the session.
+  cwd?: string;
   // The gate the action runs, and the seams of the real one, which is what a test uses when it wants the
   // candidate resolution of src/gate/flow.ts instead of a verdict.
   gate?: (request: GateRequest) => Promise<GateFlowResult>;
@@ -281,7 +291,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   };
 
   const ctx: ImproveFlowContext = {
-    cwd: CWD,
+    cwd: options.cwd ?? CWD,
     model: options.model,
     modelRegistry,
     sessionManager: {
@@ -380,7 +390,7 @@ function textOf(result: AgentToolResult<ToolDetails>): string {
 
 // Rule 1 of P9: the schema refuses an action the tool does not run and a call with no skill, and
 // the focus stays optional.
-test("skillImproveParams: an action outside the three the tool runs is rejected", () => {
+test("skillImproveParams: an action outside the four the tool runs is rejected", () => {
   assert.equal(Value.Check(skillImproveParams, { action: "apply", skill: "pdf-tools" }), false);
   assert.equal(Value.Check(skillImproveParams, { action: "accept", skill: "pdf-tools" }), false);
 });
@@ -595,6 +605,73 @@ test("propose: an ineligible skill is refused before the model is called", async
   assert.equal(harness.attempts[0].targetSkill, "pdf-tools");
   assert.equal(harness.entries.length, 1);
   assert.equal(harness.entries[0].data.outcome, "not-eligible");
+});
+
+// M2c, S2b: a skill whose name this package reserves is in the inventory as a declared skill, so the tool reaches it as it
+// reaches any other one -- and the answer it gives is the reason the package has, not one of the settings. The sentence is the
+// new one: the name is the one the package reserves for its manual, and a lesson written in a skill of that name does not
+// survive an update of it.
+const PUBLISHED_MANUAL: SkillRef = {
+  name: PUBLISHED_SKILL_NAME,
+  description: "The loop this package teaches",
+  dir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  realDir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  hasLessons: false,
+  kind: "declared",
+};
+
+test("propose: the manual this package publishes is refused with its own reason and nothing is staged", async () => {
+  const harness = createHarness({ skills: [SKILL, PUBLISHED_MANUAL] });
+
+  const result = await harness.run({ action: "propose", skill: PUBLISHED_SKILL_NAME });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "propose",
+    skill: PUBLISHED_SKILL_NAME,
+    outcome: "not-eligible",
+    reason: "published-by-this-package",
+  });
+  assert.equal(
+    textOf(result),
+    `skill "${PUBLISHED_SKILL_NAME}" is not eligible (published-by-this-package): "${PUBLISHED_SKILL_NAME}" is the name this package reserves for the manual it publishes, and a lesson written in a skill of that name does not survive an update of the package, so no candidate was generated.`,
+  );
+
+  // Nothing was generated and nothing was written: the refusal costs no generation, no staging and no byte of the
+  // skill, and the attempt is recorded all the same.
+  assert.deepEqual(harness.proposals, []);
+  assert.equal(harness.completed.length, 0);
+  assert.deepEqual(harness.writes, []);
+  assert.equal(harness.attempts.length, 1);
+  assert.equal(harness.attempts[0].event, "not-eligible");
+  assert.equal(harness.attempts[0].targetSkill, PUBLISHED_SKILL_NAME);
+  // The reason travels in the session entry, which is the /tree view of the attempt.
+  assert.equal(harness.entries.length, 1);
+  assert.equal(harness.entries[0].data.outcome, "not-eligible");
+  assert.equal(harness.entries[0].data.reason, "published-by-this-package");
+});
+
+// A diagnosis reads any skill (Q17), so the manual is diagnosed like every other one and the verdict it reports is
+// the one the run would refuse it under. What proves the exclusion is that the diagnosis wrote nothing: no candidate,
+// no index line, no session entry.
+test("diagnose: the manual this package publishes reports its own reason and writes nothing", async () => {
+  const harness = createHarness({ skills: [SKILL, PUBLISHED_MANUAL] });
+
+  const result = await harness.run({ action: "diagnose", skill: PUBLISHED_SKILL_NAME });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(result.details.outcome, "diagnosed");
+  assert.equal(
+    textOf(result).startsWith(
+      `skill "${PUBLISHED_SKILL_NAME}" is not eligible (published-by-this-package).`,
+    ),
+    true,
+  );
+  assert.equal(harness.completed.length, 0);
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
 });
 
 test("propose: an unknown skill is refused before anything is read from disk", async () => {
@@ -988,8 +1065,9 @@ test("gate: without a stagingPath the call is refused before the gate is reached
   assert.deepEqual(harness.entries, []);
 });
 
-// A name the inventory does not know is refused before the gate is asked for anything, with the same sentence the
-// other two actions answer with.
+// A name the inventory does not know is refused before the gate is asked for anything, with the same sentence diagnose and
+// propose answer with. Those two are the other actions that read the inventory; validate, the fourth, answers nothing about a
+// name because it reads no inventory at all.
 test("gate: a name the inventory does not know is refused before the gate is asked", async () => {
   const harness = createHarness({ skills: [SKILL, STANDALONE_SKILL] });
 
@@ -1082,8 +1160,8 @@ test("gate: no action of the tool accepts a candidate", async () => {
 // it does with a bank.
 const BANK_PATH = "/work/reports/cases.json";
 
-// The two fields of the bank base are accepted by the schema on the two actions that use them, and with the types it declares: a
-// bank is a path, and the defect is the boolean that says which profile the bank carries.
+// The two fields of the bank base are accepted by the schema on the three actions that use them, and with the types it
+// declares: a bank is a path, and the defect is the boolean that says which profile the bank carries.
 test("skillImproveParams: bankPath and defect are accepted on propose and on gate", () => {
   assert.equal(
     Value.Check(skillImproveParams, {
@@ -1103,7 +1181,8 @@ test("skillImproveParams: bankPath and defect are accepted on propose and on gat
 });
 
 // The second rule the schema cannot express: a defect is a bank of the other profile, so the call that names one and no bank is
-// refused before the first read, with the same stable keys as every other error of this action.
+// refused before the first read, with the same stable keys as every other error of this action -- and with the field of the call
+// that named the defect, which is what the documented shape of details promises.
 test("gate: defect without a bankPath is refused before the gate is reached", async () => {
   const harness = createHarness();
 
@@ -1115,6 +1194,7 @@ test("gate: defect without a bankPath is refused before the gate is reached", as
     skill: "pdf-tools",
     outcome: "error",
     reason: "missing-bank-path",
+    defect: true,
   });
   assert.equal(textOf(result).includes("bankPath"), true);
   assert.equal(textOf(result).includes("no run was spent"), true);
@@ -1262,4 +1342,312 @@ test("propose: a call that names a bank stages from the ask and details carry th
   assert.deepEqual(harness.proposals[0].input.evidence, []);
   assert.equal(harness.writes.length, 1);
   assert.equal(harness.writes[0].decision.gate.basis, "case-bank");
+});
+
+// ---------------------------------------------------------------------------------------------
+// M2c, S1: the fourth action, which reads a bank and nothing else
+// ---------------------------------------------------------------------------------------------
+
+// The two cases of the banks below, the floor the format accepts (MIN_CASES): the same ids and the same checks
+// test/unit/case-bank.test.ts reads, so a change in the reader shows up in the two suites at once.
+const BANK_CASES = [
+  {
+    id: "no-squash-all",
+    prompt: "Which flags does `git rebase` accept?",
+    checks: [{ kind: "contains", value: "--interactive" }],
+  },
+  {
+    id: "onto-needs-a-base",
+    prompt: "How do I move a branch onto another commit?",
+    checks: [{ kind: "regex", pattern: "^git rebase --onto" }],
+  },
+];
+
+// The two profiles over the same cases (OA3): the baseline one measures a directional improvement, and the origin one is
+// the bank a defect carries -- the artifact it came from, and no rubric.
+const BASELINE_BANK_DOCUMENT = {
+  format: CASE_BANK_FORMAT,
+  description: "Two questions about `git rebase`.",
+  cases: BANK_CASES,
+};
+
+const ORIGIN_BANK_DOCUMENT = {
+  format: CASE_BANK_FORMAT,
+  origin: {
+    kind: "review-finding",
+    path: "reports/review-2026-11-03.md",
+    excerpt: "The finding that does not hold: --squash-all is not a flag of git rebase.",
+  },
+  cases: BANK_CASES,
+};
+
+// The bank of this action is the only thing this suite puts on disk, and it lives in a temporary directory the test that
+// wrote it removes. The reader is a real one and not a seam: what validate exposes is a read of a file, and a seam there
+// would exist to avoid the disk instead of replacing the world.
+function createBankDir(t: TestContext): string {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-tool-bank-"));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return dir;
+}
+
+function writeBankFile(dir: string, document: unknown): string {
+  const file = path.join(dir, "cases.json");
+  fs.writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`, "utf8");
+  return file;
+}
+
+// The fourth action is part of the union the runtime accepts before execute() runs, and its bankPath stays optional in
+// the schema for the same reason gate's stagingPath does: typebox has no conditional, so the rule that names it lives in
+// the handler.
+test("skillImproveParams: validate is an action and its bankPath is optional", () => {
+  assert.equal(Value.Check(skillImproveParams, { action: "validate", skill: "pdf-tools" }), true);
+  assert.equal(
+    Value.Check(skillImproveParams, { action: "validate", skill: "pdf-tools", bankPath: BANK_PATH }),
+    true,
+  );
+  assert.equal(Value.Check(skillImproveParams, { action: "validate", skill: "pdf-tools", bankPath: 7 }), false);
+});
+
+// S1: a bank the reader accepts is the success of the action, and the sentence names the file, the profile the call declared
+// and the count the file declares, which is what says the bank is the one the caller meant. The sentence is asserted whole,
+// the way the other sentences of this suite are: a reader of the answer reads exactly this.
+test("validate: a valid baseline bank is bank-valid and names the profile and the count", async (t) => {
+  const file = writeBankFile(createBankDir(t), BASELINE_BANK_DOCUMENT);
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.details, {
+    action: "validate",
+    skill: "pdf-tools",
+    outcome: "bank-valid",
+    bankPath: file,
+  });
+
+  assert.equal(
+    textOf(result),
+    `${SKILL_IMPROVE_TOOL_NAME}: the case bank at "${file}" is valid for the "baseline" profile and declares 2 cases; only that file was read and no run was spent.`,
+  );
+  // No defect was declared, so the field of the call is absent from details, as it is on every other action.
+  assert.equal(Object.hasOwn(result.details, "defect"), false);
+});
+
+// The profile is the argument of the reader and not a field of the file (OA3), so the same bytes read as a defect are a bank
+// of the other profile: the refusal is the first violation of the reader, in the words the gate would publish.
+//
+// The refusal is asserted whole too, and it carries the two fields of the call: a `bank-invalid` reason says what is wrong
+// with the content and nothing about which file holds it, so the sentence names the file and details repeats the path a
+// caller would log. The shape is the one the `no-baseline` of the gate answers with.
+test("validate: the same bank read as a defect is refused with the first violation of the reader", async (t) => {
+  const file = writeBankFile(createBankDir(t), BASELINE_BANK_DOCUMENT);
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file, defect: true });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "validate",
+    skill: "pdf-tools",
+    outcome: "bank-refused",
+    reason: `bank-invalid: a bank of profile "origin" requires an "origin"`,
+    bankPath: file,
+    defect: true,
+  });
+  assert.equal(
+    textOf(result),
+    `${SKILL_IMPROVE_TOOL_NAME}: the case bank at "${file}" for skill "pdf-tools" cannot be used: bank-invalid: a bank of profile "origin" requires an "origin"; nothing was written and no run was spent.`,
+  );
+});
+
+// The other half of the same rule: the bank of a defect read with the profile the call declares is the success, and its
+// origin travels as the author wrote it.
+test("validate: a valid origin bank is bank-valid under the profile a defect declares", async (t) => {
+  const file = writeBankFile(createBankDir(t), ORIGIN_BANK_DOCUMENT);
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file, defect: true });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.details, {
+    action: "validate",
+    skill: "pdf-tools",
+    outcome: "bank-valid",
+    bankPath: file,
+    defect: true,
+  });
+
+  const text = textOf(result);
+  assert.equal(text.includes('the "origin" profile'), true);
+  assert.equal(text.includes("2 cases"), true);
+});
+
+// OA9 from the side of the action: absence is a value and not an exception, so a bank that is not there is a refusal of the
+// call -- the same word the gate publishes on `no-baseline` -- and not a crash of a call that spent nothing and has no
+// candidate to retry.
+test("validate: a bank that is not there is bank-refused with bank-absent", async (t) => {
+  const dir = createBankDir(t);
+  const file = path.join(dir, "absent.json");
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.outcome, "bank-refused");
+  assert.equal(result.details.reason, `bank-absent: ${file}`);
+  assert.equal(textOf(result).includes(`bank-absent: ${file}`), true);
+});
+
+test("validate: a file that is not JSON is bank-refused with bank-not-json", async (t) => {
+  const file = path.join(createBankDir(t), "broken.json");
+  fs.writeFileSync(file, '{"format": ', "utf8");
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.outcome, "bank-refused");
+  assert.equal(result.details.reason?.startsWith("bank-not-json: "), true);
+  assert.equal(textOf(result).includes("bank-not-json: "), true);
+});
+
+// The cap is the reader's and not a second copy here: a file over it is refused whole, which is what stops a wrong path at a
+// database from being loaded by an action whose only job is to say whether a bank is a bank.
+test("validate: a file over the cap is bank-refused with bank-too-large", async (t) => {
+  const file = path.join(createBankDir(t), "huge.json");
+  fs.writeFileSync(file, "{".repeat(MAX_CASE_BANK_BYTES + 1), "utf8");
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.outcome, "bank-refused");
+  assert.equal(result.details.reason?.startsWith("bank-too-large: "), true);
+  assert.equal(result.details.reason?.includes(`${MAX_CASE_BANK_BYTES} byte limit`), true);
+});
+
+// The third rule the schema cannot express: the action has nothing to read without a bank, and the refusal comes before the
+// first read. The token is the one gate uses for a defect with no bank; the sentence is its own, because the gate's speaks of
+// a defect and this call named none.
+test("validate: without a bankPath the call is refused with its own sentence", async () => {
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "validate",
+    skill: "pdf-tools",
+    outcome: "error",
+    reason: "missing-bank-path",
+  });
+
+  const text = textOf(result);
+  assert.equal(text.includes("bankPath"), true);
+  assert.equal(text.includes("nothing was read and no run was spent"), true);
+  assert.equal(text.includes("defect"), false);
+
+  // The token is shared with the guard of gate and the sentence is not: the two calls lack two different arguments.
+  const missingDefectBank = await harness.run({
+    action: "gate",
+    skill: "pdf-tools",
+    stagingPath: STAGING_RELATIVE,
+    defect: true,
+  });
+  assert.equal(missingDefectBank.details.reason, result.details.reason);
+  assert.notEqual(textOf(missingDefectBank), text);
+});
+
+// The whole point of the action: it reads the one file the call names and nothing else happens -- no generation, no gate, no
+// write, no index line and no session entry.
+test("validate: the action reads one file and spends nothing", async (t) => {
+  const file = writeBankFile(createBankDir(t), BASELINE_BANK_DOCUMENT);
+  const harness = createHarness();
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(harness.proposals, []);
+  assert.equal(harness.completed.length, 0);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.directionalRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// M2c, review of the slice: the bank a call names is resolved against the cwd of the session and not against the cwd of the
+// process -- the reader stats the path as it arrives, and the path a user types is the one a shell would resolve in the
+// directory the session runs in. The directory below is a temporary one this test created, so the two differ by construction:
+// the process runs from the repository, and `cases.json` exists only under the session directory.
+test("validate: a relative bankPath is resolved against the cwd of the session", async (t) => {
+  const dir = createBankDir(t);
+  const file = writeBankFile(dir, BASELINE_BANK_DOCUMENT);
+  const harness = createHarness({ cwd: dir });
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: "cases.json" });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(result.details.outcome, "bank-valid");
+  // The path of the answer is the one that was read: absolute, resolved against the session and not against the process.
+  assert.equal(result.details.bankPath, file);
+  assert.equal(textOf(result).includes(`the case bank at "${file}"`), true);
+});
+
+// The other half of the same rule: the same relative name with no file behind it is refused, and the reason of the reader and
+// the details name the resolved path, which is the file the caller has to write.
+test("validate: a relative bankPath that is not there is refused naming the resolved path", async (t) => {
+  const dir = createBankDir(t);
+  const file = path.join(dir, "cases.json");
+  const harness = createHarness({ cwd: dir });
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: "cases.json" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "validate",
+    skill: "pdf-tools",
+    outcome: "bank-refused",
+    reason: `bank-absent: ${file}`,
+    bankPath: file,
+  });
+  assert.equal(textOf(result).includes(`bank-absent: ${file}`), true);
+  assert.equal(textOf(result).includes(`the case bank at "${file}"`), true);
+
+  // A refusal writes nothing: no candidate, no index line and no session entry.
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+});
+
+// The resolution happens once, at the entry of the tool, and not once per action: a gate that names a relative bank hands the
+// flow of the bank the resolved path, and details reports the same one, because the path of the answer and the path that was
+// read are one file.
+test("gate: a relative bankPath reaches the flow resolved against the cwd of the session", async () => {
+  const harness = createHarness({
+    model: MODEL,
+    gateDirectional: async (request) => ({
+      kind: "no-baseline",
+      reason: `bank-absent: ${request.bankPath}`,
+      stagingPath: request.stagingPath,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 0,
+      usedRuns: 0,
+      overlays: null,
+    }),
+  });
+
+  const result = await harness.run({
+    action: "gate",
+    skill: "pdf-tools",
+    stagingPath: STAGING_RELATIVE,
+    bankPath: "cases.json",
+  });
+
+  const file = path.join(CWD, "cases.json");
+  assert.equal(harness.directionalRequests.length, 1);
+  assert.equal(harness.directionalRequests[0].bankPath, file);
+  assert.equal(result.details.bankPath, file);
 });

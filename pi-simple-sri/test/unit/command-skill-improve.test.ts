@@ -35,7 +35,7 @@ import type {
 import type { GateFlowResult, GateRequest } from "../../src/gate/flow.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { acceptedText, reloadFailedText } from "../../src/messages.ts";
-import { ATTEMPTS_FILE, COMMAND_NAME, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
+import { ATTEMPTS_FILE, COMMAND_NAME, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, PUBLISHED_SKILL_NAME, SKILL_FILE, SKILL_IMPROVE_TOOL_NAME } from "../../src/names.ts";
 import { PROPOSAL_MAX_TOKENS, ProposerError } from "../../src/proposer.ts";
 import { countReferenceLines } from "../../src/skill-reference.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
@@ -243,6 +243,9 @@ interface HarnessOptions {
   // The base of the run, when a test needs the candidate and the skill to exist on disk. The default is a path
   // that names nothing, which is what a run driving the seams of staging needs.
   base?: string;
+  // The directory the session runs in, for the test of the bank path: the default names nothing, and the process does not run
+  // there either, which is what proves a relative bank is resolved against the session.
+  cwd?: string;
   // The gate and the acceptance the chain runs. The gate defaults to an abstention that writes nothing; the
   // acceptance defaults to the real one, so a test that wants it records what it wrote instead of a double.
   gate?: (request: GateRequest) => Promise<GateFlowResult>;
@@ -325,7 +328,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   };
 
   const ctx: SkillImproveContext = {
-    cwd: CWD,
+    cwd: options.cwd ?? CWD,
     hasUI: options.hasUI ?? true,
     model: options.model,
     sessionManager: { getBranch: () => [...(options.branch ?? failingBranch())], getSessionId: () => SESSION_ID },
@@ -596,6 +599,56 @@ test("runSkillImprove: without arguments it reports the usage and the eligible s
   assert.deepEqual(harness.writes, []);
   assert.deepEqual(harness.attempts, []);
   assert.deepEqual(harness.entries, []);
+});
+
+// M2c, S2b: a skill whose name this package reserves is in the inventory as a declared skill -- that is how pi discovers a
+// skill a package ships -- so the offer of the help is where the exclusion has to be visible: a name listed here is a
+// name the user is invited to type, and typing this one reaches a refusal.
+const PUBLISHED_MANUAL: SkillRef = {
+  name: PUBLISHED_SKILL_NAME,
+  description: "The loop this package teaches",
+  dir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  realDir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  hasLessons: false,
+  kind: "declared",
+};
+
+test("runSkillImprove: the help does not offer the manual this package publishes", async () => {
+  const harness = createHarness({ skills: [SKILL, PUBLISHED_MANUAL] });
+
+  await harness.run("");
+
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "info");
+  assert.equal(harness.notified[0].message.includes("Eligible skills: pdf-tools."), true);
+  assert.equal(harness.notified[0].message.includes(PUBLISHED_SKILL_NAME), false);
+});
+
+// The refusal the user reads when the name is typed anyway: the sentence says which name the package reserves and why a
+// lesson written in a skill of that name would be lost, which is the whole point of the reason being its own and not a wider
+// `not-eligible`.
+test("runSkillImprove: the manual this package publishes is refused with its own sentence", async () => {
+  const harness = createHarness({ skills: [SKILL, PUBLISHED_MANUAL] });
+
+  await harness.run(PUBLISHED_SKILL_NAME);
+
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "warning");
+  assert.equal(
+    harness.notified[0].message,
+    `skill "${PUBLISHED_SKILL_NAME}" is not eligible (published-by-this-package): "${PUBLISHED_SKILL_NAME}" is the name this package reserves for the manual it publishes, and a lesson written in a skill of that name does not survive an update of the package, so no candidate was generated.`,
+  );
+
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.completed, []);
+  assert.deepEqual(harness.writes, []);
+  // The refusal still leaves its line, and its reason travels in the session entry.
+  assert.equal(harness.attempts.length, 1);
+  assert.equal(harness.attempts[0].event, "not-eligible");
+  assert.equal(harness.attempts[0].targetSkill, PUBLISHED_SKILL_NAME);
+  assert.equal(harness.entries.length, 1);
+  assert.equal(harness.entries[0].data.outcome, "not-eligible");
+  assert.equal(harness.entries[0].data.reason, "published-by-this-package");
 });
 
 test("runSkillImprove: an unknown skill is reported and nothing is generated", async () => {
@@ -1727,6 +1780,51 @@ test("runSkillImprove: --bank with --defect proposes from the bank and gates wit
   const abstention = harness.notified.at(-1);
   assert.equal(abstention?.type, "warning");
   assert.equal(abstention?.message.includes("insufficient-items"), true);
+});
+
+// M2c, review of the slice: the bank a run names is resolved against the cwd of the session and not against the cwd of the
+// process -- the reader of src/case-bank.ts stats the path as it arrives, and the path a user types is the one a shell would
+// resolve in the directory the session runs in. The directory below is a temporary one this test created, so the two differ by
+// construction: the process runs from the repository, and `cases.json` is a relative name that only the session directory
+// answers.
+test("runSkillImprove: --bank is resolved against the cwd of the session", async (t: TestContext) => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-cwd-"));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const harness = createHarness({ cwd: dir, model: MODEL });
+
+  await harness.run("pdf-tools --bank=cases.json");
+
+  // The gate of the bank received the resolved path, and the report of the run names the same one.
+  const bankPath = path.join(dir, "cases.json");
+  assert.equal(harness.directionalRequests.length, 1);
+  assert.equal(harness.directionalRequests[0].bankPath, bankPath);
+  assert.equal(harness.notified.at(-1)?.message.includes(bankPath), true);
+  assert.deepEqual(harness.gateRequests, []);
+});
+
+// The same resolution on the other consumer of the flag: the proposal of a defect reads the bank the run named, so a run that
+// gives it as a relative path proposes from it -- a request the flow reads as it arrived would answer `bank-absent` and stage
+// nothing -- and the record keeps the artifact the bank declares, read from the same directory.
+test("runSkillImprove: a relative --bank is read by the proposal against the cwd of the session", async (t: TestContext) => {
+  const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-cwd-defect-"));
+  t.after(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const artifactPath = path.join(dir, DEFECT_ARTIFACT_FILE);
+  fs.writeFileSync(artifactPath, DEFECT_ARTIFACT_TEXT, "utf8");
+  fs.writeFileSync(path.join(dir, DEFECT_BANK_FILE), defectBank(artifactPath), "utf8");
+
+  const harness = createHarness({ cwd: dir, model: MODEL });
+
+  await harness.run(`pdf-tools --bank=${DEFECT_BANK_FILE} --defect`);
+
+  assert.equal(harness.proposals.length, 1);
+  assert.equal(harness.writes.length, 1);
+  assert.equal(harness.writes[0].decision.evidence[0].origin?.path, artifactPath);
 });
 
 // ---------------------------------------------------------------------------------------------

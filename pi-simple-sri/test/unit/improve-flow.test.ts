@@ -21,7 +21,7 @@ import {
 } from "../../src/improve-flow.ts";
 import { createProposer, type CompleteFn } from "../../src/proposer.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR } from "../../src/names.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import { stagingDir, stateDir } from "../../src/write-base.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
@@ -1222,6 +1222,9 @@ test("proposeSkill: a defect whose artifact is not there answers no-evidence and
     attempts.map((line) => line.event),
     ["no-evidence"],
   );
+  // M2c, flag 1: the problem of the material is what the entry of this refusal carries, and the index is the record a
+  // reader has when the session is gone, so the line keeps the same value instead of only the event.
+  assert.equal(attempts[0].reason, reason);
   assert.equal(fs.existsSync(candidatePath(fixture.pkg)), false);
 });
 
@@ -1296,4 +1299,214 @@ test("proposeSkill: a relative artifact is resolved against the directory of the
   if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
   assert.equal(result.evidence[0].origin?.path, artifactPath);
   assert.equal(result.evidence[0].origin?.contentHash, digestOf(ARTIFACT_TEXT));
+});
+
+// M2c, S2b: the manual this package publishes is in the inventory as a declared skill -- that is how pi discovers a
+// skill a package ships -- so without a rule of its own it would be the destination of a lesson written inside
+// node_modules, which an update of the package deletes. The run refuses it before the generation, under the reason
+// that names the file and not a decision of the settings.
+const PUBLISHED_MANUAL: SkillRef = {
+  name: PUBLISHED_SKILL_NAME,
+  description: "The loop this package teaches",
+  dir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  realDir: `/skills/${PUBLISHED_SKILL_NAME}`,
+  hasLessons: false,
+  kind: "declared",
+};
+
+test("proposeSkill: the manual this package publishes is refused and no candidate is staged", async (t) => {
+  const fixture = createFixture(t);
+  const attempts: AttemptLine[] = [];
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: PUBLISHED_SKILL_NAME },
+    flowContext(failingBranch()),
+    {
+      ...flowDeps(fixture),
+      listSkills: async () => [SKILL, PUBLISHED_MANUAL],
+      propose: neverCalledProposer(),
+      appendAttempt: async (_root, line) => {
+        attempts.push(line);
+      },
+    },
+  );
+
+  if (result.kind !== "not-eligible") assert.fail(`expected not-eligible, got ${result.kind}`);
+  // The verdict the flow carries, which is what both surfaces report a sentence from.
+  assert.equal(result.reason, "published-by-this-package");
+  assert.equal(result.skill.name, PUBLISHED_SKILL_NAME);
+  // The reason reaches the session entry, which is the /tree view of the attempt, with the event of a refusal that
+  // cost no generation.
+  assert.equal(result.entry.outcome, "not-eligible");
+  assert.equal(result.entry.reason, "published-by-this-package");
+
+  // A refusal that cost nothing still leaves its line, under the event the refusal always had, and now with the reason
+  // it was refused for: M2c, flag 1. The field used to be absent, which left this refusal and the one of the settings as
+  // the same line in the index -- the authoritative record of the attempt -- and made "why did nothing happen" a question
+  // only the session could answer.
+  assert.deepEqual(
+    attempts.map((line) => line.event),
+    ["not-eligible"],
+  );
+  assert.equal(attempts[0].targetSkill, PUBLISHED_SKILL_NAME);
+  assert.equal(Object.hasOwn(attempts[0], "reason"), true);
+  assert.equal(attempts[0].reason, "published-by-this-package");
+  assert.equal(fs.existsSync(path.join(stagingDir(fixture.pkg), BASE_TIMESTAMP, PUBLISHED_SKILL_NAME)), false);
+});
+
+// The exclusion is not a preference about one skill among the others: an allow that names the manual admits everything
+// an empty allow does, and a deny about another skill is a verdict about that other skill. Neither changes the answer
+// the run reaches for the manual (F5).
+test("proposeSkill: neither an allow that names the manual nor a deny about another skill admits it", async (t) => {
+  const allowed = createFixture(t);
+  const denied = createFixture(t);
+
+  const verdictOf = async (fixture: Fixture, config: SriConfig): Promise<ProposeFlowResult> =>
+    await proposeSkill({ surface: "command", skillName: PUBLISHED_SKILL_NAME }, flowContext(failingBranch()), {
+      ...flowDeps(fixture),
+      readConfig: () => config,
+      listSkills: async () => [PUBLISHED_MANUAL],
+      propose: neverCalledProposer(),
+    });
+
+  const admitted = await verdictOf(allowed, { allow: [PUBLISHED_SKILL_NAME], deny: [] });
+  const untouched = await verdictOf(denied, { allow: [], deny: [SKILL.name] });
+
+  for (const verdict of [admitted, untouched]) {
+    if (verdict.kind !== "not-eligible") assert.fail(`expected not-eligible, got ${verdict.kind}`);
+    assert.equal(verdict.reason, "published-by-this-package");
+  }
+});
+
+// M2c, flag 1: the two causes a `not-eligible` can have are two answers, and the index is the record that has to tell
+// them apart once the session is gone. The line carries the reason of the entry of the same branch and not a word of
+// its own, so the reason of the rule and the reason of the line are one value.
+test("proposeSkill: the line of a not-eligible names the reason its entry carries", async (t) => {
+  const bySettings = createFixture(t);
+  const byPublication = createFixture(t);
+
+  const lineReasonFor = async (
+    fixture: Fixture,
+    config: SriConfig,
+    skills: readonly SkillRef[],
+    skillName: string,
+  ): Promise<string | undefined> => {
+    const attempts: AttemptLine[] = [];
+
+    const result = await proposeSkill(
+      { surface: "command", skillName },
+      flowContext(failingBranch()),
+      {
+        ...flowDeps(fixture),
+        readConfig: () => config,
+        listSkills: async () => [...skills],
+        propose: neverCalledProposer(),
+        appendAttempt: async (_root, line) => {
+          attempts.push(line);
+        },
+      },
+    );
+
+    if (result.kind !== "not-eligible") assert.fail(`expected not-eligible, got ${result.kind}`);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].event, "not-eligible");
+    // One value for the entry and the line: a second spelling of the same cause could drift from this one.
+    assert.equal(attempts[0].reason, result.entry.reason);
+    return attempts[0].reason;
+  };
+
+  const excluded = await lineReasonFor(bySettings, { allow: [], deny: [SKILL.name] }, [SKILL], SKILL.name);
+  const published = await lineReasonFor(
+    byPublication,
+    { allow: [], deny: [] },
+    [PUBLISHED_MANUAL],
+    PUBLISHED_SKILL_NAME,
+  );
+
+  assert.equal(excluded, "not-eligible");
+  assert.equal(published, "published-by-this-package");
+  assert.notEqual(excluded, published);
+});
+
+// M2c, flag 1: the rule is "the reason the entry carries" and not "always a reason". A session with no failure is a
+// refusal whose cause is the absence itself, which the entry keeps as null, so the line leaves the field out instead of
+// holding a word nobody wrote.
+test("proposeSkill: a no-evidence whose entry carries no reason leaves the line without the field", async (t) => {
+  const fixture = createFixture(t);
+  const attempts: AttemptLine[] = [];
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext([]),
+    {
+      ...flowDeps(fixture),
+      propose: neverCalledProposer(),
+      appendAttempt: async (_root, line) => {
+        attempts.push(line);
+      },
+    },
+  );
+
+  if (result.kind !== "no-evidence") assert.fail(`expected no-evidence, got ${result.kind}`);
+  assert.equal(result.entry.reason, null);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].event, "no-evidence");
+  assert.equal(Object.hasOwn(attempts[0], "reason"), false);
+  assert.equal(fs.existsSync(candidatePath(fixture.pkg)), false);
+});
+
+// M2c, flag 1, the same rule on the other refusal that has no word to keep: no-model is a session without a model and not a
+// verdict about the skill, so its line leaves the field out instead of carrying one nobody answered.
+test("proposeSkill: the line of a no-model leaves the reason out", async (t) => {
+  const fixture = createFixture(t);
+  const attempts: AttemptLine[] = [];
+  const { propose: _proposer, ...withoutProposer } = flowDeps(fixture);
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(failingBranch()),
+    {
+      ...withoutProposer,
+      appendAttempt: async (_root, line) => {
+        attempts.push(line);
+      },
+    },
+  );
+
+  if (result.kind !== "no-model") assert.fail(`expected no-model, got ${result.kind}`);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0].event, "no-model");
+  assert.equal(Object.hasOwn(attempts[0], "reason"), false);
+});
+
+// M2c, flag 1, on the file the index really is: the reason reaches state/attempts.jsonl through the writer of the package and
+// not only through a seam, so a reader who opens the index learns which of the two causes refused the run. The test above
+// records the line in a recorder; this one reads the bytes the run wrote.
+test("proposeSkill: the reason of a not-eligible reaches the line of the index", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: PUBLISHED_SKILL_NAME },
+    flowContext(failingBranch()),
+    {
+      ...flowDeps(fixture),
+      listSkills: async () => [PUBLISHED_MANUAL],
+      propose: neverCalledProposer(),
+    },
+  );
+
+  if (result.kind !== "not-eligible") assert.fail(`expected not-eligible, got ${result.kind}`);
+
+  const lines = fs
+    .readFileSync(path.join(stateDir(fixture.pkg), ATTEMPTS_FILE), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  assert.equal(lines.length, 1);
+
+  const line: AttemptLine = JSON.parse(lines[0]);
+  assert.equal(line.event, "not-eligible");
+  assert.equal(line.targetSkill, PUBLISHED_SKILL_NAME);
+  // The same value the entry of the refusal carries and the answer reports: one cause, spelled once.
+  assert.equal(line.reason, "published-by-this-package");
+  assert.equal(result.entry.reason, line.reason);
 });

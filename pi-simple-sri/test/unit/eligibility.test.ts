@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isEligible, isEligibleUnderAnySpelling } from "../../src/eligibility.ts";
+import { PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import type { Eligibility, SriConfig } from "../../src/types.ts";
 
 const ELIGIBLE: Eligibility = { eligible: true };
@@ -185,4 +186,46 @@ test("isEligible: does not mutate the config it reads", () => {
   isEligible("other-skill", config);
 
   assert.deepEqual(config, { allow: ["pdf-tools"], deny: ["system-config"] });
+});
+
+// M2c (S2b): the manual this package publishes is not a write target, whatever the settings say. The rule sits
+// before `allow` and before `deny` inside isEligibleUnderAnySpelling, which is the one place every consumer reads
+// the verdict from, and the reason it answers is a fact about the file and not a decision of the user: the skill
+// travels inside the installed package, so a lesson written into it does not survive an update.
+const PUBLISHED: Eligibility = { eligible: false, reason: "published-by-this-package" };
+
+test("isEligible: the published manual is refused with its own reason under empty settings", () => {
+  assert.deepEqual(isEligible(PUBLISHED_SKILL_NAME, { allow: [], deny: [] }), PUBLISHED);
+});
+
+// An empty allow admits every skill, and a non-empty one admits the skill it names: neither is a way in, because
+// the exclusion of the manual is not one of the two lists the user writes.
+test("isEligible: an allow that names the published manual does not admit it", () => {
+  assert.deepEqual(isEligible(PUBLISHED_SKILL_NAME, { allow: [PUBLISHED_SKILL_NAME], deny: [] }), PUBLISHED);
+});
+
+// The rule runs before `deny`, so a user who denies the manual reads the reason of the package and not the one of
+// the settings: the two facts do not survive the same change, and only one of them is about the file.
+test("isEligible: a deny that names the published manual answers the reason of the package", () => {
+  assert.deepEqual(isEligible(PUBLISHED_SKILL_NAME, { allow: [], deny: [PUBLISHED_SKILL_NAME] }), PUBLISHED);
+});
+
+// And a deny about another skill is a verdict about that skill: it changes nothing for the manual, which was already
+// refused by the rule before the list was read.
+test("isEligible: a deny that names another skill leaves the published manual refused as it is", () => {
+  assert.deepEqual(isEligible(PUBLISHED_SKILL_NAME, { allow: [], deny: ["system-config"] }), PUBLISHED);
+});
+
+// F5 over the published manual: the rule reads every spelling the inventory gives, so a copy whose frontmatter name
+// is the published one is refused in either order, and an allow that names both spellings is not a way in either.
+test("isEligibleUnderAnySpelling: the published manual answers its own reason under both spellings", () => {
+  assert.deepEqual(isEligibleUnderAnySpelling([PUBLISHED_SKILL_NAME, "pi-manual"], { allow: [], deny: [] }), PUBLISHED);
+  assert.deepEqual(isEligibleUnderAnySpelling(["pi-manual", PUBLISHED_SKILL_NAME], { allow: [], deny: [] }), PUBLISHED);
+  assert.deepEqual(
+    isEligibleUnderAnySpelling([PUBLISHED_SKILL_NAME, "pi-manual"], {
+      allow: [PUBLISHED_SKILL_NAME, "pi-manual"],
+      deny: [],
+    }),
+    PUBLISHED,
+  );
 });

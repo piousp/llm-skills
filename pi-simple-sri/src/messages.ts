@@ -1,7 +1,7 @@
 import path from "node:path";
-import { COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
+import { COMMAND_NAME, PUBLISHED_SKILL_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
-import type { DecisionSurface, SkillRef } from "./types.ts";
+import { assertNever, type DecisionSurface, type NotEligibleReason, type SkillRef } from "./types.ts";
 import { quote } from "./values.ts";
 
 // The sentences the two surfaces of the loop report (P8, P9).
@@ -55,9 +55,23 @@ export function listedNames(skills: readonly SkillRef[]): string {
 }
 
 // Unchanged in both surfaces: the refusal is the same fact whoever asked, and the settings that
-// produced it are the same file.
-export function notEligibleText(skill: SkillRef, reason: string): string {
-  return `skill ${quote(skill.name)} is not eligible (${reason}): no candidate was generated.`;
+// produced it are the same file. The two reasons are two different facts, so each one is its own
+// sentence and a third reason cannot be added without reaching this switch (M2c, S2b).
+//
+// `not-eligible` is the verdict of the settings, and its sentence is the one it always was.
+// `published-by-this-package` is the name this package reserves: `improving-skills` is the name its manual is published
+// under, and a lesson written in a skill of that name does not survive an update of the package. The sentence says the
+// reservation and not "this is the manual", because the rule compares the name -- on purpose, so that a skill the user
+// installed under that name is refused too -- and a sentence that claimed to recognize the file would be false for it.
+export function notEligibleText(skill: SkillRef, reason: NotEligibleReason): string {
+  switch (reason) {
+    case "not-eligible":
+      return `skill ${quote(skill.name)} is not eligible (${reason}): no candidate was generated.`;
+    case "published-by-this-package":
+      return `skill ${quote(skill.name)} is not eligible (${reason}): ${quote(PUBLISHED_SKILL_NAME)} is the name this package reserves for the manual it publishes, and a lesson written in a skill of that name does not survive an update of the package, so no candidate was generated.`;
+    default:
+      return assertNever(reason);
+  }
 }
 
 // Unchanged in both surfaces too: the reason the generation refused is the generation's, not the

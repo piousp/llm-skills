@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getAgentDir, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
+import { caseBankReason, loadCaseBank, type CaseBankProfile } from "./case-bank.ts";
 import { describeExpectation } from "./diagnosis.ts";
 import { gateDirectionalCandidate, type DirectionalGateResult } from "./gate/directional-flow.ts";
 import {
@@ -40,12 +41,13 @@ import { assertNever, type DecisionSurface, type Diagnosis, type Eligibility, ty
 import { quote, toErrorMessage } from "./values.ts";
 import { writeBase } from "./write-base.ts";
 
-// The skill_improve tool, the second surface of the loop (P9, Q7, M1). It answers three questions the
+// The skill_improve tool, the second surface of the loop (P9, Q7, M1). It answers four questions the
 // model can ask mid-session:
 //
 //   diagnose  what failed in this session, and what would a replay have to test? Read-only.
 //   propose   the same, plus one generation and the staging write.
 //   gate      run the replay budget over a candidate already in staging, which spends tokens.
+//   validate  read the case bank a bankPath names and report the first violation, or that it is valid. Read-only.
 //
 // diagnose and propose run the pipeline of src/improve-flow.ts, the same one /skill-improve runs, so the
 // command and the tool cannot disagree about what is eligible, what counts as evidence or what the
@@ -53,8 +55,8 @@ import { writeBase } from "./write-base.ts";
 // measures the candidate, which the command then carries into the acceptance.
 // What differs is the answer: the command notifies, the tool returns a tool result, and the tool never
 // accepts -- acceptance edits a skill and belongs to the command alone (Q12). That is why the action
-// vocabulary has three values and no fourth: a candidate this action gates stays in staging, untouched,
-// until whoever runs the command decides to accept it.
+// vocabulary has four values and no acceptance among them: a candidate this action gates stays in staging,
+// untouched, until whoever runs the command decides to accept it, and the fourth action writes nothing at all.
 //
 // Rule 3: the description below travels in every session that loads this tool, so it says in one
 // sentence that the tool never edits the skill. The rest of the promise is in the code: the only
@@ -91,15 +93,19 @@ const SURFACE: DecisionSurface = "tool";
 // caller the path of those bytes instead of making it guess.
 const GATE_DIR = "gate";
 
-export type SkillImproveAction = "diagnose" | "propose" | "gate";
+export type SkillImproveAction = "diagnose" | "propose" | "gate" | "validate";
 
-// The action names the three entry points of the surfaces, and the schema accepts nothing else: a tool call
-// outside this union is refused by the runtime before execute() runs. There is no acceptance action (Q12).
+// The action names the four entry points of the surfaces, and the schema accepts nothing else: a tool call
+// outside this union is refused by the runtime before execute() runs. None of the four accepts a candidate:
+// acceptance edits a skill and belongs to the command alone (Q12).
 export const skillImproveParams = Type.Object({
-  action: Type.Union([Type.Literal("diagnose"), Type.Literal("propose"), Type.Literal("gate")], {
-    description:
-      "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens: a budget needs at least two distinct items, and below that the answer is insufficient-items",
-  }),
+  action: Type.Union(
+    [Type.Literal("diagnose"), Type.Literal("propose"), Type.Literal("gate"), Type.Literal("validate")],
+    {
+      description:
+        "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens: a budget needs at least two distinct items, and below that the answer is insufficient-items; validate reads the case bank that bankPath names and reports its first violation or that the bank is valid, and it writes nothing and spends nothing",
+    },
+  ),
   skill: Type.String({ description: "Exact skill name, as listed by the inventory" }),
   focus: Type.Optional(Type.String({ description: "Optional hint about what to improve" })),
   // Typebox has no conditional without oneOf, so "gate needs a candidate" cannot live in the schema. It lives
@@ -108,7 +114,7 @@ export const skillImproveParams = Type.Object({
   stagingPath: Type.Optional(
     Type.String({
       description:
-        "Candidate directory inside staging/, as propose answered it (stagingPath, absolute or relative to the base): required by gate, ignored by the other actions",
+        "Candidate directory inside staging/, as propose answered it (stagingPath, absolute or relative to the base): required by gate, ignored by the other three actions",
     }),
   ),
   // M1c: the two fields of the bank base, with the same shape of rule as stagingPath -- the schema cannot say "defect needs
@@ -116,7 +122,7 @@ export const skillImproveParams = Type.Object({
   bankPath: Type.Optional(
     Type.String({
       description:
-        "Path of the case bank that measures the candidate: propose asks for a directional improvement and gate measures it with the cases the bank declares; ignored by diagnose",
+        "Path of the case bank that measures the candidate: propose asks for a directional improvement, gate measures the candidate with the cases the bank declares and validate reads it without a candidate; ignored by diagnose",
     }),
   ),
   defect: Type.Optional(
@@ -129,14 +135,16 @@ export const skillImproveParams = Type.Object({
 
 export type SkillImproveParams = Static<typeof skillImproveParams>;
 
-// What became of the call, in a closed set. "diagnosed", "proposed" and "gate-accepted" are the successes;
-// "not-eligible", "no-evidence", "unknown-skill" and "no-model" are the refusals a caller can predict and
-// handle by name; "gate-rejected" and "gate-abstained" are the two verdicts that are answers and not failures
-// of the run, and they report with isError because nothing was accepted; "no-baseline" is the gate of the bank
-// base that found nothing to measure against (M1c, OA9) -- nothing was spent, the candidate stays in staging and
-// the attempt is retryable, so it is a state of the attempt and not a verdict; "error" is everything else: a
-// generation that refused to produce a lesson, a lesson that does not validate, a write the perimeter refused,
-// a candidate the gate cannot read, or a bug.
+// What became of the call, in a closed set. "diagnosed", "proposed", "gate-accepted" and "bank-valid" are the
+// successes; "not-eligible", "no-evidence", "unknown-skill", "no-model" and "bank-refused" are the refusals a
+// caller can predict and handle by name; "gate-rejected" and "gate-abstained" are the two verdicts that are answers
+// and not failures of the run, and they report with isError because nothing was accepted; "no-baseline" is the gate
+// of the bank base that found nothing to measure against (M1c, OA9) -- nothing was spent, the candidate stays in
+// staging and the attempt is retryable, so it is a state of the attempt and not a verdict. M2c adds the two of the
+// fourth action: "bank-valid" is a bank the reader accepted under the profile the call declared, and "bank-refused" is
+// the bank it could not read, with the reason of the reader in details. "error" is everything else: a generation that
+// refused to produce a lesson, a lesson that does not validate, a write the perimeter refused, a candidate the gate
+// cannot read, or a bug.
 export type SkillImproveOutcome =
   | "diagnosed"
   | "proposed"
@@ -148,6 +156,8 @@ export type SkillImproveOutcome =
   | "gate-rejected"
   | "gate-abstained"
   | "no-baseline"
+  | "bank-valid"
+  | "bank-refused"
   | "error";
 
 // The documented shape of `details` (rule 6). `reason` is the vocabulary of the refusal for the predictable
@@ -205,16 +215,16 @@ export interface SkillImproveToolDeps extends ImproveFlowDeps {
 const TOOL_LABEL = "Skill improve";
 
 const TOOL_DESCRIPTION = [
-  "Diagnose a failure of this session, stage a lesson candidate for one installed skill, or gate a candidate",
-  "that is already in staging. The candidate of a propose comes from the failures of the session, or from the cases a",
-  "bankPath declares -- with defect when that bank describes a defect an artifact shows instead of the cases to",
-  "measure --, and gate measures it with the cases of the same bank. gate spends the replay budget of the paired",
-  "design it preregisters, and every run of that budget spends tokens; a bank that is absent or unreadable spends",
-  "nothing, leaves the candidate in staging and leaves the attempt retryable. Before any of that is spent, this tool",
-  "is also where a correction or a rejection is recorded: a correction the user made in this session is evidence that",
-  "propose reads, and a draft the user rejected is a case of a bank of a defect, which gate measures. It never edits",
-  "the skill and never accepts a candidate: the only writes are the package staging tree, the attempt index and the",
-  "session entry, and acceptance belongs to the /skill-improve command.",
+  "Diagnose a failure of this session, stage a lesson candidate for one installed skill, gate a candidate already in",
+  "staging, or read the case bank a bankPath names. A propose takes its cases from the failures of the session or from the",
+  "bank, with defect when that bank describes a defect an artifact shows, and gate measures the candidate with the cases of",
+  "that bank. gate spends the replay budget it preregisters and every run of it spends tokens; a bank that is absent or",
+  "unreadable spends nothing and leaves the attempt retryable. validate reads that one file and answers its first",
+  "violation, in the words gate uses, or that the bank is valid, without writing or spending. Before any of that is spent,",
+  "the tool also records a correction or a rejection: a correction the user made in this session, which propose reads, and",
+  "a draft the user rejected, which is a case of a bank of a defect. It never edits the skill and never accepts a candidate:",
+  "the only writes are the package staging tree, the attempt index and the session entry, and acceptance belongs to the",
+  "/skill-improve command.",
 ].join(" ");
 
 export function createSkillImproveTool(
@@ -238,6 +248,15 @@ export function createSkillImproveTool(
   };
 }
 
+// The bank a call names, resolved against the cwd of the session and not against the cwd of the process. The reader of
+// src/case-bank.ts stats the path as it arrives, which resolves it against process.cwd(), while the path a call carries is
+// the one a user typed in the directory the session runs in -- the one directory this package already resolves the
+// artifact of a defect against (src/improve-flow.ts). Resolved here, before the dispatch, so the three actions that name a
+// bank have one answer and details reports the path that was read. A call that names no bank is returned as it arrived.
+function withResolvedBankPath(params: SkillImproveParams, cwd: string): SkillImproveParams {
+  return params.bankPath === undefined ? params : { ...params, bankPath: path.resolve(cwd, params.bankPath) };
+}
+
 // The body of execute, exported so it can be exercised with a four-field fake instead of a whole
 // ExtensionToolContext, the same way runSkillImprove is for the command. `signal` is the abort signal
 // of the call, absent when the caller has nothing to abort with.
@@ -248,17 +267,25 @@ export async function runSkillImproveTool(
   signal: AbortSignal | undefined = undefined,
 ): Promise<AgentToolResult<ToolDetails>> {
   try {
-    // The three actions are the whole union, and the switch is total: a fourth one stops compiling here
+    // The bank of the call is resolved once, here, for the three actions that name one: the reader of
+    // src/case-bank.ts stats the path it is given and resolves it against process.cwd(), and the path a call
+    // carries is the one a user typed in the directory the session runs in. Everything below -- the flow, the
+    // gate and details -- reads the resolved path, so what is read and what is reported are the same file.
+    const resolved = withResolvedBankPath(params, ctx.cwd);
+
+    // The four actions are the whole union, and the switch is total: a fifth one stops compiling here
     // instead of falling through to a handler that would run a different action.
-    switch (params.action) {
+    switch (resolved.action) {
       case "diagnose":
-        return await runDiagnose(params, ctx, deps);
+        return await runDiagnose(resolved, ctx, deps);
       case "propose":
-        return await runPropose(params, ctx, deps, signal);
+        return await runPropose(resolved, ctx, deps, signal);
       case "gate":
-        return await runGate(params, ctx, deps, signal);
+        return await runGate(resolved, ctx, deps, signal);
+      case "validate":
+        return await runValidate(resolved);
       default:
-        return assertNever(params.action);
+        return assertNever(resolved.action);
     }
   } catch (error) {
     // The refusal this package raises and a bug both matter to the model, and neither may escape:
@@ -436,10 +463,24 @@ async function runGate(
   // other error of this action. Amendment 3 of S10 is the first: gate with no candidate has nothing to measure. M1c adds the
   // second: a defect is a bank of the other profile, so a call that asks for one and names no bank names no material at all.
   if (stagingPath === undefined) {
-    return failure(action, params.skill, "error", "missing-staging-path", missingStagingPathText(params.skill));
+    return failure(
+      action,
+      params.skill,
+      "error",
+      "missing-staging-path",
+      missingStagingPathText(params.skill),
+      bankFieldsOf(params),
+    );
   }
   if (params.defect === true && params.bankPath === undefined) {
-    return failure(action, params.skill, "error", "missing-bank-path", missingBankPathText(params.skill));
+    return failure(
+      action,
+      params.skill,
+      "error",
+      "missing-bank-path",
+      missingBankPathText(params.skill),
+      bankFieldsOf(params),
+    );
   }
 
   // The two halves the gate reads the candidate and the inventory from, resolved the way the flow resolves them:
@@ -450,9 +491,10 @@ async function runGate(
   const skills = await (deps.listSkills ?? listSkills)({ cwd: ctx.cwd, agentDir });
   const skill = findSkill(skills, params.skill);
   if (skill === undefined) {
-    // A name nobody knows, answered the way the other two actions answer it: the standalone the name may be, and
-    // the eligible set the caller can ask for instead (F6). The second read of the inventory is the price of that
-    // sentence, and it happens only on a refusal.
+    // A name nobody knows, answered the way diagnose and propose answer it: the standalone the name may be, and the
+    // eligible set the caller can ask for instead (F6). Those two read the inventory and answer from it; validate does
+    // not answer this at all, because it reads no inventory -- the bank a call names is the only file it touches. The
+    // second read here is the price of the sentence, and it happens only on a refusal.
     const standalone = skills.find((entry) => entry.kind === "standalone" && entry.name === params.skill) ?? null;
     const eligible = await listEligibleSkills(ctx, deps);
     return failure(
@@ -461,6 +503,7 @@ async function runGate(
       "unknown-skill",
       "unknown-skill",
       unknownSkillText(SURFACE, params.skill, standalone, eligible),
+      bankFieldsOf(params),
     );
   }
 
@@ -501,7 +544,7 @@ async function runGate(
     ...(deps.gateDeps === undefined ? {} : { gateDeps: deps.gateDeps }),
   });
   if (!wired.ok) {
-    return failure(action, skill.name, "no-model", "no-model", noModelGateText(SURFACE, skill));
+    return failure(action, skill.name, "no-model", "no-model", noModelGateText(SURFACE, skill), bankFieldsOf(params));
   }
 
   return answerOf(
@@ -533,6 +576,7 @@ function answerOf(
       "error",
       result.rejection.reason,
       failedText(skill.name, result.rejection.detail),
+      bankFieldsOf(params),
     );
   }
 
@@ -581,12 +625,68 @@ function answerOf(
   };
 }
 
-// The two fields of a call of the bank base, on propose and on gate alike: the bank the call named and whether it described a
-// defect. Absent when the call named neither, which is the shape of M1 and what keeps that answer byte for byte the one it was.
+// The two fields of a call of the bank base, on the three actions that name one -- propose, gate and validate: the bank the
+// call named, already resolved against the cwd of the session, and whether it described a defect. Absent when the call named
+// neither, which is the shape of M1 and what keeps that answer byte for byte the one it was.
 function bankFieldsOf(params: SkillImproveParams): { bankPath?: string; defect?: boolean } {
   return {
     ...(params.bankPath === undefined ? {} : { bankPath: params.bankPath }),
     ...(params.defect === true ? { defect: true } : {}),
+  };
+}
+
+// The fourth action (M2c, S1): the reader of src/case-bank.ts exposed on its own, so a model can learn what a bank is missing
+// before a proposal is spent. The bank of the directional base is the one the gate reads and the proposal does not
+// (src/improve-flow.ts), so a typo in it used to be the one bank error that cost a generation to find.
+//
+// It writes nothing, calls no model and reads no inventory: the only thing it touches is the file the call names, under the
+// profile the defect flag already means -- `origin` for a defect, `baseline` for the cases to measure. There is no seam for
+// the reader, and there is no reason for one: what it calls is a read of a file, a test points it at a temporary directory,
+// and a seam here would exist to avoid the disk and not to replace the world.
+async function runValidate(params: SkillImproveParams): Promise<AgentToolResult<ToolDetails>> {
+  const action: SkillImproveAction = "validate";
+  const bankPath = params.bankPath;
+
+  // The third rule the schema cannot express: this action has nothing to read without a bank, and the refusal comes before the
+  // first read. The token is the one runGate uses for a defect with no bank, because it is the same missing argument; the
+  // sentence is its own, because the one of the gate speaks of a defect.
+  if (bankPath === undefined) {
+    return failure(action, params.skill, "error", "missing-bank-path", validateNeedsBankText(params.skill));
+  }
+
+  const profile: CaseBankProfile = params.defect === true ? "origin" : "baseline";
+  const loaded = await loadCaseBank(bankPath, profile);
+
+  // The reader is the only judge of a bank, and the reason it answers is the vocabulary the gate publishes on `no-baseline`:
+  // whoever reads this refusal reads the words the failure would use later. The reader is fail-fast, so the reason names the
+  // first violation and no list of them is assembled here.
+  //
+  // The refusal carries the two fields of the call, the way the `no-baseline` of the gate does, so a caller that logged the
+  // answer keeps the path that was read. Its sentence names the file as well: most of these reasons -- `bank-invalid`,
+  // `bank-not-json`, `bank-too-large` -- say what is wrong with the content and not which file holds it.
+  if (!loaded.ok) {
+    const reason = caseBankReason(loaded.error);
+    return {
+      content: [{ type: "text", text: bankRefusedText(params.skill, bankPath, reason) }],
+      details: {
+        action,
+        skill: params.skill,
+        outcome: "bank-refused",
+        reason,
+        ...bankFieldsOf(params),
+      },
+      isError: true,
+    };
+  }
+
+  return {
+    content: [{ type: "text", text: bankValidText(bankPath, profile, loaded.value.cases.length) }],
+    details: {
+      action,
+      skill: params.skill,
+      outcome: "bank-valid",
+      ...bankFieldsOf(params),
+    },
   };
 }
 
@@ -635,10 +735,13 @@ function failure(
   outcome: SkillImproveOutcome,
   reason: string,
   text: string,
+  // The fields of the call that named a bank, on the refusals that stop before a bank is read: the documented shape says
+  // they are present on every answer whose call named them, and a caller that logs the refusal needs to know which call.
+  extra: ReturnType<typeof bankFieldsOf> = {},
 ): AgentToolResult<ToolDetails> {
   return {
     content: [{ type: "text", text }],
-    details: { action, skill, outcome, reason },
+    details: { action, skill, outcome, reason, ...extra },
     isError: true,
   };
 }
@@ -676,4 +779,27 @@ function missingStagingPathText(skill: string): string {
 // material and the call is refused before anything is read.
 function missingBankPathText(skill: string): string {
   return `${SKILL_IMPROVE_TOOL_NAME}: a defect of skill ${quote(skill)} needs the bank that describes it, and the call carried defect with no bankPath; nothing was read and no run was spent.`;
+}
+
+// The sentence of the missing bank on the fourth action: the same missing argument gate refuses, said without the word defect.
+function validateNeedsBankText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: validate needs the bankPath of the case bank to read for skill ${quote(skill)}, and the call carried none; nothing was read and no run was spent.`;
+}
+
+// The refusal of the fourth action: the reason of the reader travels as the reader wrote it, prefix included, because that is
+// the same text the gate publishes when the bank of a candidate cannot be read. The file is named next to it, the way the
+// sentence of the success names it: most of those reasons say what is wrong with the content, and the path is what the call
+// knows and what a reader needs to fix the bank.
+function bankRefusedText(skill: string, file: string, reason: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: the case bank at ${quote(file)} for skill ${quote(skill)} cannot be used: ${reason}; nothing was written and no run was spent.`;
+}
+
+// The success of the fourth action: the file, the profile the call declared and the count, which is what a model needs to know
+// that the bank it wrote is the bank it meant. One file was read and nothing else happened.
+function bankValidText(file: string, profile: CaseBankProfile, cases: number): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: the case bank at ${quote(file)} is valid for the ${quote(profile)} profile and declares ${casesText(cases)}; only that file was read and no run was spent.`;
+}
+
+function casesText(cases: number): string {
+  return cases === 1 ? "1 case" : `${cases} cases`;
 }

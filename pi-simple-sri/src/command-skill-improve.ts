@@ -304,7 +304,10 @@ interface Run {
 
 async function improve(args: string, run: Run): Promise<void> {
   const { ctx, deps, notify } = run;
-  const parsed = parseSkillImproveArgs(args);
+  // The bank is resolved once, here, against the cwd of the session: the reader of src/case-bank.ts stats the path as it
+  // arrives and therefore resolves it against process.cwd(), while the path a user types is relative to the directory the
+  // session runs in. Both consumers below -- the proposal of a defect and the gate of the bank -- read this one value.
+  const parsed = resolveBankPathOf(parseSkillImproveArgs(args), ctx.cwd);
 
   // No skill named: the command answers with what it can do and on which skills, so the offer is
   // the eligible set and never the whole inventory.
@@ -395,6 +398,13 @@ function measuredByBankOf(parsed: SkillImproveArgs): string | undefined {
 
 function bankFieldOf(bankPath: string | undefined): { bankPath?: string } {
   return bankPath === undefined ? {} : { bankPath };
+}
+
+// The bank a run names, resolved against the cwd of the session and not against the cwd of the process: the reader stats
+// the path it is given, and the path a user types is the one a shell would resolve in the directory the session runs in.
+// A run that names no bank is returned as it arrived.
+function resolveBankPathOf(parsed: SkillImproveArgs, cwd: string): SkillImproveArgs {
+  return parsed.bankPath === undefined ? parsed : { ...parsed, bankPath: path.resolve(cwd, parsed.bankPath) };
 }
 
 // What the gate of one run is pointed at, and the only three things both branches need: the base the candidate was written

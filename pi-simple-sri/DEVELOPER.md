@@ -13,6 +13,7 @@ Working notes for this package. Not part of the published documentation.
 | `src/checks.ts` | The mechanical predicate of the fourth class: the four kinds of check, and the one place a check is executed |
 | `src/gate/` | The paired replay gate: execution contracts, expectation evaluator, arm overlays, replay runner, budget, scorer, the two flows, judge, acceptance |
 | `schemas/` | Versioned JSON schemas: `decision.json` and the case bank, validated by tests |
+| `skills/` | The skill this package publishes: the manual, its `references/` and the two case-bank templates. Ships in the tarball because `files` names it, and pi discovers it because `pi.skills` declares it |
 | `test/unit/` | Unit tests, `node --test` (type stripping is the Node default from 22.18) |
 | `test/fixtures/` | Settings files and skill trees, including symlinks |
 | `tmp/` | Local design notes: goal, decisions, plan, review. Gitignored |
@@ -76,7 +77,7 @@ quantiles.
 ## Rules that came out of the design
 
 - A skill is edited by the command alone, after its gate accepted the candidate. The tool can diagnose,
-  propose and gate; it can never accept.
+  propose, gate and validate; it can never accept.
 - Every write goes through one chokepoint wrapped in `withFileMutationQueue()`, with atomic writes and
   read-back verification. The one exception is the append to the index, below.
 - The write perimeter is the realpath of an eligible skill directory plus `staging/` and `state/` under
@@ -141,6 +142,16 @@ quantiles.
   `:145`, `:982` and `src/gate/expectation.ts:36`, `:108`, `:146`, `:173` -- name the milestone whose slice
   changed the code beside them. A rename would touch a dozen comments and change no line of behaviour; what
   the next reader needs is to know that the words point at different things, and that is this bullet.
+- The label `(M2c)` carries neither of those two meanings, and it is not a rename of them. It names the
+  skill the package publishes (`skills/improving-skills`, `PUBLISHED_SKILL_NAME` in `src/names.ts:31`) and
+  the fourth action, `validate`, with the two outcomes it answers -- `src/eligibility.ts:16`,
+  `src/tool-skill-improve.ts:143-144` and `src/messages.ts:59` -- and `(M2)` keeps its own two meanings
+  instead of being stretched to cover these.
+- The manual in `skills/improving-skills` is part of the surface of this package: a change to the union of
+  actions, to an outcome of `src/tool-skill-improve.ts`, to the abstention vocabulary of `src/gate/types.ts`
+  or to the budget of `src/gate/scorer.ts` updates it in the same slice. Four tests hold the closed
+  vocabularies (`ACTION_NAMES`, `OUTCOME_NAMES`, `ABSTENTION_REASONS` and `VERDICT_REASONS` in
+  `test/unit/package-skill.test.ts`); the numbers are prose and nothing catches them automatically.
 
 ## Order of an acceptance
 
@@ -413,6 +424,13 @@ refuses a bank of another version instead of reading it as this one with fields 
 
 The reader hands back the bytes it parsed next to the data (`LoadedCaseBank`), because a preregistration that
 re-read the path could pin a file the runs were not about. One read, one parse, one digest.
+
+**The limits have one owner and the format has one worked example.** The caps of a bank are the schema's,
+declared in `schemas/case-bank.schema.json` and nowhere else, so a limit that only the reader knew would be a
+limit the publication never states. The two templates of `skills/improving-skills/assets/` are the only worked
+example of the format, and the suite reads them with the same two readers the gate reads a bank with -- the
+schema and `loadCaseBank` (`test/unit/package-skill.test.ts`) -- so an example the package would refuse fails
+there instead of shipping in the tarball.
 
 ### The expectation and its class
 

@@ -128,7 +128,9 @@ export function attemptHashes(
 // run (src/write-base.ts).
 //
 // `reason` is what the attempt answered when it was not an event of the vocabulary alone: the reason of an
-// abstention with its detail (the file an overlay could not copy, the skill that no longer resolves). It is
+// abstention with its detail (the file an overlay could not copy, the skill that no longer resolves), the reason of
+// an eligibility verdict (NotEligibleReason, which tells the settings apart from the name this package reserves), and
+// the problem of the material of a defect (a bank or an artifact that could not be read). It is
 // additive and optional, like every other field a line gains, so a line written before it existed still
 // reads as the line it was.
 export interface AttemptLineInput {
