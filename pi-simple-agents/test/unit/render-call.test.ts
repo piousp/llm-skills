@@ -18,7 +18,7 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   };
 }
 
-test("formatAgentParams: model, thinking, and tools all set renders each verbatim", () => {
+test("formatAgentParams: model, thinking, and tools all set renders each value with its (frontmatter) provenance", () => {
   const agent = makeAgent({
     model: "claude-opus-4",
     thinking: "high",
@@ -27,31 +27,31 @@ test("formatAgentParams: model, thinking, and tools all set renders each verbati
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: claude-opus-4 · thinking: high · tools: a, b, c · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: claude-opus-4 (frontmatter) · thinking: high (frontmatter) · tools: a, b, c (frontmatter) · skills: none · maxTurns: none · timeoutMs: none");
 });
 
-test("formatAgentParams: none of the three set renders all as inherited", () => {
+test("formatAgentParams: nothing set anywhere renders every segment as none, with no provenance suffix", () => {
   const agent = makeAgent({});
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: none · thinking: none · tools: none · skills: none · maxTurns: none · timeoutMs: none");
 });
 
-test("formatAgentParams: only model set renders thinking and tools as inherited", () => {
+test("formatAgentParams: only model set renders the rest as none", () => {
   const agent = makeAgent({ model: "claude-opus-4" });
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: inherited · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: claude-opus-4 (frontmatter) · thinking: none · tools: none · skills: none · maxTurns: none · timeoutMs: none");
 });
 
-test("formatAgentParams: empty tools array renders tools as none", () => {
+test("formatAgentParams: empty tools array renders none WITH its provenance suffix (a present value)", () => {
   const agent = makeAgent({ tools: [] });
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: none · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: none · thinking: none · tools: none (frontmatter) · skills: none · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: exactly 5 tools renders the full list with no +more suffix", () => {
@@ -59,7 +59,7 @@ test("formatAgentParams: exactly 5 tools renders the full list with no +more suf
 
   const result = formatAgentParams(agent);
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: a, b, c, d, e · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: none · thinking: none · tools: a, b, c, d, e (frontmatter) · skills: none · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: 8 tools renders first 5 plus a +3 more suffix", () => {
@@ -71,7 +71,7 @@ test("formatAgentParams: 8 tools renders first 5 plus a +3 more suffix", () => {
 
   assert.equal(
     result,
-    "model: inherited · thinking: inherited · tools: a, b, c, d, e +3 more · skills: inherited · maxTurns: inherited · timeoutMs: inherited",
+    "model: none · thinking: none · tools: a, b, c, d, e +3 more (frontmatter) · skills: none · maxTurns: none · timeoutMs: none",
   );
 });
 
@@ -180,16 +180,16 @@ test("formatAgentParams: 6 tools renders first 5 plus a +1 more suffix", () => {
 
   assert.equal(
     result,
-    "model: inherited · thinking: inherited · tools: a, b, c, d, e +1 more · skills: inherited · maxTurns: inherited · timeoutMs: inherited",
+    "model: none · thinking: none · tools: a, b, c, d, e +1 more (frontmatter) · skills: none · maxTurns: none · timeoutMs: none",
   );
 });
 
-test("formatAgentParams: modelOverride present shows the override instead of agent.model", () => {
+test("formatAgentParams: modelOverride present shows the override, with no provenance suffix (the call is its own provenance)", () => {
   const agent = makeAgent({ model: "claude-opus-4" });
 
   const result = formatAgentParams(agent, { model: "claude-haiku" });
 
-  assert.equal(result, "model: claude-haiku · thinking: inherited · tools: inherited · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: claude-haiku · thinking: none · tools: none · skills: none · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: tools override renders 'none' regardless of agent's configured tools", () => {
@@ -197,7 +197,7 @@ test("formatAgentParams: tools override renders 'none' regardless of agent's con
 
   const result = formatAgentParams(agent, { tools: [] });
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: none · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: none · thinking: none · tools: none · skills: none · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: empty override object behaves exactly like no override", () => {
@@ -205,7 +205,7 @@ test("formatAgentParams: empty override object behaves exactly like no override"
 
   const result = formatAgentParams(agent, {});
 
-  assert.equal(result, "model: claude-opus-4 · thinking: inherited · tools: a, b · skills: inherited · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: claude-opus-4 (frontmatter) · thinking: none · tools: a, b (frontmatter) · skills: none · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: skills override renders a new skills segment with the effective skills", () => {
@@ -213,7 +213,7 @@ test("formatAgentParams: skills override renders a new skills segment with the e
 
   const result = formatAgentParams(agent, { skills: ["a", "b"] });
 
-  assert.equal(result, "model: inherited · thinking: inherited · tools: inherited · skills: a, b · maxTurns: inherited · timeoutMs: inherited");
+  assert.equal(result, "model: none · thinking: none · tools: none · skills: a, b · maxTurns: none · timeoutMs: none");
 });
 
 test("formatAgentParams: tools and skills both overridden together renders both effective values", () => {
@@ -223,7 +223,7 @@ test("formatAgentParams: tools and skills both overridden together renders both 
 
   assert.equal(
     result,
-    "model: inherited · thinking: inherited · tools: read, grep · skills: tdd, gof-design-patterns · maxTurns: inherited · timeoutMs: inherited",
+    "model: none · thinking: none · tools: read, grep · skills: tdd, gof-design-patterns · maxTurns: none · timeoutMs: none",
   );
 });
 
@@ -233,31 +233,28 @@ test("formatAgentParams: agent with maxTurns renders a 'maxTurns: <n>' segment i
   const result = formatAgentParams(agent);
 
   assert.ok(
-    result.includes("maxTurns: 7"),
-    `expected rendered line to contain "maxTurns: 7", got: ${result}`,
+    result.includes("maxTurns: 7 (frontmatter)"),
+    `expected rendered line to contain "maxTurns: 7 (frontmatter)", got: ${result}`,
   );
 });
 
-test("formatAgentParams: agent without maxTurns renders a 'maxTurns: inherited' segment in the param line", () => {
+test("formatAgentParams: agent without maxTurns renders a 'maxTurns: none' segment in the param line", () => {
   const agent = makeAgent({});
 
   const result = formatAgentParams(agent);
 
   assert.ok(
-    result.includes("maxTurns: inherited"),
-    `expected rendered line to contain "maxTurns: inherited", got: ${result}`,
+    result.includes("maxTurns: none"),
+    `expected rendered line to contain "maxTurns: none", got: ${result}`,
   );
 });
 
-test("formatAgentParams: maxTurns override takes precedence when agent has no maxTurns (renders the override value)", () => {
+test("formatAgentParams: maxTurns override takes precedence when agent has no maxTurns (renders the override value, bare)", () => {
   const agent = makeAgent({});
 
   const result = formatAgentParams(agent, { maxTurns: 3 });
 
-  assert.ok(
-    result.includes("maxTurns: 3"),
-    `expected rendered line to contain "maxTurns: 3", got: ${result}`,
-  );
+  assert.match(result, /maxTurns: 3 \u00b7 timeoutMs:/);
 });
 
 test("formatAgentParams: thinking override takes precedence over the agent's frontmatter thinking (regression: must read the effective value, not agent.thinking directly)", () => {
@@ -273,6 +270,7 @@ test("formatAgentParams: thinking override takes precedence over the agent's fro
     !result.includes("thinking: low"),
     `expected rendered line to not contain the overridden-away "thinking: low", got: ${result}`,
   );
+  assert.match(result, /thinking: max \u00b7 tools:/);
 });
 
 test("formatAgentParams: agent with timeoutMs renders a 'timeoutMs: <n>' segment in the param line", () => {
@@ -281,12 +279,12 @@ test("formatAgentParams: agent with timeoutMs renders a 'timeoutMs: <n>' segment
   const result = formatAgentParams(agent);
 
   assert.ok(
-    result.includes("timeoutMs: 60000"),
-    `expected rendered line to contain "timeoutMs: 60000", got: ${result}`,
+    result.includes("timeoutMs: 60000 (frontmatter)"),
+    `expected rendered line to contain "timeoutMs: 60000 (frontmatter)", got: ${result}`,
   );
 });
 
-test("formatAgentParams: timeoutMs override takes precedence when agent has no timeoutMs (renders the override value)", () => {
+test("formatAgentParams: timeoutMs override takes precedence when agent has no timeoutMs (renders the override value, bare)", () => {
   const agent = makeAgent({});
 
   const result = formatAgentParams(agent, { timeoutMs: 20 });
@@ -295,6 +293,34 @@ test("formatAgentParams: timeoutMs override takes precedence when agent has no t
     result.includes("timeoutMs: 20"),
     `expected rendered line to contain "timeoutMs: 20", got: ${result}`,
   );
+  // Last segment, so the end anchor proves no provenance suffix follows it.
+  assert.match(result, /timeoutMs: 20$/);
+});
+
+test("formatAgentParams: a value supplied by settings.json renders its (settings.json) suffix", () => {
+  const agent = makeAgent({ model: "claude-opus-4", settingsFields: ["model"] });
+
+  const result = formatAgentParams(agent);
+
+  assert.equal(result, "model: claude-opus-4 (settings.json) · thinking: none · tools: none · skills: none · maxTurns: none · timeoutMs: none");
+});
+
+test("formatAgentParams: a settings model: \"inherit\" (present key, undefined value) renders none with no suffix", () => {
+  const agent = makeAgent({ settingsFields: ["model"] });
+
+  const result = formatAgentParams(agent);
+
+  assert.match(result, /^model: none \u00b7 /);
+  assert.ok(!result.includes("(settings.json)"));
+});
+
+test("formatAgentParams: the call's own override beats the settings provenance and carries no suffix", () => {
+  const agent = makeAgent({ model: "frontmatter-model", settingsFields: ["model"] });
+
+  const result = formatAgentParams(agent, { model: "claude-haiku" });
+
+  assert.match(result, /^model: claude-haiku \u00b7 /);
+  assert.ok(!result.includes("(settings.json)"));
 });
 
 test("buildSubagentCallText: single-mode args.model overrides the agent's configured model in the param line", () => {

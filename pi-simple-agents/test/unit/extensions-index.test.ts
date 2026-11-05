@@ -303,6 +303,31 @@ test("renderCall: context.expanded=true renders the expanded call text with the 
   assert.match(rendered, /Line two/);
 });
 
+test("renderCall: a settings.json agentOverrides model renders with the (settings.json) provenance label", async (t) => {
+  const fixture = makeAgentFixture(t);
+  // Written BEFORE the factory loads: the registry's 5 s TTL cache makes a
+  // later write masked by the setup's own discovery load.
+  fs.writeFileSync(
+    path.join(fixture.homeDir, ".pi", "settings.json"),
+    JSON.stringify({ "pi-simple-agents": { agentOverrides: { scout: { model: "anthropic/claude-opus-4-8" } } } }),
+    "utf8",
+  );
+  const pi = makeFakePi();
+  const createSession = async () => ({ session: fakeAgentSession("done") as any });
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  // One real call populates registry.peek(cwd) for the render context.
+  await pi.tool.execute("call-prov", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  await waitUntil(() => pi.sentMessages.length > 0); // the run settled
+
+  const rendered = textOf(pi.tool.renderCall({ agent: "scout", task: "x" }, fakeTheme, { cwd: fixture.cwd, argsComplete: true }));
+
+  // The whole chain settings.json → applyOverrides → AgentConfig.settingsFields
+  // → formatAgentParams, rendered.
+  assert.match(rendered, /model: anthropic\/claude-opus-4-8 \(settings\.json\)/);
+  assert.match(rendered, /thinking: none \u00b7 tools:/);
+});
+
 // (d) renderResult's generic {error}/no-details passthrough is unchanged
 // from before background jobs existed — still delegates to
 // buildSubagentResultText with progress/runs always undefined now (the old
@@ -1207,7 +1232,7 @@ test("wiring: /subagents cancel on a real running job, then /subagents clear, th
 function fakePeekCommandCtx(overrides: { mode?: string; hasUI?: boolean } = {}) {
   const notifications: Array<{ message: string; type?: string }> = [];
   const customCalls: Array<{ factory: Function; options: any }> = [];
-  const customGates: Array<(value: "toggle" | undefined) => void> = [];
+  const customGates: Array<(value: undefined) => void> = [];
   return {
     mode: overrides.mode ?? "tui",
     hasUI: overrides.hasUI ?? true,
@@ -1221,7 +1246,7 @@ function fakePeekCommandCtx(overrides: { mode?: string; hasUI?: boolean } = {}) 
       theme: fakeTheme,
       custom: (factory: Function, options: any) => {
         customCalls.push({ factory, options });
-        return new Promise<"toggle" | undefined>((resolve) => customGates.push(resolve));
+        return new Promise<undefined>((resolve) => customGates.push(resolve));
       },
     },
     notifications,
@@ -1256,7 +1281,7 @@ test("wiring: /subagents peek with an unknown id warns with the shared jobNotFou
   assert.equal(ctx.customCalls.length, 0);
 });
 
-test("wiring: /subagents peek with a single running job mounts the overlay floating, rendering a live frame", async (t) => {
+test("wiring: /subagents peek with a single running job mounts the fullscreen overlay, rendering a live frame", async (t) => {
   const fixture = makeAgentFixture(t);
   const pi = makeFakePi();
   const { session, listeners } = hangingStreamingSession();
@@ -1275,7 +1300,9 @@ test("wiring: /subagents peek with a single running job mounts the overlay float
   assert.equal(ctx.notifications.length, 0);
   assert.equal(ctx.customCalls.length, 1);
   assert.equal(ctx.customCalls[0].options.overlay, true);
-  assert.equal(ctx.customCalls[0].options.overlayOptions.width, "80%"); // floating first (decision C)
+  assert.equal(ctx.customCalls[0].options.overlayOptions.width, "100%"); // one mode only: fullscreen
+  assert.equal(ctx.customCalls[0].options.overlayOptions.maxHeight, "100%");
+  assert.equal(ctx.customCalls[0].options.overlayOptions.margin, 0);
 
   // Mount through the captured factory with fake TUI/keybindings: the fresh
   // component must render non-empty, width-fitting lines with a footer.
@@ -1759,6 +1786,89 @@ test("subagent_job retry: a relaunched job resolves an extension-provider model 
   assert.equal(launches[0].sessionOptions.model, fromHost);
   // …and it never becomes a session option of its own.
   assert.equal("modelRegistry" in launches[0].sessionOptions, false);
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+// --- the recorded task model (JobTask.model) ---
+
+// The parent session's model is what the child inherits when neither the call
+// nor the agent names one, so the job records it and every view can show it.
+test("subagent tool: an agent with no model records the parent session's model ref in the job task snapshot", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const ctx = { ...fakeExecuteCtx({ cwd: fixture.cwd }), model: { provider: "anthropic", id: "claude-opus-4-8" } };
+  const ack = await pi.tool.execute("call-parent-model", { agent: "scout", task: "x" }, undefined, undefined, ctx);
+  await waitUntil(() => listeners.length > 0);
+
+  assert.equal((ack.details as { task: { model?: string } }).task.model, "anthropic/claude-opus-4-8");
+
+  await settleRunningJob(pi, (ack.details as { jobId: string }).jobId);
+});
+
+test("subagent tool: a context without a model records no model at all (the views omit the segment)", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { session, listeners } = hangingStreamingSession();
+  const createSession = async () => ({ session } as any);
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const ack = await pi.tool.execute("call-no-parent-model", { agent: "scout", task: "x" }, undefined, undefined, fakeExecuteCtx({ cwd: fixture.cwd }));
+  await waitUntil(() => listeners.length > 0);
+
+  const task = (ack.details as { task: Record<string, unknown> }).task;
+  assert.equal(task.model, undefined);
+  assert.equal("model" in task, false); // absent, never a present-with-undefined key
+
+  await settleRunningJob(pi, (ack.details as { jobId: string }).jobId);
+});
+
+test("subagent tool: the call's own model override wins over the parent's ref in the task snapshot", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const createSession = async () => ({ session: fakeAgentSession("done") as any });
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const ctx = { ...fakeExecuteCtx({ cwd: fixture.cwd }), model: { provider: "anthropic", id: "claude-sonnet-4" } };
+  const ack = await pi.tool.execute("call-override-model", { agent: "scout", task: "x", model: "zprov/zmodel" }, undefined, undefined, ctx);
+
+  assert.equal((ack.details as { task: { model?: string } }).task.model, "zprov/zmodel");
+
+  await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
+});
+
+// A relaunch has to record the model ref too: handleRelaunch's JobActionContext
+// carries ctx.model for exactly that, so a retried job renders like a first one.
+test("subagent_job retry: the relaunched job records the invoking context's model ref", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const pi = makeFakePi();
+  const { createSession } = relaunchLaunchCapture();
+  await extensionFactory(pi as unknown as ExtensionAPI, undefined, createSession, fixture.paths);
+
+  const dir = makeSessionDir(t);
+  const parentFile = rlParentFile(dir, [
+    rlAckEntry("S2201", "call-r", "scout", "do the thing"),
+    rlCompletionEntry("S2201", "call-r", "failed", "scout", "do the thing"),
+  ]);
+
+  const jobTool = pi.tools.get(SUBAGENT_JOB_TOOL_NAME)!;
+  const jobCtx = {
+    ...fakeExecuteCtx({ cwd: fixture.cwd, sessionFile: parentFile }),
+    model: { provider: "anthropic", id: "claude-opus-4-8" },
+  };
+
+  const retried = await jobTool.execute("tc-retry-model", { action: "retry", id: "call-r" }, undefined, undefined, jobCtx);
+  assert.match(retried.content[0].text, /^Retrying scout as job S\d+/);
+
+  // The ref reaches the view the user sees: its own line under the header.
+  const listCtx = fakeCommandCtx();
+  await pi.commands.get("subagents")!.handler("list", listCtx);
+  const listText = listCtx.notifications.at(-1)!.message;
+  assert.ok(listText.split("\n").includes("  anthropic/claude-opus-4-8"), `expected a model line, got: ${listText}`);
 
   await waitUntil(() => pi.sentMessages.length > 0); // settle hygiene
 });

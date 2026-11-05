@@ -14,7 +14,7 @@ import type { TranscriptState } from "./transcript.ts";
 import { formatRunUsage } from "./usage.ts";
 import { toErrorMessage, WARN_PREFIX } from "./warn.ts";
 
-/** Floating live window for `/subagents peek`: renders a job's transcript
+/** Fullscreen live window for `/subagents peek`: renders a job's transcript
  * (src/transcript.ts state) as a bounded tail of activity lines. Structure
  * mirrors src/job-widget.ts: pure render helper first, then the component and
  * the manager controller, all themed through structural subsets (no concrete
@@ -55,7 +55,10 @@ function statusColor(status: JobState["status"]): "accent" | "success" | "error"
 }
 
 // Header: "<id> <agent> <status> · <elapsed>[ · <usage>]". Usage comes from
-// the live progress snapshot, so a running job shows tokens spent so far.
+// the live progress snapshot, so a running job shows tokens spent so far. The
+// model ref is NOT a header segment: it gets its own line right below (see
+// modelLine in src/job-view.ts), so a narrow terminal never trades the
+// status/elapsed/usage columns away for it.
 function buildHeader(job: JobSnapshot, now: number, theme: PeekTheme): string {
   // Settled jobs freeze the elapsed clock at settle time (the same rule
   // buildJobListEntry applies in src/job-view.ts): re-opening one no longer
@@ -71,11 +74,11 @@ function buildHeader(job: JobSnapshot, now: number, theme: PeekTheme): string {
   return parts.join(" ");
 }
 
-// Footer: one short dim line. The `w` hint names the mode the key switches
-// TO; the scroll hint joins only once the body outgrows the window (the
-// frame's width guard truncates the line if it ever got too long).
-function buildFooter(theme: PeekTheme, fullscreen: boolean, scrollable = false): string {
-  const base = fullscreen ? " Esc/q close \u00b7 w window" : " Esc/q close \u00b7 w fullscreen";
+// Footer: one short dim line. The scroll hint joins only once the body outgrows
+// the window (the frame's width guard truncates the line if it ever got too
+// long). One mode only, so there is no window-size hint to advertise.
+function buildFooter(theme: PeekTheme, scrollable = false): string {
+  const base = " Esc/q close";
   return theme.fg("dim", scrollable ? `${base} \u00b7 \u2191/\u2193 scroll` : base);
 }
 
@@ -200,18 +203,17 @@ function withFrame(contentLines: readonly string[], title: string, theme: PeekTh
   return frame.map((line) => truncateToWidth(line, outer));
 }
 
-// Pure line builder for one peek frame: title row, header, body, footer inside
-// a 1-cell box border frame with horizontal padding.
-// `prefs` optionally gates thinking/tool-result rendering; `scroll`, when
-// present, slices the body `offset` lines up from its bottom (0 = follow the
-// live tail, byte-identical to the no-scroll path).
+// Pure line builder for one peek frame: title row, header, the job's model line
+// when it recorded one, body, footer inside a 1-cell box border frame with
+// horizontal padding. `prefs` optionally gates thinking/tool-result rendering;
+// `scroll`, when present, slices the body `offset` lines up from its bottom
+// (0 = follow the live tail, byte-identical to the no-scroll path).
 export function buildPeekLines(
   job: JobSnapshot,
   transcript: TranscriptState | undefined,
   now: number,
   theme: PeekTheme,
   width: number,
-  fullscreen: boolean,
   prefs?: PeekRenderPrefs,
   scroll?: { offset: number },
 ): string[] {
@@ -248,8 +250,12 @@ export function buildPeekLines(
 
   const content = [
     buildHeader(job, now, theme),
+    // The model ref sits on its own dim line between header and body: the ref
+    // is long, and the header's columns must survive a narrow terminal. Omitted
+    // entirely (no blank line) when the job recorded no model.
+    ...(job.task.model ? [theme.fg("dim", job.task.model)] : []),
     ...body,
-    buildFooter(theme, fullscreen, cap > 0),
+    buildFooter(theme, cap > 0),
   ];
   return withFrame(content, `peek \u00b7 ${job.id} \u00b7 ${job.task.agent}`, theme, width);
 }
@@ -268,21 +274,23 @@ export function peekScrollCap(
 }
 
 /** Result delivered to the manager through ctx.ui.custom's `done`:
- * `undefined` closes the window, `"toggle"` reopens it in the other mode. */
-export type PeekDone = (result: "toggle" | undefined) => void;
+ * `undefined` closes the window — closing is the only outcome, since the
+ * window has a single mode. */
+export type PeekDone = (result: undefined) => void;
 
 /** What the host hands a PeekOverlayComponent: live accessors for the job
- * snapshot and transcript, the injected scheduler for the pulse timer, and
- * the view mode this overlay instance was opened in. The render prefs, the
- * initial scroll offset, and the scroll callback exist because the MANAGER
- * (not this component) owns preference wiring and `w`-toggle persistence. */
+ * snapshot and transcript, the injected scheduler for the pulse timer, and the
+ * render prefs. The initial scroll offset and the scroll callback are this
+ * component's own observation seams: the manager supplies neither any more
+ * (there is no mode switch that would have to survive a rebuild), so
+ * production always opens at offset 0, following the tail, and the offset
+ * lives only inside the open instance. */
 export interface PeekOverlayDeps {
   getJob: () => JobSnapshot | undefined;
   getTranscript: () => TranscriptState | undefined;
   now: () => number;
   schedule: (fn: () => void, ms: number) => unknown;
   cancel: (handle: unknown) => void;
-  fullscreen: boolean;
   /** Live render prefs — read fresh on every render, never cached. */
   getPrefs?: () => PeekRenderPrefs | undefined;
   /** Initial scroll offset: full-body lines up from the bottom (0 follows). */
@@ -353,9 +361,10 @@ export class PeekOverlayComponent {
   render(width: number): string[] {
     const job = this.deps.getJob();
     if (!job) {
-      // The registry pruned the job (maxRecent): a minimal dim frame.
+      // The registry pruned the job (maxRecent): a minimal dim frame. No model
+      // line is possible — the task snapshot itself is gone.
       return withFrame(
-        [this.theme.fg("dim", "job finished and evicted"), buildFooter(this.theme, this.deps.fullscreen)],
+        [this.theme.fg("dim", "job finished and evicted"), buildFooter(this.theme)],
         "peek",
         this.theme,
         width,
@@ -370,7 +379,7 @@ export class PeekOverlayComponent {
     const inner = Math.max(1, Math.max(4, width) - 4);
     this.scrollCap = peekScrollCap(job, transcript, this.theme, inner, prefs);
     const offset = this.clampScroll(this.scrollOffset, this.scrollCap);
-    return buildPeekLines(job, transcript, this.deps.now(), this.theme, width, this.deps.fullscreen, prefs, { offset });
+    return buildPeekLines(job, transcript, this.deps.now(), this.theme, width, prefs, { offset });
   }
 
   // Scroll offset, counted in full-body lines up from the bottom (0 = follow
@@ -392,11 +401,6 @@ export class PeekOverlayComponent {
     if (this.keybindings.matches(data, "tui.select.cancel") || data === "q") {
       this.stopPulse();
       this.done(undefined);
-      return;
-    }
-    if (data === "w") {
-      this.stopPulse();
-      this.done("toggle");
       return;
     }
     // Tool-output expansion (Ctrl+O by default), resolved through the
@@ -488,56 +492,37 @@ export interface PeekManager {
   close(): void;
 }
 
-const FLOATING_OVERLAY: OverlayOptions = { width: "80%", maxHeight: "50%", anchor: "center" };
 const FULLSCREEN_OVERLAY: OverlayOptions = { width: "100%", maxHeight: "100%", margin: 0 };
 
 // Drives the peek overlay: `open` fires ctx.ui.custom without awaiting it
 // (McpManager precedent — the overlay lives until the component's done()
-// fires), a "toggle" resolution reopens in the other mode, and a rejection
-// degrades to a console warning. The latest component is tracked so
+// fires), closing is the only outcome (one mode, so nothing reopens), and a
+// rejection degrades to a console warning. The latest component is tracked so
 // `close()` can stop its pulse on shutdown.
 export function createPeekManager(deps: PeekManagerDeps): PeekManager {
   let current: PeekOverlayComponent | undefined;
-  // Scroll offset of the currently open window, owned here because a `w`
-  // toggle recreates the component instance: the new one reopens at the same
-  // offset, and a real close resets it so the next open auto-follows.
-  let lastScrollOffset = 0;
 
   function openWith(
     ui: PeekManagerUi,
-    mode: "floating" | "fullscreen",
-    job: JobSnapshot,
     getJob: () => JobSnapshot | undefined,
     getTranscript: () => TranscriptState | undefined,
   ): void {
-    const overlayOptions = mode === "floating" ? FLOATING_OVERLAY : FULLSCREEN_OVERLAY;
-    void ui.custom<"toggle" | undefined>((tui, theme, keybindings, done) => {
+    void ui.custom<undefined>((tui, theme, keybindings, done) => {
       current = new PeekOverlayComponent(tui, theme, keybindings, done, {
         getJob,
         getTranscript,
         now: deps.now,
         schedule: deps.schedule,
         cancel: deps.cancel,
-        fullscreen: mode === "fullscreen",
         getPrefs: () => deps.getRenderPrefs?.(),
-        scrollOffset: lastScrollOffset,
-        onScroll: (offset) => {
-          lastScrollOffset = offset;
-        },
         // Parity with the host's own Ctrl+O: flipping the main view's
         // toggle triggers the host re-render, and the window reads the
         // prefs fresh on its next frame — no local state to keep.
         onToggleTools: () => ui.setToolsExpanded(!ui.getToolsExpanded()),
       });
       return current;
-    }, { overlay: true, overlayOptions }).then((result) => {
+    }, { overlay: true, overlayOptions: FULLSCREEN_OVERLAY }).then(() => {
       current = undefined;
-      if (result === "toggle") {
-        // Reopen keeps the scroll position (lastScrollOffset untouched).
-        openWith(ui, mode === "floating" ? "fullscreen" : "floating", job, getJob, getTranscript);
-      } else {
-        lastScrollOffset = 0; // real close: the next open follows the tail
-      }
     }).catch((error: unknown) => {
       current = undefined;
       console.warn(`${WARN_PREFIX}peek window failed: ${toErrorMessage(error)}`);
@@ -545,16 +530,15 @@ export function createPeekManager(deps: PeekManagerDeps): PeekManager {
   }
 
   return {
-    open(job, getJob, getTranscript) {
+    open(_job, getJob, getTranscript) {
       const ui = deps.getUi();
       if (!ui) return false;
-      openWith(ui, "floating", job, getJob, getTranscript); // decision C: floating first
+      openWith(ui, getJob, getTranscript); // one mode only: the fullscreen takeover
       return true;
     },
     close() {
       current?.dispose();
       current = undefined;
-      lastScrollOffset = 0;
     },
   };
 }

@@ -40,6 +40,11 @@ export function formatToolDuration(ms: number): string {
 // whole line short enough for the widget.
 const WIDGET_PREVIEW_WIDTH = 48;
 
+// The model ref gets its own cap: the widget is one space-separated line, and
+// the model is the only unbounded field in it. Capped rather than unbounded so
+// the elapsed-time column (the line's tail) never gets pushed out of view.
+const WIDGET_MODEL_WIDTH = 32;
+
 function unfinishedTaskLine(job: JobSnapshot, now: number, theme: ProgressTheme): string | undefined {
   if (job.progress.done) return undefined;
 
@@ -49,9 +54,13 @@ function unfinishedTaskLine(job: JobSnapshot, now: number, theme: ProgressTheme)
   const elapsed = theme.fg("dim", formatElapsed(now - job.startedAt));
 
   const agent = theme.fg("accent", job.task.agent);
+  // Right after the agent, not at the tail: the host truncates an over-long
+  // widget line, and here what overflows should be the task preview — never
+  // the elapsed time.
+  const model = job.task.model ? ` ${theme.fg("dim", truncate(job.task.model, WIDGET_MODEL_WIDTH))}` : "";
   const activity = theme.fg("dim", activityWord(job.progress));
   const preview = truncate(firstLine(job.task.task), WIDGET_PREVIEW_WIDTH);
-  return `${marker} ${job.id} ${agent} ${activity} ${preview}  ${elapsed}${suffix}`;
+  return `${marker} ${job.id} ${agent}${model} ${activity} ${preview}  ${elapsed}${suffix}`;
 }
 
 // Persistent-widget content: one line per still-running job, or `undefined`
@@ -88,23 +97,42 @@ export function buildFinishedTaskLine(result: AgentRunResult, theme: ProgressThe
   return `  ${theme.fg("accent", result.agent)} \u2014 ${label}${footer}`;
 }
 
+// The multi-line job views (/subagents list|status, the peek header below in
+// src/peek-window.ts) carry the model ref on a line of its own, right under the
+// header: the ref is long and the header is already dense, so a header tail
+// would push the status/elapsed columns out of the picture. Undefined when the
+// job recorded no model (see JobTask.model), so callers can omit the line
+// entirely instead of leaving a blank one. Plain text, two-space indent — the
+// same indent buildFinishedTaskLine uses.
+function modelLine(job: JobSnapshot): string | undefined {
+  return job.task.model ? `  ${job.task.model}` : undefined;
+}
+
+// Header block shared by every arm of /subagents list|status: the
+// "<id> <status> · <elapsed>" line, then the model line when the job recorded
+// one. The running and the settled arms therefore cannot drift apart.
+function headerBlock(header: string, job: JobSnapshot): string[] {
+  const model = modelLine(job);
+  return model ? [header, model] : [header];
+}
+
 function buildJobListEntry(job: JobSnapshot, now: number, theme: ProgressTheme): string {
   const state = job.state;
   const settledAt = "settledAt" in state ? state.settledAt : now;
   const elapsed = formatElapsed(settledAt - job.startedAt);
-  const header = `${job.id} ${state.status} \u00b7 ${elapsed}`;
+  const header = headerBlock(`${job.id} ${state.status} \u00b7 ${elapsed}`, job);
 
   switch (state.status) {
     case "running":
     case "cancelling":
-      return [header, buildProgressLine(job.progress, theme)].join("\n");
+      return [...header, buildProgressLine(job.progress, theme)].join("\n");
     case "errored":
       // Infrastructure crash: no run result exists, only the exception message.
-      return [header, `  ${state.error}`].join("\n");
+      return [...header, `  ${state.error}`].join("\n");
     case "failed":
     case "completed":
     case "cancelled":
-      return [header, buildFinishedTaskLine(state.result, theme)].join("\n");
+      return [...header, buildFinishedTaskLine(state.result, theme)].join("\n");
   }
 }
 
@@ -117,7 +145,7 @@ export function buildHelpText(): string {
     "  /subagents                            this help",
     "  /subagents list                       list running and recently finished jobs (newest first)",
     "  /subagents status [id]                detail one job: activity, recent tool calls, usage",
-    "  /subagents peek [id]                  live window over one job (w fullscreen, q/Esc close, Ctrl+O expand)",
+    "  /subagents peek [id]                  live window over one job (fullscreen; q/Esc close, Ctrl+O expand)",
     "  /subagents cancel [id]                stop a running job",
     "  /subagents steer <id> <message>       inject a message into a running job's live session",
     "  /subagents followUp <id> <message>    queue a message for the end of the run (it extends the run)",
@@ -465,7 +493,7 @@ export function buildJobStatusText(job: JobSnapshot, now: number, theme: Progres
   if (!isActive(job.state)) return buildJobListEntry(job, now, theme);
 
   const lines = [
-    `${job.id} ${job.state.status} \u00b7 ${formatElapsed(now - job.startedAt)}`,
+    ...headerBlock(`${job.id} ${job.state.status} \u00b7 ${formatElapsed(now - job.startedAt)}`, job),
     `  ${theme.fg("accent", job.task.agent)} ${theme.fg("dim", `\u00b7 activity: ${activityWord(job.progress)}`)}`,
   ];
   const history = job.progress.history;

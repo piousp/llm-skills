@@ -36,6 +36,7 @@ import type { ProgressTheme } from "../../src/progress.ts";
 import type { AgentRunResult } from "../../src/run.ts";
 import { MAX_TIMEOUT_MS } from "../../src/run.ts";
 import type { ReconciledRun, SubagentRelaunchCandidate, SubagentSessionReport } from "../../src/session-reconcile.ts";
+import { truncate } from "../../src/text-utils.ts";
 
 const theme: ProgressTheme = { fg: (c, t) => `<${c}>${t}</${c}>` };
 
@@ -1110,4 +1111,83 @@ test("relaunch precondition texts name their run", () => {
   assert.match(consumedOrphanText("call-o"), /already retried or continued/);
   assert.match(noTaskText(dirless), /call-d/);
   assert.match(agentNameNotOnDiskText(dirless), /"unknown"/);
+});
+
+// --- the job's model ref in the views (JobTask.model) ---
+
+// Built per test on purpose: runningJob()'s shared fixture stays model-less, so
+// the byte-pinned model-less lines above keep proving that nothing shifts when
+// the model is unknown.
+const MODEL_REF = "anthropic/claude-opus-4-8";
+
+function modelJob(overrides: Partial<JobSnapshot> = {}): JobSnapshot {
+  return runningJob({ task: { agent: "scout", task: "x", model: MODEL_REF }, ...overrides });
+}
+
+test("buildJobsWidgetLines: a recorded model shows dim right after the agent name", () => {
+  const lines = buildJobsWidgetLines([modelJob()], 2_000, theme)!;
+
+  assert.equal(
+    lines[0],
+    `\u25ef S1003 <accent>scout</accent> <dim>${MODEL_REF}</dim> <dim>waiting</dim> x  <dim>1s</dim>`,
+  );
+});
+
+test("buildJobsWidgetLines: a model ref longer than 32 cells is truncated with an ellipsis", () => {
+  const longRef = `provider/${"m".repeat(40)}`;
+  const job = modelJob({ task: { agent: "scout", task: "x", model: longRef } });
+  const lines = buildJobsWidgetLines([job], 2_000, theme)!;
+
+  assert.ok(lines[0].includes(`<dim>${truncate(longRef, 32)}</dim>`));
+  assert.ok(!lines[0].includes(longRef));
+});
+
+test("buildJobsWidgetLines: a job with no recorded model omits the segment entirely", () => {
+  const job = runningJob({ task: { agent: "scout", task: "x" } });
+
+  // Byte-identical to the pre-model line: the pin that nothing shifts.
+  assert.equal(
+    buildJobsWidgetLines([job], 2_000, theme)![0],
+    "\u25ef S1003 <accent>scout</accent> <dim>waiting</dim> x  <dim>1s</dim>",
+  );
+});
+
+test("buildJobListText: the model ref gets its own line directly under a running job's header", () => {
+  const text = buildJobListText([modelJob()], 2_000, theme);
+  const lines = text.split("\n");
+
+  assert.equal(lines[0], "S1003 running \u00b7 1s");
+  assert.equal(lines[1], `  ${MODEL_REF}`);
+  assert.match(lines[2], /<accent>scout<\/accent>/); // the progress line follows the model line
+  assert.doesNotMatch(text, /\n\n/); // never a blank line in the model's place
+});
+
+test("buildJobListText: a settled job carries the model line too (every arm shares the header block)", () => {
+  const completed: SettledJob = { ...modelJob(), state: { status: "completed", settledAt: 4_000, result: sampleResult } };
+  const lines = buildJobListText([completed], 9_000, theme).split("\n");
+
+  assert.equal(lines[0], "S1003 completed \u00b7 3s");
+  assert.equal(lines[1], `  ${MODEL_REF}`);
+  assert.match(lines[2], /success/);
+
+  // The errored arm (no run result at all, only the exception text) shares it.
+  const errored: SettledJob = { ...modelJob(), state: { status: "errored", settledAt: 4_000, error: "boom" } };
+  const erroredLines = buildJobListText([errored], 9_000, theme).split("\n");
+  assert.equal(erroredLines[1], `  ${MODEL_REF}`);
+  assert.match(erroredLines[2], /boom/);
+});
+
+test("buildJobStatusText: a running job's model line sits between the header and the activity line", () => {
+  const lines = buildJobStatusText(modelJob(), 2_000, theme).split("\n");
+
+  assert.equal(lines[0], "S1003 running \u00b7 1s");
+  assert.equal(lines[1], `  ${MODEL_REF}`);
+  assert.match(lines[2], /activity: waiting/);
+});
+
+test("buildHelpText: the peek line says fullscreen and no longer offers w", () => {
+  const text = buildHelpText();
+
+  assert.match(text, /peek \[id\]\s+live window over one job \(fullscreen; q\/Esc close, Ctrl\+O expand\)/);
+  assert.doesNotMatch(text, /w\s+fullscreen/);
 });

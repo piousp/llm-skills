@@ -32,6 +32,15 @@ export interface AgentConfig {
       (agentOverrides) configuration; invariant: integer 1..100 after
       resolveMaxTurns runs, or undefined (= no limit). */
   maxTurns?: number;
+  /** Names of the fields whose CURRENT value came from a settings.json
+      `agentOverrides` entry — src/overrides.ts's applyOverrides is the only
+      writer. Purely a rendering concern: src/render-call.ts's parameter line
+      appends a provenance suffix to the segments listed here. Presence-based,
+      not value-based: a settings `model: "inherit"` lands here while the
+      field's value stays undefined (that is how "inherit" travels through the
+      merge). Both the user (~/.pi/agent/settings.json) and the project
+      (.pi/settings.json) file map to the one "settings.json" label. */
+  settingsFields?: readonly string[];
 }
 
 export interface AgentOverrides {

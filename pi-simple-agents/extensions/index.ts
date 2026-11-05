@@ -9,10 +9,10 @@ import { MAX_TIMEOUT_MS, type RunAgentViaSdkOptions } from "../src/run.ts";
 import { SUBAGENT_TOOL_NAME, SUBAGENT_JOB_TOOL_NAME } from "../src/extension-binding.ts";
 import { createRenderSubagentCall, renderSubagentResult, renderSubagentResultMessage, type GetAgents } from "../src/render-extensions.ts";
 import { runSingleTask } from "../src/task-runner.ts";
-import { validateSubagentParams, resolveAgent, invocationOverrideOf } from "../src/validate.ts";
+import { validateSubagentParams, resolveAgent, invocationOverrideOf, applyInvocationOverride } from "../src/validate.ts";
 import type { SubagentParams as ValidatedSubagentParams, ValidationResult } from "../src/validate.ts";
 import { buildSubagentToolResult, buildSubagentAckResult, buildJobCompletionMessage, SUBAGENT_RESULT_MESSAGE_TYPE, type SubagentJobMessageDetails } from "../src/job-messages.ts";
-import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type SettledJob } from "../src/background-jobs.ts";
+import { createJobRegistry, createSettleBarrier, isActive, type JobSnapshot, type SettledJob, type JobTask } from "../src/background-jobs.ts";
 import { createJobWidget } from "../src/job-widget.ts";
 import { buildJobListText, buildJobStatusText, buildSubagentSessionText, buildSubagentStatusText, buildHelpText, parseSubagentsCommand, describeCancelResult, describeInjectResult, describeClearResult, jobNotFoundText, NO_JOBS_TEXT, resolveAutoTarget, resolveActiveTarget, ambiguousJobsText, buildRelaunchCandidatesText, buildRelaunchResultText, resolveRelaunchTarget, relaunchNotFoundText, notContinuableText, consumedOrphanText, noTaskText, agentNameNotOnDiskText, isConsumedOrphan, outOfRangeRelaunchFields, NO_RETRYABLE_RUNS_TEXT, NO_CONTINUABLE_RUNS_TEXT, type SubagentStatusAccumulator, type RelaunchKind } from "../src/job-view.ts";
 import { addUsageToTotals, buildSubagentSessionReport, buildRelaunchCandidates, type ReconcileFs, type SessionEntry, type SubagentRelaunchCandidate } from "../src/session-reconcile.ts";
@@ -39,6 +39,30 @@ function errorResult(error: string) {
     details: { error },
     isError: true,
   };
+}
+
+/** "provider/modelId" ref of the invoking context's current model, or undefined
+    when the context has none (SDK consumers, non-model sessions, test fakes) —
+    the one place the ref form is assembled for a job's recorded task model.
+    Structural parameter (no Model import): the host's ctx.model satisfies it. */
+function modelRefOf(model: { provider: string; id: string } | undefined): string | undefined {
+  return model ? `${model.provider}/${model.id}` : undefined;
+}
+
+/** The registry's JobTask for one launch: the same merge the run itself applies
+    (src/task-runner.ts's effectiveAgent), then the parent's ref — the one rule
+    the job views render (src/job-view.ts, src/peek-window.ts). The model key is
+    OMITTED, never present-with-undefined, when no source names a model, so the
+    views key off its absence. */
+function jobTaskOf(
+  agent: AgentConfig,
+  params: ValidatedSubagentParams,
+  parentModel: string | undefined,
+): JobTask {
+  const model = applyInvocationOverride(agent, params).model ?? parentModel;
+  return model === undefined
+    ? { agent: agent.name, task: params.task }
+    : { agent: agent.name, task: params.task, model };
 }
 
 // The ReconcileFs seam for /subagents session: thin synchronous node reads
@@ -266,6 +290,10 @@ type JobActionContext = {
       misses it, see src/run.ts's findModel). Optional: the test fakes do not
       carry one, which degrades to single-source resolution. */
   hostModelRegistry?: ModelRegistry;
+  /** The invoking context's model as a "provider/modelId" ref (ctx.model), so a
+      retry/continue relaunch records the same task model a first launch does.
+      Optional: test fakes carry none. */
+  parentModel?: string;
 };
 
 export default async function (
@@ -403,6 +431,11 @@ export default async function (
         resolution source (retry/continue reach here through
         handleRelaunch's JobActionContext). */
     hostModelRegistry?: ModelRegistry;
+    /** The invoking context's model as a "provider/modelId" ref: recorded on the
+        job when neither the call nor the agent names a model, because the child
+        then really does inherit the parent session's model. A relaunch fills it
+        exactly like a first launch does (handleRelaunch's JobActionContext). */
+    parentModel?: string;
   }): JobSnapshot {
     // The tool path checks `modelRuntimeResult.ok` in execute() before
     // reaching here, and the retry/continue branches check it right below;
@@ -413,7 +446,7 @@ export default async function (
     }
     return jobs.start({
       runId: input.runId,
-      task: { agent: input.agent.name, task: input.params.task },
+      task: jobTaskOf(input.agent, input.params, input.parentModel),
       // Deliberately NOT the tool call's own `signal`: coupling them would
       // abort the job the instant this launching turn ends. Only
       // /subagents cancel and shutdown should abort a background job.
@@ -559,6 +592,7 @@ export default async function (
       callerSessionFile: sessionFile,
       seedSessionFile,
       hostModelRegistry: ctx.hostModelRegistry,
+      parentModel: ctx.parentModel,
     });
     if (candidate.status === "interrupted") {
       // The orphan's child dir is consumed by this launch: one branch
@@ -689,6 +723,9 @@ export default async function (
         // Captured synchronously here: the job's run starts in a microtask,
         // after this handler has already returned (src/background-jobs.ts).
         hostModelRegistry: ctx.modelRegistry,
+        // …as is the model ref the job views render: the child inherits this
+        // session's model when neither the call nor the agent names one.
+        parentModel: modelRefOf(ctx.model),
       });
 
       // The ack records the call's REQUESTED overrides (details.params) so
@@ -717,7 +754,7 @@ export default async function (
         action,
         id,
         message,
-        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: PLAIN_THEME, hostModelRegistry: ctx.modelRegistry },
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: PLAIN_THEME, hostModelRegistry: ctx.modelRegistry, parentModel: modelRefOf(ctx.model) },
       );
       return { content: [{ type: "text" as const, text }], details: { action, id } };
     },
@@ -804,7 +841,7 @@ export default async function (
         command.kind,
         "id" in command ? command.id : undefined,
         "message" in command ? command.message : undefined,
-        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: ctx.ui.theme, hostModelRegistry: ctx.modelRegistry },
+        { cwd: ctx.cwd, mode: ctx.mode, sessionManager: ctx.sessionManager, theme: ctx.ui.theme, hostModelRegistry: ctx.modelRegistry, parentModel: modelRefOf(ctx.model) },
       );
       ctx.ui.notify(text, level);
     },

@@ -96,9 +96,9 @@ Jobs are **in-memory only, per pi session**: nothing persists across a restart, 
 
 ### The `/subagents` command
 
-Bare `/subagents` (and `/subagents help`) prints the help text: every subcommand with its argument shape, plus the auto-resolution rules. `/subagents list` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
+Bare `/subagents` (and `/subagents help`) prints the help text: every subcommand with its argument shape, plus the auto-resolution rules. `/subagents list` lists every running and recently-finished job in the current session (newest first): its id, status, elapsed time, the model it runs (`provider/modelId`) on its own line under the header, and per-task detail (live tool activity for a running job, success/failure and a usage footer for a finished one).
 
-`/subagents status <id>` shows what one job is doing in more detail than the list. For a running job it reports: status, elapsed time, the current **activity** (see below), the most recent tool call with its arguments summary, the last 10 tool calls of the run (`… (+N earlier)` elides older ones), and the live usage footer (the list view only carries usage once a job settles). For a finished job it renders exactly the list view's entry (result or error plus the usage footer). An unknown id reports `No job with id "<id>" in this session.`, the same warning wording as `cancel`.
+`/subagents status <id>` shows what one job is doing in more detail than the list. For a running job it reports: status, elapsed time, the model it runs, the current **activity** (see below), the most recent tool call with its arguments summary, the last 10 tool calls of the run (`… (+N earlier)` elides older ones), and the live usage footer (the list view only carries usage once a job settles). For a finished job it renders exactly the list view's entry (result or error plus the usage footer). An unknown id reports `No job with id "<id>" in this session.`, the same warning wording as `cancel`.
 
 `/subagents cancel <id>` cancels a running job. `/subagents clear` drops every finished job from the list (running ones are untouched) — useful after a long session accumulates a lot of history; by default the 50 most recent finished jobs are kept automatically even without clearing.
 
@@ -152,11 +152,13 @@ The event stream is deduplicated before it reaches the widget: streaming deltas 
 
 ### The running-jobs widget
 
-While at least one job is running, a persistent panel appears below the editor: one line per still-running task, with its agent, the activity word (see above), a truncated preview of the task, and elapsed time, ticking once a second. A sample line:
+While at least one job is running, a persistent panel appears below the editor: one line per still-running task, with its agent, the model the run uses, the activity word (see above), a truncated preview of the task, and elapsed time, ticking once a second. A sample line:
 
 ```
-◯ S1001 scout grep Find all fetch() calls in src/  1m 23s
+◯ S1001 scout anthropic/claude-opus-4-8 grep Find all fetch() calls in src/  1m 23s
 ```
+
+The model ref is truncated to 32 cells, so the elapsed column at the end of the line always stays visible. A job whose model is unknown (SDK and embedded callers, contexts without a session model) shows no model segment at all rather than a placeholder.
 
 It disappears automatically once nothing is running. This is how you keep track of a job that outlives whatever else the conversation moves on to: the same thing `/subagents list` shows on demand, kept visible without asking.
 

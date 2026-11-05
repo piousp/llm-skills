@@ -6,6 +6,15 @@ import type { AgentRunResult } from "./run.ts";
 export interface JobTask {
   readonly agent: string;
   readonly task: string;
+  /** The model ref ("provider/modelId") the launched run will use, recorded at
+      launch for the job views (/subagents list|status, the jobs widget, the
+      peek header): the call's own model override, else the agent's configured
+      model, else the parent session's model — the child really does inherit it
+      when neither names one. Absent when none of the three is known (SDK
+      consumers, contexts without a model): the views omit the segment rather
+      than inventing a placeholder. Informational only — the run resolves its
+      own model at src/run.ts's resolveModel regardless. */
+  readonly model?: string;
 }
 
 /** Who asked for a cancellation: "user" (a specific `/subagents cancel <id>`) or "system" (cancelAll \u2014 shutdown, or the headless safety nets in extensions/index.ts). Carried from "cancelling" through to "cancelled" so the completion message can word it accurately (see src/job-messages.ts). */

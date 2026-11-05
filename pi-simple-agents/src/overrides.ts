@@ -137,7 +137,15 @@ export function applyOverrides(
   return agents.map((agent) => {
     const override = overrides[agent.name];
     if (!override) return agent;
-    return { ...agent, ...override };
+    // Provenance is stamped HERE, the only point where the merge still knows
+    // which side a value came from. Object.keys is exactly the set of fields
+    // the settings entry carried: validateAgentOverridesEntry already dropped
+    // every ill-typed and non-overridable key, so each surviving key really
+    // was applied — including a present-with-undefined model from a settings
+    // `model: "inherit"`. Assigned AFTER the spread so it can never be
+    // shadowed; an entry that validated down to nothing yields []. Nothing but
+    // src/render-call.ts reads this.
+    return { ...agent, ...override, settingsFields: Object.keys(override) };
   });
 }
 

@@ -64,22 +64,22 @@ function lines(n: number, prefix = "line"): string {
 
 // --- buildPeekLines ---
 
-test("buildPeekLines: frame has a titled top border; header has id, agent, status and elapsed; footer closes with Esc/q and w", () => {
-  const linesOut = buildPeekLines(runningJob(), state([]), 5_000, theme, 80, false);
+test("buildPeekLines: frame has a titled top border; header has id, agent, status and elapsed; footer closes with Esc/q and offers no `w`", () => {
+  const linesOut = buildPeekLines(runningJob(), state([]), 5_000, theme, 80);
 
   // The fake theme wraps the title in accent tags; the real renderer emits ANSI there.
   assert.match(linesOut[0], /^\u250c\u2500 <accent>peek \u00b7 S1001 \u00b7 scout<\/accent> \u2500+\u2510$/);
   assert.match(linesOut[1], /^\u2502 S1001 <accent>scout<\/accent> <accent>running<\/accent> \u00b7 5s.*\u2502$/);
   assert.match(linesOut[1], /^\u2502 .*\u2502$/);
   assert.match(linesOut.at(-2)!, /Esc\/q close/);
-  assert.match(linesOut.at(-2)!, /w fullscreen/);
+  assert.doesNotMatch(linesOut.at(-2)!, /w /);
   assert.match(linesOut.at(-1)!, /^\u2514\u2500+\u2518$/);
 });
 
 test("buildPeekLines: every line fits the given width", () => {
   const long = "x".repeat(300);
   const transcript = state([entry({ kind: "text", content: long })], { currentText: long });
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 60, true);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 60);
 
   assert.ok(linesOut.length > 0);
   for (const line of linesOut) assert.ok(visible(line).length <= 60, `too wide: ${visible(line)}`);
@@ -90,7 +90,7 @@ test("buildPeekLines: header shows live usage from progress when present", () =>
   const job = runningJob({ progress: { agent: "scout", runningTools: [], history: [], done: false, usage } });
   // Wide width: the fake theme's <dim> tags count into truncateToWidth's
   // visible width, so the full usage footer needs room to survive the guard.
-  const linesOut = buildPeekLines(job, state([]), 1_000, theme, 120, false);
+  const linesOut = buildPeekLines(job, state([]), 1_000, theme, 120);
 
   // Line 0 is the top border with the title; the header follows.
   assert.match(linesOut[1], new RegExp(formatRunUsage(usage).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -99,14 +99,14 @@ test("buildPeekLines: header shows live usage from progress when present", () =>
 test("buildPeekLines: status colors — running accent, completed success, failed error", () => {
   const result = { agent: "scout", task: "t", durationMs: 1, status: "success" as const };
   // Line 1: the header sits under the titled top border (line 0).
-  const running = buildPeekLines(runningJob(), state([]), 1_000, theme, 80, false)[1];
+  const running = buildPeekLines(runningJob(), state([]), 1_000, theme, 80)[1];
   const completed = buildPeekLines(
     runningJob({ state: { status: "completed", settledAt: 1_000, result } }),
-    state([]), 2_000, theme, 80, false,
+    state([]), 2_000, theme, 80,
   )[1];
   const failed = buildPeekLines(
     runningJob({ state: { status: "failed", settledAt: 1_000, result: { agent: "scout", task: "t", durationMs: 1, status: "error" as const, error: "boom" } } }),
-    state([]), 2_000, theme, 80, false,
+    state([]), 2_000, theme, 80,
   )[1];
 
   assert.match(running, /<accent>running<\/accent>/);
@@ -119,7 +119,7 @@ test("buildPeekLines: thinking entries render only the last 5 display lines with
     entry({ kind: "text", content: "before" }),
     entry({ kind: "thinking", content: lines(8, "thought") }),
   ]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
   const body = linesOut.slice(1, -1).join("\n");
 
   assert.match(body, /thought 8/); // the newest thinking line survives
@@ -137,7 +137,7 @@ test("buildPeekLines: text entries and tool entries render in order", () => {
     entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts" }),
     entry({ kind: "tool-end", toolCallId: "t2", ok: false, summary: "no such file" }),
   ]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
   const body = linesOut.slice(1, -1);
 
   assert.match(body.join("\n"), /reading now/);
@@ -150,7 +150,7 @@ test("buildPeekLines: live currentText renders after the entries", () => {
   const transcript = state([entry({ kind: "text", content: "settled paragraph" })], {
     currentText: "streaming right now",
   });
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
   const body = linesOut.join("\n");
 
   assert.match(body, /settled paragraph/);
@@ -160,7 +160,7 @@ test("buildPeekLines: live currentText renders after the entries", () => {
 
 test("buildPeekLines: body beyond 24 lines is tail-sliced with an elision line", () => {
   const transcript = state([entry({ kind: "text", content: lines(30) })]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
 
   // top/bottom borders + header + elision + 24 body lines + footer
   assert.equal(linesOut.length, 2 + 1 + 1 + 24 + 1);
@@ -171,7 +171,7 @@ test("buildPeekLines: body beyond 24 lines is tail-sliced with an elision line",
 
 test("buildPeekLines: dropped entry count feeds the elision line", () => {
   const transcript = state([entry({ kind: "text", content: lines(30) })], { dropped: 3 });
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
 
   assert.match(linesOut[2], /\(\+9 earlier\)/);
 });
@@ -181,7 +181,7 @@ test("buildPeekLines: a settled job freezes to its result line (no live tails)",
   const result = { agent: "scout", task: "t", durationMs: 1, status: "success" as const, finalText: "done", usage };
   const job = runningJob({ state: { status: "completed", settledAt: 4_000, result } });
   const transcript = state([entry({ kind: "text", content: "body text" })], { currentText: "streaming" });
-  const linesOut = buildPeekLines(job, transcript, 9_000, theme, 80, false);
+  const linesOut = buildPeekLines(job, transcript, 9_000, theme, 80);
   const body = linesOut.join("\n");
 
   assert.match(body, /<accent>scout<\/accent> \u2014 success/); // buildFinishedTaskLine shape
@@ -193,7 +193,7 @@ test("buildPeekLines: a settled job freezes to its result line (no live tails)",
 test("buildPeekLines: a settled job's header freezes elapsed at settledAt, even re-opened far later", () => {
   const result = { agent: "scout", task: "t", durationMs: 1, status: "success" as const };
   const job = runningJob({ state: { status: "completed", settledAt: 4_000, result } });
-  const linesOut = buildPeekLines(job, state([]), 40_000, theme, 80, false);
+  const linesOut = buildPeekLines(job, state([]), 40_000, theme, 80);
 
   assert.match(linesOut[1]!, /\u00b7 4s\b/); // settledAt - startedAt: frozen at settle time
   assert.doesNotMatch(linesOut[1]!, /40s/); // not recomputed from `now`
@@ -204,7 +204,7 @@ test("buildPeekLines: a failed settled job shows FAILED plus its usage", () => {
   const job = runningJob({
     state: { status: "failed", settledAt: 4_000, result: { agent: "scout", task: "t", durationMs: 1, status: "error" as const, error: "boom", usage } },
   });
-  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80, false);
+  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /FAILED/);
   assert.match(linesOut.join("\n"), new RegExp(formatRunUsage(usage).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -212,7 +212,7 @@ test("buildPeekLines: a failed settled job shows FAILED plus its usage", () => {
 
 test("buildPeekLines: an errored settled job shows the error text instead of a result line", () => {
   const job = runningJob({ state: { status: "errored", settledAt: 4_000, error: "crashed unexpectedly" } });
-  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80, false);
+  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /crashed unexpectedly/);
   assert.doesNotMatch(linesOut.join("\n"), /FAILED/);
@@ -221,28 +221,59 @@ test("buildPeekLines: an errored settled job shows the error text instead of a r
 test("buildPeekLines: a cancelled settled job shows its result line", () => {
   const result = { agent: "scout", task: "t", durationMs: 1, status: "success" as const, finalText: "partial" };
   const job = runningJob({ state: { status: "cancelled", settledAt: 4_000, result, reason: "user" } });
-  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80, false);
+  const linesOut = buildPeekLines(job, state([]), 9_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /\u2014 success/);
 });
 
 test("buildPeekLines: an empty transcript falls back to the task's first line", () => {
-  const linesOut = buildPeekLines(runningJob(), state([]), 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), state([]), 1_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /<dim>look around the repo<\/dim>/);
 });
 
 test("buildPeekLines: an undefined transcript falls back the same way", () => {
-  const linesOut = buildPeekLines(runningJob(), undefined, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), undefined, 1_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /look around the repo/);
 });
 
 test("buildPeekLines: an empty transcript with dropped entries keeps the elision hint", () => {
-  const linesOut = buildPeekLines(runningJob(), state([], { dropped: 7 }), 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), state([], { dropped: 7 }), 1_000, theme, 80);
 
   assert.match(linesOut.join("\n"), /\(\+7 earlier\)/);
   assert.match(linesOut.join("\n"), /look around the repo/);
+});
+
+test("buildPeekLines: the model ref gets a dedicated dim line right below the header", () => {
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01, isSubscription: false, context: undefined };
+  const job = runningJob({
+    task: { agent: "scout", task: "look around the repo", model: "anthropic/claude-opus-4-8" },
+    progress: { agent: "scout", runningTools: [], history: [], done: false, usage },
+  });
+  // Wide width so the fake theme's tags do not push the segments out.
+  const linesOut = buildPeekLines(job, state([]), 5_000, theme, 120);
+
+  // Line 0 is the titled top border, line 1 the header, line 2 the model line —
+  // its own line, directly under the header, not a header tail.
+  assert.match(linesOut[1], /<accent>running<\/accent>/);
+  assert.match(linesOut[1], /\u00b7 5s/);
+  assert.doesNotMatch(linesOut[1], /anthropic\/claude-opus-4-8/);
+  assert.match(linesOut[2], /^\u2502 <dim>anthropic\/claude-opus-4-8<\/dim> +\u2502$/);
+});
+
+test("buildPeekLines: a model-less job gets no model line at all (no blank line left behind)", () => {
+  const job = runningJob({
+    task: { agent: "scout", task: "look around the repo" },
+    progress: { agent: "scout", runningTools: [], history: [], done: false },
+  });
+  const linesOut = buildPeekLines(job, state([]), 1_000, theme, 80);
+
+  // The body's fallback line follows the header immediately: no dim model
+  // segment anywhere in the header block, and no empty frame line either.
+  assert.doesNotMatch(linesOut[1], /<dim>/);
+  assert.match(linesOut[2], /<dim>look around the repo<\/dim>/);
+  for (const line of linesOut) assert.doesNotMatch(line, /\u2502[ \t]+\u2502/); // no blank content line
 });
 
 // --- buildPeekLines render prefs ---
@@ -252,7 +283,7 @@ test("buildPeekLines: hideThinking renders no thinking at all \u2014 entries, el
     entry({ kind: "text", content: "before" }),
     entry({ kind: "thinking", content: lines(8, "thought") }),
   ], { currentThinking: "live thought" });
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, { hideThinking: true });
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, { hideThinking: true });
   const frame = linesOut.join("\n");
 
   assert.doesNotMatch(frame, /thought/); // no thinking body, no live tail
@@ -267,7 +298,7 @@ test("buildPeekLines: tool-end entries with durationMs append the per-tool durat
     entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts", durationMs: 420 }),
     entry({ kind: "tool-end", toolCallId: "t2", ok: false, summary: "no such file", durationMs: 1234 }),
   ]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
   const body = linesOut.slice(1, -1);
 
   assert.match(body.join("\n"), /contents of a\.ts \u00b7 420ms/);
@@ -280,7 +311,7 @@ test("buildPeekLines: tool-end entries without durationMs render with no duratio
     entry({ kind: "tool-start", toolCallId: "t1", label: "read a.ts" }),
     entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts" }),
   ]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
   const body = linesOut.slice(1, -1).join("\n");
 
   assert.match(body, /\u25aa contents of a\.ts/);
@@ -292,7 +323,7 @@ test("buildPeekLines: toolsExpanded=false drops the whole tool-end line, duratio
     entry({ kind: "tool-start", toolCallId: "t1", label: "read a.ts" }),
     entry({ kind: "tool-end", toolCallId: "t1", ok: true, summary: "contents of a.ts", durationMs: 420 }),
   ]);
-  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, { toolsExpanded: false });
+  const linesOut = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, { toolsExpanded: false });
   const frame = linesOut.join("\n");
 
   assert.doesNotMatch(frame, /\u25aa/); // the whole result line is gone, duration included
@@ -308,7 +339,7 @@ test("buildPeekLines: toolsExpanded=false omits tool-end lines and keeps tool-st
   ]);
   const result = { agent: "scout", task: "t", durationMs: 1, status: "error" as const, error: "boom" };
   const job = runningJob({ state: { status: "failed", settledAt: 1_000, result } });
-  const linesOut = buildPeekLines(job, transcript, 9_000, theme, 80, false, { toolsExpanded: false });
+  const linesOut = buildPeekLines(job, transcript, 9_000, theme, 80, { toolsExpanded: false });
   const frame = linesOut.join("\n");
 
   assert.doesNotMatch(frame, /\u25aa/); // collapsed tools hide their results
@@ -320,16 +351,16 @@ test("buildPeekLines: toolsExpanded=false omits tool-end lines and keeps tool-st
 
 test("buildPeekLines: scroll mode at offset 0 stays byte-identical to follow mode", () => {
   const transcript = state([entry({ kind: "text", content: lines(30) })]);
-  const follow = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
-  const scrolled = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, undefined, { offset: 0 });
+  const follow = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
+  const scrolled = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, undefined, { offset: 0 });
 
   assert.deepEqual(scrolled, follow);
 });
 
 test("buildPeekLines: a negative scroll offset clamps to follow mode", () => {
   const transcript = state([entry({ kind: "text", content: lines(30) })]);
-  const follow = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false);
-  const negative = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, undefined, { offset: -5 });
+  const follow = buildPeekLines(runningJob(), transcript, 1_000, theme, 80);
+  const negative = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, undefined, { offset: -5 });
 
   assert.deepEqual(negative, follow);
 });
@@ -338,7 +369,7 @@ test("buildPeekLines: scrolling up shows older body lines, grows the elision cou
   const transcript = state([entry({ kind: "text", content: lines(30) })]);
   // offset 3: the window becomes lines 4..27; the three lines hidden above
   // it elide into the marker (nothing was dropped by the ring buffer here).
-  const scrolled = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, false, undefined, { offset: 3 });
+  const scrolled = buildPeekLines(runningJob(), transcript, 1_000, theme, 80, undefined, { offset: 3 });
   const body = scrolled.join("\n");
 
   assert.match(body, /\u0028\+3 earlier\u0029/);
@@ -347,8 +378,8 @@ test("buildPeekLines: scrolling up shows older body lines, grows the elision cou
 });
 
 test("buildPeekLines: the footer gains the scroll hint only when the body outgrows the window", () => {
-  const long = buildPeekLines(runningJob(), state([entry({ kind: "text", content: lines(30) })]), 1_000, theme, 80, false);
-  const short = buildPeekLines(runningJob(), state([entry({ kind: "text", content: "one line" })]), 1_000, theme, 80, false);
+  const long = buildPeekLines(runningJob(), state([entry({ kind: "text", content: lines(30) })]), 1_000, theme, 80);
+  const short = buildPeekLines(runningJob(), state([entry({ kind: "text", content: "one line" })]), 1_000, theme, 80);
 
   assert.match(long.at(-2)!, /\u2191\/\u2193 scroll/);
   assert.doesNotMatch(short.at(-2)!, /scroll/);
@@ -401,14 +432,13 @@ function mount(
 ) {
   const scheduler = fakeScheduler();
   const { tui, renders } = fakeTui();
-  const doneResults: Array<"toggle" | undefined> = [];
+  const doneResults: Array<undefined> = [];
   const component = new PeekOverlayComponent(tui, theme, kb, (r) => doneResults.push(r), {
     getJob: () => jobRef.current,
     getTranscript: () => state([entry({ kind: "text", content: "hi" })]),
     now: () => 1_000,
     schedule: scheduler.schedule,
     cancel: scheduler.cancel,
-    fullscreen: false,
     ...extra,
   });
   return { component, scheduler, renders, doneResults };
@@ -485,13 +515,16 @@ test("PeekOverlayComponent: q closes the same way", () => {
   assert.equal(scheduler.pendingCount(), 0);
 });
 
-test("PeekOverlayComponent: w requests the mode toggle — done(\"toggle\")", () => {
+test("PeekOverlayComponent: w is ignored like any other key now", () => {
   const jobRef = { current: runningJob() as JobSnapshot | undefined };
-  const { component, doneResults } = mount(jobRef);
+  const { component, scheduler, doneResults } = mount(jobRef);
 
   component.handleInput("w");
 
-  assert.deepEqual(doneResults, ["toggle"]);
+  // The key was removed, not remapped: nothing closes and the pulse keeps
+  // running (the same outcome as any unbound key).
+  assert.equal(doneResults.length, 0);
+  assert.equal(scheduler.pendingCount(), 1);
 });
 
 test("PeekOverlayComponent: other input is ignored", () => {
@@ -585,6 +618,16 @@ test("PeekOverlayComponent: render yields non-empty width-fitting lines with a f
   // Footer sits above the bottom border line.
   assert.match(linesOut.at(-2)!, /Esc\/q close/);
   for (const line of linesOut) assert.ok(visible(line).length <= 80);
+});
+
+test("PeekOverlayComponent: the evicted-job frame still closes with Esc/q", () => {
+  const { component } = mount({ current: undefined });
+  const frame = component.render(80);
+
+  // The pruned-job branch renders a minimal frame — the same one-mode footer.
+  assert.match(frame.join("\n"), /job finished and evicted/);
+  assert.match(frame.at(-2)!, /Esc\/q close/);
+  assert.doesNotMatch(frame.at(-2)!, /w /);
 });
 
 test("PeekOverlayComponent: dispose stops the timer without calling done; a second dispose is a no-op", () => {
@@ -717,10 +760,10 @@ function fakePeekUi() {
   // PeekManagerUi.getToolsExpanded/setToolsExpanded read and flip.
   let toolsExpanded = true;
   const calls: Array<{
-    factory: (tui: unknown, theme: PeekTheme, keybindings: PeekKeybindings, done: (r: "toggle" | undefined) => void) => unknown;
+    factory: (tui: unknown, theme: PeekTheme, keybindings: PeekKeybindings, done: (r: undefined) => void) => unknown;
     options: { overlay?: boolean; overlayOptions?: Record<string, unknown> };
   }> = [];
-  const gates: Array<(value: "toggle" | undefined) => void> = [];
+  const gates: Array<(value: undefined) => void> = [];
   // Generic signature mirrors the host's ExtensionUIContext.custom so the
   // fake is structurally assignable to PeekManagerUi.
   const ui = {
@@ -732,7 +775,7 @@ function fakePeekUi() {
         factory: factory as unknown as typeof calls[number]["factory"],
         options: options as typeof calls[number]["options"],
       });
-      return new Promise<T>((resolve) => gates.push(resolve as (value: "toggle" | undefined) => void));
+      return new Promise<T>((resolve) => gates.push(resolve as (value: undefined) => void));
     },
     notify: (_m: string, _level?: "info" | "warning" | "error") => {},
     theme,
@@ -757,7 +800,7 @@ test("createPeekManager: open with no UI returns false and never calls custom", 
   assert.equal(manager.open(job, () => job, () => undefined), false);
 });
 
-test("createPeekManager: open returns before custom resolves (fire-and-forget), floating first", () => {
+test("createPeekManager: open returns before custom resolves (fire-and-forget), always fullscreen", () => {
   const { ui, calls, gates } = fakePeekUi();
   const manager = createPeekManager({ getUi: () => ui, now: () => 0, schedule: () => 0, cancel: () => {} });
   const job = runningJob();
@@ -767,30 +810,26 @@ test("createPeekManager: open returns before custom resolves (fire-and-forget), 
   assert.equal(manager.open(job, () => job, () => undefined), true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.overlay, true);
-  assert.equal(calls[0].options.overlayOptions!.width, "80%");
+  assert.equal(calls[0].options.overlayOptions!.width, "100%");
+  assert.equal(calls[0].options.overlayOptions!.maxHeight, "100%");
+  assert.equal(calls[0].options.overlayOptions!.margin, 0);
   assert.equal(gates.length, 1);
 });
 
-test("createPeekManager: done(\"toggle\") reopens in the other mode, cycling floating -> fullscreen -> floating", async () => {
+test("createPeekManager: a close never reopens — one ctx.ui.custom call per open", async () => {
   const { ui, calls, gates } = fakePeekUi();
   const manager = createPeekManager({ getUi: () => ui, now: () => 0, schedule: () => 0, cancel: () => {} });
   const job = runningJob();
   manager.open(job, () => job, () => undefined);
 
-  // Mount the first window: the factory hands us done; route it to the gate.
+  // Mount the window and close it: closing is the only outcome now, so
+  // nothing reopens and the manager holds no component afterwards.
   calls[0].factory({ requestRender: () => {} }, theme, keybindings, (r) => gates[0](r));
-  gates[0]("toggle"); // the component's w key resolves the overlay with "toggle"
+  gates[0](undefined);
   await settleMicrotasks();
 
-  assert.equal(calls.length, 2);
-  assert.equal(calls[1].options.overlayOptions!.width, "100%"); // fullscreen
-
-  calls[1].factory({ requestRender: () => {} }, theme, keybindings, (r) => gates[1](r));
-  gates[1]("toggle");
-  await settleMicrotasks();
-
-  assert.equal(calls.length, 3);
-  assert.equal(calls[2].options.overlayOptions!.width, "80%"); // back to floating
+  assert.equal(calls.length, 1);
+  assert.equal(gates.length, 1);
 });
 
 test("createPeekManager: a rejected custom promise takes the warn path", async () => {
@@ -848,39 +887,6 @@ const componentShape = (component: unknown) =>
     handleInput(data: string): void;
     handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
   };
-
-test("createPeekManager: the scroll offset persists across a w-toggle reopen", async () => {
-  const { ui, calls, gates } = fakePeekUi();
-  const manager = createPeekManager({ getUi: () => ui, now: () => 0, schedule: () => 0, cancel: () => {} });
-  const job = runningJob();
-  manager.open(job, () => job, scrollTranscript);
-
-  // Mount the first window and scroll it up two lines via the wheel.
-  const first = componentShape(calls[0].factory({ requestRender: () => {} }, theme, keybindings, (r) => gates[0](r)));
-  first.render(80); // fixes the scroll cap (30 - 24 = 6)
-  assert.ok(first.handleMouse(wheelEvent(-2))); // handled, offset -> 2
-
-  // Reopen in the other mode: the fresh component renders at the same offset.
-  gates[0]("toggle");
-  await settleMicrotasks();
-  assert.equal(calls.length, 2);
-  const second = componentShape(calls[1].factory({ requestRender: () => {} }, theme, keybindings, (r) => gates[1](r)));
-  const reopened = second.render(80).join("\n");
-  // At offset 2 the window sits four lines above the bottom (30 - 24 - 2),
-  // so four hidden-above lines join the elision count.
-  assert.match(reopened, /\u0028\+4 earlier\u0029/);
-  assert.doesNotMatch(reopened, /line 30/); // the newest lines scrolled away
-
-  // A real close clears the offset: the next open follows the tail again.
-  gates[1](undefined);
-  await settleMicrotasks();
-  manager.open(job, () => job, scrollTranscript);
-  assert.equal(calls.length, 3);
-  const third = componentShape(calls[2].factory({ requestRender: () => {} }, theme, keybindings, (r) => gates[2](r)));
-  const fresh = third.render(80).join("\n");
-  assert.match(fresh, /line 30/); // follow mode again
-  assert.match(fresh, /\u0028\+6 earlier\u0029/);
-});
 
 test("createPeekManager: close() resets the scroll offset for the next open too", async () => {
   const { ui, calls, gates } = fakePeekUi();

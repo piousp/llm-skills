@@ -76,10 +76,10 @@ Omit them all by default: the agent's own frontmatter/settings resolution is wha
 
 ## The /subagents command
 
-Bare `/subagents` (or `/subagents help`) prints the man page: one line per subcommand with its argument shape. `/subagents list` shows the jobs: running and recently finished, newest first, with a usage footer once a job settles.
+Bare `/subagents` (or `/subagents help`) prints the man page: one line per subcommand with its argument shape. `/subagents list` shows the jobs: running and recently finished, newest first. Each entry's header (id, status, elapsed) is followed by the model the run uses (`provider/modelId`) on a line of its own, and a finished job adds a usage footer; `status` and `peek` show the same model line.
 
-- `/subagents status [id]` details one job: the current activity, the last tool calls of the run, and usage so far.
-- `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results and per-tool durations. `w` alternates between the floating window and fullscreen; Esc or `q` closes it; `Ctrl+O` toggles tool output expansion. Needs an interactive TUI session; other modes get a warning.
+- `/subagents status [id]` details one job: the model it runs, the current activity, the last tool calls of the run, and usage so far.
+- `/subagents peek [id]` opens a live window over one job: streamed text, the tail of the agent's thinking, and tool calls with their results and per-tool durations. It opens fullscreen; Esc or `q` closes it; `Ctrl+O` toggles tool output expansion. Needs an interactive TUI session; other modes get a warning.
 - `/subagents cancel [id]` stops a running job.
 - `/subagents steer <id> <message>` injects a message into a running job's live session. It lands after the current turn's tool calls finish, before the next model call, so the agent reads it and adjusts the work still pending.
 - `/subagents followUp <id> <message>` queues a message for the end of the run. It extends the run: the job settles only after the follow-up is processed, and the run can still hit its `timeoutMs` or `maxTurns` along the way.

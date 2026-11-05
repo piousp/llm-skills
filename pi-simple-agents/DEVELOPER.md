@@ -41,7 +41,9 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
   `validateAgentOverridesEntry`, and the shared field guards (`isValidModelRef`, `isValidMaxTurns`,
   `MAX_TURNS_LIMIT` — moved here so `run.ts`/`frontmatter.ts`/`validate.ts` all import one module
   and the runtime import graph stays acyclic). `validate.ts`/`agents.ts` re-export the moved symbols
-  so existing import sites stay valid.
+  so existing import sites stay valid. `applyOverrides` also stamps `AgentConfig.settingsFields` —
+  the names of the fields a settings entry carried — which `src/render-call.ts` renders as
+  provenance.
 - `src/run.ts` — `runAgentViaSdk` keeps its `new Promise` + async-IIFE shape on purpose: `settleOnce`
   must be externally callable by timeout/maxTurns/abort listeners. The two abort checks are
   phase-distinct (pre-bind, post-prompt) and live apart deliberately.
@@ -53,8 +55,9 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
 - `src/peek-window.ts` — the `/subagents peek` overlay: pure `buildPeekLines` (transcript tail —
   text, 5-line thinking cap, tool starts/ends, elision, frozen settled result), the
   `PeekOverlayComponent` (owns the 250 ms pulse that stops itself once the job settles), and
-  `createPeekManager` (fire-and-forget `ctx.ui.custom` overlay, floating-first with `w` cycling to
-  fullscreen, warn-path on rejection). Structural `Peek*` theme/keybindings/tui subsets keep it
+  `createPeekManager` (fire-and-forget `ctx.ui.custom` fullscreen overlay — one mode, no
+  window-size toggle — warn-path on rejection, and a frame whose header is followed by the job's
+  model ref on a dim line of its own). Structural `Peek*` theme/keybindings/tui subsets keep it
   testable without pi-tui.
 - `src/session-reconcile.ts` — pure reconciliation of a session's subagent spend from disk
   (backing `/subagents session`): structural shapes for pi `.jsonl` entries, ports of pi's
@@ -107,6 +110,7 @@ interface AgentConfig {
   skills?: string[];
   timeoutMs?: number;
   maxTurns?: number;
+  settingsFields?: readonly string[];
 }
 ```
 
@@ -134,6 +138,10 @@ Fields are resolved from YAML frontmatter with defaults filled in by `discoverAg
   `isValidTimeoutMs` (which only accepts values within the ceiling, and is what drops an
   out-of-range recorded parameter on relaunch). It is not enforced during frontmatter parsing or
   override merging — both of those layers just pass the raw value through.
+- `settingsFields` — names of the fields a settings.json `agentOverrides` entry supplied
+  (presence-based, so a settings `model: "inherit"` appears while its value stays undefined).
+  Written only by `applyOverrides`; carried for free by `applyInvocationOverride`'s spread; read
+  only by `formatAgentParams` for the provenance suffix.
 
 ## InvocationOverride and applyInvocationOverride
 
@@ -397,6 +405,17 @@ const agents = await discoverAgents("~/.pi/agent/agents");
 const { agentOverrides } = await loadSettings("~/.pi/agent/settings.json", ".pi/settings.json");
 const configured = applyOverrides(agents, agentOverrides);
 ```
+
+`applyOverrides` also stamps the new `settingsFields` on every agent an entry matched: the field
+names are literally `Object.keys` of the validated partial, which is exactly the set of fields the
+settings entry carried. That partial comes out of `validateAgentOverridesEntry`, so every
+non-overridable and every ill-typed key was already dropped — a surviving key really was applied,
+including the present-with-`undefined` `model` a settings `model: "inherit"` produces (that is how
+`"inherit"` travels through the merge to cancel a lower layer). An entry that validated down to
+nothing stamps `[]`, which every consumer reads as "nothing came from settings". Identity and
+lifecycle fields (`SETTINGS_EXCLUDED_FIELDS`) can never appear, for the same reason. Both settings
+files collapse into one label because `mergeOverrides` already unions the user and project keys into
+one partial per agent. Nothing but `src/render-call.ts` reads the field.
 
 ## runAgentViaSdk
 
@@ -987,7 +1006,15 @@ supplied from `extensions/index.ts`, is the only place that calls `runSingleTask
 ### src/background-jobs.ts
 
 ```typescript
-interface JobTask { readonly agent: string; readonly task: string }
+interface JobTask { readonly agent: string; readonly task: string; readonly model?: string }
+
+// `model` is the "provider/modelId" ref the launched run will use, recorded once at the single
+// launch chokepoint (`launchSubagentJob` in `extensions/index.ts`: the call's own override, else the
+// agent's configured model, else the parent session's ref). Optional on purpose — fixtures, acks and
+// messages persisted by earlier versions, and SDK contexts without a model all omit it, and the
+// views then render no model segment rather than a placeholder. Informational only: the run
+// resolves its own model at `src/run.ts`'s `resolveModel`, so a ref that later fails to resolve is
+// still the ref the job tried.
 
 // "user" = a specific /subagents cancel <id>; "system" = cancelAll() (shutdown,
 // or a headless safety net). Carried from "cancelling" into "cancelled" so
@@ -1201,16 +1228,23 @@ function describeClearResult(removed: number): string;
 Pure text builders, no UI/SDK dependency. `buildJobsWidgetLines` returns `undefined` when no job is
 `running`/`cancelling` (the caller clears the widget instead of showing an empty panel); otherwise
 one line per still-unfinished task across every active job (`◯` running, `◌` cancelling), elapsed
-time ticking from `now - job.startedAt`, plus a trailing hint line. `buildJobListText` (used by the
-`/subagents` command, not the widget) reuses `buildProgressLine` (`src/progress.ts`) for a running
-job's body and a local per-task renderer (agent, success/`FAILED`, usage footer) for a finished
-one; it does not re-sort — callers pass `jobs.list()`, already newest-first. `buildHelpText` backs
-bare `/subagents` and `/subagents help` (a plain-text man page); the listing moved there from the
-bare view in 1.5.1.
+time ticking from `now - job.startedAt`, plus a trailing hint line. The job's model ref, when one was
+recorded, is a dim segment right after the agent name and is capped at `WIDGET_MODEL_WIDTH = 32`
+cells through `truncate`, so the elapsed column at the line's tail survives a long ref; a job
+without a model renders exactly the line it rendered before the field existed. `buildJobListText`
+(used by the `/subagents` command, not the widget) reuses `buildProgressLine` (`src/progress.ts`)
+for a running job's body and a local per-task renderer (agent, success/`FAILED`, usage footer) for a
+finished one; it does not re-sort — callers pass `jobs.list()`, already newest-first. Every list
+entry is a header line, then the job's model ref on a line of its own (two-space indent, plain
+text, omitted entirely when unknown — the shared `headerBlock`/`modelLine` pair, so the running and
+the settled arms cannot drift), then the body. `buildHelpText` backs bare `/subagents` and
+`/subagents help` (a plain-text man page); the listing moved there from the bare view in 1.5.1, and
+its `peek` line now says the window opens fullscreen, with no `w` key left to advertise.
 
 `buildJobStatusText` backs `/subagents status <id>`. Settled jobs reuse `buildJobListEntry` directly (the
 module-local renderer a list entry is built from), so a finished job reports identically in both. A
-running job gets the live extras: its header, the activity word, the last `history` entry (the most
+running job gets the live extras: its header, the model line, the activity word, the last `history`
+entry (the most
 recently *started* call, which may already have ended), the history capped to the last 10 with
 `… (+N earlier)` eliding older entries, and the live usage snapshot when one has arrived. Unknown ids
 report `jobNotFoundText`, the single shared wording that `describeCancelResult`'s `not-found` case also uses.
@@ -1504,7 +1538,8 @@ the message renderer, the `/subagents` command, and three event handlers — all
   plus `widget.dispose()`.
 
 Launching a run of one task lives in ONE closure, `launchSubagentJob(input: { params; agent;
-runId; cwd; mode; callerSessionFile; seedSessionFile? }): JobSnapshot` — the subagent tool's
+runId; cwd; mode; callerSessionFile; seedSessionFile?; parentModel? }): JobSnapshot` — the subagent
+tool's
 `execute()` and the `/subagents retry|continue` commands are the two call sites. A relaunch
 there carries exactly the same job plumbing a tool-launched one does (the tracker/transcript/live-
 session taps, the delivery hook, the footer accumulator): `execute()` resolves its agent through
@@ -1513,6 +1548,14 @@ records the call's requested overrides in `details.params`; the relaunch command
 through the shared `handleRelaunch` closure (spec table, precondition texts in `src/job-view.ts`,
 consumed-orphan bookkeeping) — `CONTINUATION_PROMPT` (the fixed continuation prompt, the
 `relaunchRunId` namespace) exported at module scope next to `deliverJobResult`.
+
+The recorded `JobTask.model` comes from `jobTaskOf(agent, params, parentModel)` at that same launch
+chokepoint: `applyInvocationOverride(agent, params).model ?? parentModel`, with the key omitted (not
+set to `undefined`) when neither names a model. `parentModel` is a `"provider/modelId"` ref
+assembled in exactly one place, the module-scope `modelRefOf(ctx.model)` helper: `execute()` passes
+it directly, and the three `JobActionContext` literals (the `subagent_job` tool, the `/subagents`
+command, and, transitively, `handleRelaunch`) carry it as `parentModel` so a retry/continue relaunch
+records the same ref a first launch would.
 
 A `uiRef`/`captureUi(ctx)` pair — scoped inside the factory closure, like everything else above,
 never module-level — updated at the top of `execute()`, the `/subagents`
@@ -1646,10 +1689,19 @@ parameter line built by `formatAgentParams`. `RenderTaskEntry`, `describeTask`,
   (added alongside `timeoutMs` in this release), so it is no longer read directly off
   `agent.thinking`.
 - The rendered param line has the fixed shape
-  `model: ... · thinking: ... · tools: ... · skills: ... · maxTurns: ... · timeoutMs: ...`.
+  `model: ... · thinking: ... · tools: ... · skills: ... · maxTurns: ... · timeoutMs: ...`, and each
+  of the six segments says where its value came from: the bare value when the call itself overrode
+  the field (the call is its own provenance), `value (settings.json)` when a settings
+  `agentOverrides` entry supplied it, `value (frontmatter)` for the agent's own configuration, and
+  the word `none` when no layer sets it. The suffix appears only when a value exists, so a settings
+  `model: "inherit"` (a present key with an undefined value) reads plain `model: none`, never
+  `none (settings.json)`. Provenance is read off `AgentConfig.settingsFields`, stamped by
+  `applyOverrides` where the merge still knows which side a value came from.
 - `formatList` (private, generalized from an earlier `formatTools`) renders both the `tools` and
-  `skills` segments: `undefined` → `"inherited"`, empty array → `"none"`, otherwise the first
-  `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer.
+  `skills` segments: `undefined` → `none`, empty array → `none`, otherwise the first
+  `MAX_ITEMS_SHOWN` items comma-joined, with `+N more` appended when the list is longer. An empty
+  array keeps its provenance suffix (`none (frontmatter)`) because an explicitly empty whitelist IS
+  a value: that is what tells it apart from a list nobody set.
 ### src/format-tool-call.ts
 
 ```typescript

@@ -606,6 +606,55 @@ test("applyOverrides: timeoutMs override flows onto the merged config; agents wi
   assert.equal(appliedOther!.timeoutMs, undefined);
 });
 
+// --- settingsFields: provenance stamped by the one merge that knows it ---
+
+function provenanceAgent(name = "scout", overrides: Partial<AgentConfig> = {}): AgentConfig {
+  return {
+    name,
+    description: "test",
+    tools: ["read"],
+    model: "frontmatter-model",
+    systemPromptMode: "append",
+    inheritProjectContext: true,
+    defaultReads: [],
+    source: "user",
+    filePath: `/fake/${name}.md`,
+    systemPrompt: "body",
+    ...overrides,
+  };
+}
+
+test("applyOverrides: stamps settingsFields with the fields the settings entry carried", () => {
+  const [applied] = applyOverrides([provenanceAgent()], { scout: { model: "project-model" } });
+
+  assert.equal(applied!.model, "project-model");
+  assert.deepEqual(applied!.settingsFields, ["model"]);
+});
+
+test("applyOverrides: an agent with no settings entry keeps settingsFields undefined", () => {
+  const [applied] = applyOverrides([provenanceAgent("other")], {});
+
+  assert.equal(applied!.settingsFields, undefined);
+});
+
+test("applyOverrides: a settings model: \"inherit\" (present key, undefined value) still lands in settingsFields", () => {
+  const [applied] = applyOverrides([provenanceAgent()], { scout: { model: undefined } });
+
+  // Presence-based, not value-based: the value stays undefined while the key
+  // is recorded — that is how a settings "inherit" cancels a lower layer.
+  assert.equal(applied!.model, undefined);
+  assert.deepEqual(applied!.settingsFields, ["model"]);
+});
+
+test("applyInvocationOverride: settingsFields survives the merge on both paths", () => {
+  const agent = provenanceAgent("scout", { settingsFields: ["model"] });
+
+  // Fast path (no override key): the very same object, provenance included.
+  assert.equal(applyInvocationOverride(agent, {}), agent);
+  // Copy path: the field is not an override key, so the spread carries it.
+  assert.deepEqual(applyInvocationOverride(agent, { thinking: "high" }).settingsFields, ["model"]);
+});
+
 test("discoverAgents: cache returns cached data on second call", async () => {
   const dir = makeTmpDir();
   try {

@@ -1,13 +1,22 @@
 import type { AgentConfig, InvocationOverride } from "./agents.ts";
-import { applyInvocationOverride } from "./agents.ts";
+import { applyInvocationOverride, OVERRIDE_KEYS } from "./agents.ts";
 import { invocationOverrideOf } from "./validate.ts";
 import { firstLine, truncate } from "./text-utils.ts";
 
 const MAX_ITEMS_SHOWN = 5;
 
+/** What a segment says when no layer supplies it. Lowercase, and deliberately
+    the same word an explicitly empty list renders: the provenance suffix, not
+    the word, is what tells "explicitly nothing" apart from "no value". */
+const NO_VALUE = "none";
+/** Provenance labels. Both settings files collapse into the one "settings.json"
+    label on purpose: the reader only needs to know the value did not come from
+    the agent's own frontmatter. */
+const SETTINGS_LABEL = "settings.json";
+const FRONTMATTER_LABEL = "frontmatter";
+
 function formatList(items: string[] | undefined): string {
-  if (items === undefined) return "inherited";
-  if (items.length === 0) return "none";
+  if (items === undefined || items.length === 0) return NO_VALUE;
 
   const shown = items.slice(0, MAX_ITEMS_SHOWN).join(", ");
   const remaining = items.length - MAX_ITEMS_SHOWN;
@@ -83,13 +92,30 @@ function buildExpandedSingleCallText(
 }
 
 export function formatAgentParams(agent: AgentConfig, override?: InvocationOverride): string {
-  const effective = applyInvocationOverride(agent, override ?? {});
-  const model = effective.model ?? "inherited";
-  const thinking = effective.thinking ?? "inherited";
-  const tools = formatList(effective.tools);
-  const skills = formatList(effective.skills);
-  const maxTurns = effective.maxTurns ?? "inherited";
-  const timeoutMs = effective.timeoutMs ?? "inherited";
+  const called: InvocationOverride = override ?? {};
+  const effective = applyInvocationOverride(agent, called);
 
-  return `model: ${model} · thinking: ${thinking} · tools: ${tools} · skills: ${skills} · maxTurns: ${maxTurns} · timeoutMs: ${timeoutMs}`;
+  // 1. A field the call itself overrode renders bare: the call is its own
+  //    provenance (and applyInvocationOverride may have just replaced a
+  //    settings value, which is why this check comes first).
+  // 2. Otherwise a settings-supplied value says so.
+  // 3. Any other present value came from the agent's frontmatter: discovery
+  //    and applyOverrides are the only two writers of these fields.
+  // 4. No value at all renders NO_VALUE with no suffix — a settings
+  //    `model: "inherit"` is a present key with an undefined value and must
+  //    not read "none (settings.json)".
+  const suffix = (field: (typeof OVERRIDE_KEYS)[number], hasValue: boolean): string => {
+    if (!hasValue || called[field] !== undefined) return "";
+    return agent.settingsFields?.includes(field) ? ` (${SETTINGS_LABEL})` : ` (${FRONTMATTER_LABEL})`;
+  };
+  const scalar = (field: "model" | "thinking" | "maxTurns" | "timeoutMs"): string => {
+    const value = effective[field];
+    return value === undefined ? NO_VALUE : `${value}${suffix(field, true)}`;
+  };
+  const list = (field: "tools" | "skills"): string => {
+    const value = effective[field];
+    return `${formatList(value)}${suffix(field, value !== undefined)}`;
+  };
+
+  return `model: ${scalar("model")} · thinking: ${scalar("thinking")} · tools: ${list("tools")} · skills: ${list("skills")} · maxTurns: ${scalar("maxTurns")} · timeoutMs: ${scalar("timeoutMs")}`;
 }
