@@ -32,6 +32,11 @@ import type { AttemptLine } from "./types.ts";
 // `no-baseline` was the one entry of the reserve below and M1c turned that permission on: a gate of the
 // directional base that finds no bank to measure against writes the line, leaves the candidate staged and
 // leaves the record in the state it was, so the attempt is retryable instead of a dead end (Q23, OA1).
+//
+// `retired` is the event of the retirement (M3, S4): the line a lesson leaves when it stops applying. It carries the pair
+// of hashes of the acceptance and not the ones of the file it rewrote, so the line joins its `accepted` by
+// `candidateHash` exactly the way that line joined the `proposed` of the run that produced it -- which is how
+// src/metrics.ts and src/standing.ts take the lesson out of force without losing the acceptance that put it there.
 export const ATTEMPT_EVENTS = [
   "proposed",
   "no-evidence",
@@ -41,6 +46,7 @@ export const ATTEMPT_EVENTS = [
   "gate-rejected",
   "gate-abstained",
   "no-baseline",
+  "retired",
 ] as const;
 
 export type AttemptEvent = (typeof ATTEMPT_EVENTS)[number];

@@ -12,7 +12,7 @@ Working notes for this package. Not part of the published documentation.
 | `src/case-bank.ts` | The neutral bank of cases: the versioned format, its two profiles and the one reader of the file |
 | `src/checks.ts` | The mechanical predicate of the fourth class: the four kinds of check, and the one place a check is executed |
 | `src/gate/` | The paired replay gate: execution contracts, expectation evaluator, arm overlays, replay runner, budget, scorer, the two flows, judge, acceptance |
-| `schemas/` | Versioned JSON schemas: `decision.json` and the case bank, validated by tests |
+| `schemas/` | Versioned JSON schemas: `decision.json`, the case bank, `retirement.json` and the lines of `signals.jsonl`, validated by tests |
 | `skills/` | The skill this package publishes: the manual, its `references/` and the two case-bank templates. Ships in the tarball because `files` names it, and pi discovers it because `pi.skills` declares it |
 | `test/unit/` | Unit tests, `node --test` (type stripping is the Node default from 22.18) |
 | `test/fixtures/` | Settings files and skill trees, including symlinks |
@@ -115,16 +115,16 @@ quantiles.
 - The mechanics of a gate are a necessary condition and never a sufficient one. When a bank declares a
   rubric the judge is the second condition, it is asked only after the rule accepted, and an answer of
   the judge that nobody can read abstains the gate instead of accepting it.
-- A lesson state that no writer produces is still part of the contract. `retired` is a member of
-  `LESSON_STATUSES` (`src/types.ts:150`) and nothing in this version writes it: its writer is the retirement
-  by merit of M3 (`tmp/goal.md:88`). It is not deleted, because the closed set of states is what that
-  milestone needs, and a state removed from it is a validator that refuses the lesson the next version
-  writes.
+- The closed set of lesson states is the contract, and `retired` has its writer since M3. `retired` is a
+  member of `LESSON_STATUSES` (`src/types.ts:161`), which M2 declared with the state and with nothing that
+  produced it; the retirement writes it (`retireLessonFile`, `src/writer.ts:628`, called by step 4 of
+  `retireLesson`, `src/retirement.ts:145`). The state stays in the set for the reason it was declared there:
+  a state removed from it is a validator that refuses the lesson the next version writes.
 - A lesson accepted before M2 keeps the frontmatter it was written with -- `status: "proposed"` and
   `gate: "pending"` -- and is not migrated: rewriting it would edit a skill with no gate in front of it,
   which is the one thing this package does not do. The validator accepts it exactly as it accepts a lesson of
   today (`src/lesson-frontmatter.ts:7-8`, status at `:166-168`, gate at `:179-181`), and `accepted@<ts>` stays
-  a valid gate value for a file already on disk (`src/types.ts:167-170`).
+  a valid gate value for a file already on disk (`src/types.ts:174-176`).
 - The floor of a paired design is two items, and equivalent failures are one. `MIN_ITEMS = 2`
   (`src/gate/scorer.ts:56`) abstains with `insufficient-items` when the plan is short -- `:89` for the replay
   base, `:179` for a bank -- and the item count that reaches it is already deduplicated:
@@ -216,12 +216,13 @@ second time. The consequence is accepted and it is worth naming: a candidate the
 `staging/` under a frontmatter that says `accepted`. The verdict of an attempt lives in `outcome.status` and
 in the index, never in the frontmatter of a lesson, and `staging/` is not inside any skill.
 
-**And nobody reads that frontmatter as a verdict.** The verification at retrieval of M3 -- over skills that
-are already accepted -- reads `decision.json` and `state/attempts.jsonl`, never `lesson.status` nor
-`lesson.gate`. No module of `src/` reads the two fields to decide anything today: `src/lesson-frontmatter.ts`
-serializes them (`:101`, `:103`, `:131`, `:133`) and validates them (`:166-168`, `:179-181`), and that is all.
-The risk is the module of M3, which does not exist yet, so the limit is written here as a permanent
-constraint and not as a note about this version.
+**And nobody reads that frontmatter as a verdict.** The verification at retrieval -- the check of M3 over
+skills that are already accepted -- reads `decision.json` and `state/attempts.jsonl`, never `lesson.status` nor
+`lesson.gate`: the module says so in its own first lines (`src/standing.ts:19`), and the section
+[The check of an accepted lesson](#the-check-of-an-accepted-lesson) states it with the test that fixes it. No
+module of `src/` reads the two fields to decide anything: `src/lesson-frontmatter.ts` serializes them (`:101`,
+`:103`, `:131`, `:133`) and validates them (`:166-168`, `:179-181`), and that is all. The limit is written here
+as a permanent constraint and not as a note about this version.
 
 ### The reload of the session
 
@@ -278,8 +279,9 @@ the scorer's (`evaluateCaseGate`) and not the flow's. Three consequences follow,
 
 ## Extending the artifacts
 
-Four artifacts outlive the version that wrote them: the index, the `gate` block of a decision record, the
-schema as a whole and the bank of cases. Each has one written rule.
+Six artifacts outlive the version that wrote them: the index, the `gate` block of a decision record, the
+schema as a whole, the bank of cases, the record of a retirement and the file of the suspicions. Each has one
+written rule.
 
 ### The event vocabulary of the index
 
@@ -300,6 +302,12 @@ schema as a whole and the bank of cases. Each has one written rule.
   has to classify lands here before a writer may use it. `ReservedAttemptEvent` is `never` while the list is
   empty, which is what makes `KnownAttemptEvent` equal `AttemptEvent` without either of them being
   rewritten.
+- **`retired` is emitted, not reserved** (M3, S4). The line a lesson leaves when it stops applying is written by
+  the retirement (`retireLesson`, `src/retirement.ts:145`), it is an entry of `ATTEMPT_EVENTS`
+  (`src/attempts.ts:49`), and it carries the pair of hashes of the acceptance plus `failureSignature: null`, so
+  it joins its `accepted` line by `candidateHash` exactly the way that line joined the `proposed` of the run
+  that produced it. Nothing of M3 passed through `RESERVED_ATTEMPT_EVENTS`: a name is reserved by a version
+  that recognizes it and does not write it, and `retired` arrived in the slice that writes it.
 - `reason` is the optional field that says what an abstention was about, in the words of the vocabulary
   plus the detail the flow computed: `overlay-failed: cannot copy ...`. It is absent when the reason is
   the whole story, so a line written by an older version and a line written today read the same way.
@@ -307,6 +315,48 @@ schema as a whole and the bank of cases. Each has one written rule.
   candidate is the `accepted` event the acceptance writes when it edits the skill. The intermediate
   state lives in `decision.json`, where it cannot be confused with the record of a write. The base of the
   bank follows the same rule: a gate that passes is `gate-accepted` in the record and no line of its own.
+
+### The book of attempts
+
+`readLedger` (`src/ledger.ts:69`) is the only reader of `state/attempts.jsonl` and of the `decision.json` each
+of its lines names. It exists because the criterion of M3 is a count: until this slice the index had three
+writers and no reader at all, and a series of sessions nobody can read is a series nobody can measure.
+
+- **The type of the writer is not the type of the reader** (`src/ledger.ts:16`). `AttemptLine.event` is
+  `KnownAttemptEvent` because only `buildAttemptLine` decides what this version emits, and a line read here may
+  carry an event a later version wrote. So `event` is a `string` in `ReadAttemptLine` (`:45`), an unknown event
+  is kept verbatim and counted like any other line (`src/metrics.ts:139`, under the key `unknown`), and nothing
+  in this module normalizes or rewrites what it read. `isKnownAttemptEvent` (`src/attempts.ts:75`) is the
+  predicate a consumer classifies a line with; the reader itself classifies nothing, which is why an old report
+  and a new index never disagree about a line neither of them understands.
+- **What it does with what it cannot interpret** (`:23`). A line that is not JSON, that is not an object, or
+  whose `event` is not a non-empty string stops the reading where it is, and `damaged` names the position and
+  the problem (`:57`, `:90`); the lines before it are answered. A file of one object per line has no way back
+  from its first illegible one -- the truncated tail of an interrupted append is exactly that line, and
+  whatever follows it addresses no event either -- so the alternative is a report with a silent gap, which
+  reads as a smaller series.
+- **A record is an annex of a line** (`:138`, `:157`). `historyPath` is what an accepted line names and
+  `decisionPath` is what the rest of the vocabulary names, both relative to the base of the run; a record that
+  is absent, that is not JSON, that is not an object or that declares another schema is the `problem` of the
+  line and never an exception (`:165`, `:187`). The attempt happened whether or not its record survived the
+  `staging/` directory it was written in, and the coverage of a report counts the difference instead of hiding
+  it.
+- **An absent index is an empty answer** (`:77`): a package just installed has no attempts, so a caller asking
+  for the series of a machine that never ran one deserves `lines: []` and not an exception. Any other failure
+  of this read is the state of the machine and travels as it is.
+- **It never writes** (`:28`): no `mkdir`, no `writeFile`, no rename and no `rm`. Reading is not a privilege
+  that has to be defended, so the module has no perimeter and no mutation queue, and the base is resolved with
+  `path.resolve` instead of being required absolute the way the chokepoint requires it.
+
+**The limit, and it is deliberate.** The reader validates the version of `decision.json` and nothing else
+(`:32`, `:187`): `schema` is compared against `pi-simple-sri/decision@1` and the rest of the record travels as
+the gate wrote it. A `decision.json` edited by hand until `candidate` is gone is therefore a record from the
+point of view of this module, and the consumer that reads the field fails where it reads it -- `standingOf`
+resolves `record.skill.realDir` and `record.candidate.lessonPath` (`src/standing.ts:111`) and raises instead of
+answering. The partition is the one the module comment states: the whole shape of a record is the business of
+the gate (`readStagedDecision`, `src/gate/flow.ts:1004`), which this module does not import, and a second
+reading of that contract here would be a second implementation of a rule with an owner -- one that could
+disagree with the gate and would have to be maintained beside it.
 
 ### The gate block
 
@@ -432,6 +482,31 @@ example of the format, and the suite reads them with the same two readers the ga
 schema and `loadCaseBank` (`test/unit/package-skill.test.ts`) -- so an example the package would refuse fails
 there instead of shipping in the tarball.
 
+#### The adapter of an eval set
+
+The gate that would have admitted a reader of `evals/prompt_set.json` never opened, and the bullet above states
+the argument: what belongs here is the count it was decided on, because that is the part a reader can check
+against the tree. Nine `evals/` directories under `/home/pablo/LLMs/skills/`; eight `prompt_set.json` between
+those directories and `~/.pi/agent/evals/`; and **not one file under the nine** with either of the two shapes
+the slice was gated on. Seven of the eight parse, and what they hold is the author's own harness -- an array of
+objects carrying an `id`, a `prompt` and the names of `expected_checks` -- while the eighth,
+`pablo-code-philosophy`, is not JSON at all: line 45 escapes `\s` inside the name of a check
+(`kiss\s*>\s*dry`), which JSON does not define.
+
+Zero of nine is the shape of the answer, and the contract of the bank is what makes it final. A case requires
+`checks` with `minItems: 1` in both profiles, one definition because the file carries no discriminator
+(`schemas/case-bank.schema.json:52`, `:66-69`), and the reader refuses an empty list under the same rule
+(`src/case-bank.ts:362-367`). An adapter that read `prompt` alone would therefore produce cases with no
+predicate, `buildDefectDiagnosis` drops every one of them (`src/diagnosis.ts:232-233`), and the gate would
+abstain with `insufficient-items` every time: a bank that costs a proposal and measures nothing. A foreign
+format is not uncomfortable here; it is short of the information this package measures with.
+
+**What would reopen it.** A second consumer whose predicates are already `CaseCheck` -- not the names of a
+registry of another repository -- or an evaluation file that declares its own checks. Either one arrives as one
+more producer of a `CaseBank`, and the plug point does not move: `loadCaseBank(file, profile)`
+(`src/case-bank.ts:148-151`) stays the only entry point to the format, `readCaseBank` behind it the one parse,
+and no adapter changes the format, the profile or the flow.
+
 ### The expectation and its class
 
 - The relation between an expectation and its class is stated three times, and the three say the same
@@ -457,6 +532,215 @@ there instead of shipping in the tarball.
 - The guard of an empty diagnosis follows the same split: `buildDiagnosis` still refuses a diagnosis with no
   replay item and the schema no longer does, because how many items are right is a property of the basis and
   each constructor owns its own answer.
+
+### The metrics of the series
+
+`metricsOf` (`src/metrics.ts:113`) is a projection of the ledger and of nothing else: no file, no process, no
+clock and no model, and `failureClassesOf` (`:108`) is the same over a list of evidence. It is deliberately
+neither of the two things a report of this kind usually is. It is not a cache: a stored rate goes wrong the day
+`staging/` is pruned, and correcting it would need a rule of invalidation that nothing asks for, so the numbers
+are recomputed on every call. And it is not a judge: it counts the verdicts the gate and the acceptance already
+decided, because re-deriving one from the runs would be a second gate that could disagree with the first.
+
+**The two rates, and the one that supports them.**
+
+- `acceptanceRate = accepted / (accepted + rejected + abstained)` (`:70`, `:125`). The denominator is the three
+  verdicts of the gate, and `attempts` is their sum computed where they are counted (`:187`), so the total of
+  the report and its parts cannot disagree. A `proposed` attempt that never reached a gate stays outside the
+  rate: it is not a measurement of the gate, and the vocabulary of the report is filled with the events that
+  appear instead of with zeros, because twelve zeros hide that there were no attempts at all (`:135`). The
+  three verdicts are read off the event of the line and not off the record (`:197`), because an abstention that
+  ended before the budget leaves the record in `not-run` or `preregistered` with the line already written
+  (`src/gate/flow.ts`), and demanding a concluded record of the three would drop real abstentions.
+- `recurrenceRate = accepted lessons that saw their class come back / accepted lessons in force` (`:126`, over
+  the rows of `:82`). "In force" is one rule and it has one owner: an accepted line whose candidate a later
+  `retired` line of the same skill names with the same `candidateHash` is out of the denominator (`:345`), and
+  `src/standing.ts:223` repeats that rule because the module exports no predicate for the pair -- the two move
+  together or the series and the check disagree about which lessons exist.
+- `gateRegressionRate = regressions / pairs` (`:128`) is the column of support and not the recurrence. A
+  regression of the gate is a pair (item, repetition) the incumbent passed and the candidate failed
+  (`regressionsOf`, `src/gate/scorer.ts:385`): it is a fact about one candidate and one replay, while a
+  recurrence is a fact about the lessons a skill already carries. The two travel under names that cannot be
+  confused, and the printed sentence keeps each denominator in its parenthesis (`src/messages.ts:371`).
+- A rate whose denominator is 0 is 0 (`:391`), and the sentence that prints it names the attempt that is
+  missing instead of printing `0.00` (`src/messages.ts:371`): a zero over nothing is the absence of a
+  measurement, never a measurement of zero.
+
+**Why the recurrence is measured by class of failure.** The key is `failureClassesOf(record.evidence)`
+(`:108`): the sorted set of `<kind>:<tool>`, derived at read time, with `-` for the classes that watch no tool
+(`:45`). It is not the stored `failureSignature`, because a signature is computed over the ids of evidence
+(`signatureOf`, `src/diagnosis.ts:533`) and every id carries the timestamp of its failure
+(`src/evidence.ts:277-283`), so two sessions that hit the same wall never produce the same one. The class is
+coarser on purpose -- it says that a `tool_error` in `read` came back, not that the same failure did -- and
+that is the granularity the definition of a regression needs, because a record of another session can be
+joined to a lesson by nothing finer.
+
+**The coverage travels with the answer** (`:91`, `:148`). `historyPath` points inside the skill and
+`decisionPath` points into a `staging/` anybody may prune, so a rate printed without its coverage claims a
+measurement over records nobody read. `records` counts the lines whose record resolved and the ones that named
+a record that is no longer there; a line that names no record at all -- a refusal that answered before a
+candidate existed -- is neither.
+
+**The split of D-B** (`:33`, `:255`). Among the items of the fourth class that a concluded gate ran, a failed
+run without `checkFailures` is a turn a tool sank before there was text to judge, and one with the list is a
+text that did not pass the checks of its case (`checksOutcome`, `src/gate/expectation.ts:178`). Two halves, read
+off records already written: the split costs no run, and it is what allows the unanimity rule to be discussed
+with a number instead of an anecdote.
+
+The report describes and does not decide. `--metrics` reads the index and prints, and nothing in the package
+reads a rate to gate, accept or retire anything (`reportMetrics`, `src/command-skill-improve.ts:625`): a number
+in front of the gate would be a second rule, and the gate is the only one.
+
+### The check of an accepted lesson
+
+`standingOf` (`src/standing.ts:82`) answers, for every accepted lesson still in force, what its bytes on disk
+are worth against the record that accepted it. It is the other half of the tie M2 wrote down: a lesson is
+accepted by a record, and until this slice nothing could verify that the file still was what the record said.
+
+**Why the record is the authority and the file is not.** A candidate is serialized with the frontmatter of the
+lesson it will become, `status: "accepted"` included, so a candidate the gate rejected stays in `staging/`
+carrying that same header, and a `lessons/<slug>.md` whose frontmatter says `accepted` may be the copy of a
+rejected attempt. What answers is the pair the record carries -- `candidate.contentHash` over the whole file and
+`candidate.bodyHash` over the normalized body -- compared against the bytes on disk now (`:131`).
+
+**The five states, in the order they are decided** (`:40`):
+
+- `missing` -- the file is not there, or a component of its path is a file.
+- `unreadable` -- the file cannot be read or cannot be hashed at all: a file nobody can hash is not a file this
+  module may call intact.
+- `intact` -- the whole file hashes to the `contentHash` of the record (`:154`), whatever its frontmatter says.
+- `frontmatter-moved` -- the body still hashes to the `bodyHash` and the file does not hash to the `contentHash`
+  (`:159`): only the header around the correction moved.
+- `body-moved` -- neither hash matches: the correction itself was rewritten.
+
+**The reference line is a second question and not a sixth state** (`:33`, `:176`). A lesson can be byte-identical
+to its record and inert, because pi loads it through the line of `## Lessons` and through nothing else (Q10), so
+`referenced` travels beside the state and the `detail` names both problems when there are two.
+
+**And no branch reads `status` or `gate` of the frontmatter** (`:19`). Parsing the lesson to compute its
+`bodyHash` is not reading the header as a verdict: it is hashing the file with `lessonHashes`
+(`src/writer.ts:99`), the same function the writer stamped the record with, so both sides of the comparison are
+one arithmetic. `test/unit/standing.test.ts:335` is the test that fixes it: a lesson whose frontmatter says
+`proposed` and whose bytes hash to the record is reported `intact` with `referenced: true`, because the record
+decided the acceptance and the header did not.
+
+The path of the lesson comes from the record and never from the inventory (`:111`): the record names it relative
+to the skill and `skill.realDir` is the path that survives a symlink, so a skill that moved is still answered by
+the record. The row of a skill names its worst state by a severity order (`:69`): `missing` first, then
+`body-moved`, then `frontmatter-moved`, then `intact`, with `unreadable` beside the known ones because what
+cannot be read is unknown and unknown is its own answer instead of the worst of the known (`:245`, `:257`). An
+acceptance whose record is gone is counted in `missingRecords` (`:58`, `:94`) and left out of the checks: a
+lesson nothing could compare against its record is a hole in the coverage, never an intact lesson.
+
+### The retirement of a lesson
+
+`retireLesson` (`src/retirement.ts:145`) is the second and the last path of the package that writes inside a
+skill, and the only one that takes something out of it. A lesson that stops applying is not deleted: the file
+stays where it is and its frontmatter says `status: "retired"`, which is the tombstone, and the reference line
+leaves `## Lessons`, which is what makes the lesson inert -- pi loads a lesson through that line (Q10), so a
+retired lesson costs nothing to the next session however intact its bytes are.
+
+**The order of the writes is the contract** (`:11`), and every position of it is a guarantee:
+
+1. the lesson on disk is the one the acceptance measured: its `contentHash` is the one the record of the
+   acceptance declares (`:165`). A file that is not there is `lesson-missing`, one whose bytes moved is
+   `lesson-drift`, and neither writes anything -- a retirement takes back the lesson that was accepted and not
+   whatever the slug names today.
+2. the snapshot comes before the first edit (`:183`), as in the acceptance: the skill as it was is always on
+   disk when this protocol starts to change it, and a timestamp that is taken is taken.
+3. the reference line leaves `## Lessons` (`:189`). This step comes *before* the tombstone and not after it, and
+   that is the one reason of the order: if step 4 fails, the file still says `accepted` and the lesson is
+   already inert, so running the retirement again finds the pre-image of step 1 intact and finishes. In the
+   other order the second run trips over its own pre-image -- the bytes it finds are a tombstone it wrote
+   halfway -- and the skill keeps a tombstone nobody can reach with the tool (`:18`).
+4. the lesson is rewritten with `status: "retired"` and the same body (`:198`). `retireLessonFile`
+   (`src/writer.ts:628`) post-conditions the `bodyHash` before and after, so a retirement that changed the body
+   is an error and not a retirement: the state changes and the correction does not.
+5. `.history/<timestamp>/retirement.json`, the record of what was retired with which hashes and why (`:222`),
+   written after the bytes of the skill landed, into the snapshot this retirement took and only there
+   (`writeHistoryRetirement`, `src/writer.ts:729`; the name is `src/names.ts:24`).
+6. the `retired` line of the index (`:227`), with the pair of hashes of the acceptance and
+   `failureSignature: null` -- the field is required and nullable on purpose (OA4 of M1) -- so the line joins its
+   `accepted` by `candidateHash` exactly the way that line joined the `proposed` of the run that produced it.
+
+**`retirement@1` is its own artifact and not `decision@2`** (`schemas/retirement.schema.json:3`,
+`src/types.ts:655`). A decision record describes what a gate decided about a candidate: `candidate.kind` is
+`const "new-lesson"` and `gate` is a union of six blocks, and a retirement is not a verdict of anything. Opening
+`decision@2` for it would have widened the record of a gate to carry a fact the gate never decided; a file with
+its own `$id` and its own `format` follows the precedent the case bank set.
+
+**The merit is the user's and there is no gate here** (`:31`). Requiring a measured regression before retiring
+would make a lesson that is simply false impossible to take back, which is the case the reason `wrong` exists
+for. The vocabulary of the reasons is closed -- `stale`, `superseded`, `ineffective`, `wrong`, `unreferenced`
+(`:64`) -- and each key names a state the caller reports differently, with the detail as free text because a
+key without a sentence is a reason nobody can act on. The refusals are values and not errors (`:73`, `:81`),
+save the ones the protocol does not name -- a snapshot that cannot be taken, a tombstone that cannot be written,
+a record that cannot land -- which are thrown the way the rest of the package treats a broken file.
+
+**A retirement is not undone.** There is no `unretire`, no flag that re-adds the reference line and no writer
+of `status: "accepted"` over a lesson that is already in the skill; the way back is to propose another lesson
+and let it pass its gate. That is the same asymmetry the publication has: the record of what was retired stays
+in the snapshot of that retirement, so the decision is auditable after the fact even though it cannot be
+reverted.
+
+### The collector of signals
+
+`src/signals.ts` is the only module of the package that runs in every turn of every session. What it does is
+decided mechanically from what a turn already carries, so its budget is part of its contract: no model call, no
+process, no wall clock and no file read per turn. A turn costs one pass over the `toolCall`s of its message and
+one copy of references from `getBranch()` to find the prompt of the user, and the only writes are one line per
+new suspicion (`recordSignalLine`, `src/signals.ts:487`).
+
+**The trigger.** `turn_end` (`extensions/index.ts:264`), because the other events do not answer the question:
+`session_shutdown` does not always happen -- a kill emits nothing -- and `session_start` does not see the turns
+of the session it starts. The handler observes, reports one line per suspicion that is new and answers
+`undefined`: it adds no entry, changes no boundary and never throws, because a bug in a notice cannot be
+allowed to break the session that reads it.
+
+**The two classes, and how each is detected** (`:15`, `:19`).
+
+- `rewritten-draft`: a call to `write` or `edit` names a file that an earlier turn already wrote, and the
+  arguments differ (`:355`). Two calls on the same file in the same turn are the model refining its own draft
+  and raise nothing, and the comparison is between the digests of the canonical arguments (`hashOfArguments`,
+  `src/evidence.ts:313`) and never between texts, so no content is kept in memory.
+- `repeated-request`: the prompt of this turn repeats, in substance, the one of an earlier turn (`:374`). The
+  significant tokens of the shorter prompt are a subset of the longer one's and at least three are shared
+  (`:57`), where a token is what is left after splitting on everything that is not a letter or a digit,
+  lowercased, and kept at five code points or more (`:59`, `:404`). There is no stopword list: it would be a
+  vocabulary with no owner.
+
+**The caps, and why each one exists** (`:35`). In memory: eight open suspicions (`:45`), thirty-two tracked
+paths (`:48`) and eight remembered prompts (`:51`), the oldest dropped past each cap. In the file: 128 lines
+(`:62`), and past it the file is folded at the next hydration -- the last event per id, newest first (`:282`,
+`:587`, `:621`). The two caps are not the same rule: the one in memory keeps the cost of a turn flat, and the
+one on the file keeps a file a year of sessions grew short enough to be read in one go.
+
+**The suspicion survives the session that raised it** (`:29`). `state/signals.jsonl`
+(`schemas/signal.schema.json:3`, `src/names.ts:30`) is append-only, one event per line -- `raised` with the whole
+suspicion and `consumed` with the id and the moment -- and the state of an id is its last event. Append-only
+avoids the read-modify-write race between two sessions of pi for the same reason the index does
+(`appendSignalLine`, `src/writer.ts:225`), and the reader tolerates what it cannot use (`:505`, `:528`): a line
+that is not JSON, of another format or without the fields of its event is skipped and counted, and a truncated
+tail is discarded instead of being read as the event it almost was.
+
+**The id carries the session** (`:348`), on purpose: the same rewrite in another session is a new occurrence
+with its own id, and it is reported again. That is behaviour and not a defect, and it is why a suspicion is a
+suspicion and never a defect: the user may have rewritten the draft by choice, and only a confirmation turns it
+into a measurable attempt. The confirmation arrives as `--signal=<id>` and opens the directional attempt, which
+needs a bank to measure it (`src/command-skill-improve.ts:544`): a confirmation with no bank spends nothing, and
+the suspicion stays open and retryable.
+
+**The child of a replay registers nothing.** The factory returns at its first statement when
+`PI_SIMPLE_SRI_REPLAY=1` (`extensions/index.ts:189`), so a replay hydrates no collector, raises no suspicion
+and writes no line of `state/signals.jsonl` -- the same guard that stops a replay from starting another propose
+over itself.
+
+**The rule of the identical prompt.** pi emits `turn_end` once per assistant turn, and the agent loop runs
+several turns under one user message, so a prompt identical to the one of the previous turn is the same message
+and is not remembered twice (`:196`, `:385`). The consequence is written into the detection: a repeat that a new
+user message spells identically is read as the message it repeats and raises nothing, because the tokens cannot
+tell "asked again on purpose" from "the loop went on", and guessing would raise a suspicion at every turn of a
+loop the agent runs under one message.
 
 ## Tests
 

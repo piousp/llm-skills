@@ -219,6 +219,9 @@ function requestFor(fixture: Fixture, lessonText: string, overrides: Partial<Acc
     // The hash the gate preregistered: the SKILL.md of the skill as it stands when the acceptance is asked
     // for it, so a test that wants drift asks with the hash of an older text.
     expectedSkillContentHash: digestOf(readFile(fixture.skillFilePath)),
+    // The verdict of a skill the settings admit, which is the one every other test of this file leaves in place: the
+    // guard of the eligibility is the first step of the protocol and a test that wants it to fire passes its own.
+    eligibility: { eligible: true },
     failureSignature: FAILURE_SIGNATURE,
     timestamp: TIMESTAMP,
     ...overrides,
@@ -282,6 +285,20 @@ function outcomeOf(record: unknown): DecisionRecord["outcome"] {
   const outcome: unknown = (record as Record<string, unknown>).outcome;
   if (typeof outcome !== "object" || outcome === null) assert.fail("the history record carries no outcome");
   return outcome as DecisionRecord["outcome"];
+}
+
+// The seams of the writes, each one failing the test if it is reached: a refusal that wrote anything would leave a trace
+// here even though the tree of the skill already proves it did not. The guard of the eligibility is the first step of the
+// protocol, so none of the six may be called.
+function forbiddenWrites(): AcceptDeps {
+  return {
+    snapshot: async () => assert.fail("an ineligible skill must not be snapshotted"),
+    writeLesson: async () => assert.fail("an ineligible skill must not receive a lesson"),
+    removeLesson: async () => assert.fail("nothing may be removed"),
+    upsertReference: async () => assert.fail("no reference line may be written"),
+    writeHistoryDecision: async () => assert.fail("no record may be written"),
+    appendAttempt: async () => assert.fail("no line of the index may be written"),
+  };
 }
 
 test("acceptCandidate: the accepted candidate leaves its snapshot, its lesson and one reference line", async (t) => {
@@ -520,4 +537,41 @@ test("acceptCandidate: the history record says accepted and the index line joins
     targetSkill: SKILL_NAME,
     historyPath: value.historyPath,
   });
+});
+
+// M3, S7 (D-C): the last negative, and the only one this protocol cannot read for itself -- it reads no settings, on
+// purpose. The verdict arrives as data, so a caller that learned the skill is no longer eligible after the gate spent its
+// budget stops here: before the snapshot, before the lesson and before the SKILL.md is even read.
+test("acceptCandidate: a skill that is no longer eligible is refused before the snapshot", async (t) => {
+  const fixture = createFixture(t);
+  const skillBefore = readFile(fixture.skillFilePath);
+  const request = requestFor(fixture, LESSON_TEXT, {
+    eligibility: { eligible: false, reason: "not-eligible" },
+  });
+
+  const refused = rejection(await acceptCandidate(request, seams(forbiddenWrites())));
+
+  assert.equal(refused.reason, "no-longer-eligible");
+  // The reason of the verdict is in the detail: the settings and the name this package reserves are two facts, and the
+  // sentence says which one refused the write.
+  assert.equal(refused.detail.includes(SKILL_NAME), true);
+  assert.equal(refused.detail.includes("is no longer eligible: not-eligible"), true);
+
+  // Nothing was created, nothing was written and the index has no line: the refusal is the first step of the protocol.
+  assert.deepEqual(relativeTree(fixture.skillDir), [SKILL_FILE, "lessons/pdf-first.md"]);
+  assert.equal(readFile(fixture.skillFilePath), skillBefore);
+  assert.equal(fs.existsSync(attemptsPath(fixture)), false);
+});
+
+// The other side of the guard: an eligible verdict is not a second refusal, and the protocol runs as it did before the
+// guard existed -- which is what the rest of this file proves with the same default.
+test("acceptCandidate: an eligible skill follows the protocol of the slice", async (t) => {
+  const fixture = createFixture(t);
+  const request = requestFor(fixture, LESSON_TEXT, { eligibility: { eligible: true } });
+
+  const value = accepted(await acceptCandidate(request, seams()));
+
+  assert.equal(value.referenceAdded, true);
+  assert.equal(readFile(path.join(fixture.lessonsDir, `${SLUG}.md`)), LESSON_TEXT);
+  assert.equal(countReferenceLines(readFile(fixture.skillFilePath), SLUG), 1);
 });

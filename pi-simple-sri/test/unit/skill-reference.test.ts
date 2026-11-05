@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   countReferenceLines,
   hasReference,
+  removeReferenceLine,
   upsertReferenceLine,
 } from "../../src/skill-reference.ts";
 
@@ -334,6 +335,84 @@ for (const entry of IDEMPOTENCE_CASES) {
     assert.equal(twice, once);
     assert.equal(thrice, once);
     assert.equal(countReferenceLines(once, SLUG), 1);
+  });
+}
+
+// The inverse of the upsert, and the second edit the retirement of a lesson makes (M3, S4): the bullet of the section
+// leaves and nothing else moves. The three cases below are the three questions the rule answers -- what leaves, what
+// stays, and what happens to a text that carries no line at all, which has to come back byte for byte.
+const REMOVAL_TEXT = [
+  "# pdf-tools",
+  "",
+  "## Lessons",
+  "",
+  `- [lessons/${SLUG}.md](lessons/${SLUG}.md) - Merged cells`,
+  EXISTING_REFERENCE,
+  `See lessons/${SLUG}.md for details.`,
+  "",
+  "## Notes",
+  "",
+  `- [lessons/${SLUG}.md](lessons/${SLUG}.md) - Merged cells`,
+  "",
+].join("\n");
+
+test("removeReferenceLine: the line leaves the section and only the section", () => {
+  const without = removeReferenceLine(REMOVAL_TEXT, SLUG);
+
+  // The bullet of the section is gone, the other lesson of the same list stays, and so do the prose mention and the
+  // bullet of `## Notes`: neither of them is the reference, which is the rule countReferenceLines counts by.
+  assert.deepEqual(
+    without.split("\n"),
+    [
+      "# pdf-tools",
+      "",
+      "## Lessons",
+      "",
+      EXISTING_REFERENCE,
+      `See lessons/${SLUG}.md for details.`,
+      "",
+      "## Notes",
+      "",
+      `- [lessons/${SLUG}.md](lessons/${SLUG}.md) - Merged cells`,
+      "",
+    ],
+  );
+  assert.equal(countReferenceLines(without, SLUG), 0);
+  assert.equal(countReferenceLines(without, "existing"), 1);
+  assert.equal(hasReference(without, SLUG), false);
+});
+
+// The retirement can stop after the reference line and be run again (M3, S4), so this edit has to be idempotent: the
+// second call finds nothing to remove and answers the text it was given.
+test("removeReferenceLine: a second call changes nothing", () => {
+  const once = removeReferenceLine(REMOVAL_TEXT, SLUG);
+  assert.equal(removeReferenceLine(once, SLUG), once);
+});
+
+interface RemovalNoOpCase {
+  name: string;
+  text: string;
+}
+
+// A text without the reference of this slug comes back as it arrived, and that is stronger than "an equal text": the
+// file is not rewritten with the same bytes, so the ending of the file and every line of it survive exactly. The last
+// case is the one a re-joined text would get wrong: a file with no trailing newline.
+const NO_OP_CASES: readonly RemovalNoOpCase[] = [
+  { name: "a file without the section", text: SKILL_HEAD },
+  { name: "an empty section", text: "# pdf-tools\n\n## Lessons\n" },
+  {
+    name: "a section that lists another lesson",
+    text: ["# pdf-tools", "", "## Lessons", "", EXISTING_REFERENCE, ""].join("\n"),
+  },
+  {
+    name: "a file with no trailing newline",
+    text: ["# pdf-tools", "", "## Lessons", "", EXISTING_REFERENCE].join("\n"),
+  },
+];
+
+for (const entry of NO_OP_CASES) {
+  test(`removeReferenceLine: a text without the line is returned unchanged (${entry.name})`, () => {
+    assert.equal(removeReferenceLine(entry.text, SLUG), entry.text);
   });
 }
 

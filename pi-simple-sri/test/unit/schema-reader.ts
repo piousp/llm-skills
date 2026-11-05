@@ -12,16 +12,19 @@ import { isPlainObject } from "../../src/values.ts";
 // acceptance and the case bank), and copies of a validator can disagree. It is not a *.test.ts, so the runner does
 // not execute it as a suite; tsconfig includes test/**/*, so it is typechecked like everything else.
 //
-// Two contracts are read here, one per schema, and each answer names the document it validated: the path of a
-// violation starts with "decision" or with "case-bank", so a failure says which file it came from.
-// test/unit/decision-schema.test.ts keeps the negative cases of the first, and test/unit/case-bank.test.ts the ones of
-// the second: they are the files that fix what this reader catches, one injected fault per case, so a keyword the
-// schema adds later and this reader does not know shows up there as a case nobody could make fail.
+// One contract per schema is read here, and each answer names the document it validated: the path of a violation starts
+// with the name of the contract -- "decision", "case-bank", "signal" or "retirement" -- so a failure says which file it
+// came from. test/unit/decision-schema.test.ts keeps the negative cases of the first, test/unit/case-bank.test.ts the ones
+// of the second, test/unit/signal-schema.test.ts the ones of the third (M3, S5) and test/unit/retirement-schema.test.ts the
+// ones of the fourth (M3, S4): they are the files that fix what this reader catches, one injected fault per case, so a
+// keyword the schema adds later and this reader does not know shows up there as a case nobody could make fail.
 
 const SCHEMAS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
 
 const DECISION_SCHEMA_FILE = "decision.schema.json";
 const CASE_BANK_SCHEMA_FILE = "case-bank.schema.json";
+const SIGNAL_SCHEMA_FILE = "signal.schema.json";
+const RETIREMENT_SCHEMA_FILE = "retirement.schema.json";
 
 // A schema as it is on disk, untyped on purpose: every read of it narrows a field to a keyword, and a cast to a
 // shape of our own invention would be the one thing the reader cannot check.
@@ -39,10 +42,22 @@ export function loadBankSchema(): unknown {
   return readSchema(CASE_BANK_SCHEMA_FILE);
 }
 
+// M3 (S5): the line of the file of signals, one contract of two events (`raised` and `consumed`) chosen by a oneOf.
+export function loadSignalSchema(): unknown {
+  return readSchema(SIGNAL_SCHEMA_FILE);
+}
+
+// M3 (S4): the record of a retirement, versioned by its `schema` const and closed at every level.
+export function loadRetirementSchema(): unknown {
+  return readSchema(RETIREMENT_SCHEMA_FILE);
+}
+
 // Read once each: a schema is a file of the package and not of the run, and every validation below reads the same
 // bytes the negative cases of the two suites describe.
 const DECISION_SCHEMA: unknown = loadDecisionSchema();
 const CASE_BANK_SCHEMA: unknown = loadBankSchema();
+const SIGNAL_SCHEMA: unknown = loadSignalSchema();
+const RETIREMENT_SCHEMA: unknown = loadRetirementSchema();
 
 // The violations of `document` against schemas/decision.schema.json, with the JSON pointer of each one. An empty
 // list is the record satisfying the schema.
@@ -53,6 +68,16 @@ export function validateAgainstSchema(document: unknown): string[] {
 // The same reading over schemas/case-bank.schema.json.
 export function validateAgainstBankSchema(document: unknown): string[] {
   return violationsAgainst(CASE_BANK_SCHEMA, document, "case-bank");
+}
+
+// The same reading over schemas/signal.schema.json.
+export function validateAgainstSignalSchema(document: unknown): string[] {
+  return violationsAgainst(SIGNAL_SCHEMA, document, "signal");
+}
+
+// The same reading over schemas/retirement.schema.json.
+export function validateAgainstRetirementSchema(document: unknown): string[] {
+  return violationsAgainst(RETIREMENT_SCHEMA, document, "retirement");
 }
 
 function violationsAgainst(schema: unknown, document: unknown, at: string): string[] {

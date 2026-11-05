@@ -24,6 +24,7 @@ import { spendBudget, tokenTallyOf, type PlannedItem } from "./budget.ts";
 import {
   answerGateConclusion,
   appendGateAnswerLine,
+  eligibilityRefusalOf,
   preregisteredRecordOf,
   resolveStagedCandidate,
   verifiedStagedLesson,
@@ -50,8 +51,9 @@ import type { CaseGateJudgeAnswer, GateVerdict, NoBaselineResult } from "./types
 // the pair and the layout of the index line. What is its own is the material -- a bank instead of the turns of a
 // diagnosis -- and the sequence that material needs, which is this list and no other:
 //
-//   1. resolve the candidate, and refuse one of another base (`basis-mismatch`) or one the gate already answered
-//      (`already-concluded`). Both are refusals and not abstentions: nothing was spent, and nothing can be;
+//   1. resolve the candidate, and refuse one of another base (`basis-mismatch`), one the gate already answered
+//      (`already-concluded`) or one of a skill the settings no longer admit (`not-eligible`). All three are refusals and not
+//      abstentions: nothing was spent, and nothing can be;
 //   2. read the bank ONCE and parse those bytes. A bank that is not a baseline -- absent, unreadable, over its cap, not
 //      JSON, not a bank of this version -- answers `no-baseline` with the stable text of the reader, writes the one line
 //      of the index that names it and spends nothing;
@@ -166,9 +168,11 @@ export async function gateDirectionalCandidate(
   const candidateDir = path.resolve(request.base, request.stagingPath);
   const decisionPath = path.join(candidateDir, DECISION_FILE);
 
-  // Step 1. The record, and the two guards of this base. A candidate of another base is not measured by a bank -- its record
-  // says how it would decide, and that is not this way -- and a candidate the gate already answered is not gated twice: a
-  // second verdict would overwrite one a reader may already have acted on.
+  // Step 1. The record, and the three guards of this base. A candidate of another base is not measured by a bank -- its record
+  // says how it would decide, and that is not this way -- a candidate the gate already answered is not gated twice: a second
+  // verdict would overwrite one a reader may already have acted on, and a candidate of a skill the settings no longer admit is
+  // refused before this flow reads a byte of its bank: measuring it would compare a skill the user has excluded with itself plus
+  // a lesson, and the acceptance would refuse the candidate afterwards, once the cases were paid for.
   const resolved = await resolveStagedCandidate(request.base, request.skill.name, request.stagingPath);
   if (!resolved.ok) return { kind: "refused", rejection: resolved.error };
   const record = resolved.value;
@@ -188,6 +192,15 @@ export async function gateDirectionalCandidate(
       `${quote(relativeToBase(request.base, decisionPath))} is ${quote(status)}: a candidate is gated once, and the rule of a gate that already answered is not preregistered again`,
     );
   }
+
+  // M3, S7b: the eligibility guard of the replay base, at the same point of this sequence -- after the record is proven to be a
+  // candidate and before the bank is read, the rule preregistered and any run spent. Without it this base is the way around the
+  // guard: a `/skill-improve --staged=<path> --bank=<bank>` over a skill `deny` names would read the bank and pay for the cases
+  // before the acceptance refused it as `no-longer-eligible`, which is the spend D-C says must not happen. The guard is one
+  // function of the gate (eligibilityRefusalOf, ./flow.ts) because the two bases obey one rule, and it answers `refused`: nothing
+  // was written and no run was spent.
+  const ineligible = eligibilityRefusalOf(request);
+  if (ineligible !== null) return { kind: "refused", rejection: ineligible };
 
   // Step 2. The bank, read once. The bytes that were parsed come back with the data, so the digest the preregistration pins
   // is the digest of what was judged: a second read of the path could hand a different file, and no check afterwards would

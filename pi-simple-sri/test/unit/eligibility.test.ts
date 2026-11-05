@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isEligible, isEligibleUnderAnySpelling } from "../../src/eligibility.ts";
+import { isEligible, isEligibleUnderAnySpelling, spellingsOfSkill } from "../../src/eligibility.ts";
 import { PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import type { Eligibility, SriConfig } from "../../src/types.ts";
 
@@ -177,6 +177,30 @@ test("isEligible: the eligible result carries no reason", () => {
   const result = isEligible("pdf-tools", { allow: [], deny: [] });
 
   assert.deepEqual(result, { eligible: true });
+});
+
+// M3 (S7): the spellings have one owner now, and it is the module the rule lives in. The loop, the gate and the acceptance
+// decide with the list this function answers, so the shape and the order of the list are what the three sites share.
+test("spellingsOfSkill: a directory named after the skill answers one spelling", () => {
+  assert.deepEqual(spellingsOfSkill({ name: "pdf-tools", dir: "/skills/pdf-tools" }), ["pdf-tools"]);
+});
+
+test("spellingsOfSkill: another directory name adds its basename after the name", () => {
+  assert.deepEqual(spellingsOfSkill({ name: "syscfg", dir: "/skills/system-config" }), [
+    "syscfg",
+    "system-config",
+  ]);
+});
+
+// The order is the one the rule reads and the one the table above spells out: the name of the frontmatter first, the
+// basename of the directory after it, whichever of the two the settings happen to name -- the deepEqual above fixes the
+// order, so this test fixes the reason it is that one.
+test("spellingsOfSkill: the list is the one the rule of the spellings reads", () => {
+  const spellings = spellingsOfSkill({ name: "syscfg", dir: "/skills/system-config" });
+
+  assert.equal(spellings.length, 2);
+  assert.deepEqual(isEligibleUnderAnySpelling(spellings, { allow: ["system-config"], deny: [] }), ELIGIBLE);
+  assert.deepEqual(isEligibleUnderAnySpelling(spellings, { allow: [], deny: ["syscfg"] }), NOT_ELIGIBLE);
 });
 
 test("isEligible: does not mutate the config it reads", () => {

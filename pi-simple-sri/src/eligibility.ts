@@ -1,3 +1,4 @@
+import path from "node:path";
 import { PUBLISHED_SKILL_NAME } from "./names.ts";
 import type { Eligibility, SriConfig } from "./types.ts";
 
@@ -22,6 +23,16 @@ import type { Eligibility, SriConfig } from "./types.ts";
 // it both get the same answer, and the reason says whose decision it was.
 export function isEligible(skillName: string, config: SriConfig): Eligibility {
   return isEligibleUnderAnySpelling([skillName], config);
+}
+
+// The spellings of one skill, which are the argument of the rule above (F5): the `name` of the frontmatter and the
+// basename of the directory, in that order, and one spelling when the two agree. It moved here from
+// src/improve-flow.ts (M3, S7) because it had two owners waiting: the loop, the gate and the acceptance take the same
+// verdict, and a private copy in each would be a second answer to "which names does the settings file decide about" --
+// the day one of them learned about a third spelling, the other two would quietly decide about two.
+export function spellingsOfSkill(skill: { name: string; dir: string }): string[] {
+  const dirName = path.basename(skill.dir);
+  return dirName === skill.name ? [skill.name] : [skill.name, dirName];
 }
 
 export function isEligibleUnderAnySpelling(

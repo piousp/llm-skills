@@ -138,6 +138,7 @@ test("ATTEMPT_EVENTS: the emitible vocabulary is the one of Q14 and every member
     "gate-rejected",
     "gate-abstained",
     "no-baseline",
+    "retired",
   ]);
 
   for (const event of ATTEMPT_EVENTS) {
@@ -199,6 +200,38 @@ test("a no-baseline line is built by the constructor and comes back unchanged", 
     stagingPath: STAGING_PATH,
     decisionPath: DECISION_PATH,
     reason: "bank-absent: /work/cases.json",
+  });
+
+  // Through the format the index is: one JSON line, and the event on it is one this version both reads and writes.
+  const parsed: unknown = JSON.parse(JSON.stringify(line));
+  assert.deepEqual(parsed, line);
+  assert.equal(isAttemptEvent(line.event), true);
+  assert.equal(isKnownAttemptEvent(line.event), true);
+});
+
+// M3, S4: the retirement emits a line too, and it is a line of the same shape. Its pair of hashes is the one of the
+// lesson the acceptance measured -- the tombstone keeps the same body and the line joins the acceptance by it -- and
+// `failureSignature` is an explicit null, because a retirement decides nothing about a failure (OA4 of M1).
+test("a retired line is built by the constructor, parses back and is an event of this version", () => {
+  const line = buildAttemptLine({
+    now: NOW,
+    event: "retired",
+    targetSkill: "pdf-tools",
+    hashes: { candidateHash: CANDIDATE_HASH, bodyHash: BODY_HASH },
+    failureSignature: null,
+    historyPath: HISTORY_PATH,
+    reason: "stale: the tables of the appendix moved",
+  });
+
+  assert.deepEqual(line, {
+    ts: NOW.toISOString(),
+    event: "retired",
+    candidateHash: CANDIDATE_HASH,
+    bodyHash: BODY_HASH,
+    failureSignature: null,
+    targetSkill: "pdf-tools",
+    historyPath: HISTORY_PATH,
+    reason: "stale: the tables of the appendix moved",
   });
 
   // Through the format the index is: one JSON line, and the event on it is one this version both reads and writes.

@@ -10,6 +10,8 @@ import { caseBankReason, loadCaseBank } from "../../src/case-bank.ts";
 import type { CaseBankProfile } from "../../src/case-bank.ts";
 import type { GateAbstentionReason, GateVerdictReason } from "../../src/gate/types.ts";
 import { PUBLISHED_SKILL_NAME } from "../../src/names.ts";
+import type { RetirementReason } from "../../src/retirement.ts";
+import type { SignalKind } from "../../src/signals.ts";
 import { findSkill, listSkills } from "../../src/skills-inventory.ts";
 import type { SkillImproveAction, SkillImproveOutcome } from "../../src/tool-skill-improve.ts";
 import { isPlainObject } from "../../src/values.ts";
@@ -114,6 +116,28 @@ const VERDICT_REASONS: Record<GateVerdictReason, string> = {
 // written from memory names, and since S2c it is swept over both files: a literal forbidden in SKILL.md is
 // forbidden in the reference too.
 const FORBIDDEN_IN_MANUAL: readonly string[] = ["README.md", "pablo-", "goal-discovery", "mattpocock", "scout"];
+
+// The two kinds of suspicion the collector raises while a session happens (M3, S5), one key per member of the union: a kind
+// added to src/signals.ts without a line in the manual is a notice the reader cannot recognise, and the manual is the only
+// place the user learns that a suspicion is not a defect and that only a confirmation turns it into an attempt. What is
+// asserted is the presence of the word, never the sentence around it.
+const SIGNAL_KIND_NAMES: Record<SignalKind, string> = {
+  "rewritten-draft": "rewritten-draft",
+  "repeated-request": "repeated-request",
+};
+
+// The reasons a lesson is retired for (M3, S4), one key per member of the union: a key added to src/retirement.ts without a
+// line in the manual is a reason the user types without knowing it exists, and the manual is the one place these closed
+// vocabularies are written down. What is asserted is the presence of the word, never the sentence around it. The
+// rejections of the protocol are not part of this table: each one is a sentence of src/messages.ts that names its own
+// state, and the manual has no list of them.
+const RETIREMENT_REASON_NAMES: Record<RetirementReason, string> = {
+  stale: "stale",
+  superseded: "superseded",
+  ineffective: "ineffective",
+  wrong: "wrong",
+  unreferenced: "unreferenced",
+};
 
 interface Template {
   file: string;
@@ -316,6 +340,28 @@ test("SKILL.md: the manual names every reason the verdict of a gate carries", ()
 
   for (const reason of Object.values(VERDICT_REASONS)) {
     assert.ok(body.includes(reason), `expected the manual to name the verdict reason ${JSON.stringify(reason)}`);
+  }
+});
+
+// M3 (S5): the two kinds of suspicion the collector raises, over their own union and for the same reason as the three above.
+// The manual is where a user learns that a notice is a suspicion and not a defect, so a kind the manual never names is a
+// notice nobody can act on.
+test("SKILL.md: the manual names the two kinds of suspicion the collector raises", () => {
+  const body = manualBody();
+
+  for (const name of Object.values(SIGNAL_KIND_NAMES)) {
+    assert.ok(body.includes(name), `expected the manual to name the kind of suspicion ${JSON.stringify(name)}`);
+  }
+});
+
+// M3 (S4): the reasons a lesson is retired for, over their own union and for the same reason as the vocabularies above.
+// The command takes the key with `--reason=<key>` and the record of the retirement carries it, so a key the manual never
+// names is one a reader of the manual cannot type.
+test("SKILL.md: the manual names every reason a lesson is retired for", () => {
+  const body = manualBody();
+
+  for (const name of Object.values(RETIREMENT_REASON_NAMES)) {
+    assert.ok(body.includes(name), `expected the manual to name the retirement reason ${JSON.stringify(name)}`);
   }
 });
 

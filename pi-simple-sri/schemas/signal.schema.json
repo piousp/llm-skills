@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/signal@1.json",
+  "title": "pi-simple-sri signal, format 1",
+  "description": "One line of state/signals.jsonl: the memory of the suspicious occurrences the extension notices while a session happens (M3, S5). Append-only, one event per line, two events: `raised` opens a suspicion with everything it is, `consumed` closes it once the user confirmed it, and the state of an id is its last event. A suspicion is not a defect and not an attempt: it is a line of this file until someone confirms it, and only then does it open a measurable attempt (M3, S6). The file lives under the write base of the package, next to the index of attempts, and it is outside the tarball like the rest of state/. src/signals.ts is the authority on the fold and on which event closes which id, and it reads tolerantly on purpose: a line this schema refuses is skipped and counted, never thrown, so the negative cases of this contract live in test/unit/signal-schema.test.ts and not in production. Every level sets additionalProperties: false, so a line with a misspelled field is refused by name. A change of the shape or of the meaning of a field declared here is a new format, with a new `format` const.",
+  "oneOf": [
+    {
+      "description": "A suspicion the collector raised. The id names one occurrence and not one class of occurrence: the session is part of the material it hashes, so the same rewrite in another session is a new line that is reported again.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "event", "id", "kind", "createdAt", "sessionId", "turnIndex", "subject", "excerpt", "prompt"],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract: the reader skips it and counts it.",
+          "const": "pi-simple-sri/signal@1"
+        },
+        "event": {
+          "description": "The event this line reports. The two of this format are the two branches of the oneOf, so a line carrying the payload of both is refused instead of read as the branch closest to it.",
+          "const": "raised"
+        },
+        "id": {
+          "description": "\"sg-\" plus the first 8 hex of sha256(JSON.stringify([kind, sessionId, turnIndex, subject])). The prefix is part of the spelling because the id is quoted in a command and is read apart from the file it came from.",
+          "type": "string",
+          "pattern": "^sg-[0-9a-f]{8}$"
+        },
+        "kind": {
+          "description": "Which of the two suspicions this is: a draft the model wrote twice, or a prompt the user had to ask again. src/signals.ts declares the same set (SIGNAL_KINDS) and the manual teaches both.",
+          "enum": ["rewritten-draft", "repeated-request"]
+        },
+        "createdAt": {
+          "description": "When the collector raised it, from the one clock of the package. It dates the notice and not the turn.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "description": "The session of pi that raised it, as the session manager names it. It is part of the id, and it is kept apart so a reader can say which session an id came from without recomputing the hash.",
+          "type": "string",
+          "minLength": 1
+        },
+        "turnIndex": {
+          "description": "The turn of the session the suspicion points at: the turn of the rewrite, or the turn of the repeated prompt.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "subject": {
+          "description": "What the suspicion is about: the rewritten path, or the significant tokens of the repeated prompt joined by single spaces. It is the material of the id, so it is the field a reader compares.",
+          "type": "string",
+          "minLength": 1
+        },
+        "excerpt": {
+          "description": "The concrete fragment, at the length an evidence excerpt is kept (src/evidence.ts): the turn and the path of a rewrite, or the prompt as the user wrote it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "prompt": {
+          "description": "The prompt of the user of the turn the suspicion points at, as it was written. Absent prompts are spelled with the empty string rather than by dropping the field, so the field is always there and a reader never guesses whether its absence meant \"no prompt\" or \"an older writer\".",
+          "type": "string"
+        },
+        "model": {
+          "description": "\"provider/model\" of the turn, when the turn or the session names one.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "description": "A suspicion someone confirmed. It closes the id and costs nothing by itself: what it opens is the directional attempt of S6, which names the skill and pays the gate of always.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "event", "id", "at"],
+      "properties": {
+        "format": {
+          "description": "The same versioned id as the other event: one format, two events.",
+          "const": "pi-simple-sri/signal@1"
+        },
+        "event": {
+          "description": "The event this line reports.",
+          "const": "consumed"
+        },
+        "id": {
+          "description": "The id this consumption closes, in the spelling the `raised` line used.",
+          "type": "string",
+          "pattern": "^sg-[0-9a-f]{8}$"
+        },
+        "at": {
+          "description": "When the suspicion was consumed, from the one clock of the package.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "skill": {
+          "description": "The skill the confirmation opens an attempt for. Optional because the consumption and the name of the skill are two moments: the collector closes an id as soon as it is taken, and the command of S6 is what knows which skill the confirmation names.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  ]
+}

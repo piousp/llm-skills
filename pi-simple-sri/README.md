@@ -26,7 +26,9 @@ the last thing the accepting run does, after the acceptance has answered, and a 
 the acceptance standing and is reported on its own.
 
 One thing is explicitly not in this release: the recursive step, where the generator itself is versioned
-and evaluated. Retirement by merit and the metrics of a longer loop are later milestones too.
+and evaluated. What the loop records is read back in this release instead: the series of sessions is
+measured, an accepted lesson is checked against the record that accepted it, and a lesson that stops applying
+is retired with its reason on file.
 
 The design follows the 2026 literature on skill self-improvement. [REFERENCES.md](REFERENCES.md)
 lists the papers behind each rule, with their identifiers and what each one supports.
@@ -110,6 +112,31 @@ skill_improve {action: "gate", skill: "<skill>", stagingPath: "<the candidate>",
 A session that starts prints one line naming the four ways of giving feedback and the cost of the gate, and
 nothing more; a session pi reloaded prints nothing, because the reader has just read it. `/skill-improve`
 with no argument offers the same four, next to the skills that are eligible.
+
+### The reports, the retirement and a confirmed suspicion
+
+Four more flags, and two of them name no skill:
+
+```
+/skill-improve --metrics
+/skill-improve --verify
+/skill-improve <skill> --retire=<slug> --reason=<key> [detail]
+/skill-improve <skill> --signal=<id> --bank=<path>
+```
+
+`--metrics` reports the series the index already holds: the rate of acceptance, the rate of recurrence, the
+regressions a gate counted, and the split of why a case that failed failed. `--verify` answers for every
+accepted lesson still in force, comparing its bytes with the record that accepted it and its reference line
+with the `SKILL.md` of the skill. Both read the index and the bytes it names and stop there: they generate
+nothing, gate nothing, write nothing and spend no token.
+
+`--retire=<slug> --reason=<key>` takes an accepted lesson back out of use, for the reason the key names and the
+detail the rest of the line carries. The lesson stays in the skill as a tombstone and its reference line leaves
+`## Lessons`, so pi stops loading it.
+
+`--signal=<id>` confirms one of the two suspicions the extension noticed on its own, and it opens a directional
+attempt: the cases of the bank are what measures it, so the flag needs `--bank=<path>`, and without one nothing
+is spent and the suspicion stays open.
 
 ## Improving without a failure
 
@@ -446,7 +473,8 @@ package.
 │   ├── arms/incumbent/<skill>/            the skill as it stands
 │   ├── arms/candidate/<skill>/            the skill plus the lesson and its reference line
 │   └── gate/runs/<item>-<rep>-<arm>.jsonl the raw output of every run
-└── state/attempts.jsonl                   one event per line, append only
+├── state/attempts.jsonl                   one event per line, append only
+└── state/signals.jsonl                    one suspicion per event, append only, folded at 128 lines
 ```
 
 The `arms/` and `gate/runs/` entries appear when the gate runs: a candidate whose gate never started has
@@ -455,7 +483,11 @@ row of `decision.json` and the bytes behind it are the same coordinates. `case-b
 a candidate measured by a bank, and it is a copy of the file the user wrote: the cases and the rubric the
 gate judged travel with the attempt, so the record can be read years after the bank changed.
 
-An acceptance is the one thing this package writes inside a skill, and it writes three things there:
+`state/signals.jsonl` is the memory of the suspicions nobody has confirmed yet: one event per line, `raised`
+when one is noticed at the end of a turn and `consumed` when it is confirmed, and the state of a suspicion is
+its last event. It is written by the extension on its own, in the same append-only way as the index.
+
+Two paths write inside a skill, and the first of them is the acceptance, which writes three things there:
 
 ```
 <skill dir>/
@@ -464,13 +496,19 @@ An acceptance is the one thing this package writes inside a skill, and it writes
 └── .history/<timestamp>/
     ├── SKILL.md                           the skill as it was
     ├── lessons/                           the lessons as they were
-    └── decision.json                      the record of the acceptance
+    ├── decision.json                      the record of the acceptance
+    └── retirement.json                    the record of a retirement, when there is one
 ```
 
 The history snapshot is taken before the first edit, and a timestamp that already exists is refused
 instead of overwritten: history is never rewritten. The record of the acceptance is written into the
 snapshot only after the bytes of the skill are verified, so a record that says `accepted` cannot
 describe a write that did not happen.
+
+A retirement takes its own snapshot the same way, before it touches anything, and its record of what was
+retired and why lands inside that snapshot. The skill as it was is on disk whether the retirement finished or
+stopped halfway, and a file that already holds a snapshot of that moment is refused for the same reason the
+acceptance refuses it.
 
 The index line, the session entry and the `details` of the tool name those paths relative to the write
 base (`staging/<timestamp>/<skill>/...`), so a record stays readable after the agent directory moves,
@@ -484,10 +522,12 @@ rather than migrated: the gate reads one schema, and a record it cannot read is 
 be proposed again.
 
 The events of the index are `proposed`, `no-evidence`, `not-eligible`, `no-model`, `accepted`,
-`gate-rejected`, `gate-abstained` and `no-baseline`. A gate that passes writes no line of its own: the
+`gate-rejected`, `gate-abstained`, `no-baseline` and `retired`. A gate that passes writes no line of its own: the
 intermediate state lives in `decision.json` as `gate-accepted`, and the line is the `accepted` event the
 acceptance writes when it edits the skill, joined to the rest by the hash of the candidate. `no-baseline`
-is the one event of a gate that never started, and it is why the attempt it names is retryable.
+is the one event of a gate that never started, and it is why the attempt it names is retryable. `retired` is
+the line a retirement writes, and it carries the pair of hashes of the acceptance, so it joins its `accepted`
+line by `candidateHash`.
 
 `decision.json` also records which base decided the gate. A block of the `case-bank` base carries the
 result under `caseBank` and keeps `replay` at `null`, because schema 1 requires that key of every block; a
@@ -518,17 +558,18 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 ## Safety
 
-- Outside an acceptance the loop writes only under the write base, `<agent dir>/sri`, in `staging/` and
-  `state/`. An acceptance writes inside the skill, and only there: the lesson, one line of `SKILL.md`
-  and the history snapshot. A write base that falls inside a skill directory is refused before anything
-  is written: both sides are compared through the existing part of their paths, so a symlink pointing
-  into a skill is caught too.
+- Outside an acceptance and a retirement the loop writes only under the write base, `<agent dir>/sri`, in
+  `staging/` and `state/`. Those two are the only paths that write inside the skill: the
+  acceptance writes the lesson, one line of `SKILL.md` and the history snapshot, and a retirement writes the
+  tombstone of the lesson, the reference line out of `SKILL.md` and its own snapshot. A write base that falls
+  inside a skill directory is refused before anything is written: both sides are compared through the existing
+  part of their paths, so a symlink pointing into a skill is caught too.
 - Every write goes through one chokepoint: the target is checked against the write perimeter with
   resolved paths -- the write base, the skill directory, its `lessons/` and its `.history/` -- written
   to a temporary file, renamed, then read back and compared byte by byte.
-- The one write that is not a temporary file and a rename is an append to the index: one line, one
-  write, on a handle opened for appending, verified against the tail of the file. Two pi sessions
-  appending to the same installation at the same moment do not overwrite each other's line.
+- The one write that is not a temporary file and a rename is an append to the index or to the file of the
+  suspicions: one line, one write, on a handle opened for appending, verified against the tail of the file.
+  Two pi sessions appending to the same installation at the same moment do not overwrite each other's line.
 - Writes to the same file are serialized inside the process, and a file that is a symlink is written
   through the link instead of being replaced by a regular file.
 - The lesson is verified against the hash of the candidate before it lands, and `SKILL.md` is verified
@@ -554,7 +595,25 @@ directory name, because pi accepts that the two differ. The file is only read.
   write a lesson into a skill from the tool.
 - The gate is expensive and hard to satisfy. A lesson has to pass every run of its arm -- four with two
   items, six with three -- while the skill it replaces misses at least one, so a rejection or an
-  abstention is a normal answer and not a defect of the run.
+  abstention is a normal answer and not a defect of the run. The unanimity rule is what makes it strict in
+  practice: a candidate is rejected when the model that replays it adheres imperfectly, whatever the lesson
+  says. In the smoke test of the first milestone a case bank rejected a candidate that met the checks in three
+  of its four runs, because one replayed turn called `read` with `offset` as a string and the tool came back
+  with an error. `--metrics` prints how many of those failed runs were sunk by the text and how many by a tool
+  that returned an error, so the rule is discussed with two numbers instead of an anecdote.
+- The rate of recurrence rests on the records the index names. A `staging/` directory that was pruned takes the
+  record of a rejected or an abstained attempt with it and the series gets shorter without anything failing, so
+  the report prints the coverage -- how many of the records it names could not be read -- and a partial
+  measurement is visible instead of silent.
+- Recurrence is measured by class of failure and not by the exact failure: the kind of failure and the tool that
+  produced it, so a `tool_error` in `read` coming back counts as the failure returning even when it is another
+  call of another session. The signature a record stores cannot be used for this, because it is computed over
+  evidence ids that carry the timestamp of the transcript, and two sessions never share one.
+- The suspicions live in `state/signals.jsonl` with a ceiling of 128 lines: past it the file is folded at the
+  next session start and what is old is lost. The id of a suspicion carries the session that raised it, so the
+  same rewrite in another session is a new occurrence and is reported again.
+- A retirement is not undone. There is no `unretire`, and no flag that writes a retired lesson back under
+  `## Lessons`: the way back is to propose another lesson and let it pass its gate.
 - The reload after an acceptance belongs to the run that accepted: it is the last thing that run does, so a
   proposal or a gate never reloads, and a reload that fails leaves the lesson active from the next session.
 - The proposal is one model call capped at 2048 tokens. A longer lesson fails validation instead of
@@ -575,11 +634,13 @@ directory name, because pi accepts that the two differ. The file is only read.
 
 ## Roadmap
 
-- This version (M2c): the package publishes its own skill, `/skill:improving-skills`, which teaches the
-  loop and the case bank, and the tool gains a read-only check of a bank before a gate reads it.
-- Later: automatic evidence collection, typed diagnosis, acceptance, rejection and regression metrics,
-  retirement of lessons by merit, and the recursive step where the generator is versioned and evaluated
-  the same way.
+- This version (M3): the loop reads back what it recorded. The index of attempts has a reader, so the series
+  of sessions is measured -- rate of acceptance, rate of recurrence, the regressions a gate counted and the two
+  causes of a case that failed -- and every accepted lesson is checked against the record that accepted it. An
+  accepted lesson can be retired with its reason on file, and two silent signals are noticed at the end of a
+  turn without spending a token, one of which the user can confirm to open a measured attempt. This is where the
+  automatic collection of evidence, the metrics and the retirement of the earlier list of future work landed.
+- Later (M4): the recursive step, where the generator is versioned and evaluated the same way.
 
 ## More
 

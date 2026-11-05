@@ -6,14 +6,14 @@ import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes 
 import { caseBankReason, loadCaseBank, type CaseBank } from "./case-bank.ts";
 import { readSriConfig } from "./config.ts";
 import { buildBaselineDiagnosis, buildDefectDiagnosis, buildDiagnosis } from "./diagnosis.ts";
-import { isEligibleUnderAnySpelling } from "./eligibility.ts";
+import { isEligibleUnderAnySpelling, spellingsOfSkill } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
 import { notConcludedGateOf } from "./gate/flow.ts";
 import { sha256Digest, sha256Hex } from "./hash.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { createModelCall, type ModelCallRegistry } from "./model-call.ts";
-import { SKILL_FILE } from "./names.ts";
+import { SETTINGS_FILE, SKILL_FILE } from "./names.ts";
 import { createProposer, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "./skills-inventory.ts";
@@ -100,10 +100,6 @@ import {
 // appendEntry, so it is visible in /tree and never enters the model context
 // (docs/extensions.md:180, :344).
 export const ENTRY_TYPE = "skill-improvement";
-
-// pi reads its global settings from <agent dir>/settings.json and derives the directory from the
-// environment at the call, not at the import (dist/core/settings-manager.js:123, getAgentDir).
-const SETTINGS_FILE = "settings.json";
 
 // What happened to one attempt, as the session entry records it. It is the same set of facts as the
 // line in state/attempts.jsonl plus the skill and the focus, so a reader of /tree sees what was
@@ -686,14 +682,12 @@ function eligibleSkills(skills: readonly SkillRef[], config: SriConfig): SkillRe
 // A skill answers to two spellings -- the frontmatter `name` and the basename of its directory -- and
 // findSkill resolves a request written either way, so the settings may name it with either one. The
 // verdict is taken over both (F5), and the kind check above keeps the shared skills directory of a
-// standalone skill out of the spellings that reach a write target.
+// standalone skill out of the spellings that reach a write target. The spellings themselves are
+// src/eligibility.ts's (spellingsOfSkill): the gate takes the same verdict over the same list, and the
+// acceptance re-checks the verdict the command resolved from it, so the three sites read one owner
+// instead of keeping a copy each.
 function eligibilityOf(skill: SkillRef, config: SriConfig): Eligibility {
-  return isEligibleUnderAnySpelling(spellingsOf(skill), config);
-}
-
-function spellingsOf(skill: SkillRef): string[] {
-  const dirName = path.basename(skill.dir);
-  return dirName === skill.name ? [skill.name] : [skill.name, dirName];
+  return isEligibleUnderAnySpelling(spellingsOfSkill(skill), config);
 }
 
 // OA5: the identity of the model of the invocation, in the "provider/model" spelling the evidence carries, so a replay item

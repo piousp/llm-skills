@@ -16,6 +16,10 @@ import type { CaseBankOriginKind } from "./case-bank.ts";
 // are its only producers and consumers. Type-only for the same reason: the contract names the shape, and the
 // module that executes it is the one that compiles its regexes.
 import type { CaseCheck } from "./checks.ts";
+// The vocabulary of the reasons a lesson is retired for lives in src/retirement.ts, next to the protocol that writes one,
+// the way the event vocabulary lives in src/attempts.ts. Type-only, so the record contract keeps no run time dependency on
+// the module that writes into a skill; the schema of the record declares the same five keys.
+import type { RetirementReason } from "./retirement.ts";
 import { describe } from "./values.ts";
 
 // Settings read from the `pi-simple-sri` key of settings.json (Q16). Both lists
@@ -637,6 +641,33 @@ export interface DecisionRecord {
   outcome: DecisionOutcome;
 }
 
+// The record of a retirement (M3, S4), written as `.history/<timestamp>/retirement.json` inside the skill whose lesson it
+// retires. It mirrors schemas/retirement.schema.json field by field: same names, same optional/required split, no extra
+// keys. It is not a DecisionRecord on purpose -- candidate.kind is one literal, gate is a union of six blocks and
+// outcome.status names no retirement -- and a retirement is not a verdict about a candidate: it is the reason a user gave
+// for a lesson that stops applying.
+//
+// The two hashes of `lesson` are the ones the acceptance declared, which are the ones the retirement verified against the
+// bytes on disk before touching them; `retiredContentHash` is the digest of the file after the tombstone, so a reader can
+// tell a retirement from the bytes it was decided on. `retires.historyPath` is the decision.json of that acceptance, or
+// null when the line of the index that named it carried none -- the field is always there, like every field of a record
+// this package writes, so a reader never guesses whether its absence meant "no record" or "an older writer".
+export interface RetirementRecord {
+  schema: "pi-simple-sri/retirement@1";
+  createdAt: string; // ISO date-time
+  skill: { name: string; dir: string; realDir: string; wasSymlink: boolean };
+  lesson: {
+    slug: string;
+    title: string;
+    lessonPath: string; // relative to the skill, the spelling of src/skill-reference.ts
+    contentHash: string; // "sha256:" + 64 hex, the one of the acceptance
+    bodyHash: string; // "sha256:" + 64 hex, the one of the acceptance, which the retirement does not change
+    retiredContentHash: string; // "sha256:" + 64 hex over the tombstone
+  };
+  retires: { historyPath: string | null };
+  reason: { key: RetirementReason; detail: string };
+}
+
 // One line of state/attempts.jsonl. Append-only, one event per line, events
 // joined by candidateHash (Q14).
 //
@@ -661,9 +692,10 @@ export interface AttemptLine {
   targetSkill: string;
   stagingPath?: string;
   decisionPath?: string;
-  // Where the acceptance left the authoritative record of the run: .history/<timestamp>/decision.json
-  // inside the skill, present exactly on the line of an accepted candidate, which is the one event that
-  // wrote a skill.
+  // Where the acceptance left the authoritative record of the run: .history/<timestamp>/decision.json inside the skill.
+  // It is present exactly on the two events that wrote a skill: the line of an accepted candidate, where it names the
+  // record of that write, and the line of a retirement (M3, S4), where it names the record of the acceptance the lesson
+  // was taken from. The retirement writes its own reason into retirement.json, next to this record and not in its place.
   historyPath?: string;
   // Why the attempt answered nothing, when the flow knows it: it is the reason of an abstention with its detail -- the file
   // an overlay could not copy, the skill that no longer resolves --, the reason of an eligibility verdict

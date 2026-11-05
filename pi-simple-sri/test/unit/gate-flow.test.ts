@@ -19,7 +19,7 @@ import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import type { CaseCheck } from "../../src/checks.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, PUBLISHED_SKILL_NAME, SETTINGS_FILE, SKILL_FILE } from "../../src/names.ts";
 import type { ListSkillsOptions } from "../../src/skills-inventory.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
@@ -30,6 +30,7 @@ import type {
   GateConcluded,
   ReplayItem,
   SkillRef,
+  SriConfig,
 } from "../../src/types.ts";
 import { stateDir, stagingDir } from "../../src/write-base.ts";
 import { lessonHashes } from "../../src/writer.ts";
@@ -191,6 +192,9 @@ interface RecordOverrides {
   // is the one of the bytes on disk when the candidate was staged.
   defect?: boolean;
   artifactPath?: string;
+  // M3, S7: the name of the skill of the fixture, which is the name the record declares and the name the eligibility guard
+  // of the gate reads. The default is the skill of the suite.
+  skillName?: string;
 }
 
 // The record writeStagingCandidate publishes next to the lesson: schema @1, the candidate the gate will rewrite
@@ -200,16 +204,17 @@ function decisionRecord(overrides: RecordOverrides = {}): DecisionRecord {
   if (overrides.defect === true) return defectRecord(overrides.artifactPath);
 
   const evidence = fixtureEvidence(overrides);
-  const itemSkills = overrides.itemSkills ?? [SKILL_NAME];
+  const skillName = overrides.skillName ?? SKILL_NAME;
+  const itemSkills = overrides.itemSkills ?? [skillName];
 
   return {
     schema: "pi-simple-sri/decision@1",
     createdAt: "2026-11-02T14:03:22.481Z",
     trigger: { surface: "command", focus: "merged cells" },
     skill: {
-      name: SKILL_NAME,
-      dir: "/skills/pdf-tools",
-      realDir: "/skills/pdf-tools",
+      name: skillName,
+      dir: `/skills/${skillName}`,
+      realDir: `/skills/${skillName}`,
       wasSymlink: false,
       eligible: true,
     },
@@ -298,14 +303,14 @@ function defectRecord(artifactPath: string | undefined): DecisionRecord {
 // A declared skill the way a user writes one: frontmatter, a body, and a script next to it. The `## Lessons`
 // section is absent on purpose -- the overlay completes it in both arms, which is the case of the first lesson
 // of a skill.
-function skillFile(): string {
+function skillFile(name: string = SKILL_NAME): string {
   return [
     "---",
-    `name: ${SKILL_NAME}`,
+    `name: ${name}`,
     "description: Extract tables from PDFs",
     "---",
     "",
-    `# ${SKILL_NAME}`,
+    `# ${name}`,
     "",
     "Use the scripts in this directory.",
     "",
@@ -334,17 +339,18 @@ function createFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
     fs.rmSync(base, { recursive: true, force: true });
   });
 
-  const skillDir = path.join(base, "skills", SKILL_NAME);
+  const skillName = options.skillName ?? SKILL_NAME;
+  const skillDir = path.join(base, "skills", skillName);
   fs.mkdirSync(path.join(skillDir, "scripts"), { recursive: true });
   const skillFilePath = path.join(skillDir, SKILL_FILE);
-  fs.writeFileSync(skillFilePath, skillFile(), "utf8");
+  fs.writeFileSync(skillFilePath, skillFile(skillName), "utf8");
   fs.writeFileSync(path.join(skillDir, "scripts", "extract.sh"), "#!/bin/sh\npdftotext \"$1\" -\n", "utf8");
   if (options.symlink === true) {
     fs.symlinkSync(SKILL_FILE, path.join(skillDir, "linked-skill.md"));
   }
 
   const skill: SkillRef = {
-    name: SKILL_NAME,
+    name: skillName,
     description: "Extract tables from PDFs",
     dir: skillDir,
     realDir: skillDir,
@@ -352,7 +358,7 @@ function createFixture(t: TestContext, options: FixtureOptions = {}): Fixture {
     kind: "declared",
   };
 
-  const candidateDir = path.join(stagingDir(base), STAGING_TIMESTAMP, SKILL_NAME);
+  const candidateDir = path.join(stagingDir(base), STAGING_TIMESTAMP, skillName);
   const lessonsDir = path.join(candidateDir, LESSONS_DIR);
   fs.mkdirSync(lessonsDir, { recursive: true });
   fs.writeFileSync(path.join(lessonsDir, `${SLUG}.md`), LESSON_TEXT, "utf8");
@@ -407,6 +413,19 @@ function readRecord(decisionPath: string): DecisionRecord {
 
 function attemptsPath(base: string): string {
   return path.join(stateDir(base), ATTEMPTS_FILE);
+}
+
+// The settings the eligibility guard of the gate reads (M3, S7): the file under the agent directory of the request, in the
+// shape src/config.ts parses. Both lists are written even when empty, so a test says which verdict it exercises instead of
+// leaning on what the absence of the file would answer.
+function writeSettings(fixture: Fixture, config: SriConfig): void {
+  const agentDir = path.join(fixture.base, "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentDir, SETTINGS_FILE),
+    `${JSON.stringify({ "pi-simple-sri": { skills: config } }, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 // The lines of state/attempts.jsonl, in the order they were appended. An index nobody wrote answers with no
@@ -1362,4 +1381,58 @@ test("gateStagedCandidate: a candidate whose gate already answered is refused", 
   // The verdict is the one of the first run: the record is not rewritten and the index gained nothing.
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
   assert.deepEqual(readLines(fixture.base), []);
+});
+
+// M3, S7 (D-C): the loop refuses an ineligible skill before it proposes, so a candidate can only be here by another way --
+// written by hand, or staged by an earlier version of this package. The gate refuses it with `not-eligible`, the shape that
+// already means "nothing was written and no run was spent", and it does so before the plan: no run, no arm, no snapshot,
+// no line of the index and a record exactly as it was.
+test("gateStagedCandidate: a candidate of a skill the settings deny is refused before any run", async (t) => {
+  const fixture = createFixture(t);
+  writeSettings(fixture, { allow: [], deny: [SKILL_NAME] });
+  const before = fs.readFileSync(fixture.decisionPath, "utf8");
+  const harness = createHarness();
+
+  const result = await gateStagedCandidate(gateRequest(fixture), harness.deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  // The reason of the settings and not the one of the package: the two facts do not survive the same change.
+  assert.equal(result.rejection.reason, "not-eligible");
+  assert.equal(result.rejection.detail.includes(JSON.stringify(SKILL_NAME)), true);
+  assert.equal(result.rejection.detail.includes("is not eligible: not-eligible"), true);
+
+  assert.equal(harness.runs.length, 0);
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+  // The two arms are the first write of a plan, so their absence is the proof that the refusal came before it.
+  assert.equal(fs.existsSync(path.join(fixture.candidateDir, "arms")), false);
+  assert.equal(fs.existsSync(path.join(fixture.skill.dir, HISTORY_DIR)), false);
+});
+
+// The other side of the guard: an empty allow admits every skill `deny` does not name, so a settings file that excludes
+// nothing is not a second refusal of the ordinary run and the candidate follows the path of the gate.
+test("gateStagedCandidate: an empty allow does not refuse for eligibility", async (t) => {
+  const fixture = createFixture(t);
+  writeSettings(fixture, { allow: [], deny: [] });
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  assert.equal(harness.runs.length, PLANNED_RUNS);
+});
+
+// The name this package reserves is refused before either list is read (src/eligibility.ts), and the detail of the refusal
+// names that reason: the decision of the user and the fact of the package are two answers, and only one of them says the
+// user has to act.
+test("gateStagedCandidate: a candidate of the published manual names the reserved name", async (t) => {
+  const fixture = createFixture(t, { skillName: PUBLISHED_SKILL_NAME });
+  const harness = createHarness();
+
+  const result = await gateStagedCandidate(gateRequest(fixture), harness.deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  assert.equal(result.rejection.reason, "not-eligible");
+  assert.equal(result.rejection.detail.includes("published-by-this-package"), true);
+  assert.equal(harness.runs.length, 0);
 });

@@ -1,6 +1,20 @@
 import path from "node:path";
 import { COMMAND_NAME, PUBLISHED_SKILL_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
+// Type-only, so the wording of the report does not pull the arithmetic of src/metrics.ts -- and the ledger behind it -- into
+// every surface that reports a sentence: this module names the shape of the numbers, and metrics.ts is the one that counts
+// them.
+import type { GateTally, Metrics, SkillTally } from "./metrics.ts";
+// Type-only, so the wording of this module does not pull the collector -- and the writer behind it -- into every surface
+// that reports a sentence: this module names the shape of a suspicion and the collector is the one that builds it.
+import type { Suspicion } from "./signals.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
+// Type-only, so the wording of the report of the check does not pull the reader of the lesson bytes -- and the disk behind it
+// -- into every surface that reports a sentence: this module names the shape of the report, and src/standing.ts is the one
+// that reads the files behind it.
+import type { LessonCheck, SkillStanding, StandingReport } from "./standing.ts";
+// Type-only, so the wording of a retirement does not pull the protocol -- and the writer behind it -- into every surface that
+// reports a sentence: this module names the refusal the retirement answered, and src/retirement.ts is the one that decided it.
+import type { RetireRejection } from "./retirement.ts";
 import { assertNever, type DecisionSurface, type NotEligibleReason, type SkillRef } from "./types.ts";
 import { quote } from "./values.ts";
 
@@ -32,7 +46,14 @@ import { quote } from "./values.ts";
 // bank or its artifact cannot be read, and the sentence may not claim that the session showed no failure.
 // The discovery slice adds the third: the one line the extension reports when a session starts
 // (feedbackNoticeText), which belongs here because it names both surfaces and this module is the one owner of
-// the wording a surface reports.
+// the wording a surface reports. M3 adds the fourth: the line the collector reports when it raises a suspicion
+// (signalText), which is here for the same reason as the notice and says the opposite thing about certainty, and the
+// fifth: the report of the accepted lessons against the records that accepted them (standingText), which describes what is
+// on disk and decides nothing. S4 adds the sixth: the sentence of a retirement (retiredText) and the one each of its
+// refusals answers with (retireRejectedText), which belong here because a retirement is a write into a skill and the
+// command is the only surface that makes one -- the tool gains no flag for it. S6 adds the seventh: the answer of a
+// confirmation that names a suspicion nobody holds (unknownSignalText), which is here because it is the other half of the
+// notice above -- one sentence opens the suspicion and one says it cannot be found.
 
 // The line the extension reports once at the start of a session (M1c, S11, Q26). It exists because the channels of the
 // package fail differently: the description of the tool is what a model reads and a session notice is what a user reads,
@@ -180,6 +201,26 @@ export function noModelGateText(surface: DecisionSurface, skill: SkillRef): stri
   return `${sentence}${withClause(surface, { tool: TOOL_IN_STAGING, command: COMMAND_NOT_EDITED })}`;
 }
 
+// The line the extension reports when the collector of signals raises a suspicion (M3, S5). It names the fact, the
+// subject, and the one thing that turns a suspicion into a measurable attempt: the confirmation of the user. It promises
+// nothing about the skill, because a suspicion is not a defect (Q25) -- the user may have rewritten the draft by choice,
+// or asked twice on purpose -- and nothing was read, spent or edited behind it.
+export function signalText(suspicion: Suspicion): string {
+  const tail =
+    "Nothing was spent and the skill was not touched: only a confirmation of the user turns a suspicion into a measurable attempt.";
+
+  switch (suspicion.kind) {
+    case "rewritten-draft":
+      return `possible rewritten draft: the file ${quote(suspicion.subject)} was written in an earlier turn and written again in turn ${suspicion.turnIndex} with different arguments. ${tail}`;
+    case "repeated-request":
+      return `possible repeated request: this turn asks, in substance, for what an earlier turn already asked -- ${quote(suspicion.excerpt)}. ${tail}`;
+    default:
+      // A kind of a later version that reaches this build of the messages is a sentence nobody wrote: the dispatch names it
+      // instead of rendering it with the wording of another one.
+      return assertNever(suspicion.kind);
+  }
+}
+
 // The one sentence of the acceptance, and the only builder here without a per-surface variant: the tool never
 // accepts (Q12), so a variant for it would be a branch nothing reaches. Both paths are absolute -- the lesson
 // inside the skill and the record inside its history -- because they are what a human opens. What the sentence promises
@@ -195,6 +236,59 @@ export function acceptedText(skill: SkillRef, slug: string, lessonPath: string, 
 // for the reason acceptedText has none: the reload is a call of the command's context and the tool never has one.
 export function reloadFailedText(reason: string): string {
   return `the skill was accepted and its lesson is already on disk, but the reload of this session failed: ${reason}. The acceptance stands -- nothing was reverted -- and the next session start reads the skill as it is now.`;
+}
+
+// The same sentence over a retirement (M3, S4), and it is its own function because the other one says the lesson was
+// accepted: a retirement that takes a lesson back and a reload that fails is the same two facts, and a sentence that named
+// the wrong write would leave a user believing a lesson is in force that is not.
+export function retirementReloadFailedText(reason: string): string {
+  return `the lesson was retired and its tombstone is already on disk, but the reload of this session failed: ${reason}. The retirement stands -- nothing was reverted -- and the next session start reads the skill as it is now, with the lesson unreferenced.`;
+}
+
+// The one sentence of a retirement (M3, S4): what stopped applying, where the tombstone and the reason are, and the one
+// fact a user needs before trying again -- there is no unretire, the way back is another proposal. Both paths are absolute
+// for the reason acceptedText names them that way: they are what a human opens. The clause about the reference line is
+// the answer of the protocol and not an assumption of this module: a skill that never referenced the lesson is one the
+// retirement did not have to edit, and the sentence says which of the two happened.
+export function retiredText(
+  skill: SkillRef,
+  slug: string,
+  lessonPath: string,
+  retirementPath: string,
+  referenceRemoved: boolean,
+): string {
+  const reference = referenceRemoved
+    ? "and its reference line left the ## Lessons section of the skill, so pi no longer loads it"
+    : "and the ## Lessons section of the skill carried no reference line to it, so pi was not loading it either";
+  return `retired ${lessonReferencePath(slug)} from skill ${quote(skill.name)}: the file at ${quote(lessonPath)} now says status "retired" ${reference}; the record of the retirement is ${quote(retirementPath)}. There is no unretire: a lesson that stops applying is replaced by proposing another one. The session reloads next, and a reload that fails leaves this retirement standing and is reported on its own.`;
+}
+
+// The sentence of each refusal of a retirement, one per reason of the closed union and never a generic one: the six
+// reasons name six states and the user acts differently on each, so each one gets the sentence that says what was not
+// written and what is next. The detail the protocol computed travels inside it, because that is the text that names the
+// paths and the bytes the user repairs.
+export function retireRejectedText(skill: SkillRef, rejection: RetireRejection): string {
+  // The reason travels in the sentence, the way the verdict of a gate travels in the line it reports: the user reads the
+  // word the record of the retirement would have carried, so the refusal and the vocabulary are one thing.
+  const opening = `skill ${quote(skill.name)} (${rejection.reason}): `;
+
+  switch (rejection.reason) {
+    case "never-accepted":
+      return `${opening}nothing was retired -- ${rejection.detail}. A retirement takes back a lesson this package accepted, so a slug the index holds no acceptance of has nothing to take back.`;
+    case "unreadable-index":
+      return `${opening}nothing was retired, and the question cannot be answered from this index -- ${rejection.detail}. The line an interrupted append cut may be the acceptance of this lesson, so the refusal says the index is broken instead of claiming nothing was accepted.`;
+    case "lesson-missing":
+      return `${opening}nothing was retired -- ${rejection.detail}. The acceptance is in the index and the file it names is not in the skill, so there is no lesson to retire.`;
+    case "lesson-drift":
+      return `${opening}nothing was retired -- ${rejection.detail}. What a retirement takes back is the lesson the acceptance measured, and a file whose bytes moved is not that lesson: correct the file, or accept the lesson again, before retiring it.`;
+    case "history-exists":
+      return `${opening}nothing was retired -- ${rejection.detail}. Ask again a moment later: the snapshot of a retirement is named after the clock, and a history that is taken is never rewritten.`;
+    case "reference-failed":
+      return `${opening}the retirement stopped at the reference line and wrote no tombstone, no record and no line of the index -- ${rejection.detail}.`;
+    default:
+      // The six reasons are the whole union: a reason added to src/retirement.ts without a sentence here stops compiling.
+      return assertNever(rejection.reason);
+  }
 }
 
 // A concluded gate always has a reason, except on an acceptance, where there was nothing to explain. The
@@ -254,4 +348,183 @@ function standaloneSkillText(surface: DecisionSurface, name: string): string {
   return surface === "command"
     ? `${lead} so its lessons would have nowhere to live and it cannot be improved.`
     : `${lead} so it cannot be improved.`;
+}
+
+// The report of the series of sessions (M3, S2): the numbers src/metrics.ts projects, each one printed next to the
+// denominator it was computed over. The parenthesis is part of the number and not decoration -- "0.50 (2 of 4 gated
+// attempts)" says what was divided by what, and a rate whose denominator the reader cannot see is a rate no one can audit.
+//
+// A denominator of 0 prints no rate at all. "0.00" over nothing is not a measurement of zero but the absence of one, so the
+// sentence names the attempt that is missing: no gated attempt yet, no accepted lesson yet, no pair replayed by a gate yet.
+//
+// The two rates are the two numbers OA5 asks for, and they are printed under names that cannot be confused with each other.
+// The recurrence is the definition of a regression the author gave -- going back to a path an accepted lesson had already
+// corrected -- and it is computed over the lessons in force. The gate regressions are another fact with another denominator,
+// and they travel as a column of support: the pairs of runs a gate replayed, of which some went from passing under the
+// incumbent to failing under the candidate. A regression of the gate is not a recurrence: the first is about one candidate
+// and one replay, the second is about the lessons a skill already carries.
+//
+// The split of D-B is the fourth line: why the failed runs of the fourth class failed, which is the number the unanimity
+// rule is discussed with. The coverage is the last line and it is printed only when it has something to say (rule 5): a
+// pruned `staging/` takes the record of a rejected attempt away and leaves the line of the index behind, so a report printed
+// without it would claim a measurement over records nobody read.
+export function metricsText(metrics: Metrics): string {
+  const lines = [
+    acceptanceRateText(metrics),
+    recurrenceRateText(metrics),
+    gateRegressionText(metrics.gated),
+    `quality defects that failed: ${metrics.buried.toolError} by a tool error, ${metrics.buried.text} by the text.`,
+  ];
+
+  if (metrics.records.missing > 0) lines.push(coverageText(metrics.records));
+
+  return lines.join("\n");
+}
+
+// The share of the attempts that reached a gate that the acceptance accepted. The rate is the one src/metrics.ts projected --
+// this module prints it and never divides on its own -- and the parenthesis is the denominator that rate was computed over:
+// the derived total of the gate (see GateTally), so an abstention is in it, because it reached a gate even though it
+// concluded nothing.
+function acceptanceRateText(metrics: Metrics): string {
+  const { gated } = metrics;
+  if (gated.attempts === 0) return "acceptance rate: no gated attempt yet.";
+
+  return `acceptance rate ${rateText(metrics.acceptanceRate)} (${gated.accepted} of ${gatedAttemptsText(gated.attempts)}).`;
+}
+
+// The share of the accepted lessons in force whose failure class came back. The rate is the projected one again, and both
+// counts are the sum of the rows of the report: a lesson is a fact of a skill and the report counts them per skill (rule 9),
+// so the denominator is the sum of the rows and not a field of its own.
+function recurrenceRateText(metrics: Metrics): string {
+  const lessons = totalOf(metrics.bySkill, "lessons");
+  if (lessons === 0) return "recurrence rate: no accepted lesson yet.";
+
+  const recurrences = totalOf(metrics.bySkill, "recurrences");
+  return `recurrence rate ${rateText(metrics.recurrenceRate)} (${recurrences} of ${acceptedLessonsText(lessons)}).`;
+}
+
+// The column of support: a count and its denominator, and not a rate, because what it answers -- did the candidate lose a
+// pair the incumbent passed -- is read as a number of pairs and not as a share of anything.
+function gateRegressionText(gated: GateTally): string {
+  if (gated.pairs === 0) return "gate regressions: no pair replayed by a gate yet.";
+
+  return `gate regressions ${gated.regressions} of ${gated.pairs} incumbent passes.`;
+}
+
+// The one line that keeps the report from claiming more than it measured: how many of the records the index names were not
+// there and what that does to the numbers above.
+function coverageText(records: { present: number; missing: number }): string {
+  const named = recordsText(records.present + records.missing);
+  return `coverage is partial: of the ${named} this index names, ${records.missing} could not be read, so the rates above measure the records that are here and not the series.`;
+}
+
+// Two decimals for every rate. The counts in the parenthesis are what the rounding leaves out: a reader who wants the exact
+// share divides the two numbers the sentence already printed.
+function rateText(rate: number): string {
+  return rate.toFixed(2);
+}
+
+// The two denominators as words, so the sentence reads as English at both ends: one gated attempt and one accepted lesson
+// are as ordinary as four of either, and "1 gated attempts" is the kind of detail that makes a report look generated.
+function gatedAttemptsText(attempts: number): string {
+  return attempts === 1 ? "1 gated attempt" : `${attempts} gated attempts`;
+}
+
+function acceptedLessonsText(lessons: number): string {
+  return lessons === 1
+    ? "1 accepted lesson that saw its failure class return"
+    : `${lessons} accepted lessons that saw their failure class return`;
+}
+
+function recordsText(records: number): string {
+  return records === 1 ? "1 record" : `${records} records`;
+}
+
+function totalOf(tallies: readonly SkillTally[], key: "recurrences" | "lessons"): number {
+  return tallies.reduce((total, tally) => total + tally[key], 0);
+}
+
+// The report of the accepted lessons against the records that accepted them (M3, S3): what the bytes of each lesson on disk
+// are worth next to the acceptance that wrote them. The states are the ones src/standing.ts decided; this module puts them
+// in order and prints them, so nothing here can turn a report into a permission to retire, to re-accept or to edit, and a
+// line that reads as good news is a description and not a warranty.
+//
+// One line per skill, then one line per lesson that has something to say, then the count of the lessons nobody could check.
+// The rows travel in the order standingOf returned them, sorted by name there, and the lessons in the order of the index,
+// which is the order a reader comparing two reports reads down.
+//
+// A lesson whose bytes are the ones of the record and whose skill still loads it is not printed at all: it is the answer the
+// report exists to earn, and a line per intact lesson would bury the ones that are wrong. An index with no acceptance in
+// force prints one sentence and no table, the rule the rates of metricsText follow: a table with no row is not a measurement
+// of zero.
+export function standingText(report: StandingReport): string {
+  if (report.checks.length === 0 && report.skills.length === 0 && report.missingRecords === 0) {
+    return "no accepted lesson is in force in this index, so there is nothing to check.";
+  }
+
+  const lines = report.skills.map(skillStandingText);
+  lines.push(...report.checks.filter(carriesSomething).map(lessonStandingText));
+  if (report.missingRecords > 0) lines.push(missingRecordsText(report.missingRecords));
+
+  return lines.join("\n");
+}
+
+// Whether a lesson has something to say in the report: its bytes moved from the ones the record names, or the skill does not
+// reach the file. The two questions are independent and each one is a repair of its own, so either of them earns a line.
+function carriesSomething(check: LessonCheck): boolean {
+  return check.standing !== "intact" || !check.referenced;
+}
+
+// One row per skill the check answered for (rule 8 of the slice): the worst state of its lessons, then the count and that
+// same state again, so the line reads as a row of a report and not as a sentence about a count. The worst one is the whole
+// answer of the row -- the count says nothing about how many of them are wrong -- and it is the state of the parenthesised
+// half for a reader who scans only that.
+function skillStandingText(row: SkillStanding): string {
+  return `${row.skill}: ${row.worst} (${lessonsText(row.lessons)}, worst: ${row.worst})`;
+}
+
+// One lesson that needs saying, with the reason it does. A lesson whose bytes are the ones of the record is listed only
+// because the skill does not reach it, and that line has to open with the fact the state hides: the file is there, and a
+// lesson pi never loads does nothing (Q10).
+function lessonStandingText(check: LessonCheck): string {
+  const detail = check.detail ?? "no reason was recorded";
+  const reason = check.standing === "intact" ? `the lesson file is in the skill, ${detail}` : detail;
+  return `  - ${check.slug}: ${check.standing} (${reason})`;
+}
+
+// The last line, printed only when it has something to say: an acceptance whose record cannot be read is a lesson nothing
+// compared against the bytes on disk, so the report counts it instead of letting a reader believe the rows above cover the
+// whole index.
+function missingRecordsText(missing: number): string {
+  if (missing === 1) {
+    return "1 accepted lesson could not be checked: the record that accepted it is not readable any more, so its bytes and its reference line were not compared against anything.";
+  }
+  return `${missing} accepted lessons could not be checked: the record that accepted them is not readable any more, so their bytes and their reference line were not compared against anything.`;
+}
+
+function lessonsText(lessons: number): string {
+  return lessons === 1 ? "1 lesson" : `${lessons} lessons`;
+}
+
+// The line the two reports of the index add when the file stopped before its end (M3, S10). src/ledger.ts answers `damaged`
+// when the first line it cannot interpret cuts the reading, and a report built over the lines before that cut is shorter than
+// the index is and, for that same reason, more reassuring than the truth: the sentence names the line the reading stopped at,
+// says that nothing after it was read, and gives the problem and the path of the file the reader has to repair. It is added to
+// the answer the report already gave and not printed on its own, because it is a property of that answer and not a second one.
+//
+// The number is one more than the position the reader answered (M3, S11). `damaged.index` is a position inside a file -- 0-based,
+// as src/ledger.ts says -- and the sentence names a line of the file a human opens, which counts from 1. The conversion lives here
+// and not in the reader because the two count different things and only this sentence owes the second one: printed as it arrived,
+// the position would call a cut on the first line `line 0`, and `line 1` would name the second.
+export function damagedIndexText(damaged: { index: number; problem: string }, indexPath: string): string {
+  return `the index ${quote(indexPath)} stops at line ${damaged.index + 1}, so everything after that line was not read and the answer above covers the lines before it only: ${damaged.problem}.`;
+}
+
+// The answer of a confirmation that names a suspicion nobody holds (M3, S6). A suspicion lives in two places and the
+// sentence names both, because the id alone cannot say which one failed: the memory of this session and the file the
+// collector hydrates when the session starts. It says where the open ones are -- the notice that reported them, which is
+// the line the id arrived in -- and it promises nothing about the id it cannot see: no candidate, no gate and no model was
+// reached, and the skill was not touched.
+export function unknownSignalText(id: string): string {
+  return `No suspicion with the id ${quote(id)} is open: it was not raised in this session or in the file of the collector, or a confirmation already consumed it. The open ones are named in the notice that reports them, and nothing was spent and the skill was not touched.`;
 }

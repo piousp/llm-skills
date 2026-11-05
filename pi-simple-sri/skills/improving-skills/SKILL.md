@@ -37,7 +37,9 @@ expensive thing this package does, and the user is the one who decides to pay it
 would cost, the answer is the numbers and nothing else.
 
 Accepting is not the model's at all: there is no action that edits a skill and no flag that turns one into an
-acceptor, so a lesson lands only when the user runs `/skill-improve` and the gate of that same invocation accepts.
+acceptor, so a lesson lands only when the user runs `/skill-improve` and the gate of that same invocation accepts. The
+same command is the only surface that takes a lesson back out of use: `--retire=<slug> --reason=<key>` retires one
+accepted lesson, and no other surface edits a skill.
 
 The cases of a case bank are the user's writing. A case is a question the user wants measured and the condition
 that makes an answer pass, in the user's words. The model may propose a draft and explain what a check would mean,
@@ -143,10 +145,93 @@ into the record before the first run and cannot be chosen once the result is kno
 An abstention is not a failure and a rejection is not a mistake. Both are the loop working: the budget was spent,
 the record keeps what it cost, and the skill was left alone.
 
+### What the rates of the series measure
+
+`/skill-improve --metrics` reads the index of attempts under the write base and prints the numbers of the series, and
+it spends nothing: no generation, no gate, no model call and no write. The acceptance rate is the share of the attempts
+that reached a gate that the acceptance accepted, over the attempts that reached one. The recurrence rate is the
+definition of a regression this package uses: of the accepted lessons still in force, how many saw their failure class
+come back, which is a later attempt of the same skill hitting the class of failure the lesson had corrected. The gate
+regressions are a different fact, and they travel as a column of support: the pairs of runs the gate replayed on which
+the incumbent passed and the candidate did not, so a regression there is about one candidate and says nothing about the
+lessons a skill carries. The last line splits the failed runs of a quality defect by their cause, a turn a tool sank
+before there was text to judge or a text that did not pass the checks.
+
+Both rates cover the records the index still names and nothing else. A staging directory that is pruned takes the
+record of a rejected attempt away and leaves its line behind, so the report says how many records are missing and reads
+as the measurement of what is still on disk. A rate whose denominator is zero is not printed as a number: the line says
+instead that there is nothing to measure yet.
+
+### What the check of an accepted lesson reads
+
+`/skill-improve --verify` checks an accepted lesson against the record that accepted it -- the bytes of the file, the body
+they carry and the reference line of `SKILL.md` that makes pi load it -- without measuring it again, and it does not read
+the frontmatter of the lesson as a verdict. A candidate the gate rejected stays in `staging/` carrying the same
+`status: "accepted"` the lesson it would have been carries, so the record is the authority and the header is not. One
+state is named per lesson, out of `intact`, `frontmatter-moved`, `body-moved`, `missing` and `unreadable`, next to the
+worst state of each skill, and the report counts the acceptances it could not check because their record is not readable
+any more. It reads the index of attempts under the write base, it takes no other flag, and it spends nothing: no
+generation, no gate, no model call and no write.
+
+### What a retirement takes back
+
+`/skill-improve <skill> --retire=<slug> --reason=<key> <detail>` retires one accepted lesson of a skill, and it is the
+second and the last thing this package writes inside a skill. A retired lesson is not deleted: the file stays where it is
+and its frontmatter says `status: "retired"`, and its reference line leaves the `## Lessons` section, so pi stops loading
+it. The run writes, in this order, a snapshot of the skill under `.history/<timestamp>/`, the section without that line,
+the tombstone in the lesson file, the record of the reason in `.history/<timestamp>/retirement.json`, and one `retired`
+line in the index of attempts, which joins the acceptance of that lesson by the hashes it carries.
+
+The reason is a key of a closed vocabulary plus the sentence of the user, which is the focus of the run: `stale` for a
+lesson the skill no longer meets, `superseded` for one a better lesson replaced, `ineffective` for one that was measured
+and did not hold, `wrong` for one that is false, and `unreferenced` for one nothing loads any more. A retirement needs the
+acceptance: the index has to carry an `accepted` line for that slug of that skill, and the bytes on disk have to be the
+ones that acceptance measured. A file whose bytes moved is refused as `lesson-drift`, a slug no acceptance names as
+`never-accepted`, and an index that stops at a truncated line as `unreadable-index`, because the line an interrupted
+append cut may be the acceptance itself. None of the three writes anything.
+
+There is no unretire. The way back is another lesson: `/skill-improve <skill>` proposes one, the gate measures it, and the
+acceptance writes it next to the retired file, which stays in the skill as the record of what was taken back. A retirement
+is the user's decision and never the model's -- the tool has no action, flag or argument that retires a lesson -- and it
+spends no run: no model, no gate and no candidate.
+
 ## The case bank
 
 The form of the bank, the four kinds of check, the validation of a draft and the interview that writes the bank with
 the user are in `references/case-bank.md`, which is read before writing or reviewing a bank.
+
+## Silent signals
+
+Two things a session does are worth a second look, and the extension notices both while the session happens, with no
+model call, no process and no run:
+
+- `rewritten-draft`: a call to `write` or `edit` names a file that an earlier turn already wrote, and the arguments
+differ. Two calls on the same file inside one turn are the model refining its own draft, and they raise nothing.
+- `repeated-request`: the prompt of the user of a turn repeats, in substance, the prompt of an earlier turn. The
+  significant tokens of the shorter prompt -- what is left after splitting on everything that is not a letter or a
+  digit, lowercased, five characters or more -- are contained in the longer one's, and at least three of them are
+  shared.
+
+A suspicion is not a defect. The user may have rewritten the draft by choice or asked twice on purpose, so the
+notice names the occurrence and nothing else: it does not edit the skill, it does not spend a run, and it does not
+touch the turn. What it does do is keep the suspicion: it is written to `state/signals.jsonl`, under the write base,
+with the id `sg-...` that names it, so a suspicion one session raised is still there in the next one and a suspicion
+nobody confirmed does not disappear. The same rewrite in another session is a new occurrence, with its own id, and it
+is reported again.
+
+The only thing that turns a suspicion into a measurable attempt is the confirmation of the user:
+`/skill-improve <skill> --signal=<id> --bank=<path>`. A confirmed suspicion opens the directional attempt this
+package already has, with the bank the user names as its expectation: the cases that file declares are what the
+confirmation is measured against, and the suspicion is the focus of the record, spelled `signal:<kind>: <excerpt>` in the
+trigger of its `decision.json`, so a line of the index can be traced back to the suspicion it came from. The focus of a
+confirmation is the suspicion itself, so the form takes no focus of its own: a focus typed next to `--signal` is a usage
+error and not an override of the suspicion, because no field of the record would carry it and it would be lost in silence.
+The vocabulary of evidence does not grow: a confirmation names no new class of failure, and the attempt it opens is the one
+`--bank` opens.
+
+Without a bank there is nothing to measure a confirmation against, so nothing is spent and the suspicion stays open, and the
+same confirmation can be given again with a bank. A suspicion never decides anything on its own: it does not edit the skill,
+it does not open an attempt until the user confirms it, and `[NEVER]` treat it as a failure of the session or of the skill.
 
 ## What this skill does not do
 

@@ -153,6 +153,62 @@ this section is folded into a release when the milestone is published.
   before the bank is read and no run is spent.
 - The reload of the session after an acceptance is still M2.
 
+### Milestone M3: reading the series back
+
+Reading back what the loop recorded. Until this milestone the index of attempts had three writers and no
+reader, and the records it names were written and never read; the package reads them now, and three answers
+hang from that reading: the numbers of the series, the state of an accepted lesson against the record that
+accepted it, and the precondition of a retirement. An accepted lesson can also be taken back with its reason
+on file, and the two silent signals of the user are noticed at the end of a turn without spending a token.
+`version` in `package.json` is untouched, and this section is folded into a release when the milestone is
+published.
+
+#### Added
+
+- The reader of the index: `state/attempts.jsonl` and the `decision.json` each of its lines names, with a type
+  wider than the writer's -- an event a later version wrote is kept and counted instead of failing the read --
+  a `damaged` position for the first line nothing can interpret, and no write of any kind.
+- `--metrics`: the rate of acceptance over the attempts that reached a gate, the rate of recurrence over the
+  accepted lessons in force, the regressions the gate counted as a column of support, the two causes a case of
+  the fourth class can fail for, and the coverage of the records the index names. The rates are projected from
+  the ledger on every call and never stored, and the report decides nothing.
+- `--verify`: every accepted lesson still in force, compared with the record that accepted it -- `intact`,
+  `frontmatter-moved`, `body-moved`, `missing` or `unreadable` -- plus whether the `SKILL.md` of the skill still
+  reaches the file. No branch reads `status` or `gate` of the frontmatter.
+- `--retire=<slug> --reason=<key>`: the retirement of an accepted lesson. Its own `.history/<timestamp>/`
+  snapshot first, the reference line out of `## Lessons`, the lesson rewritten as `status: "retired"` with the
+  body unchanged, `.history/<timestamp>/retirement.json` (`retirement@1`) with the reason, and one `retired`
+  line of the index carrying the hashes of the acceptance.
+- `retired` in the vocabulary of the index: the event the retirement writes, joined to its `accepted` by
+  `candidateHash`. It is an emitted event, never a reserved name.
+- The collector of signals at the end of every turn: `rewritten-draft` and `repeated-request`, decided
+  mechanically with no model call, no process and no clock. A suspicion survives the session that raised it in
+  `state/signals.jsonl` (`signal@1`), append-only, with `raised` and `consumed` events and a ceiling of 128
+  lines.
+- `--signal=<id>`: the confirmation of a suspicion, which opens the directional attempt that measures it and
+  needs a bank; without one nothing is spent and the suspicion stays open.
+- Eligibility re-checked before the gate spends and before the acceptance writes: `not-eligible` refuses a
+  candidate whose skill the settings no longer admit, and the acceptance takes the verdict as data and refuses
+  with `no-longer-eligible` before it snapshots anything.
+
+#### Changed
+
+- The write perimeter reaches the skill through two paths instead of one. A retirement writes there through the
+  same chokepoint as the acceptance, and takes its own snapshot before it touches anything.
+- A lesson that a retirement took back is inert because its reference line is gone, and its state is recorded
+  in the file so a reader of the skill can tell it from a lesson that is in force.
+
+#### Notes
+
+- A retirement is not undone: there is no `unretire`, and the way back is another lesson that passes its gate.
+- The rates are only as complete as the records that survive. A pruned `staging/` shortens the series, and the
+  report prints how many of the records it names it could not read.
+- Recurrence is measured by class of failure -- the kind and the tool -- because the signature a record stores
+  carries the timestamp of its own session and two sessions never share one.
+- A suspicion is not a defect. The two signals are noticed and reported, and only a confirmation of the user
+  turns one into an attempt that can spend.
+- The recursive step, where the generator itself is versioned and evaluated, is M4.
+
 ## [0.0.1] - 2026-11-03
 
 First release. It stages lesson candidates and records every decision; it does

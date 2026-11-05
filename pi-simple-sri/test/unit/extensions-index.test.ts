@@ -1,5 +1,10 @@
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   AgentToolResult,
   SessionEntry,
@@ -15,18 +20,22 @@ import sriExtension, {
   type SriSeams,
   type SriSessionStartEvent,
   type SriSessionStartHandler,
+  type SriTurnEndContext,
+  type SriTurnEndHandler,
 } from "../../extensions/index.ts";
 import {
   ENTRY_TYPE,
   type ImprovementEntry,
   type SkillImproveContext,
+  type SkillImproveUi,
   type NotifyType,
 } from "../../src/command-skill-improve.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import type { GateRequest } from "../../src/gate/flow.ts";
-import { feedbackNoticeText } from "../../src/messages.ts";
-import { COMMAND_NAME, REPLAY_ENV_VAR } from "../../src/names.ts";
+import { feedbackNoticeText, signalText } from "../../src/messages.ts";
+import { COMMAND_NAME, REPLAY_ENV_VAR, SIGNALS_FILE } from "../../src/names.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
+import { SIGNAL_FORMAT, type Suspicion } from "../../src/signals.ts";
 import {
   SKILL_IMPROVE_TOOL_NAME,
   skillImproveParams,
@@ -84,6 +93,9 @@ const USAGE: Usage = {
 };
 
 const BASE_MS = Date.parse("2026-11-02T14:00:00.000Z");
+// The session both event handlers are driven with: the id of a suspicion carries it, so the seeded line of the hydration
+// test and the id the collector computes have to name the same one.
+const SESSION_ID = "session-test";
 
 const SKILL: SkillRef = {
   name: "pdf-tools",
@@ -227,9 +239,9 @@ interface Harness {
   toolNames: string[];
   entries: EntryCall[];
   messages: SentMessage[];
-  /** The session_start handlers the factory registered, in the order it registered them. */
-  startHandlers: SriSessionStartHandler[];
-  /** Every event name the factory listened to, in order: the one handler it registers is the only one. */
+  /** Every handler the factory registered, by event name: one per event, as pi holds them. */
+  handlers: Map<string, unknown>;
+  /** Every event name the factory listened to, in order: one handler per event and no others. */
   onEvents: string[];
   notified: NotifiedCall[];
   /** Every read of the context's `ui`, in order: a copied context reads it eagerly (see the test below). */
@@ -293,7 +305,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const toolNames: string[] = [];
   const entries: EntryCall[] = [];
   const messages: SentMessage[] = [];
-  const startHandlers: SriSessionStartHandler[] = [];
+  const handlers = new Map<string, unknown>();
   const onEvents: string[] = [];
   const notified: NotifiedCall[] = [];
   const uiReads: string[] = [];
@@ -316,7 +328,10 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     },
     on(event, handler) {
       onEvents.push(event);
-      startHandlers.push(handler);
+      // One handler per event name, which is what pi holds: a second registration for the same event is a second
+      // subscription nothing below could tell apart from the first.
+      assert.equal(handlers.has(event), false, `the factory registered two handlers for ${event}`);
+      handlers.set(event, handler);
       // The unsubscribe pi hands back: no test here unregisters a handler, and a registration that a test
       // could drop would make the count of notices meaningless.
       return () => undefined;
@@ -394,7 +409,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     toolNames,
     entries,
     messages,
-    startHandlers,
+    handlers,
     onEvents,
     notified,
     uiReads,
@@ -445,20 +460,122 @@ function restoreEnv(previous: string | undefined): void {
   process.env[REPLAY_ENV_VAR] = previous;
 }
 
-// Drives the one session_start handler the factory registered, with a context narrowed to the channel the handler
-// reads (SriNoticeContext) and one reason. The handler notifies and returns, so what it reports lands in the same
-// recorder the command's own notices use.
-function startSession(harness: Harness, reason: SriSessionStartEvent["reason"]): void {
-  const handler = harness.startHandlers.at(0);
-  assert.ok(handler !== undefined, "the factory must register a session_start handler");
-  const ctx: SriNoticeContext = {
-    ui: {
-      notify: (message: string, type?: NotifyType) => {
-        harness.notified.push({ message, type: type ?? "info" });
-      },
+// The directory pi reports as its agent directory in the tests that drive an event handler. The collector of the extension
+// resolves its base from there -- the wiring passes `() => writeBase(getAgentDir())` and never a path of its own -- so the
+// variable points at a directory of the fixture and nothing of a real installation is read or written.
+function useAgentDir(t: TestContext): string {
+  const agentDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-wiring-agent-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+  return agentDir;
+}
+
+function uiOf(harness: Harness): SkillImproveUi {
+  return {
+    notify: (message: string, type?: NotifyType) => {
+      harness.notified.push({ message, type: type ?? "info" });
     },
   };
-  handler({ type: "session_start", reason }, ctx);
+}
+
+function handlerOf(harness: Harness, event: "session_start" | "turn_end"): unknown {
+  const handler = harness.handlers.get(event);
+  assert.ok(handler !== undefined, `the factory must register a ${event} handler`);
+  return handler;
+}
+
+function sessionStartHandlerOf(harness: Harness): SriSessionStartHandler {
+  return handlerOf(harness, "session_start") as SriSessionStartHandler;
+}
+
+function turnEndHandlerOf(harness: Harness): SriTurnEndHandler {
+  return handlerOf(harness, "turn_end") as SriTurnEndHandler;
+}
+
+// Drives the one session_start handler the factory registered, with a context narrowed to the members the handler reads
+// (SriNoticeContext) and one reason. The handler hydrates the collector and then reports or stays silent, so what it reports
+// lands in the same recorder the command's own notices use.
+async function startSession(harness: Harness, reason: SriSessionStartEvent["reason"]): Promise<void> {
+  const ctx: SriNoticeContext = {
+    ui: uiOf(harness),
+    sessionManager: {
+      getBranch: () => [],
+      getSessionId: () => SESSION_ID,
+    },
+  };
+  await sessionStartHandlerOf(harness)({ type: "session_start", reason }, ctx);
+}
+
+// A turn whose assistant message calls `write` once: the collector reads the tool calls of the turn from this message, and
+// the arguments it hashes are the ones the two turns of a rewrite differ in.
+function writeTurn(callId: string, target: string, content: string): AssistantMessage {
+  const call: ToolCall = { type: "toolCall", id: callId, name: "write", arguments: { path: target, content } };
+  return {
+    role: "assistant",
+    content: [call],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    usage: USAGE,
+    stopReason: "toolUse",
+    timestamp: BASE_MS,
+  };
+}
+
+// Drives the one turn_end handler the factory registered. The answer is asserted here and not at every call site: the
+// handler adds nothing to the turn, so every call has to answer undefined.
+async function endTurn(harness: Harness, turnIndex: number, message: AssistantMessage): Promise<void> {
+  const ctx: SriTurnEndContext = {
+    ui: uiOf(harness),
+    cwd: CWD,
+    model: undefined,
+    sessionManager: {
+      getBranch: () => [],
+      getSessionId: () => SESSION_ID,
+    },
+  };
+  const answer = await turnEndHandlerOf(harness)({ type: "turn_end", turnIndex, message }, ctx);
+  assert.equal(answer, undefined, "the turn_end handler adds nothing to the turn and answers undefined");
+}
+
+// The line the collector would write for the rewrite below, as the seeded file carries it: the id is computed here and not
+// with the collector's own function, so the file is the input of the hydration and not a copy of its output.
+function raisedSignalLine(turnIndex: number, subject: string): string {
+  const material = JSON.stringify(["rewritten-draft", SESSION_ID, turnIndex, subject]);
+  const id = `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`;
+  return `${JSON.stringify({
+    format: SIGNAL_FORMAT,
+    event: "raised",
+    id,
+    kind: "rewritten-draft",
+    createdAt: "2026-11-02T14:03:22.481Z",
+    sessionId: SESSION_ID,
+    turnIndex,
+    subject,
+    excerpt: `turn ${turnIndex - 1}: ${subject}`,
+    prompt: "",
+  })}\n`;
+}
+
+// The suspicion the two turns below raise, as the sentence of src/messages.ts renders it: the notice is asserted whole,
+// because a notice that named another file or another kind would still be a notice.
+function rewrittenDraftSuspicion(turnIndex: number, subject: string): Suspicion {
+  const material = JSON.stringify(["rewritten-draft", SESSION_ID, turnIndex, subject]);
+  return {
+    id: `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`,
+    kind: "rewritten-draft",
+    createdAt: "2026-11-02T14:03:22.481Z",
+    sessionId: SESSION_ID,
+    turnIndex,
+    subject,
+    excerpt: `turn ${turnIndex - 1}: ${subject}`,
+    prompt: "",
+  };
 }
 
 test("the factory registers the command and the tool, exactly once each", () => {
@@ -512,24 +629,27 @@ test("the factory registers the command and the tool, exactly once each", () => 
 });
 
 // M1c (S11, Q26, OA8): the package tells the reader that the feedback of a session can be recorded, from two channels
-// that cover the failure of the other. The first one is this handler: one line, once per session, and never on a reload.
-test("the factory registers one session_start handler, and registering it reports nothing", () => {
+// that cover the failure of the other. The first one is the session_start handler: one line, once per session, and never on
+// a reload. M3 (S5) adds the second one, the collector of signals, which is registered on turn_end.
+test("the factory registers one handler per event, and registering them reports nothing", () => {
   const harness = makeHarness();
 
   registerSurfaces(harness.pi, harness.seams);
 
-  // One event and one handler: a second handler would be the second notice OA8 accepted the risk of only once.
-  assert.deepEqual(harness.onEvents, ["session_start"]);
-  assert.equal(harness.startHandlers.length, 1);
+  // One handler per event: a second session_start handler would be the second notice OA8 accepted the risk of only once,
+  // and a second turn_end handler would raise every suspicion twice.
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
+  assert.equal(harness.handlers.size, 2);
   // The registration is not the notice: a session that never starts reports nothing, and nothing of the loop ran.
   assert.deepEqual(harness.notified, []);
 });
 
-test("the session_start handler reports the feedback notice once, as info", () => {
+test("the session_start handler reports the feedback notice once, as info", async (t) => {
   const harness = makeHarness();
+  useAgentDir(t);
   registerSurfaces(harness.pi, harness.seams);
 
-  startSession(harness, "startup");
+  await startSession(harness, "startup");
 
   assert.deepEqual(harness.notified, [{ message: feedbackNoticeText(), type: "info" }]);
   // The notice names both surfaces of the package and the two costs of the gate, and promises nothing else: the tokens a
@@ -552,20 +672,126 @@ test("the session_start handler reports the feedback notice once, as info", () =
 
 // The value a reload carries is the one that is not news: pi reloads a session after an acceptance (M2), and the notice
 // of the reloaded session is the line the reader has just read.
-test("the session_start handler does not report the notice on a reload", () => {
+test("the session_start handler does not report the notice on a reload", async (t) => {
   const harness = makeHarness();
+  useAgentDir(t);
   registerSurfaces(harness.pi, harness.seams);
 
-  startSession(harness, "reload");
+  await startSession(harness, "reload");
 
   assert.deepEqual(harness.notified, []);
   // Every other reason is a session with something to say, so the silence is the reload's and not the handler's.
   for (const reason of ["startup", "new", "resume", "fork"] as const) {
     const other = makeHarness();
     registerSurfaces(other.pi, other.seams);
-    startSession(other, reason);
+    await startSession(other, reason);
     assert.equal(other.notified.length, 1, `the notice must be reported for the reason ${reason}`);
   }
+});
+
+// M3 (S5): the collector is hydrated on every session start, and a reload is exactly the early return above. The proof is
+// the silence of the turn below: the file already carries the line the two turns would raise, so a hydration that happened
+// leaves nothing to report, while a hydration that the reload skipped would report a suspicion twice over two sessions.
+test("the session_start handler hydrates the collector on a reload, and reports nothing", async (t) => {
+  const agentDir = useAgentDir(t);
+  const harness = makeHarness();
+  const subject = "/work/notes.md";
+  fs.mkdirSync(path.join(agentDir, "sri", "state"), { recursive: true });
+  fs.writeFileSync(path.join(agentDir, "sri", "state", SIGNALS_FILE), raisedSignalLine(2, subject), "utf8");
+  registerSurfaces(harness.pi, harness.seams);
+
+  await startSession(harness, "reload");
+  await endTurn(harness, 1, writeTurn("call-1", subject, "the first draft"));
+  await endTurn(harness, 2, writeTurn("call-2", subject, "the second draft"));
+
+  assert.deepEqual(harness.notified, []);
+  // The hydrated line is still the only one: an id the file already carries is not raised a second time.
+  assert.equal(fs.readFileSync(path.join(agentDir, "sri", "state", SIGNALS_FILE), "utf8").split("\n").filter((line) => line !== "").length, 1);
+});
+
+// M3 (S5): a file written twice in two turns with other arguments is the one signal the collector raises here, and the
+// wiring does three things with it and nothing else: it observes, it reports one line per new suspicion, and it answers
+// undefined. Nothing is added to the session, nothing is sent and no gate runs.
+test("the turn_end handler reports one notice for a rewritten draft and answers undefined", async (t) => {
+  useAgentDir(t);
+  const harness = makeHarness();
+  const subject = "/work/notes.md";
+  registerSurfaces(harness.pi, harness.seams);
+
+  await startSession(harness, "startup");
+  harness.notified.splice(0);
+
+  await endTurn(harness, 1, writeTurn("call-1", subject, "the first draft"));
+  assert.equal(harness.notified.length, 0);
+
+  await endTurn(harness, 2, writeTurn("call-2", subject, "the second draft"));
+  // One notice, whole: the sentence of src/messages.ts for the suspicion the two turns raise, as info.
+  const expected = signalText(rewrittenDraftSuspicion(2, subject));
+  assert.deepEqual(
+    harness.notified.map((notice) => ({ message: notice.message, type: notice.type })),
+    [{ message: expected, type: "info" }],
+  );
+  // The sentence names the subject and calls the occurrence a suspicion: it never claims a defect, because the user may
+  // have rewritten the draft by choice.
+  assert.equal(expected.includes(subject), true);
+  assert.equal(expected.includes("suspicion"), true);
+
+  // The turn is pi's: no entry, no message, no candidate and no gate.
+  assert.deepEqual(harness.entries, []);
+  assert.deepEqual(harness.messages, []);
+  assert.deepEqual(harness.log.writes, []);
+  assert.deepEqual(harness.log.attempts, []);
+  assert.deepEqual(harness.modelCalls, []);
+});
+
+// The other half of the rule: a turn that rewrites nothing reports nothing, so the notice is the suspicion's and not the
+// handler's.
+test("the turn_end handler reports nothing when the turn shows nothing", async (t) => {
+  useAgentDir(t);
+  const harness = makeHarness();
+  registerSurfaces(harness.pi, harness.seams);
+
+  await startSession(harness, "startup");
+  harness.notified.splice(0);
+
+  await endTurn(harness, 1, writeTurn("call-1", "/work/notes.md", "the first draft"));
+  await endTurn(harness, 2, writeTurn("call-2", "/work/other.md", "another file"));
+
+  assert.deepEqual(harness.notified, []);
+});
+
+// M3 (S6): the collector the wiring hydrates for the turn is the one the command confirms a suspicion with -- one object,
+// passed as a dependency of the command -- so a suspicion a turn raised is the one a `/skill-improve --signal=<id>` of the
+// same session reads. The proof is the answer: the id the command names is the id the handler raised, so a command holding
+// another collector, or none, would answer that no suspicion of that id is open.
+test("the collector of the wiring is the one the command confirms a suspicion with", async (t) => {
+  useAgentDir(t);
+  const harness = makeHarness();
+  const subject = "/work/notes.md";
+  registerSurfaces(harness.pi, harness.seams);
+
+  await startSession(harness, "startup");
+  harness.notified.splice(0);
+  await endTurn(harness, 1, writeTurn("call-1", subject, "the first draft"));
+  await endTurn(harness, 2, writeTurn("call-2", subject, "the second draft"));
+
+  // The suspicion the second turn raised, by the id the notice of src/messages.ts cannot be read for.
+  const id = rewrittenDraftSuspicion(2, subject).id;
+  await harness.command().handler(`pdf-tools --signal=${id}`, harness.ctx);
+
+  const report = harness.notified.at(-1);
+  assert.equal(report?.type, "warning");
+  // The run found the suspicion and answered the state of an attempt with no bank to measure it against; a command holding
+  // another collector would have answered that the suspicion is not open.
+  assert.equal(report?.message.includes(id), true);
+  assert.equal(report?.message.includes("--bank=<path>"), true);
+  assert.equal(report?.message.includes("No suspicion"), false);
+
+  // Nothing was spent and nothing of the loop ran: no generation, no candidate, no line of the index and no model call.
+  assert.deepEqual(harness.log.proposals, []);
+  assert.deepEqual(harness.log.writes, []);
+  assert.deepEqual(harness.log.attempts, []);
+  assert.deepEqual(harness.modelCalls, []);
 });
 
 // The module is imported at the top of this file, before any test ran; a fake API that is never
@@ -602,10 +828,10 @@ test("registering runs no part of the loop", () => {
   // The registration did happen; only the loop was left untouched.
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
-  assert.deepEqual(harness.onEvents, ["session_start"]);
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
   assert.deepEqual(harness.entries, []);
   assert.deepEqual(harness.messages, []);
-  // Registering the session_start handler reports nothing by itself: the notice is the event's, not the wiring's.
+  // Registering the handlers reports nothing by itself: the notice is the event's, not the wiring's.
   assert.deepEqual(harness.notified, []);
 });
 
@@ -874,5 +1100,5 @@ test("the replay guard answers only to the value \"1\"", () => {
 
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
-  assert.deepEqual(harness.onEvents, ["session_start"]);
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
 });

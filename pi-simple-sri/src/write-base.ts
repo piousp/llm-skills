@@ -47,8 +47,9 @@ export function relativeToBase(base: string, target: string): string {
 }
 
 // A base inside the skill the run improves: staging would become a part of the skill and the audit
-// index would land next to its SKILL.md. This package never writes inside a skill (only M1's accepted
-// write will, and under its own snapshot), so the run is refused before the index is touched, since
+// index would land next to its SKILL.md. This package writes inside a skill in exactly two places --
+// the acceptance of M1 (src/gate/acceptance.ts) and the retirement of M3 (src/retirement.ts) -- and
+// both do it under their own snapshot, so the run is refused before the index is touched, since
 // both of its writes land under the base.
 //
 // Every spelling of the skill is compared because the inventory keeps the linked path and the real one

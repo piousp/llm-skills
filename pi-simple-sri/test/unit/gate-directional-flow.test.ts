@@ -20,7 +20,7 @@ import type { JudgeRequest } from "../../src/gate/judge.ts";
 import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, CASE_BANK_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
+import { ATTEMPTS_FILE, CASE_BANK_FILE, DECISION_FILE, LESSONS_DIR, SETTINGS_FILE, SKILL_FILE } from "../../src/names.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
   AttemptLine,
@@ -31,9 +31,10 @@ import type {
   GateTokens,
   Result,
   SkillRef,
+  SriConfig,
 } from "../../src/types.ts";
 import { stateDir, stagingDir } from "../../src/write-base.ts";
-import { lessonHashes } from "../../src/writer.ts";
+import { lessonHashes, rewriteStagingDecision } from "../../src/writer.ts";
 import { validateAgainstSchema } from "./schema-reader.ts";
 
 // The directional gate (M1c, S9): a bank of cases the user wrote, the preregistration of the bank and of the rule before the
@@ -312,6 +313,19 @@ function readRecord(decisionPath: string): DecisionRecord {
 
 function attemptsPath(base: string): string {
   return path.join(stateDir(base), ATTEMPTS_FILE);
+}
+
+// The settings the eligibility guard of the gate reads (M3, S7b): the file under the agent directory of the request, in the
+// shape src/config.ts parses. Both lists are written even when empty, so a test says which verdict it exercises instead of
+// leaning on what the absence of the file would answer.
+function writeSettings(fixture: Fixture, config: SriConfig): void {
+  const agentDir = path.join(fixture.base, "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentDir, SETTINGS_FILE),
+    `${JSON.stringify({ "pi-simple-sri": { skills: config } }, null, 2)}\n`,
+    "utf8",
+  );
 }
 
 // The lines of state/attempts.jsonl, in the order they were appended. An index nobody wrote answers with no lines, which is
@@ -945,6 +959,63 @@ test("gateDirectionalCandidate: a candidate the gate already answered is refused
   assert.equal(harness.runs.length, 0);
   assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
   assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+});
+
+// M3, S7b (D-C): the eligibility guard of the replay base, in the other base of the gate. The loop refuses an ineligible skill
+// before it proposes, so a candidate of a skill the settings deny can only be here by another way -- written by hand, or staged
+// by an earlier version -- and without this guard the flow of the bank is the way around it: it would read the bank, pin its
+// bytes and pay for the cases before the acceptance refused the candidate as `no-longer-eligible`. Nothing is written here -- no
+// copy of the bank, no preregistration, no line of the index -- and the record of the staging tree stays as it was, down to the
+// moment it was written.
+test("gateDirectionalCandidate: a candidate of a skill the settings deny is refused before the bank is read", async (t) => {
+  const fixture = createFixture(t);
+  writeSettings(fixture, { allow: [], deny: [SKILL_NAME] });
+  const before = fs.readFileSync(fixture.decisionPath, "utf8");
+  const moment = fs.statSync(fixture.decisionPath).mtimeMs;
+  const harness = createHarness(fixture);
+  // The writer of the record, wrapped so the test can say it was never asked for one: a refusal is not a gate that wrote a state
+  // and changed its mind, and a rewrite would replace the file this test compares against itself.
+  let rewrites = 0;
+  const deps: DirectionalGateDeps = {
+    ...harness.deps,
+    rewriteDecision: async (base, candidateDir, decision) => {
+      rewrites += 1;
+      return await rewriteStagingDecision(base, candidateDir, decision);
+    },
+  };
+
+  const result = await gateDirectionalCandidate(gateRequest(fixture), deps);
+
+  if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
+  // The reason of the settings and not the one of the package: the two facts do not survive the same change.
+  assert.equal(result.rejection.reason, "not-eligible");
+  assert.equal(result.rejection.detail.includes(JSON.stringify(SKILL_NAME)), true);
+  assert.equal(result.rejection.detail.includes("is not eligible: not-eligible"), true);
+
+  // Zero runs and zero judgements: the guard runs before the bank is read, so the cost of this base is zero.
+  assert.equal(harness.runs.length, 0);
+  assert.equal(harness.judged.length, 0);
+  assert.equal(rewrites, 0);
+
+  // The record of the staging tree is not touched, and the moment it was written is the proof: a rewrite replaces the file.
+  assert.equal(fs.readFileSync(fixture.decisionPath, "utf8"), before);
+  assert.equal(fs.statSync(fixture.decisionPath).mtimeMs, moment);
+  // The copy of the bank is the first write of this base, so its absence is the proof that the refusal came before step 2.
+  assert.equal(fs.existsSync(path.join(fixture.candidateDir, CASE_BANK_FILE)), false);
+  assert.equal(fs.existsSync(attemptsPath(fixture.base)), false);
+});
+
+// The other side of the guard: an empty allow admits every skill `deny` does not name, so a settings file that excludes nothing
+// is not a second refusal of the ordinary run and the gate of the bank follows the path of always.
+test("gateDirectionalCandidate: an empty allow does not refuse for eligibility", async (t) => {
+  const fixture = createFixture(t);
+  writeSettings(fixture, { allow: [], deny: [] });
+  const harness = createHarness(fixture);
+
+  const result = concluded(await gateDirectionalCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  assert.equal(harness.runs.length, PLANNED_RUNS);
 });
 
 // The guard of the candidate's bytes is the guard of the replay base: a lesson that moved since it was staged is the one

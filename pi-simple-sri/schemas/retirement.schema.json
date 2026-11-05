@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/retirement@1.json",
+  "title": "pi-simple-sri retirement, format 1",
+  "description": "The record of a retirement (M3, S4): the file .history/<timestamp>/retirement.json inside the skill whose lesson it retired. It says which lesson stopped applying, with which hashes, why, and which acceptance it takes back. It is not decision.json: a decision describes what a gate decided about a candidate, and a candidate is one literal kind with a gate block of six states and an outcome that names no retirement. The record is built by src/retirement.ts and written by src/writer.ts through the one chokepoint of the package, after the tombstone landed, so a record that says what was retired describes a skill that says the same. The two hashes of `lesson` are the pair the acceptance declared -- the pre-image the retirement verified before touching a byte -- and `retiredContentHash` is the digest of the file after the rewrite, so a reader can tell a retirement from the bytes it was decided on. Every level sets additionalProperties: false, so a record with a misspelled field is refused by name, and a change of the shape or of the meaning of a field declared here is a new format with a new `schema` const. The negative cases of this contract live in test/unit/retirement-schema.test.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "createdAt", "skill", "lesson", "retires", "reason"],
+  "properties": {
+    "schema": {
+      "description": "The versioned id of the format. A reader that does not implement this one refuses the record instead of interpreting the fields of another version.",
+      "const": "pi-simple-sri/retirement@1"
+    },
+    "createdAt": {
+      "description": "When the retirement happened, from the one clock of the run: the same instant that names the snapshot directory and the `ts` of the line of the index it appends.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "skill": {
+      "description": "The skill the retirement wrote into, copied from the record of the acceptance and not from the inventory: realDir is the path the acceptance wrote through, which is the path that survives a symlink and the one the lesson and the snapshot are read from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "dir", "realDir", "wasSymlink"],
+      "properties": {
+        "name": {
+          "description": "The name the inventory answers the skill to, and the targetSkill of the line of the index.",
+          "type": "string",
+          "minLength": 1
+        },
+        "dir": {
+          "description": "The directory the skill was found at, which may be a link.",
+          "type": "string",
+          "minLength": 1
+        },
+        "realDir": {
+          "description": "The directory the write went through: the real path of `dir` when that one is a symlink.",
+          "type": "string",
+          "minLength": 1
+        },
+        "wasSymlink": {
+          "description": "Whether `dir` and `realDir` differed, derived the way src/types.ts derives it for a decision record.",
+          "type": "boolean"
+        }
+      }
+    },
+    "lesson": {
+      "description": "The lesson that stopped applying, identified by its slug and by the two hashes the acceptance measured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slug", "title", "lessonPath", "contentHash", "bodyHash", "retiredContentHash"],
+      "properties": {
+        "slug": {
+          "description": "The slug of the candidate of the acceptance, which is the name of the file and the slug of its reference line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "description": "The title the acceptance recorded. The record carries it so a reader names the lesson without opening a file it may have retired.",
+          "type": "string",
+          "minLength": 1
+        },
+        "lessonPath": {
+          "description": "The lesson relative to the skill directory, in the spelling src/skill-reference.ts owns: lessons/<slug>.md.",
+          "type": "string",
+          "pattern": "^lessons/[^/]+\\.md$"
+        },
+        "contentHash": {
+          "description": "\"sha256:\" plus 64 hex over the whole lesson file the acceptance measured, which is the pre-image this retirement verified before touching a byte.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bodyHash": {
+          "description": "\"sha256:\" plus 64 hex over the normalized body of that same file. It is the one of the acceptance because a retirement changes the state and never the body.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "retiredContentHash": {
+          "description": "\"sha256:\" plus 64 hex over the file as it is after the tombstone, so the record answers what the bytes it retired became.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "retires": {
+      "description": "What the retirement takes back: the record of the acceptance that put the lesson there.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["historyPath"],
+      "properties": {
+        "historyPath": {
+          "description": "The decision.json of the acceptance inside the skill, in the spelling the line of the index carried, or null when that line named none. The field is always present and says so, instead of being absent and leaving a reader to guess.",
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "reason": {
+      "description": "Why the lesson stops applying: one key of the closed vocabulary of src/retirement.ts and the sentence the user gave with it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "detail"],
+      "properties": {
+        "key": {
+          "description": "The key of the vocabulary: it went stale, something better replaced it, it was ineffective, it is wrong, or nothing references it any more. src/retirement.ts declares the same five (RETIREMENT_REASONS) and the manual teaches each one.",
+          "enum": ["stale", "superseded", "ineffective", "wrong", "unreferenced"]
+        },
+        "detail": {
+          "description": "The free text of the user, which is the focus of the command. A key without a sentence is a reason nobody can act on, so the field is required and not empty.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

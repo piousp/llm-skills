@@ -1,7 +1,9 @@
-import type {
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  ExtensionAPI,
+import {
+  getAgentDir,
+  type AgentToolResult,
+  type AgentToolUpdateCallback,
+  type ExtensionAPI,
+  type TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
   runSkillImprove,
@@ -11,9 +13,11 @@ import {
   type SkillImproveMessage,
   type SkillImproveUi,
 } from "../src/command-skill-improve.ts";
-import type { ImproveFlowContext, ImproveFlowDeps } from "../src/improve-flow.ts";
-import { feedbackNoticeText } from "../src/messages.ts";
+import type { ImproveFlowContext, ImproveFlowDeps, ImproveFlowSession } from "../src/improve-flow.ts";
+import { feedbackNoticeText, signalText } from "../src/messages.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR, SKILL_IMPROVE_TOOL_NAME } from "../src/names.ts";
+import { createSignalCollector, turnObservationOf } from "../src/signals.ts";
+import { writeBase } from "../src/write-base.ts";
 import {
   createSkillImproveTool,
   skillImproveParams,
@@ -22,12 +26,13 @@ import {
   type ToolDetails,
 } from "../src/tool-skill-improve.ts";
 
-// The wiring (P10): the two surfaces of the loop and the notice of a session start, registered on pi's
-// extension API, and nothing else. Every decision this package makes lives in src/; this file decides only which
-// surface is called and which dependencies it is called with.
+// The wiring (P10): the two surfaces of the loop, the notice of a session start and the collector of signals (M3, S5),
+// registered on pi's extension API, and nothing else. Every decision this package makes lives in src/; this file decides
+// only which surface is called and which dependencies it is called with.
 //
-//   /skill-improve <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]  -> runSkillImprove
-//   skill_improve { action, skill, focus, stagingPath, bankPath, defect }               -> createSkillImproveTool
+//   /skill-improve <skill> [focus] [--bank=<path>] [--signal=<id>] [--defect] [--staged=<stagingPath>]
+//                  [--metrics] [--verify] [--retire=<slug> --reason=<key>]  -> runSkillImprove
+//   skill_improve { action, skill, focus, stagingPath, bankPath, defect }  -> createSkillImproveTool
 //
 // Both run the same loop (src/improve-flow.ts), so the command and the tool cannot disagree about
 // what is eligible, what counts as evidence or what a candidate looks like; both can gate a candidate
@@ -35,16 +40,22 @@ import {
 // that passes into the acceptance (src/gate/acceptance.ts). The tool receives its dependencies at registration time and
 // the command receives the same ones at call time.
 //
-// The third registration is not a surface but a line: the one event this file listens to reports feedbackNoticeText
-// (src/messages.ts) at the start of every session whose reason is not "reload" (M1c, S11), so a user who never reads a
-// description and a model that never reads a notice both hear that the feedback of a session can be recorded.
+// The third registration is not a surface but a line: it reports feedbackNoticeText (src/messages.ts) at the start of
+// every session whose reason is not "reload" (M1c, S11), so a user who never reads a description and a model that never
+// reads a notice both hear that the feedback of a session can be recorded.
 //
-// What the factory does not do is as much part of the contract as what it does: no process, no
-// socket, no timer, no file read (docs/extensions.md:58-60). The root below is path arithmetic; the
-// settings, the inventory, the model, the writer and the clock are all resolved inside a run. That
-// is also why no session_shutdown handler is registered: nothing here holds a resource that would
-// need one, and the one session_start handler of M1c holds nothing either -- it reports one line and
-// returns.
+// The fourth is not a surface either: it is the collector of the silent signals of M3, hydrated when the session starts
+// and observed at the end of every turn (src/signals.ts). It raises a suspicion -- never a defect, never a verdict -- and
+// reports one line per new one, and it changes nothing else about the turn: the handler answers undefined, so the boundary
+// of the turn is the one pi drew. Since S6 it is also the dependency the command confirms a suspicion with, so the memory
+// the session raised and the one a `/skill-improve --signal=<id>` reads are the same object.
+//
+// What the factory does not do is as much part of the contract as what it does: no process, no socket, no timer and no
+// read at registration (docs/extensions.md:58-60). The root below is path arithmetic and nothing is resolved before a
+// session starts; the settings, the inventory, the model, the writer and the clock are all resolved inside a run; the
+// hydration of the collector reads one file per session, and the collector appends one line when it raises a new
+// suspicion, and neither happens at registration. That is also why no session_shutdown handler is registered: nothing
+// here holds a resource that would need one -- the two event handlers hold the memory of one session and return.
 //
 // Importing this module runs nothing either. The only statements at module level declare types and
 // constants, so a `pi -e` that loads the file and never calls the factory registers nothing.
@@ -59,10 +70,12 @@ import {
 // The description is what the command list shows, so it names the syntax and the things a user must know before running it:
 // the two materials a candidate can be written from (the failures of the session, or the cases of a bank), the flag that
 // describes a defect, the flag that gates a candidate that already exists, that the candidate is gated before anything is
-// written, that the gate spends tokens, and the floor of two distinct items below which the paired design abstains. This
-// command is also the only surface that may accept a candidate (Q12), and the description says so instead of promising
-// that nothing is ever edited.
-const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows instead of the cases to measure --, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>]. --staged=<stagingPath> gates a candidate that is already in staging instead of proposing a second one, and a bank that is absent or unreadable spends nothing, leaves the candidate in staging and leaves the attempt retryable. The gate spends tokens on every run and needs at least two distinct items to have a paired design to run, abstaining with insufficient-items below that; this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
+// written, that the gate spends tokens, and the floor of two distinct items below which the paired design abstains. Since M3
+// it also names the four forms of the command that are not a proposal -- the two that read the index (--metrics,
+// --verify), the confirmation of a suspicion (--signal) with its bank, and the retirement (--retire) with its reason --
+// because a flag that exists and is not named here is a flag the reader has to guess. This command is also the only surface
+// that may accept a candidate (Q12), and the description says so instead of promising that nothing is ever edited.
+const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows instead of the cases to measure --, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>] [--signal=<id>] [--metrics] [--verify] [--retire=<slug> --reason=<key>]. --staged=<stagingPath> gates a candidate that is already in staging instead of proposing a second one, and a bank that is absent or unreadable spends nothing, leaves the candidate in staging and leaves the attempt retryable. --metrics reports the numbers of the attempts already recorded and --verify checks every accepted lesson against the record that accepted it, the two of them reading the index alone, and --signal=<id> --bank=<path> confirms one suspicion the collector holds open as a directional attempt whose focus is the suspicion itself. --retire=<slug> --reason=<key> takes one accepted lesson back out of use for a recorded reason, and the detail of that reason is the focus of the run. The gate spends tokens on every run and needs at least two distinct items to have a paired design to run, abstaining with insufficient-items below that; this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
 
 // The seams a test may replace: everything the loop resolves for itself, plus the two gate flows the command chains
 // after it and the tool runs on its own. The gate's own seams are the tool's, and the acceptance's are not here
@@ -102,34 +115,59 @@ export interface SkillImproveToolDefinition {
   ): Promise<AgentToolResult<ToolDetails>>;
 }
 
-// Why a session started, as pi reports it (SessionStartEvent.reason), and the slice of the context the one
-// event handler of this package reads.
+// Why a session started, as pi reports it (SessionStartEvent.reason), and the slices of the context the two event handlers
+// of this package read.
 //
 // "reload" is the value that is not a session with news in it: pi reloads after an acceptance (M2) and the
 // notice of a reloaded session would be the line the reader has just read, so the handler stays silent on it
-// (OA8). The context is narrowed to the one channel the handler uses, the way SriCommandRegistration narrows
-// the command's: a test drives the handler with one member, and pi's own context satisfies it at the
+// (OA8). The context is narrowed to the members the handlers use, the way SriCommandRegistration narrows
+// the command's: a test drives a handler with a handful of fields, and pi's own context satisfies it at the
 // assignment in sriExtension below.
 export interface SriSessionStartEvent {
   readonly type: "session_start";
   readonly reason: "startup" | "reload" | "new" | "resume" | "fork";
 }
 
-export interface SriNoticeContext {
-  readonly ui: SkillImproveUi;
+// A turn as the end of it reports it: the index of the turn and the message the model answered with, which is where the
+// tool calls of the turn live (TurnEndEvent, narrowed the way SriSessionStartEvent is).
+export interface SriTurnEndEvent {
+  readonly type: "turn_end";
+  readonly turnIndex: number;
+  readonly message: TurnEndEvent["message"];
 }
 
-export type SriSessionStartHandler = (event: SriSessionStartEvent, ctx: SriNoticeContext) => void;
+// The session half of both event contexts: the collector is hydrated and observed for the session the handlers belong to,
+// and the id of a suspicion carries its identifier.
+export interface SriNoticeContext {
+  readonly ui: SkillImproveUi;
+  readonly sessionManager: ImproveFlowSession;
+}
+
+// What the collector reads besides the session: the same two members ImproveFlowContext declares, because the observation
+// of a turn is built with them (turnObservationOf, src/signals.ts) and the context pi hands a handler is passed through as
+// it is.
+export interface SriTurnEndContext extends SriNoticeContext, Pick<ImproveFlowContext, "cwd" | "model"> {}
+
+// Both handlers answer a promise because both wait on a file the collector owns -- its hydration, and the line of a new
+// suspicion -- and neither answers a value: pi allows either, and a handler that returned entries or `continue` would be
+// deciding something about the turn, which this package does not do.
+export type SriSessionStartHandler = (
+  event: SriSessionStartEvent,
+  ctx: SriNoticeContext,
+) => void | Promise<void>;
+
+export type SriTurnEndHandler = (event: SriTurnEndEvent, ctx: SriTurnEndContext) => void | Promise<void>;
 
 // The slice of ExtensionAPI this package uses: the two registrations, the two channels that only
 // the extension API carries (appendEntry and sendMessage do not exist on the context pi hands a
-// handler or a tool), and the one event it listens to. The session entry of this package is always the
+// handler or a tool), and the two events it listens to. The session entry of this package is always the
 // same payload, so appendEntry is narrowed to it here rather than at every call site.
 export interface SriExtensionApi {
   registerCommand(name: string, options: SriCommandRegistration): void;
   registerTool(tool: SkillImproveToolDefinition): void;
   appendEntry(customType: string, data?: ImprovementEntry): void;
   sendMessage(message: SkillImproveMessage): void;
+  on(event: "turn_end", handler: SriTurnEndHandler): () => void;
   on(event: "session_start", handler: SriSessionStartHandler): () => void;
 }
 
@@ -163,6 +201,14 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
     },
   };
 
+  // M3 (S5): the collector of the silent signals, over the base of the package's own state. The base arrives as a function
+  // and not as a path because getAgentDir() is read when a session starts, never when this factory runs: registering
+  // resolves no directory, opens no file and starts nothing.
+  //
+  // It is created before the dependencies below because it is one of them since S6: the command confirms a suspicion through
+  // this same collector, so the object the two handlers hold and the one a confirmation reads are one object.
+  const signals = createSignalCollector(() => writeBase(getAgentDir()));
+
   // The command's own dependency: the message channel. With a UI the command notifies through
   // ctx.ui, and only a run without one needs this channel, which is why it is the command's and not
   // the tool's.
@@ -176,6 +222,9 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
     sendMessage: (message) => {
       api.sendMessage(message);
     },
+    // The collector is a dependency of the command and not of the tool: only the command confirms a suspicion (M3, S6), and
+    // the tool has no flag that opens an attempt from one.
+    signals,
   };
 
   api.registerCommand(COMMAND_NAME, {
@@ -190,11 +239,36 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   // M1c (S11, Q26): the user and the model learn that the feedback of a session can be recorded from two channels that
   // cover the failure of the other -- a model reads the description of a tool and may never read a session notice, and a
   // user reads the notice and may never read a description. One line per session, and none on a reload (OA8): the notice
-  // of a session pi reloaded after an acceptance would be the line the reader just read. Nothing behind the handler
-  // reads a file, starts a process or holds a timer, so a session_start handler is all this costs.
-  api.on("session_start", (event, ctx) => {
+  // of a session pi reloaded after an acceptance would be the line the reader just read.
+  //
+  // M3 (S5) adds the one read behind this handler: the collector is hydrated once per session, and on a reload too -- the
+  // reload is exactly the early return below, and a session that reloads still has to fold what the sessions before it
+  // raised. The hydration is outside the turn by construction: it happens at the session start, and the write the
+  // collector does when it raises a suspicion is one line at the end of a turn.
+  api.on("session_start", async (event, ctx) => {
+    try {
+      await signals.hydrate(writeBase(getAgentDir()), ctx.sessionManager.getSessionId());
+    } catch {
+      // A collector that cannot read its file is a collector with nothing remembered, and the notice below is still owed:
+      // an unreadable file of suspicions cannot silence the line that tells a user what can be recorded.
+    }
+
     if (event.reason === "reload") return;
     ctx.ui.notify(feedbackNoticeText(), "info");
+  });
+
+  // M3 (S5): the end of a turn is where the two silent signals of Q25 are noticed. The handler observes, reports one line
+  // per suspicion that is new, and answers undefined: it adds no entry to the session, changes no boundary and never
+  // throws. Everything is inside the try because the collector runs in every turn of every session, and a bug in a notice
+  // cannot be allowed to break the session that reads it.
+  api.on("turn_end", async (event, ctx) => {
+    try {
+      const observation = turnObservationOf(event, ctx.sessionManager.getBranch(), ctx);
+      const raised = await signals.observe(observation);
+      for (const suspicion of raised) ctx.ui.notify(signalText(suspicion), "info");
+    } catch {
+      // Swallowed on purpose: see the comment above.
+    }
   });
 }
 

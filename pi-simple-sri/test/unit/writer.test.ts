@@ -10,6 +10,7 @@ import { stagingDir, stateDir } from "../../src/write-base.ts";
 import { SriPerimeterError } from "../../src/perimeter.ts";
 import {
   appendAttemptLine,
+  appendSignalLine,
   copySkillTree,
   discardStagingCandidate,
   removeLessonFile,
@@ -23,6 +24,7 @@ import {
   writeTextAtomically,
   type StagingWriteInput,
 } from "../../src/writer.ts";
+import type { RaisedSignalLine } from "../../src/signals.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef } from "../../src/types.ts";
 
@@ -667,6 +669,102 @@ test("appendAttemptLine: refuses an index that is a symlink out of the state dir
   );
 
   assert.equal(fs.readFileSync(outsidePath, "utf8"), "");
+});
+
+// M3 (S5): the file of signals is the second append-only file of the package, and it goes through the same append: one line
+// per event, its newline included, verified against the tail, guarded by the same perimeter and the same queue.
+function signalLine(overrides: Partial<RaisedSignalLine> = {}): RaisedSignalLine {
+  return {
+    format: "pi-simple-sri/signal@1",
+    event: "raised",
+    id: "sg-1a2b3c4d",
+    kind: "rewritten-draft",
+    createdAt: "2026-11-02T14:03:22.481Z",
+    sessionId: "session-1",
+    turnIndex: 3,
+    subject: "/work/notes.md",
+    excerpt: "turn 2: /work/notes.md",
+    prompt: "write the notes of the meeting",
+    model: "anthropic/claude-sonnet-4-5",
+    ...overrides,
+  };
+}
+
+test("appendSignalLine: writes one line with its newline under state/", async (t) => {
+  const fixture = createFixture(t);
+  const signalsPath = path.join(stateDir(fixture.pkg), "signals.jsonl");
+  const line = signalLine();
+  assert.equal(fs.existsSync(stateDir(fixture.pkg)), false);
+
+  await appendSignalLine(fixture.pkg, line);
+
+  const content = fs.readFileSync(signalsPath, "utf8");
+  assert.equal(content, `${JSON.stringify(line)}\n`);
+  // The index of attempts is a different file: a suspicion is not an attempt (AttemptLine.targetSkill is required and a
+  // suspicion names no skill).
+  assert.deepEqual(fs.readdirSync(stateDir(fixture.pkg)), ["signals.jsonl"]);
+});
+
+test("appendSignalLine: two events leave two lines in order and keep the first intact", async (t) => {
+  const fixture = createFixture(t);
+  const signalsPath = path.join(stateDir(fixture.pkg), "signals.jsonl");
+  const first = signalLine();
+  const second = signalLine({ id: "sg-5e6f7a8b", kind: "repeated-request", subject: "write notes meeting" });
+
+  await appendSignalLine(fixture.pkg, first);
+  const afterFirst = fs.readFileSync(signalsPath, "utf8");
+  await appendSignalLine(fixture.pkg, second);
+
+  const content = fs.readFileSync(signalsPath, "utf8");
+  assert.equal(content.startsWith(afterFirst), true);
+  assert.deepEqual(
+    content.split("\n").filter((line) => line !== ""),
+    [JSON.stringify(first), JSON.stringify(second)],
+  );
+});
+
+// The one absoluteness guard: a relative base resolves against the working directory of the process.
+test("appendSignalLine: refuses a relative path", async () => {
+  await assert.rejects(
+    () => appendSignalLine("state", signalLine()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("not absolute"),
+  );
+});
+
+// The verification of the append is the tail and not the whole file, so the line another process landed in between is not
+// a failure: the same reading the index of attempts gets, from the same helper.
+test("appendSignalLine: a line that another process appended in between is not a failure", async (t) => {
+  const fixture = createFixture(t);
+  const signalsPath = path.join(stateDir(fixture.pkg), "signals.jsonl");
+  const ours = signalLine();
+  const other = signalLine({ id: "sg-9c0d1e2f" });
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(signalsPath, "", "utf8");
+  appendFromAnotherProcessAfter(t, signalsPath, `${JSON.stringify(other)}\n`);
+
+  await appendSignalLine(fixture.pkg, ours);
+
+  assert.deepEqual(
+    fs.readFileSync(signalsPath, "utf8").split("\n").filter((line) => line !== ""),
+    [JSON.stringify(ours), JSON.stringify(other)],
+  );
+});
+
+// Append-only has one precondition, and it is the file's and not the event's: a line glued onto a truncated one would make
+// the file unreadable from that point on, so the append refuses and leaves the bytes as they were.
+test("appendSignalLine: refuses to append after a line that was truncated", async (t) => {
+  const fixture = createFixture(t);
+  const signalsPath = path.join(stateDir(fixture.pkg), "signals.jsonl");
+  const truncated = '{"format":"pi-simple-sri/signal@1","event":"raised"';
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(signalsPath, truncated, "utf8");
+
+  await assert.rejects(
+    () => appendSignalLine(fixture.pkg, signalLine()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("does not end with a newline"),
+  );
+
+  assert.equal(fs.readFileSync(signalsPath, "utf8"), truncated);
 });
 
 // F1: a candidate whose index line failed is retired, and the answer says whether the directory is

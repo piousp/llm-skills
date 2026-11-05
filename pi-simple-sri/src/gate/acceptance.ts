@@ -5,35 +5,40 @@
 //
 // The order is not negotiable, and every position of it is a guarantee:
 //
-//   0. a SKILL.md that already references the slug is refused before anything is written. Both arms of the
+//   0. the skill is still one the settings admit. The verdict arrives as data -- this module reads no settings, on
+//      purpose -- and a candidate the gate accepted under a skill the user has excluded since is refused here, before
+//      the snapshot and before any byte: a lesson written into that skill is a lesson the loop refuses to improve from
+//      then on, and the gate's own check is older than the write.
+//   1. a SKILL.md that already references the slug is refused before anything is written. Both arms of the
 //      gate were built from the skill as it stood, so a line that is already there makes them identical in
 //      `## Lessons` and the gate would have compared the skill with itself. The refusal is here and not in
 //      the overlay because the overlay has no operation that deletes a reference line and must not gain
 //      one.
-//   1. the SKILL.md of the skill has to hash to the value the gate preregistered: an edit between the
+//   2. the SKILL.md of the skill has to hash to the value the gate preregistered: an edit between the
 //      gate and the acceptance makes the verdict describe a skill that no longer exists, so the candidate
 //      is refused instead of published.
-//   2. the snapshot comes first and before any edit, so the skill as it was is always on disk when this
+//   3. the snapshot comes first and before any edit, so the skill as it was is always on disk when this
 //      module starts to change it. History is never rewritten: a timestamp that is taken is taken.
-//   3. the lesson is written and verified against the `contentHash` of the candidate, so the bytes that
+//   4. the lesson is written and verified against the `contentHash` of the candidate, so the bytes that
 //      land are the bytes the gate measured.
-//   4. the reference line is added, idempotent by slug; if it cannot be, the lesson is withdrawn, because
+//   5. the reference line is added, idempotent by slug; if it cannot be, the lesson is withdrawn, because
 //      a lesson pi cannot reach is inert and a half-accepted skill is worse than an unchanged one.
-//   5. the authoritative record of the acceptance is written into the snapshot, and only after the bytes
+//   6. the authoritative record of the acceptance is written into the snapshot, and only after the bytes
 //      of the skill are verified: a `.history/<ts>/decision.json` that says "accepted" can never describe
 //      a write that did not happen.
-//   6. the event of the index is appended with the `historyPath` of the record, which is what joins the
+//   7. the event of the index is appended with the `historyPath` of the record, which is what joins the
 //      "gate-accepted" of the staged record with the "accepted" of the write by `candidateHash`.
-//   7. the reload of the session is not a step of this protocol: it is a call on the context pi hands a command,
+//   8. the reload of the session is not a step of this protocol: it is a call on the context pi hands a command,
 //      and it lives at the end of the command's handler (see the invariant at the end of acceptCandidate).
 //
 // The staged `decision.json` is never rewritten to "accepted": it keeps the "gate-accepted" the gate
 // decided, and the line of the index is what tells both states apart.
 //
 // Nothing here reads settings, calls a model or spawns anything: it takes the record the gate wrote, the
-// candidate it measured and one clock, and the answer is either the acceptance or the named reason it did
-// not happen. Refusals the protocol does not name -- a skill that cannot be read, an index that cannot be
-// appended -- are thrown, the same way the rest of the package treats a broken file.
+// candidate it measured, the eligibility verdict its caller resolved (step 0, as data and never as a file) and one
+// clock, and the answer is either the acceptance or the named reason it did not happen. Refusals the protocol does not
+// name -- a skill that cannot be read, an index that cannot be appended -- are thrown, the same way the rest of the
+// package treats a broken file.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -42,7 +47,7 @@ import { sha256Digest } from "../hash.ts";
 import { HISTORY_DIR, SKILL_FILE } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { countReferenceLines, lessonReferencePath } from "../skill-reference.ts";
-import type { AttemptLine, DecisionRecord, Result } from "../types.ts";
+import type { AttemptLine, DecisionRecord, Eligibility, Result } from "../types.ts";
 import { currentTime, quote, toErrorMessage } from "../values.ts";
 import {
   appendAttemptLine,
@@ -56,10 +61,11 @@ import {
 } from "../writer.ts";
 
 // Why a candidate the gate accepted was not written. The list is closed and each reason names a state the
-// caller can report differently: the slug is already live, the skill moved since the gate saw it, the
-// history of that timestamp is taken, or the reference line could not be written (and the lesson was
-// withdrawn). None of them is a failure of the run itself, which is why they are values and not errors.
+// caller can report differently: the skill is no longer one the settings admit, the slug is already live, the skill moved
+// since the gate saw it, the history of that timestamp is taken, or the reference line could not be written (and the lesson
+// was withdrawn). None of them is a failure of the run itself, which is why they are values and not errors.
 export type AcceptRejectionReason =
+  | "no-longer-eligible"
   | "slug-already-referenced"
   | "skill-drift"
   | "history-exists"
@@ -80,12 +86,18 @@ export interface AcceptRejection {
 // `timestamp` names the snapshot directory and defaults to the clock of `deps.now`, in the same spelling
 // the staging writer gives a candidate: UTC, no separators. It travels in the request because a test proves
 // the refusal of an occupied timestamp without waiting for a millisecond to pass.
+//
+// `eligibility` is the verdict of the skill under the settings, and it travels as data (M3, S7): the gate checked it
+// before it spent a run and this module checks it again before the first byte, because between the two the settings can
+// have changed -- and the invariant of this file is that it reads no settings of its own, so the caller that resolved the
+// verdict is the one that hands it over.
 export interface AcceptRequest {
   base: string;
   skill: { name: string; realDir: string };
   candidate: { slug: string; title: string; lessonText: string; contentHash: string };
   decision: DecisionRecord;
   expectedSkillContentHash: string;
+  eligibility: Eligibility;
   failureSignature: string;
   timestamp?: string;
 }
@@ -137,12 +149,24 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
   const timestamp = request.timestamp ?? formatTimestamp(now, "history snapshot");
   const { slug, title, lessonText, contentHash } = request.candidate;
 
-  // The SKILL.md is read once: the reference count of step 0 and the hash of step 1 come from the same
+  // Step 0: the skill is still one the settings admit. The verdict is the caller's -- this module reads no settings, on
+  // purpose -- and the refusal is here because this is the last moment before the first byte: a lesson written into a
+  // skill the user has excluded since the gate would be one the loop refuses to improve from then on. Nothing of the skill
+  // is read, nothing is snapshotted and nothing is written, which is what the reason says.
+  const eligibility = request.eligibility;
+  if (!eligibility.eligible) {
+    return reject(
+      "no-longer-eligible",
+      `${quote(request.skill.name)} is no longer eligible: ${eligibility.reason}; nothing was written`,
+    );
+  }
+
+  // The SKILL.md is read once: the reference count of step 1 and the hash of step 2 come from the same
   // bytes, so the two questions are answered about one version of the file.
   const skillBytes = readSkillBytes(skillFilePath);
   const reference = lessonReferencePath(slug);
 
-  // Step 0: the slug is already reachable from the skill. Nothing is created, not even a snapshot: the
+  // Step 1: the slug is already reachable from the skill. Nothing is created, not even a snapshot: the
   // gate that accepted this candidate compared the skill with itself.
   if (countReferenceLines(skillBytes.toString("utf8"), slug) > 0) {
     return reject(
@@ -151,7 +175,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
     );
   }
 
-  // Step 1: the skill has not moved since the gate preregistered it. The perimeter of the skill file comes
+  // Step 2: the skill has not moved since the gate preregistered it. The perimeter of the skill file comes
   // with this check and before any write, so a SKILL.md that is a link out of the skill is refused here
   // instead of one step later, after the snapshot had been taken for it.
   assertWritable(skillFilePath, [skillDir]);
@@ -163,7 +187,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
     );
   }
 
-  // Step 2: the copy of the skill as it was, before anything of it changes. An occupied timestamp is its
+  // Step 3: the copy of the skill as it was, before anything of it changes. An occupied timestamp is its
   // own answer and not an error: the writer refuses it too, and this check only names it as the typed
   // rejection the caller reports. A timestamp that leaves `.history/` is not pre-checked here: the writer
   // refuses it with its perimeter, which is the guard that has to hold even if this check is removed.
@@ -176,11 +200,11 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
   }
   const snapshot = await seams.snapshot(skillDir, timestamp);
 
-  // Step 3: the lesson, verified against the hash of the candidate. The writer refuses a text that does
+  // Step 4: the lesson, verified against the hash of the candidate. The writer refuses a text that does
   // not hash to it, so the bytes that land are the bytes the gate measured.
   const lessonPath = await seams.writeLesson(skillDir, slug, lessonText, contentHash);
 
-  // Step 4: the reference line that makes the lesson reachable (Q10). A failure here withdraws the lesson,
+  // Step 5: the reference line that makes the lesson reachable (Q10). A failure here withdraws the lesson,
   // because a lesson pi cannot reach is inert and a skill with half an acceptance is worse than the skill
   // that was there. The compensation does not change the reason: it is still a reference that could not be
   // written, and the detail says what happened to the lesson and names the snapshot that was kept.
@@ -194,7 +218,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
     );
   }
 
-  // Step 5: the authoritative record of the acceptance, inside the snapshot the acceptance took. The
+  // Step 6: the authoritative record of the acceptance, inside the snapshot the acceptance took. The
   // record is the one the gate wrote with the outcome of the write and nothing else: `gate.status` stays
   // "gate-accepted", which is what the gate decided, and the record is built as a copy because the caller
   // keeps its own object.
@@ -204,7 +228,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
   };
   const historyPath = await seams.writeHistoryDecision(skillDir, timestamp, decision);
 
-  // Step 6: the event of the index, joined to the "proposed" and, through `candidateHash`, to the
+  // Step 7: the event of the index, joined to the "proposed" and, through `candidateHash`, to the
   // "gate-accepted" of the staged record -- M1 emits no line for a gate that passed, so this is the line
   // that closes the pair. The candidate hash is the one step 3 verified against the bytes now on disk, and
   // the body hash is the one the record declares for that same candidate: the request carries the hash of
@@ -221,7 +245,7 @@ export async function acceptCandidate(request: AcceptRequest, deps: AcceptDeps =
     }),
   );
 
-  // Step 7 of the protocol is not a step of this module, and that is an invariant rather than a note about one
+  // Step 8 of the protocol is not a step of this module, and that is an invariant rather than a note about one
   // version of it: the reload of the session is a call on the context pi hands a command, and this function receives
   // AcceptDeps -- writes and seams, no context at all. The file that declares `waitForIdle` and `reload` is the
   // command's (SkillImproveContext, src/command-skill-improve.ts), and the two calls live at the end of its handler,
@@ -263,7 +287,7 @@ function readSkillBytes(skillFilePath: string): Buffer {
   }
 }
 
-// The compensation of step 4. The removal can itself fail, and the error the caller is about to read
+// The compensation of step 5. The removal can itself fail, and the error the caller is about to read
 // already names the reference line that did not land, so this function only answers whether the lesson is
 // gone -- the same value src/writer.ts answers with, and never a second reason (I8).
 async function withdrawLesson(seams: AcceptSeams, skillDir: string, slug: string): Promise<boolean> {

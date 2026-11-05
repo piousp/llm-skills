@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildAttemptLine, type AttemptEvent } from "../attempts.ts";
+import { readSriConfig } from "../config.ts";
 import { expectationViolation, signatureOf } from "../diagnosis.ts";
+import { isEligibleUnderAnySpelling, spellingsOfSkill } from "../eligibility.ts";
 import { sha256Digest } from "../hash.ts";
-import { DECISION_FILE, LESSONS_DIR } from "../names.ts";
+import { DECISION_FILE, LESSONS_DIR, SETTINGS_FILE } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "../skills-inventory.ts";
 import { assertNever, outcomeStatusFor } from "../types.ts";
@@ -77,6 +79,15 @@ import type {
 // the budget, the verdict and the line are the ones of M1, unchanged -- the branch of the defect changes where the items come
 // from and what judges them, and nothing about how the gate spends.
 //
+// M3 (S7) adds one refusal and no branch: right after the record is proven to be a candidate, and before the artifact guard,
+// the plan and the first run, the skill is asked of the eligibility rule of the package (src/eligibility.ts) over the spellings it
+// answers to. A candidate that exists by another way than the loop -- written by hand, or staged by an earlier version -- can
+// belong to a skill the settings no longer admit, and a replay over it would spend a budget measuring a skill the user has
+// excluded. The answer is `refused` and not an abstention: nothing was written, no run was spent and the index gained no line,
+// which is what the refusal already means. The guard itself is one function of this module (eligibilityRefusalOf) and not a
+// block of this flow: the second base of M1c runs it at the same point of its own sequence, and a copy of it there would be the
+// way around a rule this base obeys.
+//
 // It is here and not in the surface (src/tool-skill-improve.ts, src/command-skill-improve.ts) because both
 // surfaces run it and a candidate this module gates is one the whole package then trusts: one
 // implementation, one set of guards, and no second reading of a decision.json.
@@ -120,11 +131,40 @@ export type CandidateRejectionReason =
   // The gate of the record already answered (M1c): `preregistered` or one of the three concluded statuses. A candidate is
   // gated once -- the rule is preregistered against a candidate nobody has measured yet -- so a second gate is refused
   // instead of rewriting a verdict somebody may already have read.
-  | "already-concluded";
+  | "already-concluded"
+  // The skill the candidate belongs to is no longer one the settings admit, or it is the name this package reserves
+  // (M3, S7): the record is a candidate and the run is refused before it spends anything, because measuring it would
+  // compare a skill the user has excluded with itself plus a lesson.
+  | "not-eligible";
 
 export interface CandidateRejection {
   reason: CandidateRejectionReason;
   detail: string;
+}
+
+// The eligibility verdict of a skill, re-taken before a gate spends anything (M3, S7/D-C). It lives here, once, because
+// the gate has two bases and a guard that only one of them runs is a guard the other base walks around: a candidate that
+// exists by another route -- written by hand, or staged by an older version -- must not be measured against a skill the
+// settings no longer admit. `null` means the gate may go on.
+//
+// The settings are read with the reader of src/config.ts, which answers the default config -- every skill but the reserved
+// name -- for a file that is not there, so a session without settings loses nothing here. The answer is a CandidateRejection
+// and not an abstention: nothing was written, no run was spent and the index gains no line, which is what a refusal already
+// means.
+//
+// The argument is the two fields both requests of the gate carry (GateRequest and the DirectionalGateRequest that extends it),
+// so each base hands its own request and neither needs a conversion. `skill` is the whole reference and not its name, because
+// a skill answers to two spellings (src/eligibility.ts): a `deny` written with the basename of the directory names the same
+// skill as one written with the name of its frontmatter, and a rule that looked at one spelling would depend on which of them
+// the user picked.
+export function eligibilityRefusalOf(request: { agentDir: string; skill: SkillRef }): CandidateRejection | null {
+  const verdict = isEligibleUnderAnySpelling(
+    spellingsOfSkill(request.skill),
+    readSriConfig(path.join(request.agentDir, SETTINGS_FILE)),
+  );
+  if (verdict.eligible) return null;
+
+  return { reason: "not-eligible", detail: `${quote(request.skill.name)} is not eligible: ${verdict.reason}` };
 }
 
 export type StagedCandidateResult = Result<DecisionRecord, CandidateRejection>;
@@ -310,6 +350,16 @@ export async function gateStagedCandidate(
       },
     };
   }
+
+  // M3, S7 (D-C): the skill this candidate belongs to is still one the settings admit. The loop refuses an ineligible skill
+  // before it proposes (src/improve-flow.ts), so a candidate can only be here by another way -- written by hand, or staged
+  // by an earlier version of this package -- and a replay over it would measure a skill the user has excluded in the meantime.
+  // It runs right after the record is proven to be a candidate and before the artifact guard and the plan, because a gate
+  // about nothing is the cheapest one to stop, and it answers `refused`: nothing was written and no run was spent, which is
+  // exactly this case. The guard is the module's and not this flow's (eligibilityRefusalOf above), because the other base of
+  // the gate runs it at this same point of its own sequence.
+  const ineligible = eligibilityRefusalOf(request);
+  if (ineligible !== null) return { kind: "refused", rejection: ineligible };
 
   // The artifact of a defect, re-verified before the plan and before any run (M1c, S8). The truth of a defect is a file,
   // and the record keeps the digest of the bytes it read: a file that moved since the proposal describes a failure nobody

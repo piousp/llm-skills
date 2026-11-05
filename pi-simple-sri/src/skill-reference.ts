@@ -89,6 +89,34 @@ export function upsertReferenceLine(text: string, slug: string, title: string): 
   return joinLines(lines);
 }
 
+// The inverse of upsertReferenceLine, and the second edit the retirement of a lesson makes (M3, S4): the bullets of
+// `## Lessons` that name this slug come out of the section and nothing of the rest of the file moves. Without the line
+// pi never reaches the lesson, which is what makes a retired lesson inert while its file stays where it is (Q10).
+//
+// Idempotent by slug the other way round: a text that carries no line for this slug -- or no section at all -- is
+// returned as it arrived, byte for byte and not re-joined, so a second run of the retirement cannot churn SKILL.md. The
+// removal is only ever inside the section: a bullet in another section, a link without the bullet and a prose mention
+// are not the reference, which is the same rule countReferenceLines counts by.
+export function removeReferenceLine(text: string, slug: string): string {
+  const pattern = referencePattern(slug);
+  const lines = splitLines(text);
+  const headingIndex = lines.findIndex(isLessonsHeading);
+  if (headingIndex === -1) {
+    return text;
+  }
+
+  const end = sectionEnd(lines, headingIndex);
+  const kept = lines.filter((line, index) => !(index > headingIndex && index < end && pattern.test(line)));
+  if (kept.length === lines.length) {
+    return text;
+  }
+
+  // The ending is the one the file had: a text without a trailing newline keeps having none, so the only bytes that
+  // move are the lines that left.
+  const joined = kept.join("\n");
+  return text.endsWith("\n") ? `${joined}\n` : joined;
+}
+
 // The first line of the section that is not blank, or `end` when the section holds no content.
 function firstContentIndex(lines: readonly string[], from: number, end: number): number {
   for (let index = from; index < end; index++) {

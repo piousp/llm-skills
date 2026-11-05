@@ -5,12 +5,15 @@ import path from "node:path";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { SriWriterError } from "./errors.ts";
 import { sha256Digest } from "./hash.ts";
-import { parseLesson } from "./lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "./names.ts";
+import { parseLesson, serializeLesson } from "./lesson-frontmatter.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, RETIREMENT_FILE, SIGNALS_FILE, SKILL_FILE } from "./names.ts";
+// Type-only, so the append of a signal line does not make this module depend on the collector at run time: the
+// collector is the module that writes through this chokepoint, and the shape of the line it writes is declared there.
+import type { SignalLine } from "./signals.ts";
 import { stagingDir, stateDir } from "./write-base.ts";
 import { assertWritable, isInsideOrEqual } from "./perimeter.ts";
 import * as skillReference from "./skill-reference.ts";
-import type { AttemptLine, DecisionRecord, Result, SkillRef } from "./types.ts";
+import type { AttemptLine, DecisionRecord, Result, RetirementRecord, SkillRef } from "./types.ts";
 import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile, quote, toErrorMessage } from "./values.ts";
 
 // The single write chokepoint of the package. Every write here:
@@ -29,10 +32,11 @@ import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile,
 //   4. reads the file back and compares the bytes, so a write that did not land is an
 //      error instead of a silent success (verification on write, not only on read).
 //
-// The one write of the package that is not a temporary file and a rename is the append to the index of
-// attempts: a file that is only ever added to has one line appended to it, in one write, and the write is
-// verified against the tail of the file instead of against a read of the whole thing (appendAttemptLine,
-// OA11). Everything above -- the perimeter first, the queue around it -- still holds for it.
+// The two writes of the package that are not a temporary file and a rename are the appends to the two files that are only
+// ever added to: the index of attempts and the file of signals. One line is appended to them, in one write, and the write
+// is verified against the tail of the file instead of against a read of the whole thing (appendAttemptLine, OA11;
+// appendSignalLine, M3 S5). Everything above -- the perimeter first, the queue around it -- still holds for both, and both
+// go through the same private helper so the protocol exists once.
 //
 // Nothing here renders lesson frontmatter: src/lesson-frontmatter.ts owns that format
 // (P6) and hands the serialized file over as text. This module only moves bytes, hashes
@@ -211,17 +215,32 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
 // in-process queue, which keeps two callers of this module from interleaving their verification, and the
 // perimeter, which runs before the handle exists (I10).
 export async function appendAttemptLine(base: string, line: AttemptLine): Promise<void> {
+  await appendStateLine(base, ATTEMPTS_FILE, line);
+}
+
+// The same append for the file of signals (M3, S5): the collector raises and consumes suspicions in a file that is only
+// ever added to, under the same state directory and with the same protocol. The line is the collector's to shape
+// (src/signals.ts owns the two events) and the protocol is this module's only, which is why the helper below is the one
+// append of the package and this function is a name and a file.
+export async function appendSignalLine(base: string, line: SignalLine): Promise<void> {
+  await appendStateLine(base, SIGNALS_FILE, line);
+}
+
+// The one append of the module: `file` is the name of an append-only file under state/, and the base of the run decides
+// the directory it lands in. The caller of an append names no path, so no caller can append outside the state directory
+// of the base it was given.
+async function appendStateLine(base: string, file: string, line: AttemptLine | SignalLine): Promise<void> {
   requireAbsoluteBase(base, "append");
 
   // The base is known here, so the write is guarded against the whole state directory instead of the path the
   // caller handed over; that check runs inside appendQueued below, where the bytes land, and is not repeated
   // here.
   const stateRoot = stateDir(base);
-  const statePath = path.join(stateRoot, ATTEMPTS_FILE);
+  const statePath = path.join(stateRoot, file);
   fs.mkdirSync(stateRoot, { recursive: true });
 
   // One string, one write: the newline travels with the line, so a crash either lands the whole event or
-  // leaves the index as it was to the last complete line.
+  // leaves the file as it was to the last complete line.
   const jsonLine = `${JSON.stringify(line)}\n`;
   const bytes = Buffer.from(jsonLine, "utf8");
 
@@ -232,12 +251,13 @@ export async function appendAttemptLine(base: string, line: AttemptLine): Promis
     // Verified by its tail: the question is whether the line landed, and the last bytes of the file answer
     // it without reading -- and certainly without rewriting -- the lines that were already there.
     //
-    // The question is not whether the line is the last one. Two processes of pi appending to the same index is
+    // The question is not whether the line is the last one. Two processes of pi appending to the same file is
     // the ordinary case (OA11), and one of them can land its line between the append above and this read: the
     // tail then ends with a line this call did not write, while the line of this call is one or more lines
     // back, still in the window TAIL_SLACK_BYTES makes wide enough to hold it. What the window proves is what
-    // the append promised: the index ends where a line ends, and this event is in it. A substring cannot be
-    // some other event -- buildAttemptLine makes the line unique through `ts` and the candidate hashes.
+    // the append promised: the file ends where a line ends, and this event is in it. A substring cannot be
+    // some other event -- buildAttemptLine makes its line unique through `ts` and the candidate hashes, and the id of a
+    // signal line is the occurrence itself.
     const tail = await readTail(statePath, bytes.length + TAIL_SLACK_BYTES);
     if (!tail.endsWith("\n") || !tail.includes(jsonLine)) {
       throw new SriWriterError(
@@ -580,6 +600,159 @@ export async function writeHistoryDecision(
   return decisionPath;
 }
 
+// ---------------------------------------------------------------------------------------------
+// M3, S4: the three writes of the retirement. The protocol, the order of the steps and the reason for the order live in
+// src/retirement.ts; what lives here is the file -- the tombstone, the reference line that comes out and the record of
+// the reason -- with the perimeter, the mutation queue and the read-back of every other write in this module.
+// ---------------------------------------------------------------------------------------------
+
+// The pair of hashes a tombstone answers with: the digest of the file as it is after the rewrite, and the digest of the
+// normalized body, which the retirement does not change.
+export interface RetiredLesson {
+  contentHash: string; // "sha256:" + 64 hex over the whole lesson file, tombstone included
+  bodyHash: string; // "sha256:" + 64 hex over the normalized body, the one of the acceptance
+}
+
+// The tombstone of a retired lesson (M3, S4): lessons/<slug>.md rewritten with `status: "retired"` and nothing else
+// changed. The file stays where it is -- the retirement deletes nothing -- and two conditions make the state honest:
+//
+//   - the bytes on disk are the ones the acceptance measured. The caller verified the same hash before the snapshot, and
+//     the check is here again because this is the function that writes: what is retired is what was accepted, and a file
+//     whose bytes moved is refused instead of being buried under a tombstone nobody decided on.
+//   - the body does not move. That is the post-condition of the round trip: the state changes and the correction does not,
+//     so a body hash that differs afterwards throws instead of leaving a rewritten file. parseLesson and serializeLesson are
+//     the two directions of the one format that owns the file (P6), so this module spells no frontmatter by hand.
+//
+// The narrowest root is lessons/, exactly as in removeLessonFile: the slug names a file of that directory, and a slug
+// carrying a path separator stays inside the skill but leaves the directory the lessons are the only files of.
+export async function retireLessonFile(
+  skillRealDir: string,
+  slug: string,
+  expectedContentHash: string,
+): Promise<RetiredLesson> {
+  const skillDir = requireDirectory(skillRealDir, "skill directory");
+  const lessonsDir = path.join(skillDir, LESSONS_DIR);
+  const lessonPath = path.join(lessonsDir, `${slug}.md`);
+
+  assertWritable(lessonPath, [skillDir]);
+
+  // The read, the two conditions and the write happen under the queue of this file, the shape rewriteStagingDecision has: the
+  // pre-image that was verified is the one that is rewritten, and two retirements of the same lesson cannot interleave their
+  // verification with each other's write. writeFileAtomic is the primitive and not writeFileQueued because the queue is
+  // already held here, and withFileMutationQueue is not reentrant on the same path.
+  return await withFileMutationQueue(lessonPath, async () => {
+    const text = await readTextOrThrow(lessonPath);
+    const before = lessonHashes(text);
+    if (!before.ok) {
+      throw new SriWriterError(
+        `refusing to retire ${quote(lessonPath)}: the lesson file is not a valid lesson file (${before.error})`,
+        lessonPath,
+      );
+    }
+    if (before.value.contentHash !== expectedContentHash) {
+      throw new SriWriterError(
+        `refusing to retire ${quote(lessonPath)}: the lesson file hashes to ${before.value.contentHash}, not to the ${expectedContentHash} of the acceptance`,
+        lessonPath,
+      );
+    }
+
+    const lesson = parseLesson(text);
+    if (!lesson.ok) {
+      throw new SriWriterError(`refusing to retire ${quote(lessonPath)}: ${lesson.error}`, lessonPath);
+    }
+
+    const retired = serializeLesson({ ...lesson.value, status: "retired" });
+    if (!retired.ok) {
+      throw new SriWriterError(`refusing to retire ${quote(lessonPath)}: ${retired.error}`, lessonPath);
+    }
+
+    const after = lessonHashes(retired.value);
+    if (!after.ok) {
+      throw new SriWriterError(`refusing to retire ${quote(lessonPath)}: ${after.error}`, lessonPath);
+    }
+    if (after.value.bodyHash !== before.value.bodyHash) {
+      throw new SriWriterError(
+        `refusing to retire ${quote(lessonPath)}: the body would hash to ${after.value.bodyHash} instead of the ${before.value.bodyHash} of the file on disk; a retirement changes the state and never the body`,
+        lessonPath,
+      );
+    }
+
+    await writeFileAtomic(lessonPath, Buffer.from(retired.value, "utf8"), lessonsDir);
+
+    return after.value;
+  });
+}
+
+// The other edit of a retirement (M3, S4): the reference line of the slug leaves `## Lessons`, so pi stops loading the
+// lesson (Q10). The text -> text rule is src/skill-reference.ts's -- the inverse of upsertReferenceLine -- and what stays
+// here is the file: reading it, writing it inside the perimeter and checking the line is gone, the way the acceptance
+// checks the line landed.
+//
+// The answer says whether there was a line to remove. A SKILL.md without it is not rewritten with the same bytes: a write
+// that changes nothing is a chance to lose something, and the second run of a retirement after a failure has to find this
+// step already done instead of a file it rewrites for nothing.
+export async function dropReferenceLine(skillRealDir: string, slug: string): Promise<boolean> {
+  const skillDir = requireDirectory(skillRealDir, "skill directory");
+  const skillFilePath = path.join(skillDir, SKILL_FILE);
+
+  // No assertWritable here, for the reason upsertReferenceLine has none: writeFileAtomic guards the file against the skill
+  // directory as its first statement (I10), and this function writes nothing else. The check this function adds is about
+  // content, not about the perimeter: the read-back below counts the reference lines.
+  let removed = false;
+  await withFileMutationQueue(skillFilePath, async () => {
+    const content = await readTextOrThrow(skillFilePath);
+    const next = skillReference.removeReferenceLine(content, slug);
+    if (next === content) {
+      return;
+    }
+
+    await writeFileAtomic(skillFilePath, Buffer.from(next, "utf8"), skillDir);
+
+    const readBack = await readTextOrThrow(skillFilePath);
+    if (skillReference.countReferenceLines(readBack, slug) !== 0) {
+      throw new SriWriterError(
+        `${quote(skillFilePath)}: the reference to ${quote(skillReference.lessonReferencePath(slug))} is still there after the write`,
+        skillFilePath,
+      );
+    }
+    removed = true;
+  });
+
+  return removed;
+}
+
+// The record of a retirement (M3, S4): .history/<timestamp>/retirement.json, written after the tombstone landed, so a
+// record that says what was retired describes a skill that says the same thing. It lands in the snapshot the retirement
+// took before touching the skill and only there, the rule writeHistoryDecision follows and for the same reason: the
+// timestamp is a path segment the caller names, so `.history/` is the root and the snapshot has to be a directory that is
+// there. A record that already exists is refused: history is never rewritten.
+export async function writeHistoryRetirement(
+  skillRealDir: string,
+  timestamp: string,
+  record: RetirementRecord,
+): Promise<string> {
+  const skillDir = requireDirectory(skillRealDir, "skill directory");
+  const historyDir = path.join(skillDir, HISTORY_DIR);
+  const snapshotPath = path.join(historyDir, timestamp);
+  const retirementPath = path.join(snapshotPath, RETIREMENT_FILE);
+
+  assertWritable(retirementPath, [historyDir]);
+
+  requireDirectory(snapshotPath, "history snapshot");
+
+  await withFileMutationQueue(retirementPath, async () => {
+    if (fs.existsSync(retirementPath)) {
+      throw new SriWriterError(
+        `the retirement record ${quote(retirementPath)} already exists: history is never rewritten`,
+        retirementPath,
+      );
+    }
+    await writeFileAtomic(retirementPath, Buffer.from(retirementText(record), "utf8"), historyDir);
+  });
+
+  return retirementPath;
+}
+
 // What this module needs from a record it is about to replace: the identity of the candidate, which is
 // the slug that names its lesson and the pair of hashes of that file. Read as data and never with a
 // cast: a field that is missing or of another type is a refusal, not a record with a hole in it.
@@ -662,6 +835,13 @@ function allocateCandidateDir(stagingRoot: string, baseTimestamp: string): strin
 // the bytes that actually reached the disk, so the two call sites that stamp them spread a copy into the
 // record instead of trusting values computed elsewhere -- and the caller's object is not mutated.
 function decisionText(record: DecisionRecord): string {
+  return `${JSON.stringify(record, null, 2)}\n`;
+}
+
+// The one serialization of a retirement record (M3, S4), the shape decisionText gives a decision: two-space JSON and one
+// trailing newline, so the two files that share a snapshot are read the same way and neither ends in the middle of a
+// line.
+function retirementText(record: RetirementRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
