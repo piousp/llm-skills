@@ -3,14 +3,14 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
-## [Unreleased]
+## [0.0.1] - 2026-11-05
 
-Milestone M1: the paired replay gate and the acceptance. The candidate is no
-longer the end of the loop -- a lesson is written into the skill only when a
-replay says it helps. `version` in `package.json` is untouched, and this section
-is folded into a release when the milestone is published.
+### Milestone M1: the paired replay gate and the acceptance
 
-### Added
+The candidate is no longer the end of the loop -- a lesson is written into the skill only when a replay
+says it helps.
+
+#### Added
 
 - Paired replay gate over a staged candidate: two arms copied into staging that
 differ only in the `## Lessons` section, two repetitions of each replay item
@@ -53,7 +53,7 @@ report the verdict and the runs it spent, and still never accepts.
 reader that meets an event it does not know classifies the line instead of
 failing on it.
 
-### Changed
+#### Changed
 
 - `/skill-improve` runs propose, then the gate, then the acceptance: a lesson is
 written into the skill in the same command run that proposes it, and only when
@@ -67,7 +67,7 @@ line, and no lock file is written.
 directory, its `lessons/` and its `.history/` are added as roots, and nothing
 else outside the write base became writable.
 
-### Notes
+#### Notes
 
 - Running the gate spends tokens: every run is a whole `pi` session in a child
 process, and the worst case is twelve of them plus the one proposal generation.
@@ -212,11 +212,16 @@ published.
 ### Milestone M3c: technical debt
 
 The five debts the handoff of M3 left behind, closed without a change of behaviour: each one was a rule or a
-literal with two owners that only a comment kept in step. `version` in `package.json` is untouched, and this
-section is folded into a release when the milestone is published.
+literal with two owners that only a comment kept in step.
+
+#### Added
+
+- The `LICENSE` file (MIT), which `package.json` already declared.
 
 #### Changed
 
+- The README is rewritten for the people who install the package: what SRI does, how to use it, and what to
+  expect. The internal detail stays in `DEVELOPER.md`.
 - `decision@1` has one owner: the literal and its type are declared together in `src/types.ts` as
   `DECISION_SCHEMA`, and the reader of the index, the gate and the builder of the record import it instead of
   spelling it again. The tests keep the literal written by hand on purpose, because a test that imported the
@@ -243,13 +248,13 @@ section is folded into a release when the milestone is published.
   where they happen to dereference it. The guard is the fields they read and not the whole of `decision@1`, so a
   block nested deeper and malformed stays the problem of the consumer that reads it.
 
-## [0.0.1] - 2026-11-03
+### Milestone M0: the loop and the audit trail
 
-First release. It stages lesson candidates and records every decision; it does
+The first release. It stages lesson candidates and records every decision; it does
 not accept a lesson yet, because acceptance needs the paired replay gate that
 lands in M1.
 
-### Added
+#### Added
 
 - `/skill-improve <skill> [focus]` and the `skill_improve` tool with `diagnose`
   and `propose` actions. `diagnose` reads only; neither surface accepts a
@@ -276,7 +281,7 @@ lands in M1.
 - Compensation: when the audit index cannot be written, the staged candidate is
   removed and the error names both paths.
 
-### Fixed
+#### Fixed
 
 Before publication, so these never reached a release: the single model call
 sends the session identifier, because a session-affine provider (opencode-go)
@@ -288,7 +293,7 @@ under `pi install npm:pi-simple-sri` is inside `node_modules` and lost both on
 upgrade. The answers print the absolute candidate path, the records keep it
 relative, and state staged elsewhere is not migrated.
 
-### Notes
+#### Notes
 
 - Needs pi 1.4 or newer.
 - Scope is gated iterative self-improvement. The recursive step, where the
