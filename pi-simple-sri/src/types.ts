@@ -187,6 +187,14 @@ export interface LessonDraft {
 // never revalidates, so there is no dispatcher between the two.
 export type DecisionSchema = "pi-simple-sri/decision@1";
 
+// The value the type above names, declared beside it because this module is the only owner of the literal: the reader
+// of the ledger (src/ledger.ts), the gate (src/gate/flow.ts) and the builder of the record (src/improve-flow.ts) import
+// it instead of spelling it again. A @2 in the type breaks the constant at compile time, so no consumer can keep
+// checking against the version this package no longer writes while the type check passes. The tests keep the literal
+// written by hand on purpose: a test that imported this constant would follow a @2 instead of refusing it, and the
+// tripwire would lose its only witness.
+export const DECISION_SCHEMA: DecisionSchema = "pi-simple-sri/decision@1";
+
 export type DecisionSurface = "command" | "tool";
 
 // The closed set of gate statuses, declared once and derived to a type the way LESSON_STATUSES is: the

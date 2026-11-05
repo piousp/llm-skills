@@ -19,7 +19,7 @@ import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import type { CaseCheck } from "../../src/checks.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, PUBLISHED_SKILL_NAME, SETTINGS_FILE, SKILL_FILE } from "../../src/names.ts";
+import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, PUBLISHED_SKILL_NAME, SKILL_FILE } from "../../src/names.ts";
 import type { ListSkillsOptions } from "../../src/skills-inventory.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
@@ -415,18 +415,11 @@ function attemptsPath(base: string): string {
   return path.join(stateDir(base), ATTEMPTS_FILE);
 }
 
-// The settings the eligibility guard of the gate reads (M3, S7): the file under the agent directory of the request, in the
-// shape src/config.ts parses. Both lists are written even when empty, so a test says which verdict it exercises instead of
-// leaning on what the absence of the file would answer.
-function writeSettings(fixture: Fixture, config: SriConfig): void {
-  const agentDir = path.join(fixture.base, "agent");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(agentDir, SETTINGS_FILE),
-    `${JSON.stringify({ "pi-simple-sri": { skills: config } }, null, 2)}\n`,
-    "utf8",
-  );
-}
+// The settings of the request (B4). The gate no longer reads the file: the surface reads it once per run and hands the value
+// over, so every run of this suite says in its request which lists it is judged by. Both lists are written even when empty, so
+// a test says which verdict it exercises instead of leaning on what the absence of the file would answer -- and the default is
+// the config a machine that wrote no settings.json gets (src/config.ts).
+const DEFAULT_CONFIG: SriConfig = { allow: [], deny: [] };
 
 // The lines of state/attempts.jsonl, in the order they were appended. An index nobody wrote answers with no
 // lines, which is what a gate that passes has to leave behind.
@@ -518,13 +511,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
   return { deps, runs };
 }
 
-function gateRequest(fixture: Fixture): GateRequest {
+function gateRequest(fixture: Fixture, config: SriConfig = DEFAULT_CONFIG): GateRequest {
   return {
     base: fixture.base,
     agentDir: path.join(fixture.base, "agent"),
     cwd: fixture.base,
     stagingPath: fixture.candidateDir,
     skill: fixture.skill,
+    config,
   };
 }
 
@@ -1389,11 +1383,10 @@ test("gateStagedCandidate: a candidate whose gate already answered is refused", 
 // no line of the index and a record exactly as it was.
 test("gateStagedCandidate: a candidate of a skill the settings deny is refused before any run", async (t) => {
   const fixture = createFixture(t);
-  writeSettings(fixture, { allow: [], deny: [SKILL_NAME] });
   const before = fs.readFileSync(fixture.decisionPath, "utf8");
   const harness = createHarness();
 
-  const result = await gateStagedCandidate(gateRequest(fixture), harness.deps);
+  const result = await gateStagedCandidate(gateRequest(fixture, { allow: [], deny: [SKILL_NAME] }), harness.deps);
 
   if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
   // The reason of the settings and not the one of the package: the two facts do not survive the same change.
@@ -1413,10 +1406,9 @@ test("gateStagedCandidate: a candidate of a skill the settings deny is refused b
 // nothing is not a second refusal of the ordinary run and the candidate follows the path of the gate.
 test("gateStagedCandidate: an empty allow does not refuse for eligibility", async (t) => {
   const fixture = createFixture(t);
-  writeSettings(fixture, { allow: [], deny: [] });
   const harness = createHarness();
 
-  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture, { allow: [], deny: [] }), harness.deps));
 
   assert.equal(result.kind, "gate-accepted");
   assert.equal(harness.runs.length, PLANNED_RUNS);

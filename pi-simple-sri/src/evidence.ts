@@ -41,7 +41,12 @@ import { cutCodePoints, isPlainObject } from "./values.ts";
 // decision.schema.json and this module must not widen it. It travels next to the items, keyed
 // by evidence id (see DerivedEvidence).
 
-const MAX_EXCERPT_CODE_POINTS = 200;
+// The cap of an excerpt. This module owns the number: the signals of a session, the bank of cases and the summary of a
+// defect quote the same text an evidence excerpt carries, and a second copy would let one of them keep cutting at the old
+// limit after this one moved. It is a named constant because the schemas that declare the limit
+// (schemas/signal.schema.json, schemas/case-bank.schema.json) name it in prose, and a reader of those documents has to be
+// able to be told what the number is: a literal at four uses could not be pointed at.
+export const MAX_EXCERPT_CODE_POINTS = 200;
 const RETRY_THRESHOLD = 3;
 const TRANSCRIPT_SOURCE = "transcript";
 const ID_PREFIX = "ev-";
@@ -320,8 +325,9 @@ function callCountsKey(toolName: string, argsHash: string): string {
 }
 
 // A message holds either a bare string or text and image parts; images contribute nothing to
-// an excerpt or a prompt.
-function textOf(content: string | readonly (TextContent | ImageContent)[]): string {
+// an excerpt or a prompt. Exported because the collector of signals reads the prompt of a turn
+// with this same rule (src/signals.ts): the text of a message is one question with one answer.
+export function textOf(content: string | readonly (TextContent | ImageContent)[]): string {
   if (typeof content === "string") return content;
 
   const parts: string[] = [];

@@ -1,6 +1,7 @@
 import { isKnownAttemptEvent } from "./attempts.ts";
 import type { Ledger, LedgerLine } from "./ledger.ts";
 import type { GateBlock, GateStatus, ReplayRunRecord } from "./types.ts";
+import { isLater, isRetired } from "./vitality.ts";
 
 // The metrics of the series of sessions (M3, S2; OA5 of the plan with the third amendment of the author): the numbers
 // the exit criterion of the milestone is written with, projected from the ledger and from nothing else.
@@ -43,11 +44,6 @@ const UNKNOWN_EVENT = "unknown";
 // The tool of an evidence class that watches no tool. "-" and not the empty string: the key is read by a human, and
 // "user_correction:-" says out loud that the class is the whole of it.
 const NO_TOOL = "-";
-
-// The event the retirement writes (rule 6). S4 wrote the name into ATTEMPT_EVENTS (src/attempts.ts), and the literal stays
-// here on purpose: what this module compares is the `event` of a line read from the index -- a string the tolerant reader
-// keeps verbatim -- and not the type of the writer, which is the narrower of the two.
-const RETIRED_EVENT = "retired";
 
 // The three statuses of a gate that concluded, of either basis (rule 2). The two that are absent are a gate that never
 // ran and one that only preregistered its rule, and neither measured a thing a rate could be built on.
@@ -314,9 +310,10 @@ interface AcceptedLesson {
   classes: string[];
 }
 
-// Rule 6: the lines `accepted` whose candidate no later `retired` line of the same skill names. The acceptance used here
-// is the one of rule 2, so every accepted lesson is also an accepted attempt and the two counts of the report cannot
-// disagree about what an acceptance is.
+// Rule 6: the lines `accepted` whose candidate no later `retired` line of the same skill names. The rule itself is one and
+// it lives in src/vitality.ts (isRetired), which src/standing.ts reads too; what this function decides is which acceptance
+// it is applied to -- the one of rule 2 -- so every accepted lesson is also an accepted attempt and the two counts of the
+// report cannot disagree about what an acceptance is.
 //
 // The classes of a lesson are the ones of the evidence of its own record: they are the failures it corrected, which is
 // the path a recurrence goes back to. A lesson whose record is gone has no class to come back to and cannot recur.
@@ -336,20 +333,6 @@ function lessonsOf(lines: readonly LedgerLine[]): AcceptedLesson[] {
   }
 
   return lessons;
-}
-
-// Rule 6: the candidate of the line is no longer in force when another line of the same skill names the same candidate
-// as `retired` and is later. That event is the one the retirement of S4 (OA4) writes, and the comparison is against the
-// literal because a line of the index carries a string the tolerant reader keeps verbatim: the vocabulary of
-// src/attempts.ts is the type of the writer, and this module reads what the index holds.
-function isRetired(lesson: LedgerLine, lines: readonly LedgerLine[]): boolean {
-  return lines.some(
-    (entry) =>
-      entry.line.event === RETIRED_EVENT &&
-      entry.line.targetSkill === lesson.line.targetSkill &&
-      entry.line.candidateHash === lesson.line.candidateHash &&
-      isLater(entry.line.ts, lesson.line.ts),
-  );
 }
 
 // Rule 7: a lesson came back when a later line of the same skill names a record whose classes of failure cut the ones
@@ -374,16 +357,6 @@ function recurred(lesson: AcceptedLesson, lines: readonly LedgerLine[]): boolean
 
 function intersects(left: readonly string[], right: readonly string[]): boolean {
   return left.some((key) => right.includes(key));
-}
-
-// Whether one moment of the index is later than another. The two are compared as instants and not as strings: the
-// spelling is an ISO date-time written by one clock (src/attempts.ts), and parsing them answers the order without a
-// clock of this module. A moment nothing can parse is later than nothing, which keeps a damaged timestamp from
-// inventing a retirement or a recurrence.
-function isLater(ts: string, than: string): boolean {
-  const moment = Date.parse(ts);
-  const other = Date.parse(than);
-  return Number.isFinite(moment) && Number.isFinite(other) && moment > other;
 }
 
 // Rule 4: the rate nobody measured is 0. The text that prints it names the empty denominator in words (src/messages.ts),

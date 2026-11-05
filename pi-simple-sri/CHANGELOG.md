@@ -209,6 +209,40 @@ published.
   turns one into an attempt that can spend.
 - The recursive step, where the generator itself is versioned and evaluated, is M4.
 
+### Milestone M3c: technical debt
+
+The five debts the handoff of M3 left behind, closed without a change of behaviour: each one was a rule or a
+literal with two owners that only a comment kept in step. `version` in `package.json` is untouched, and this
+section is folded into a release when the milestone is published.
+
+#### Changed
+
+- `decision@1` has one owner: the literal and its type are declared together in `src/types.ts` as
+  `DECISION_SCHEMA`, and the reader of the index, the gate and the builder of the record import it instead of
+  spelling it again. The tests keep the literal written by hand on purpose, because a test that imported the
+  constant would follow a `@2` instead of refusing it.
+- The cap of an excerpt has one owner: `MAX_EXCERPT_CODE_POINTS` lives in `src/evidence.ts` beside `textOf`, and
+  the collector of signals, the reader of a bank and the summary of a defect cut at the constant they import. The
+  two schemas that declare the limit are compared against it by the suite, so the number a user reads in the
+  contract cannot drift from the number the reader applies. `src/proposer.ts` keeps its own `textOf`, which reads
+  a value of a different shape.
+- The force of an accepted lesson has one owner: `src/vitality.ts` declares the event an acceptance writes and the
+  two predicates the rule of retirement is made of, and the recurrence of `--metrics` and the check of an accepted
+  lesson import them. The reading of "accepted" stays split in two on purpose -- the recurrence needs the record,
+  the check needs the event alone -- and the module exports no predicate for the pair.
+- The settings of a run are read once: `src/config.ts` owns the name of the file and the reader, `src/eligibility.ts`
+  owns the verdict over the spellings of a skill, and one `SriConfig` travels from the branch that runs to the
+  proposal, the gate and the acceptance. An edit of `settings.json` in the middle of a gate is seen by the next run
+  and not by the one in flight.
+
+#### Fixed
+
+- The reader of the index checks the spine of the record a line names instead of only its version: a record that
+  lost `skill.realDir`, a string of `candidate`, `evidence`, `outcome.status` or the pair of `gate` is the
+  `problem` of its line, the reading of the next line goes on, and the three consumers answer instead of raising
+  where they happen to dereference it. The guard is the fields they read and not the whole of `decision@1`, so a
+  block nested deeper and malformed stays the problem of the consumer that reads it.
+
 ## [0.0.1] - 2026-11-03
 
 First release. It stages lesson candidates and records every decision; it does

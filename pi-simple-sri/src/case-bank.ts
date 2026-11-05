@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { validateCheck, type CaseCheck } from "./checks.ts";
+import { MAX_EXCERPT_CODE_POINTS } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
 import type { Result } from "./types.ts";
 import {
@@ -119,13 +120,12 @@ export interface CaseBankFailure {
 }
 
 // The four limits of the optional text fields and of the excerpt, the same numbers the schema declares as
-// minLength and maxLength. The excerpt limit is the one src/evidence.ts declares for an evidence excerpt: the entry
+// minLength and maxLength. The excerpt limit is not declared here: src/evidence.ts owns it, because the entry
 // that originated a defect and the excerpt the record keeps are the same text, and two different limits would let
 // the bank hold a finding the record then has to cut.
 const MAX_DESCRIPTION_CODE_POINTS = 500;
 const MAX_RUBRIC_CODE_POINTS = 8000;
 const MAX_PROMPT_CODE_POINTS = 4000;
-const MAX_EXCERPT_CODE_POINTS = 200;
 
 // The id of a case is a slug, the same shape a lesson slug has (schemas/decision.schema.json declares both), because
 // it is the coordinate a failure names.

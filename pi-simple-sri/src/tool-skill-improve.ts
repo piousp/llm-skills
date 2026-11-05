@@ -2,6 +2,7 @@ import path from "node:path";
 import { getAgentDir, type AgentToolResult, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { caseBankReason, loadCaseBank, type CaseBankProfile } from "./case-bank.ts";
+import { readSriConfigOf } from "./config.ts";
 import { describeExpectation } from "./diagnosis.ts";
 import { gateDirectionalCandidate, type DirectionalGateResult } from "./gate/directional-flow.ts";
 import {
@@ -509,13 +510,17 @@ async function runGate(
 
   // The candidate, named the way both flows name it: the base it sits under, the skill the inventory resolved, the directory
   // of the candidate and the signal pi aborts the call with -- which reaches every run of the budget, so a cancelled call
-  // stops between runs instead of spending the rest of them.
+  // stops between runs instead of spending the rest of them. The settings are read here, once per call (B4): the gate decides
+  // the eligibility of the skill over this value before it spends, and this surface never accepts, so this read is the whole
+  // of what the action needs. It comes after the name was resolved because a name nobody knows is answered from the eligible
+  // set, which reads the settings itself.
   const request = {
     base,
     agentDir,
     cwd: ctx.cwd,
     stagingPath,
     skill,
+    config: readSriConfigOf(agentDir, deps.readConfig),
     ...(signal === undefined ? {} : { signal }),
   };
 

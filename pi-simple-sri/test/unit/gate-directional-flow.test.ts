@@ -20,7 +20,7 @@ import type { JudgeRequest } from "../../src/gate/judge.ts";
 import type { ReplayRun, ReplayRunRequest } from "../../src/gate/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, CASE_BANK_FILE, DECISION_FILE, LESSONS_DIR, SETTINGS_FILE, SKILL_FILE } from "../../src/names.ts";
+import { ATTEMPTS_FILE, CASE_BANK_FILE, DECISION_FILE, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type {
   AttemptLine,
@@ -315,18 +315,10 @@ function attemptsPath(base: string): string {
   return path.join(stateDir(base), ATTEMPTS_FILE);
 }
 
-// The settings the eligibility guard of the gate reads (M3, S7b): the file under the agent directory of the request, in the
-// shape src/config.ts parses. Both lists are written even when empty, so a test says which verdict it exercises instead of
-// leaning on what the absence of the file would answer.
-function writeSettings(fixture: Fixture, config: SriConfig): void {
-  const agentDir = path.join(fixture.base, "agent");
-  fs.mkdirSync(agentDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(agentDir, SETTINGS_FILE),
-    `${JSON.stringify({ "pi-simple-sri": { skills: config } }, null, 2)}\n`,
-    "utf8",
-  );
-}
+// The settings of the request (B4). This base no longer reads the file either: the surface reads it once per run and hands the
+// value over, so a test says in its request which lists the guard decides by. The default is the config of a machine that wrote
+// no settings.json (src/config.ts), which is what every run of this suite that moves no list is judged by.
+const DEFAULT_CONFIG: SriConfig = { allow: [], deny: [] };
 
 // The lines of state/attempts.jsonl, in the order they were appended. An index nobody wrote answers with no lines, which is
 // what a gate that accepts has to leave behind.
@@ -472,13 +464,14 @@ function createHarness(fixture: Fixture, options: HarnessOptions = {}): Harness 
   return { deps, runs, blocks, judged };
 }
 
-function gateRequest(fixture: Fixture): DirectionalGateRequest {
+function gateRequest(fixture: Fixture, config: SriConfig = DEFAULT_CONFIG): DirectionalGateRequest {
   return {
     base: fixture.base,
     agentDir: path.join(fixture.base, "agent"),
     cwd: fixture.base,
     stagingPath: fixture.candidateDir,
     skill: fixture.skill,
+    config,
     bankPath: fixture.bankPath,
     model: MODEL,
   };
@@ -969,7 +962,6 @@ test("gateDirectionalCandidate: a candidate the gate already answered is refused
 // moment it was written.
 test("gateDirectionalCandidate: a candidate of a skill the settings deny is refused before the bank is read", async (t) => {
   const fixture = createFixture(t);
-  writeSettings(fixture, { allow: [], deny: [SKILL_NAME] });
   const before = fs.readFileSync(fixture.decisionPath, "utf8");
   const moment = fs.statSync(fixture.decisionPath).mtimeMs;
   const harness = createHarness(fixture);
@@ -984,7 +976,7 @@ test("gateDirectionalCandidate: a candidate of a skill the settings deny is refu
     },
   };
 
-  const result = await gateDirectionalCandidate(gateRequest(fixture), deps);
+  const result = await gateDirectionalCandidate(gateRequest(fixture, { allow: [], deny: [SKILL_NAME] }), deps);
 
   if (result.kind !== "refused") assert.fail(`the candidate must be refused, the gate answered ${result.kind}`);
   // The reason of the settings and not the one of the package: the two facts do not survive the same change.
@@ -1009,10 +1001,9 @@ test("gateDirectionalCandidate: a candidate of a skill the settings deny is refu
 // is not a second refusal of the ordinary run and the gate of the bank follows the path of always.
 test("gateDirectionalCandidate: an empty allow does not refuse for eligibility", async (t) => {
   const fixture = createFixture(t);
-  writeSettings(fixture, { allow: [], deny: [] });
   const harness = createHarness(fixture);
 
-  const result = concluded(await gateDirectionalCandidate(gateRequest(fixture), harness.deps));
+  const result = concluded(await gateDirectionalCandidate(gateRequest(fixture, { allow: [], deny: [] }), harness.deps));
 
   assert.equal(result.kind, "gate-accepted");
   assert.equal(harness.runs.length, PLANNED_RUNS);

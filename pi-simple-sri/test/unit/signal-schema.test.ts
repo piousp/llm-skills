@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { MAX_EXCERPT_CODE_POINTS } from "../../src/evidence.ts";
 import { SIGNAL_FORMAT, SIGNAL_KINDS } from "../../src/signals.ts";
 import { isPlainObject } from "../../src/values.ts";
 import { loadSignalSchema, validateAgainstSignalSchema } from "./schema-reader.ts";
@@ -139,6 +140,10 @@ for (const negative of NEGATIVE_CASES) {
 
 // The one literal of the format has an owner (src/signals.ts), and the schema has to declare it as its `const`: a schema
 // that drifted from the writer would document a file nobody writes.
+//
+// The cap of the excerpt is the other number the two files share, and its owner is src/evidence.ts: the collector cuts the
+// excerpt at that constant and the schema states the limit in its own bytes, in the branch of the raised event. Nothing
+// else ties the contract to the constant, so the two are compared here instead of described.
 test("the schema declares the format and the kinds the collector writes", () => {
   const schema: unknown = loadSignalSchema();
   assert.ok(isPlainObject(schema), "the schema of the signals must be a JSON object");
@@ -148,4 +153,20 @@ test("the schema declares the format and the kinds the collector writes", () => 
   for (const kind of SIGNAL_KINDS) {
     assert.ok(text.includes(`"${kind}"`), `expected the schema to declare the kind ${kind}`);
   }
+});
+
+test("the schema cuts the excerpt at the cap src/evidence.ts owns", () => {
+  const schema: unknown = loadSignalSchema();
+  assert.ok(isPlainObject(schema), "the schema of the signals must be a JSON object");
+
+  const branches = schema.oneOf;
+  assert.ok(Array.isArray(branches), "the format of the signals is a oneOf of its two events");
+  const raised: unknown = branches[0];
+  assert.ok(isPlainObject(raised), "the branch of the raised event must be a schema node");
+  const properties = raised.properties;
+  assert.ok(isPlainObject(properties), "the raised event must declare the properties of its line");
+  const excerpt: unknown = properties.excerpt;
+  assert.ok(isPlainObject(excerpt), "the raised event must declare the excerpt");
+
+  assert.equal(excerpt.maxLength, MAX_EXCERPT_CODE_POINTS);
 });

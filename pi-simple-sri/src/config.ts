@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import { SriConfigError } from "./errors.ts";
+import { SETTINGS_FILE } from "./names.ts";
 import type { SriConfig } from "./types.ts";
 import { describe, isPlainObject, toErrorMessage } from "./values.ts";
 
@@ -92,4 +94,17 @@ export function readSriConfig(settingsPath: string): SriConfig {
   }
 
   return parseSriConfigAt(raw, settingsPath);
+}
+
+// The reader a surface hands over for the file above: readSriConfig in production, and any function of the same shape in a
+// test. It is a type and not a second function because the seam was already spelled out verbatim in the dependencies of the
+// loop (src/improve-flow.ts), and the gate would have been the third copy of it.
+export type ConfigReader = (settingsPath: string) => SriConfig;
+
+// The settings of one agent directory (B4). It is the only place outside src/names.ts that spells the name of the file: the
+// three sites that used to join the two by hand -- the inventory of the loop, the eligibility guard of the gate and the
+// acceptance of the command -- ask here instead, so a run cannot read the settings of one directory while its gate reads the
+// settings of another. The reader is a parameter because the seam a test replaces is the reader, and not the join.
+export function readSriConfigOf(agentDir: string, read: ConfigReader = readSriConfig): SriConfig {
+  return read(path.join(agentDir, SETTINGS_FILE));
 }

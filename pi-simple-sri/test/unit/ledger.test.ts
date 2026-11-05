@@ -10,8 +10,8 @@ import { stateDir } from "../../src/write-base.ts";
 
 // The reader of the index of attempts (Q14) and of the records its lines name. What this file fixes is the
 // tolerance, which is the whole contract of the module: an unknown event is read and kept, a line nothing can
-// interpret stops the reading at its own index, a record that is absent or of another version is a problem of its
-// line and never an exception, and a read leaves the bytes of the fixture where they were.
+// interpret stops the reading at its own index, a record that is absent, of another version or without the spine its
+// consumers read is a problem of its line and never an exception, and a read leaves the bytes of the fixture where they were.
 //
 // The fixtures are real files under a temporary base, because the module is arithmetic over paths and fs: a stub of
 // fs would prove the shape of the code and not the answer to a directory that is not what the index says it is.
@@ -20,6 +20,7 @@ const INDEX_TS = "2026-11-04T09:00:00.000Z";
 const CONTENT_HASH = `sha256:${"a".repeat(64)}`;
 const BODY_HASH = `sha256:${"b".repeat(64)}`;
 const DECISION_SCHEMA = "pi-simple-sri/decision@1";
+const LESSON_SLUG = "use-the-lattice-strategy-for-merged-cells";
 // The authoritative record of an accepted candidate: inside the skill, and published relative to the base.
 const HISTORY_RELATIVE = "skills/pdf-tools/.history/20261104T090000000Z/decision.json";
 const STAGING_DECISION_RELATIVE = "staging/20261104T090000000Z/pdf-tools/decision.json";
@@ -70,13 +71,36 @@ function writeRawIndex(fixture: Fixture, text: string): void {
   fs.writeFileSync(fixture.indexPath, text, "utf8");
 }
 
-// A decision.json of the given version, and the absolute path it landed at. Only the version is what the reader
-// looks at -- the shape of the whole record is the business of the gate -- so the rest is the two fields every
-// record has.
-function writeRecord(fixture: Fixture, relative: string, schema: string): string {
+// A decision.json with the spine whole, and the absolute path it landed at. The spine is what the reader checks -- the five
+// blocks its three consumers dereference -- and `spine` is what a test adds or replaces on top of it, so the fixture of a
+// broken record is the whole record a hand edit took one block out of. A key set to undefined is a key the record does not
+// have: JSON.stringify drops it, which is how the two broken fixtures below write a record with no `candidate` at all.
+// Nothing deeper is written, because the shape of the whole document is the business of the gate.
+function decisionRecord(spine: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema: DECISION_SCHEMA,
+    createdAt: INDEX_TS,
+    skill: { name: "pdf-tools", dir: "/skills/pdf-tools", realDir: "/skills/pdf-tools", wasSymlink: false, eligible: true },
+    candidate: {
+      kind: "new-lesson",
+      slug: LESSON_SLUG,
+      title: "Use the lattice strategy for merged cells",
+      targetLesson: null,
+      lessonPath: `lessons/${LESSON_SLUG}.md`,
+      contentHash: CONTENT_HASH,
+      bodyHash: BODY_HASH,
+    },
+    evidence: [],
+    outcome: { status: "accepted", reason: null, decidedAt: INDEX_TS },
+    gate: { basis: "replay", status: "not-run" },
+    ...spine,
+  };
+}
+
+function writeRecord(fixture: Fixture, relative: string, record: Record<string, unknown>): string {
   const recordPath = path.join(fixture.base, relative);
   fs.mkdirSync(path.dirname(recordPath), { recursive: true });
-  fs.writeFileSync(recordPath, `${JSON.stringify({ schema, createdAt: INDEX_TS }, null, 2)}\n`, "utf8");
+  fs.writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   return recordPath;
 }
 
@@ -167,7 +191,7 @@ test("readLedger: a truncated last line stops the reading at its index", async (
 // reader that preferred it would answer a problem instead of a record.
 test("readLedger: an accepted line resolves the record its historyPath names", async (t) => {
   const fixture = createFixture(t);
-  const historyPath = writeRecord(fixture, HISTORY_RELATIVE, DECISION_SCHEMA);
+  const historyPath = writeRecord(fixture, HISTORY_RELATIVE, decisionRecord());
   writeIndex(fixture, [
     lineOf("accepted", { historyPath: HISTORY_RELATIVE, decisionPath: STAGING_DECISION_RELATIVE }),
   ]);
@@ -208,11 +232,11 @@ test("readLedger: a record that is not there is a problem of its line, and the r
   assert.equal(proposed.problem, undefined);
 });
 
-// The version is the whole guard of the module on a record: a record of a decision@2 is not one this version can
+// The version is the first guard of the module on a record: a record of a decision@2 is not one this version can
 // count, and the line says so instead of throwing or of counting a record it does not understand.
 test("readLedger: a record of another schema is a problem and not an exception", async (t) => {
   const fixture = createFixture(t);
-  writeRecord(fixture, HISTORY_RELATIVE, "pi-simple-sri/decision@2");
+  writeRecord(fixture, HISTORY_RELATIVE, decisionRecord({ schema: "pi-simple-sri/decision@2" }));
   writeIndex(fixture, [lineOf("accepted", { historyPath: HISTORY_RELATIVE })]);
 
   const ledger = await readLedger(fixture.base);
@@ -222,6 +246,64 @@ test("readLedger: a record of another schema is a problem and not an exception",
   assert.equal(entry.problem?.includes("unsupported schema"), true);
   assert.equal(entry.problem?.includes("pi-simple-sri/decision@2"), true);
   assert.equal(ledger.damaged, null);
+});
+
+// The shape, which is the second guard and the one B5 added: a record that declares the version this package reads and lost
+// `candidate` entirely is a `problem` of its own line, not `damaged`. The line of the index was read and what is broken is the
+// annex it names, so the reading goes on to the last line instead of stopping where the record broke.
+test("readLedger: a record without a candidate is a problem of its line, and the reading goes on", async (t) => {
+  const fixture = createFixture(t);
+  const recordPath = writeRecord(fixture, HISTORY_RELATIVE, decisionRecord({ candidate: undefined }));
+  writeIndex(fixture, [lineOf("accepted", { historyPath: HISTORY_RELATIVE }), lineOf("proposed")]);
+
+  const ledger = await readLedger(fixture.base);
+
+  assert.equal(ledger.damaged, null);
+  assert.equal(ledger.lines.length, 2);
+
+  const [accepted, proposed] = ledger.lines;
+  assert.equal(accepted.record, null);
+  assert.equal(accepted.recordPath, recordPath);
+  // The sentence the line reports it with: the path it read, the refusal, and the field of the spine it asked for.
+  assert.equal(accepted.problem?.startsWith(`${JSON.stringify(recordPath)}: not a decision record: `), true);
+  assert.equal(accepted.problem?.endsWith("candidate is undefined"), true);
+
+  assert.equal(proposed.index, 1);
+  assert.equal(proposed.line.event, "proposed");
+  assert.equal(proposed.problem, undefined);
+});
+
+// The block that is there and lost one field of the spine: a skill with no `realDir` is a path the check of src/standing.ts
+// cannot resolve, and the sentence names the field and not only the block, because the field is what has to be repaired.
+test("readLedger: a skill without its realDir is a problem that names the field", async (t) => {
+  const fixture = createFixture(t);
+  writeRecord(fixture, HISTORY_RELATIVE, decisionRecord({ skill: { name: "pdf-tools" } }));
+  writeIndex(fixture, [lineOf("accepted", { historyPath: HISTORY_RELATIVE })]);
+
+  const ledger = await readLedger(fixture.base);
+
+  const [entry] = ledger.lines;
+  assert.equal(entry.record, null);
+  assert.equal(entry.problem?.endsWith("skill.realDir is undefined"), true);
+  assert.equal(ledger.damaged, null);
+});
+
+// The other side of the guard, and the reason it can be narrow: a record with the whole spine resolves, so every field the
+// report and the check read is one the reader handed over instead of one it refused.
+test("readLedger: a record with the whole spine still resolves", async (t) => {
+  const fixture = createFixture(t);
+  writeRecord(fixture, HISTORY_RELATIVE, decisionRecord());
+  writeIndex(fixture, [lineOf("accepted", { historyPath: HISTORY_RELATIVE })]);
+
+  const ledger = await readLedger(fixture.base);
+
+  const [entry] = ledger.lines;
+  assert.equal(entry.problem, undefined);
+  assert.equal(entry.record?.schema, DECISION_SCHEMA);
+  assert.equal(entry.record?.skill.realDir, "/skills/pdf-tools");
+  assert.equal(entry.record?.candidate.slug, LESSON_SLUG);
+  assert.equal(entry.record?.outcome.status, "accepted");
+  assert.deepEqual(entry.record?.gate, { basis: "replay", status: "not-run" });
 });
 
 // A line of a refusal that names no record is not a broken line: the attempt answered before a candidate existed, and
@@ -242,7 +324,7 @@ test("readLedger: a line that names no record is not a problem", async (t) => {
 // bytes, their size and their modification time, and the state directory keeps the one file it had.
 test("readLedger: the reader writes nothing", async (t) => {
   const fixture = createFixture(t);
-  const historyPath = writeRecord(fixture, HISTORY_RELATIVE, DECISION_SCHEMA);
+  const historyPath = writeRecord(fixture, HISTORY_RELATIVE, decisionRecord());
   writeIndex(fixture, [lineOf("proposed"), lineOf("accepted", { historyPath: HISTORY_RELATIVE })]);
 
   const watched = [fixture.indexPath, historyPath];

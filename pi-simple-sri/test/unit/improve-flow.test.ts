@@ -776,6 +776,32 @@ test("proposeSkill: the agent directory of the run reaches the settings and the 
   assert.deepEqual(inventories, ["/agent"]);
 });
 
+// B4: one reading of the settings per run. A surface that reads them once -- for its proposal, its gate and its acceptance --
+// hands the value over, and the loop prefers it to the reader: the reader below throws, so a run that asked it a second time
+// would fail instead of answering, and the verdict is the one of the config that travelled. Both facts are the same fact: what
+// the run decided on is what the surface read.
+test("proposeSkill: a config handed over is preferred to the reader", async (t) => {
+  const fixture = createFixture(t);
+
+  const deps: ImproveFlowDeps = {
+    ...flowDeps(fixture),
+    agentDir: "/agent",
+    config: { allow: [], deny: [SKILL.name] },
+    readConfig: () => {
+      throw new Error("the reader must not be called when the config travels as data");
+    },
+  };
+
+  const result = await proposeSkill(
+    { surface: "command", skillName: SKILL.name },
+    flowContext(failingBranch()),
+    deps,
+  );
+
+  if (result.kind !== "not-eligible") assert.fail(`expected the verdict of the config handed over, got ${result.kind}`);
+  assert.equal(result.reason, "not-eligible");
+});
+
 // The wiring owns no path: without a base handed over, the run writes under the agent directory it
 // resolved, which is the anchor that survives a reinstall of the package.
 test("proposeSkill: without a base, the run writes under the agent directory", async (t) => {

@@ -1,14 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSriConfig, readSriConfig, SriConfigError } from "../../src/config.ts";
+import { parseSriConfig, readSriConfig, readSriConfigOf, SriConfigError } from "../../src/config.ts";
 import type { SriConfig } from "../../src/types.ts";
 
 const EMPTY_CONFIG: SriConfig = { allow: [], deny: [] };
 
 function settingsPath(fixture: string): string {
   return fileURLToPath(new URL(`../fixtures/settings/${fixture}`, import.meta.url));
+}
+
+// The directory the fixtures live in, which is what readSriConfigOf takes: it holds the files above by name and no
+// settings.json of its own, so the default answer below is the one of a directory nobody configured.
+function settingsDir(): string {
+  return fileURLToPath(new URL("../fixtures/settings", import.meta.url));
 }
 
 // Returns whatever the call threw so the test can inspect the typed error's
@@ -261,4 +268,28 @@ test("readSriConfig: a non-object pi-simple-sri value fails with the settings pa
   assert.equal(error.settingsPath, path);
   assert.ok(error.message.includes('"pi-simple-sri" must be an object'));
   assert.ok(error.message.includes(path));
+});
+
+// B4: the settings of one agent directory, and the one place outside src/names.ts that spells the name of the file. The
+// reader is a parameter, so the join and the seam are proved without a file on disk: what the function answers is what the
+// reader answered, and the only path it built is the one under the directory it was given.
+test("readSriConfigOf: joins settings.json under the agent directory and reads it with the reader it is given", () => {
+  const reads: string[] = [];
+  const injected: SriConfig = { allow: ["pdf-tools"], deny: ["system-config"] };
+
+  const config = readSriConfigOf("/agent", (settingsRead) => {
+    reads.push(settingsRead);
+    return injected;
+  });
+
+  assert.deepEqual(reads, [path.join("/agent", "settings.json")]);
+  // The value is the reader's, not one this function built: it parses nothing and defaults nothing.
+  assert.equal(config, injected);
+});
+
+// The default reader is the one of this module, and its answer for a directory that holds no settings.json is the default
+// config -- every skill but the reserved name -- so the join is also proved against the real one.
+test("readSriConfigOf: an agent directory with no settings file answers the default config", () => {
+  assert.equal(fs.existsSync(path.join(settingsDir(), "settings.json")), false);
+  assert.deepEqual(readSriConfigOf(settingsDir()), EMPTY_CONFIG);
 });

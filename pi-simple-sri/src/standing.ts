@@ -5,6 +5,7 @@ import { SKILL_FILE } from "./names.ts";
 import { countReferenceLines, lessonReferencePath } from "./skill-reference.ts";
 import type { DecisionCandidate, DecisionRecord } from "./types.ts";
 import { isMissingPathError, quote, toErrorMessage } from "./values.ts";
+import { ACCEPTED_EVENT, isRetired } from "./vitality.ts";
 import { lessonHashes } from "./writer.ts";
 
 // The check of an accepted lesson against the record that accepted it (M3, S3; OA6 of the plan): the tie M2 wrote
@@ -67,12 +68,6 @@ export interface StandingReport {
 // file nobody can hash is not worse than a file that is known to have drifted -- what is unreadable is unknown, and
 // unknown is reported as its own answer instead of as the worst of the known ones.
 const SEVERITY: readonly LessonStanding[] = ["missing", "body-moved", "frontmatter-moved", "unreadable", "intact"];
-
-// The event the acceptance writes, and the one the retirement writes. Both literals belong to src/metrics.ts, which reads
-// the series with them; that module exports no predicate for the pair, so the rule of "accepted and still in force" is
-// repeated below and the two have to move together.
-const ACCEPTED_EVENT = "accepted";
-const RETIRED_EVENT = "retired";
 
 // The whole report, from the ledger and from nothing else.
 //
@@ -207,36 +202,14 @@ function detailOf(reasons: readonly (string | undefined)[]): { detail?: string }
   return present.length === 0 ? {} : { detail: present.join("; ") };
 }
 
-// Rule 1: an accepted line is checked only while it is in force. The rule is the one of the recurrence of src/metrics.ts
-// -- that module is its owner and builds its denominator with it -- and it is repeated here because it exports no
-// predicate for the pair; the two implementations move together or the series and the check disagree about which lessons
-// exist.
+// Rule 1: an accepted line is checked only while it is in force. The retirement that takes the force away is the rule of
+// src/vitality.ts, which is its one owner; what is decided here is the acceptance, and it is the event alone -- an accepted
+// line whose record is gone is still an accepted line, and the report counts it apart in `missingRecords` instead of
+// dropping it as if it were out of force. That reading is not the one of the recurrence in src/metrics.ts, which needs the
+// record to know the classes of failure of the lesson; the two were kept apart on purpose when the rule got its owner.
 function isInForce(entry: LedgerLine, lines: readonly LedgerLine[]): boolean {
   if (entry.line.event !== ACCEPTED_EVENT) return false;
   return !isRetired(entry, lines);
-}
-
-// The candidate of the line is no longer in force when a later line of the same skill names the same candidate as
-// `retired`. That event is the one the retirement of S4 (OA4) writes, and the comparison is against the literal because a
-// line of the index carries a string the tolerant reader keeps verbatim: the vocabulary of src/attempts.ts is the type of
-// the writer, and this module reads what the index holds.
-function isRetired(lesson: LedgerLine, lines: readonly LedgerLine[]): boolean {
-  return lines.some(
-    (entry) =>
-      entry.line.event === RETIRED_EVENT &&
-      entry.line.targetSkill === lesson.line.targetSkill &&
-      entry.line.candidateHash === lesson.line.candidateHash &&
-      isLater(entry.line.ts, lesson.line.ts),
-  );
-}
-
-// Whether one moment of the index is later than another, compared as instants and not as strings: the spelling is an ISO
-// date-time written by one clock (src/attempts.ts), and parsing them answers the order without a clock of this module. A
-// moment nothing can parse is later than nothing, which keeps a damaged timestamp from retiring a lesson on its own.
-function isLater(ts: string, than: string): boolean {
-  const moment = Date.parse(ts);
-  const other = Date.parse(than);
-  return Number.isFinite(moment) && Number.isFinite(other) && moment > other;
 }
 
 // Rule 8: one row per skill the report checked, sorted by name, with the worst state of its lessons and how many were

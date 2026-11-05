@@ -4,9 +4,12 @@ import { attemptSignature } from "./attempts.ts";
 import type { CaseBank } from "./case-bank.ts";
 import type { CaseCheck } from "./checks.ts";
 import { SriDiagnosisError } from "./errors.ts";
-// The one runtime dependency of this module on the evidence: the digest of a list of checks is the canonical digest the
-// evidence owns (hashOfArguments), so the key of a defect and the arguments of a tool call are hashed by one rule.
-import { hashOfArguments, type EvidenceContext } from "./evidence.ts";
+// What this module takes at run time from the evidence, and only this: the digest of a list of checks, which is the
+// canonical digest the evidence owns (hashOfArguments), so the key of a defect and the arguments of a tool call are hashed
+// by one rule; and the cap of an excerpt, which is the number src/evidence.ts owns because the entry a defect was read
+// from and the sentence a human reads quote the same text -- a longer cap here would let the summary hold a finding the
+// record cuts.
+import { MAX_EXCERPT_CODE_POINTS, hashOfArguments, type EvidenceContext } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
 import { assertNever } from "./types.ts";
 import type {
@@ -56,11 +59,6 @@ import { closedObjectProblemOf, cutCodePoints, describe, isPlainObject, quote } 
 // nor the class can say what a replayed answer must satisfy.
 
 const ID_SEPARATOR = "\n";
-
-// The cap of the excerpt the summary of a defect quotes: the 200 code points src/evidence.ts and src/case-bank.ts declare,
-// so the entry a defect was read from and the sentence a human reads quote the same text. A longer cap here would let the
-// summary hold a finding the record cuts.
-const MAX_EXCERPT_CODE_POINTS = 200;
 
 // What a row of the table can say about the expectation of its class before the evidence arrives: the class and the version of
 // the check, and no payload. Both payloads come from elsewhere -- the name of the tool from the evidence item (expectationFor),

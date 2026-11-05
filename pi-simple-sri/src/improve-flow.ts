@@ -4,20 +4,20 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir, type SessionEntry, type SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { attemptHashes, buildAttemptLine, type AttemptEvent, type AttemptHashes } from "./attempts.ts";
 import { caseBankReason, loadCaseBank, type CaseBank } from "./case-bank.ts";
-import { readSriConfig } from "./config.ts";
+import { readSriConfig, readSriConfigOf } from "./config.ts";
 import { buildBaselineDiagnosis, buildDefectDiagnosis, buildDiagnosis } from "./diagnosis.ts";
-import { isEligibleUnderAnySpelling, spellingsOfSkill } from "./eligibility.ts";
+import { eligibilityOfSkill } from "./eligibility.ts";
 import { deriveEvidence, modelIdentity, type DerivedEvidence, type EvidenceContext } from "./evidence.ts";
 import { ProposerError, SriFailClosedError, SriWriterError } from "./errors.ts";
 import { notConcludedGateOf } from "./gate/flow.ts";
 import { sha256Digest, sha256Hex } from "./hash.ts";
 import { serializeLesson } from "./lesson-frontmatter.ts";
 import { createModelCall, type ModelCallRegistry } from "./model-call.ts";
-import { SETTINGS_FILE, SKILL_FILE } from "./names.ts";
+import { SKILL_FILE } from "./names.ts";
 import { createProposer, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "./skills-inventory.ts";
-import { outcomeStatusFor, toDecisionSkill } from "./types.ts";
+import { DECISION_SCHEMA, outcomeStatusFor, toDecisionSkill } from "./types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -179,6 +179,10 @@ export interface ImproveFlowDeps {
   // a test proves which directory a run read, and the default is pi's, resolved once per run.
   agentDir?: string;
   now?: () => Date;
+  // The settings of the run, already read by the surface that ran it (B4). The loop prefers it to the reader below, so a
+  // command that read the file once -- for its own proposal, its gate and its acceptance -- hands the same value to all
+  // three instead of making this module read it a second time. Absent is the surface that has none: the run reads, once.
+  config?: SriConfig;
   readConfig?: (settingsPath: string) => SriConfig;
   listSkills?: (options: ListSkillsOptions) => Promise<SkillRef[]>;
   readSkillText?: (skill: SkillRef) => Promise<string>;
@@ -322,7 +326,7 @@ export async function diagnoseSkill(
   if (target.kind === "unknown-skill") return target;
 
   const { skill, config } = target;
-  const eligibility = eligibilityOf(skill, config);
+  const eligibility = eligibilityOfSkill(skill, config);
   const derived = sessionEvidence(ctx);
 
   // Nothing to diagnose is a refusal with its own answer -- the skill and the verdict a candidate
@@ -369,7 +373,7 @@ export async function proposeSkill(
   // branch that writes, because every line of the index and every candidate lands under the base.
   assertBaseOutsideSkill(seams.base, [skill.dir, skill.realDir]);
 
-  const verdict = eligibilityOf(skill, config);
+  const verdict = eligibilityOfSkill(skill, config);
   if (!verdict.eligible) {
     const hashes = attemptHashes("not-eligible", skill.name, focus);
     // The reason the entry below carries: one value for the index and for /tree, so the two cannot report two causes.
@@ -577,6 +581,8 @@ export async function proposeSkill(
 
 // The seams with their production default, resolved once per call.
 interface FlowSeams {
+  // The settings the surface already read, when it did (B4): the first of the two sources readInventory consults.
+  config: SriConfig | undefined;
   readConfig: (settingsPath: string) => SriConfig;
   listSkills: (options: ListSkillsOptions) => Promise<SkillRef[]>;
   readSkillText: (skill: SkillRef) => Promise<string>;
@@ -592,6 +598,7 @@ function seamsOf(deps: ImproveFlowDeps): FlowSeams {
   // settings of one agent directory, the skills of another and write into a third place.
   const agentDir = deps.agentDir ?? getAgentDir();
   return {
+    config: deps.config,
     readConfig: deps.readConfig ?? readSriConfig,
     listSkills: deps.listSkills ?? listSkills,
     readSkillText: deps.readSkillText ?? readSkillFile,
@@ -607,13 +614,15 @@ async function readInventory(
   ctx: ImproveFlowContext,
   seams: FlowSeams,
 ): Promise<{ config: SriConfig; skills: SkillRef[] }> {
-  const config = seams.readConfig(path.join(seams.agentDir, SETTINGS_FILE));
+  // One reading of the settings per run (B4): the value the surface handed over, and the file under the agent directory only
+  // when it handed none. The path is built by src/config.ts and not here, so this module knows no file name.
+  const config = seams.config ?? readSriConfigOf(seams.agentDir, seams.readConfig);
   const skills = await seams.listSkills({ cwd: ctx.cwd, agentDir: seams.agentDir });
   return { config, skills };
 }
 
 // The target of a run, or the refusal that says why there is none. The settings travel with it because
-// both entries read them once, and the verdict of the skill is taken over that same file.
+// both entries read them once, and the verdict of the skill is taken over that same config.
 type RunTarget =
   | { kind: "resolved"; config: SriConfig; skill: SkillRef }
   | UnknownSkillFlowResult;
@@ -674,20 +683,13 @@ function resolveTarget(
 }
 
 function eligibleSkills(skills: readonly SkillRef[], config: SriConfig): SkillRef[] {
+  // A skill answers to two spellings -- the frontmatter `name` and the basename of its directory -- and findSkill resolves a
+  // request written either way, so the settings may name it with either one. The verdict is taken over both (F5) by the one
+  // owner of the pair (eligibilityOfSkill, src/eligibility.ts), and the kind check above keeps the shared skills directory of
+  // a standalone skill out of the spellings that reach a write target.
   return skills.filter(
-    (skill) => skill.kind === "declared" && eligibilityOf(skill, config).eligible,
+    (skill) => skill.kind === "declared" && eligibilityOfSkill(skill, config).eligible,
   );
-}
-
-// A skill answers to two spellings -- the frontmatter `name` and the basename of its directory -- and
-// findSkill resolves a request written either way, so the settings may name it with either one. The
-// verdict is taken over both (F5), and the kind check above keeps the shared skills directory of a
-// standalone skill out of the spellings that reach a write target. The spellings themselves are
-// src/eligibility.ts's (spellingsOfSkill): the gate takes the same verdict over the same list, and the
-// acceptance re-checks the verdict the command resolved from it, so the three sites read one owner
-// instead of keeping a copy each.
-function eligibilityOf(skill: SkillRef, config: SriConfig): Eligibility {
-  return isEligibleUnderAnySpelling(spellingsOfSkill(skill), config);
 }
 
 // OA5: the identity of the model of the invocation, in the "provider/model" spelling the evidence carries, so a replay item
@@ -953,7 +955,7 @@ export function buildDecision(input: DecisionInput): DecisionRecord {
   const { skill, draft } = input;
 
   return {
-    schema: "pi-simple-sri/decision@1",
+    schema: DECISION_SCHEMA,
     createdAt: input.now.toISOString(),
     trigger: triggerOf(input.request),
     skill: toDecisionSkill(skill, input.verdict.eligible),

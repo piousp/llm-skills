@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ATTEMPTS_FILE } from "./names.ts";
-import type { AttemptLine, DecisionRecord, DecisionSchema, Result } from "./types.ts";
+import { DECISION_SCHEMA } from "./types.ts";
+import type { AttemptLine, DecisionRecord, Result } from "./types.ts";
 import { describe, errorCode, isMissingPathError, isPlainObject, quote, toErrorMessage } from "./values.ts";
 import { stateDir } from "./write-base.ts";
 
@@ -29,15 +30,21 @@ import { stateDir } from "./write-base.ts";
 // this module has no perimeter and no mutation queue, and the base is resolved with path.resolve instead of being
 // required absolute the way the write chokepoint requires it.
 //
-// The one write it reads is the record of a gate, and only its version: the whole shape of decision.json is the
-// business of the gate (readStagedDecision in src/gate/flow.ts), which this module does not import. A record exists
+// The one write it reads is the record of a gate, and only its version and its spine: the whole shape of decision.json is
+// the business of the gate (readStagedDecision in src/gate/flow.ts), which this module does not import. A record exists
 // here to be counted next to the line that named it, not to be gated a second time.
+//
+// The spine is what the three consumers of this reader dereference -- `skill.realDir` and the four strings of `candidate`
+// (src/standing.ts and the retirement flow), `evidence` and `outcome.status` (src/metrics.ts) -- and every one of those
+// fields is a required key of schemas/decision.schema.json, so no record this package wrote is refused. That guard is
+// narrow on purpose: a block nested deeper and malformed (a `gate.caseBank` without `cases`) stays the problem of the
+// consumer that reads it, because validating the whole document here would be a second implementation of the schema at
+// run time, and DEVELOPER.md rejects that by design. The limit is written down, not hidden.
 
-// The version of decision.json this reader opens. It is the same literal src/types.ts declares as the type of the
-// field and src/gate/flow.ts holds as its own constant, repeated here because this module imports nothing from the
-// gate; the type is DecisionSchema, so a @2 in src/types.ts breaks both comparisons at compile time instead of
-// leaving a guard that silently never fires.
-const DECISION_SCHEMA: DecisionSchema = "pi-simple-sri/decision@1";
+// The version of decision.json this reader opens has one owner, src/types.ts, where the literal and the type of the
+// field are declared together (DECISION_SCHEMA). This module imports it instead of spelling it a second time, and the
+// imported value is typed DecisionSchema, so a @2 in src/types.ts breaks the type and this guard at compile time instead
+// of leaving a comparison that silently never fires.
 
 // The line as a reader sees it: `event` is a string, because the vocabulary of the writer is not the vocabulary of
 // the reader -- an index written by a later version carries events this one cannot name, and a reader that refused
@@ -162,6 +169,42 @@ function recordFailureText(recordPath: string, error: unknown): string {
   return `${quote(recordPath)}: ${toErrorMessage(error)}`;
 }
 
+// The first field of the spine of a record that is missing or has the wrong type, written the way the line reports it, or
+// null when the spine is whole. The spine is exactly what the three consumers of this reader dereference, in the order
+// they read it: `skill.realDir` (src/standing.ts and the retirement flow), the four strings of `candidate` (the same two),
+// `evidence` (src/metrics.ts), `outcome.status` (src/metrics.ts) and `gate.status` with `gate.basis` (src/metrics.ts).
+//
+// Every one of those fields is a required key of schemas/decision.schema.json, so a record this package wrote is never
+// refused here, and a record whose deeper blocks are malformed -- `gate.caseBank` without `cases` -- passes this guard and
+// fails where its consumer reads it: the whole shape of the document has one owner, the gate, and a second reading of it
+// at run time is the duplication DEVELOPER.md rejects. What this answers is the tail of the sentence and not the whole of
+// it: the path it was read from belongs to readRecord, and this function knows no path.
+function recordProblemOf(parsed: Record<string, unknown>): string | null {
+  const skill = parsed.skill;
+  if (!isPlainObject(skill)) return `skill is ${describe(skill)}`;
+  if (typeof skill.realDir !== "string") return `skill.realDir is ${describe(skill.realDir)}`;
+
+  const candidate = parsed.candidate;
+  if (!isPlainObject(candidate)) return `candidate is ${describe(candidate)}`;
+  for (const field of ["slug", "lessonPath", "contentHash", "bodyHash"]) {
+    if (typeof candidate[field] !== "string") return `candidate.${field} is ${describe(candidate[field])}`;
+  }
+
+  if (!Array.isArray(parsed.evidence)) return `evidence is ${describe(parsed.evidence)}`;
+
+  const outcome = parsed.outcome;
+  if (!isPlainObject(outcome)) return `outcome is ${describe(outcome)}`;
+  if (typeof outcome.status !== "string") return `outcome.status is ${describe(outcome.status)}`;
+
+  const gate = parsed.gate;
+  if (!isPlainObject(gate)) return `gate is ${describe(gate)}`;
+  for (const field of ["status", "basis"]) {
+    if (typeof gate[field] !== "string") return `gate.${field} is ${describe(gate[field])}`;
+  }
+
+  return null;
+}
+
 async function readRecord(recordPath: string): Promise<Result<DecisionRecord, string>> {
   let text: string;
   try {
@@ -181,11 +224,19 @@ async function readRecord(recordPath: string): Promise<Result<DecisionRecord, st
     return { ok: false, error: `${quote(recordPath)}: not a decision record: it is ${describe(parsed)}` };
   }
 
-  // The version is the whole guard of this module on a record: a record written by a version of this package this
-  // one does not read is not a record it can count, and saying so is the difference between a coverage problem and
-  // a wrong number.
+  // The version comes first: a record written by a version of this package this one does not read is not a record it can
+  // count, and saying so is the difference between a coverage problem and a wrong number. The shape of such a record is
+  // not this version's business either, so the spine below is asked of the records that declare the version this one reads.
   if (parsed.schema !== DECISION_SCHEMA) {
     return { ok: false, error: `${quote(recordPath)}: unsupported schema ${describe(parsed.schema)}` };
+  }
+
+  // The spine, and not the schema: a record that declares this version and lost a field its consumers dereference is a
+  // record this module cannot hand over, so the line reports it as its own problem and the reading of the next line goes
+  // on. It is not `damaged` -- the line of the index was read, and what is broken is the annex it names.
+  const problem = recordProblemOf(parsed);
+  if (problem !== null) {
+    return { ok: false, error: `${quote(recordPath)}: not a decision record: ${problem}` };
   }
 
   return { ok: true, value: parsed as unknown as DecisionRecord };

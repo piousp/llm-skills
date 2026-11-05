@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AssistantMessage, JsonObject, ToolCall, UserMessage } from "@earendil-works/pi-ai";
 import type { SessionMessageEntry } from "@earendil-works/pi-coding-agent";
-import { deriveEvidence, mergeEvidence } from "../../src/evidence.ts";
+import { MAX_EXCERPT_CODE_POINTS, deriveEvidence, mergeEvidence } from "../../src/evidence.ts";
 import type { EvidenceItem, EvidenceKind } from "../../src/types.ts";
 
 // Session entries are fabricated here, never read from a session file: evidence.ts only looks at
@@ -256,8 +256,8 @@ test("deriveEvidence: a fourth identical call does not add a second retry_loop",
   );
 });
 
-test("deriveEvidence: the user correction after an error is cut at 200 code points without splitting a surrogate pair", () => {
-  const correction = "😀".repeat(300);
+test("deriveEvidence: the user correction is cut at MAX_EXCERPT_CODE_POINTS code points without splitting a surrogate pair", () => {
+  const correction = "😀".repeat(MAX_EXCERPT_CODE_POINTS + 100);
   const entries = [...failingBashTranscript(), userEntry(3, correction)];
 
   const { items } = deriveEvidence(entries);
@@ -266,11 +266,13 @@ test("deriveEvidence: the user correction after an error is cut at 200 code poin
     items.map((item) => item.kind),
     ["tool_error", "user_correction"],
   );
+  // The cut lands exactly on the cap its owner declares, and a lone surrogate would be 3 bytes instead of 4: the pair
+  // is never cut in half.
   const userCorrection = items[1];
-  assert.equal(userCorrection.excerpt, "😀".repeat(200));
-  // A lone surrogate would be 3 bytes instead of 4: the pair is never cut in half.
-  assert.equal(Buffer.byteLength(userCorrection.excerpt ?? "", "utf8"), 800);
-  assert.equal([...(userCorrection.excerpt ?? "")].length, 200);
+  const excerpt = userCorrection.excerpt ?? "";
+  assert.equal(excerpt, "😀".repeat(MAX_EXCERPT_CODE_POINTS));
+  assert.equal([...excerpt].length, MAX_EXCERPT_CODE_POINTS);
+  assert.equal(Buffer.byteLength(excerpt, "utf8"), 4 * MAX_EXCERPT_CODE_POINTS);
   assert.match(userCorrection.id, ID_PATTERN);
 });
 

@@ -1,17 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { buildAttemptLine, type AttemptEvent } from "../attempts.ts";
-import { readSriConfig } from "../config.ts";
 import { expectationViolation, signatureOf } from "../diagnosis.ts";
-import { isEligibleUnderAnySpelling, spellingsOfSkill } from "../eligibility.ts";
+import { eligibilityOfSkill } from "../eligibility.ts";
 import { sha256Digest } from "../hash.ts";
-import { DECISION_FILE, LESSONS_DIR, SETTINGS_FILE } from "../names.ts";
+import { DECISION_FILE, LESSONS_DIR } from "../names.ts";
 import { assertWritable, isInsideOrEqual } from "../perimeter.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "../skills-inventory.ts";
-import { assertNever, outcomeStatusFor } from "../types.ts";
+import { assertNever, DECISION_SCHEMA, outcomeStatusFor } from "../types.ts";
 import type {
   DecisionRecord,
-  DecisionSchema,
   GateBasis,
   GateBudget,
   GateCaseBankNotRun,
@@ -25,6 +23,7 @@ import type {
   ReplayItem,
   Result,
   SkillRef,
+  SriConfig,
 } from "../types.ts";
 import { currentTime, describe, isDirectory, isPlainObject, isRegularFile, quote, toErrorMessage } from "../values.ts";
 import { relativeToBase, stagingDir } from "../write-base.ts";
@@ -105,9 +104,9 @@ import type {
 // The one schema this package writes, and the only one its gate reads (OA12). A candidate staged by another
 // version is refused instead of being rewritten: a decision@0 record carries `predicate` where this version
 // has `expectation`, so a gate that opened it would either write a record that is half of each version or
-// fail halfway through its own sequence. The type of the constant is DecisionSchema, so a @2 in src/types.ts
-// breaks this comparison at compile time instead of leaving a guard that silently never fires.
-const DECISION_SCHEMA: DecisionSchema = "pi-simple-sri/decision@1";
+// fail halfway through its own sequence. The literal and its type are owned by src/types.ts and imported here as
+// DECISION_SCHEMA, so a @2 there breaks the type and this constant together at compile time instead of leaving a guard
+// that silently never fires.
 
 // Why a staged candidate cannot be gated. Each reason names a different answer for the caller, and none of
 // them is an error the run should crash on: `detail` carries the refusal with the path in it, so the record
@@ -147,21 +146,21 @@ export interface CandidateRejection {
 // exists by another route -- written by hand, or staged by an older version -- must not be measured against a skill the
 // settings no longer admit. `null` means the gate may go on.
 //
-// The settings are read with the reader of src/config.ts, which answers the default config -- every skill but the reserved
-// name -- for a file that is not there, so a session without settings loses nothing here. The answer is a CandidateRejection
-// and not an abstention: nothing was written, no run was spent and the index gains no line, which is what a refusal already
-// means.
+// The settings do not arrive as a path any more (B4): the surface reads them once per run, at the branch that runs, and hands
+// the value over in the request, so the guard and the acceptance of the same run decide on one SriConfig. It is therefore the
+// caller's business which file was read and when; what this function owns is the verdict, which it takes with the one rule
+// of src/eligibility.ts over the spellings the skill answers to.
+//
+// The answer is a CandidateRejection and not an abstention: nothing was written, no run was spent and the index gains no line,
+// which is what a refusal already means.
 //
 // The argument is the two fields both requests of the gate carry (GateRequest and the DirectionalGateRequest that extends it),
 // so each base hands its own request and neither needs a conversion. `skill` is the whole reference and not its name, because
 // a skill answers to two spellings (src/eligibility.ts): a `deny` written with the basename of the directory names the same
 // skill as one written with the name of its frontmatter, and a rule that looked at one spelling would depend on which of them
 // the user picked.
-export function eligibilityRefusalOf(request: { agentDir: string; skill: SkillRef }): CandidateRejection | null {
-  const verdict = isEligibleUnderAnySpelling(
-    spellingsOfSkill(request.skill),
-    readSriConfig(path.join(request.agentDir, SETTINGS_FILE)),
-  );
+export function eligibilityRefusalOf(request: { skill: SkillRef; config: SriConfig }): CandidateRejection | null {
+  const verdict = eligibilityOfSkill(request.skill, request.config);
   if (verdict.eligible) return null;
 
   return { reason: "not-eligible", detail: `${quote(request.skill.name)} is not eligible: ${verdict.reason}` };
@@ -236,12 +235,18 @@ export async function resolveStagedCandidate(
 // the overlay contract takes a SkillRef (src/gate/overlay.ts) and a narrower value would make this module
 // invent the fields it does not have -- a description, a kind, whether the skill has lessons -- which are
 // inventory facts and not things a gate may guess.
+//
+// `config` is the settings the run read when it entered (B4), and it is required: the gate decides the eligibility of the
+// skill before it spends (eligibilityRefusalOf), and a request without the settings would send this module back to the file --
+// which is the second reading of one run the whole rule exists to prevent. The surface reads once, in the branch that runs,
+// and every step of that run -- the proposal, the gate and the acceptance -- decides on this one value.
 export interface GateRequest {
   base: string; // writeBase(agentDir): staging/ and state/ live under it
   agentDir: string;
   cwd: string;
   stagingPath: string;
   skill: SkillRef;
+  config: SriConfig;
   // The abort signal of the surface that asked, when it has one: a tool call carries one pi can abort, a
   // command has nothing to abort with and leaves it absent. It travels to every run of the budget.
   signal?: AbortSignal;

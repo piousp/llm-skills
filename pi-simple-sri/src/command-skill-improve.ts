@@ -1,7 +1,7 @@
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { readSriConfig } from "./config.ts";
-import { isEligibleUnderAnySpelling, spellingsOfSkill } from "./eligibility.ts";
+import { readSriConfigOf } from "./config.ts";
+import { eligibilityOfSkill } from "./eligibility.ts";
 import { SriFailClosedError, SriWriterError } from "./errors.ts";
 import { acceptCandidate, type AcceptDeps } from "./gate/acceptance.ts";
 import {
@@ -52,12 +52,12 @@ import {
 } from "./messages.ts";
 import { metricsOf } from "./metrics.ts";
 import { wireDirectionalGate } from "./model-call.ts";
-import { ATTEMPTS_FILE, COMMAND_NAME, SETTINGS_FILE, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
+import { ATTEMPTS_FILE, COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
 import { RETIREMENT_REASONS, retireLesson, type RetireDeps, type RetirementReason } from "./retirement.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
 import type { SignalCollector, Suspicion } from "./signals.ts";
 import { standingOf } from "./standing.ts";
-import { assertNever, type DecisionRecord, type DecisionSurface, type Eligibility, type SkillRef } from "./types.ts";
+import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef, type SriConfig } from "./types.ts";
 import { quote, toErrorMessage } from "./values.ts";
 import { writeBase, stateDir } from "./write-base.ts";
 
@@ -551,6 +551,12 @@ async function improve(args: string, run: Run): Promise<void> {
   // record already carries, so the attempt says which suspicion it came from without a key of its own.
   const focus = confirmed === undefined ? parsed.focus : signalFocusOf(confirmed);
 
+  // B4: the settings of this run, read once here -- in the branch that runs -- and handed to the three steps below: the
+  // proposal reads its inventory and its verdict from them, the gate its eligibility guard, and the acceptance the verdict it
+  // re-checks before it writes. The read is not at the entry of runSkillImprove on purpose: --metrics, --verify, --retire, the
+  // usage line and the actions of the tool that name no skill reach this point without reading a file.
+  const config = readSriConfigOf(deps.agentDir ?? getAgentDir(), deps.readConfig);
+
   // The proposal is written from the bank whenever the run names one, --defect included: the artifact the defect was read
   // from and the cases that measure it are declared in that file, and the branch reads both before it generates. Which base
   // measures the candidate is a separate question, and the answer is measuredByBankOf below.
@@ -563,7 +569,7 @@ async function improve(args: string, run: Run): Promise<void> {
       ...(parsed.defect === true ? { defect: true } : {}),
     },
     ctx,
-    deps,
+    { ...deps, config },
   );
 
   switch (result.kind) {
@@ -603,6 +609,7 @@ async function improve(args: string, run: Run): Promise<void> {
           base: result.base,
           skill: result.skill,
           stagingPath: result.staged.stagingPath,
+          config,
           ...bankFieldOf(measuredByBankOf(parsed)),
         },
         run,
@@ -854,13 +861,20 @@ function resolveBankPathOf(parsed: SkillImproveArgs, cwd: string): SkillImproveA
   return parsed.bankPath === undefined ? parsed : { ...parsed, bankPath: path.resolve(cwd, parsed.bankPath) };
 }
 
-// What the gate of one run is pointed at, and the only three things both branches need: the base the candidate was written
+// What the gate of one run is pointed at, and the only four things both branches need: the base the candidate was written
 // under, the skill it belongs to -- resolved by the loop for a candidate it staged, by the inventory for a candidate that
-// already exists -- and the path of the candidate, in the spelling the records use (relative to that base).
+// already exists -- the path of the candidate, in the spelling the records use (relative to that base), and the settings the
+// run read when it entered (B4).
+//
+// `config` travels in the target because a run reads the file once: the gate decides the eligibility of the skill over it
+// before it spends, and the acceptance re-takes the same verdict over the same value after the gate. A second reader here
+// would be a second answer to "what do the settings say", and a file edited in the middle of a long gate would reach half of
+// one run.
 interface GateTarget {
   base: string;
   skill: SkillRef;
   stagingPath: string;
+  config: SriConfig;
   bankPath?: string;
 }
 
@@ -891,6 +905,9 @@ async function gateStagedCandidateRun(
       base: deps.base ?? writeBase(agentDir),
       skill,
       stagingPath,
+      // The one reading of --staged (B4), and it comes after the name was resolved: a name nobody knows is answered from the
+      // eligible set, which reads the settings itself, and a refusal that already knows the file is not read twice.
+      config: readSriConfigOf(agentDir, deps.readConfig),
       ...bankFieldOf(measuredByBankOf(parsed)),
     },
     run,
@@ -959,6 +976,8 @@ async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | D
     // The skill the loop resolved and wrote the candidate for, or the one the inventory answered for a staged candidate:
     // the gate refuses a candidate named after another skill.
     skill: target.skill,
+    // The settings the run read when it entered (B4), which the guard of the gate and the acceptance of this same run share.
+    config: target.config,
   };
 
   if (target.bankPath === undefined) {
@@ -988,11 +1007,13 @@ async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, ru
   const { ctx, deps, notify } = run;
   const { record, skillContentHash } = await stagedRecordOf(target, gate);
 
-  // D-C (OA10, S7): the verdict the acceptance re-checks before it writes. It is resolved here, after the gate and as late
-  // as this surface can, because the settings may have changed while the gate spent its budget -- and it travels as data
-  // because the acceptance reads no settings of its own. The rule and the reader are the ones the loop uses, so a run and
-  // its acceptance cannot disagree about what the settings say.
-  const eligibility = eligibilityOfSkill(target.skill, deps);
+  // D-C (OA10, S7): the verdict the acceptance re-checks before it writes. It is re-verified where the runs are spent (the
+  // guard of the gate) and where the bytes are written (here), and both take it over the config the run read when it entered
+  // (target.config, B4) -- never over a fresh read of the file. The decision therefore survives the change of B4 unchanged: an
+  // edit of settings.json in the middle of a long gate is seen by the next run and not by the one in flight, which is the price
+  // of a run that decides on one SriConfig from its proposal to its write. The rule is src/eligibility.ts's and it is resolved
+  // here because the acceptance reads no settings of its own: what it re-checks is the verdict, and it travels as data.
+  const eligibility = eligibilityOfSkill(target.skill, target.config);
 
   // The bytes the acceptance writes are the bytes the candidate holds, read from the lesson the record names and verified
   // against the pair of hashes it declares (verifiedStagedLesson, the guard both gate bases run before they spend). Nothing
@@ -1058,15 +1079,6 @@ async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, ru
     warnAfterReload(run, reloadFailedText(toErrorMessage(error)));
   }
   return;
-}
-
-// The verdict of one skill under the settings of this run, over the spellings it answers to (M3, S7). The rule is
-// src/eligibility.ts's and the reader is the seam the loop reads the settings with, resolved here because the acceptance
-// may not read settings at all: what it re-checks is the verdict, not the file.
-function eligibilityOfSkill(skill: SkillRef, deps: SkillImproveDeps): Eligibility {
-  const agentDir = deps.agentDir ?? getAgentDir();
-  const config = (deps.readConfig ?? readSriConfig)(path.join(agentDir, SETTINGS_FILE));
-  return isEligibleUnderAnySpelling(spellingsOfSkill(skill), config);
 }
 
 // The record the gate left in the candidate, with the hash of the skill it measured. The acceptance writes the

@@ -215,6 +215,9 @@ interface CompletedCall {
 interface HarnessOptions {
   branch?: readonly SessionEntry[];
   config?: SriConfig;
+  // The reader the run resolves the settings with, for the test of the actions that must not read them at all (B4). The default
+  // answers the config above, so every other test of this suite reads the settings through the seam it always did.
+  readConfig?: (settingsPath: string) => SriConfig;
   skills?: readonly SkillRef[];
   model?: Model<Api>;
   propose?: ProposeFn;
@@ -327,7 +330,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const deps: SkillImproveToolDeps = {
     now: () => NOW,
     agentDir: AGENT_DIR,
-    readConfig: () => options.config ?? { allow: [], deny: [] },
+    readConfig: options.readConfig ?? (() => options.config ?? { allow: [], deny: [] }),
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
     write,
@@ -958,7 +961,8 @@ test("gate: a staged candidate is gated and the answer carries the verdict and t
   assert.equal(text.includes("the skill is untouched"), true);
 
   // The request names the candidate of the call and the skill the inventory resolved, under the base and the
-  // agent directory of the run, in the directory of the session.
+  // agent directory of the run, in the directory of the session -- and it carries the settings the run read (B4), which is
+  // the config the guard of the gate decides by.
   assert.equal(harness.gateRequests.length, 1);
   assert.deepEqual(harness.gateRequests[0], {
     base: BASE,
@@ -966,6 +970,7 @@ test("gate: a staged candidate is gated and the answer carries the verdict and t
     cwd: CWD,
     stagingPath: STAGING_RELATIVE,
     skill: SKILL,
+    config: { allow: [], deny: [] },
   });
 
   // Nothing of this action writes: no candidate, no index line, no entry.
@@ -1460,6 +1465,23 @@ test("validate: the same bank read as a defect is refused with the first violati
     textOf(result),
     `${SKILL_IMPROVE_TOOL_NAME}: the case bank at "${file}" for skill "pdf-tools" cannot be used: bank-invalid: a bank of profile "origin" requires an "origin"; nothing was written and no run was spent.`,
   );
+});
+
+// B4: validate reads one file and nothing else -- the bank the call names. The settings of the session are not part of that
+// answer, and the reader below throws, so a call that read them would fail instead of answering: the one action that writes
+// nothing and spends nothing does not get to depend on a file the question never named.
+test("validate: a bank is valid even when the settings cannot be read", async (t) => {
+  const file = writeBankFile(createBankDir(t), BASELINE_BANK_DOCUMENT);
+  const harness = createHarness({
+    readConfig: () => {
+      throw new Error("validate must not read the settings");
+    },
+  });
+
+  const result = await harness.run({ action: "validate", skill: "pdf-tools", bankPath: file });
+
+  assert.equal(result.isError, undefined);
+  assert.equal(result.details.outcome, "bank-valid");
 });
 
 // The other half of the same rule: the bank of a defect read with the profile the call declares is the success, and its

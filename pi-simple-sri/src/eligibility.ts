@@ -50,3 +50,12 @@ export function isEligibleUnderAnySpelling(
   }
   return { eligible: false, reason: "not-eligible" };
 }
+
+// The verdict of one skill under the settings of one run (B4): the rule above over the spellings the skill answers to (F5).
+// It is the one owner of the pair `spellingsOfSkill` + `isEligibleUnderAnySpelling`, which the loop, the gate and the
+// acceptance each spelled out -- the day one of them learned about a third spelling, the other two would have gone on
+// deciding about two. What it decides is the rule of this module; where the settings come from is the caller's, which is why
+// the config arrives as data and not as a path.
+export function eligibilityOfSkill(skill: { name: string; dir: string }, config: SriConfig): Eligibility {
+  return isEligibleUnderAnySpelling(spellingsOfSkill(skill), config);
+}

@@ -285,6 +285,9 @@ interface Harness {
   completed: CompletedCall[];
   gateRequests: GateRequest[];
   directionalRequests: DirectionalGateRequest[];
+  // The paths the run asked the settings reader for, in order (B4). The run reads the file once per run, so this array is
+  // what "one reading" means here: a second entry is a second answer to "what do the settings say".
+  configReads: string[];
   acceptRequests: AcceptRequest[];
   retireRequests: RetireRequest[];
   // The calls of one run in the order they happened (M2, S3): "notify" for every report of the context, "waitForIdle" and
@@ -330,6 +333,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const completed: CompletedCall[] = [];
   const gateRequests: GateRequest[] = [];
   const directionalRequests: DirectionalGateRequest[] = [];
+  const configReads: string[] = [];
   const acceptRequests: AcceptRequest[] = [];
   const retireRequests: RetireRequest[] = [];
   const calls: string[] = [];
@@ -439,7 +443,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const deps: SkillImproveDeps = {
     now: () => NOW,
     agentDir: AGENT_DIR,
-    readConfig: () => options.config ?? { allow: [], deny: [] },
+    readConfig: (settingsPath) => {
+      configReads.push(settingsPath);
+      return options.config ?? { allow: [], deny: [] };
+    },
     listSkills: async () => [...(options.skills ?? [SKILL])],
     readSkillText: async () => SKILL_TEXT,
     write,
@@ -491,6 +498,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     completed,
     gateRequests,
     directionalRequests,
+    configReads,
     acceptRequests,
     retireRequests,
     calls,
@@ -2025,6 +2033,22 @@ test("runSkillImprove: the acceptance receives the eligibility verdict of the sk
   assert.deepEqual(harness.acceptRequests[0].eligibility, { eligible: true });
 });
 
+// B4: the settings of a run are read once, in the branch that runs, and they travel as data -- so the proposal, the gate and
+// the acceptance of one run decide on the same SriConfig. The count is the whole assertion: a second read would be a second
+// answer to "what do the settings say", and a settings file edited in the middle of a long gate would reach half of one run.
+test("runSkillImprove: a propose, gate and accept run reads the settings once", async (t: TestContext) => {
+  const { harness } = createAcceptingHarness(t);
+
+  await harness.run("pdf-tools");
+
+  // The three steps of the chain happened: the candidate was proposed, the gate answered it and the acceptance received it.
+  assert.equal(harness.proposals.length, 1);
+  assert.equal(harness.gateRequests.length, 1);
+  assert.equal(harness.acceptRequests.length, 1);
+  // And the run asked for the settings of its agent directory exactly once, with the path src/config.ts builds.
+  assert.deepEqual(harness.configReads, [path.join(AGENT_DIR, "settings.json")]);
+});
+
 // The candidate can exist by another way than the loop of this command: --staged takes one that is already in staging and
 // never asks the flow whether its skill is eligible. The verdict still reaches the acceptance, and it is the one of the
 // settings of this run -- so the last negative fires here, before the snapshot, and the skill keeps the text the gate saw.
@@ -2125,6 +2149,31 @@ function attemptLineOf(
     ...(options.historyPath === undefined ? {} : { historyPath: options.historyPath }),
     ...(options.decisionPath === undefined ? {} : { decisionPath: options.decisionPath }),
   };
+}
+
+// The base of the three consumers of B5: one `accepted` line of the index whose `.history/` record is the file a hand edit
+// left broken -- the version this reader checks, and no `candidate` at all. It is one fixture for the three of them because
+// the defect was one: the reader handed that object over as a `DecisionRecord` and the consumer threw where it read it. The
+// skill directory is the one the record and the inventory name, so each branch reaches its own first dereference.
+function brokenRecordFixture(t: TestContext, prefix: string): { base: string; skillDir: string; historyPath: string } {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), prefix));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const historyPath = path.join(skillDir, HISTORY_DIR, TIMESTAMP, DECISION_FILE);
+  fs.mkdirSync(path.dirname(historyPath), { recursive: true });
+  fs.writeFileSync(historyPath, JSON.stringify({ schema: "pi-simple-sri/decision@1", createdAt: NOW_ISO }), "utf8");
+
+  fs.mkdirSync(stateDir(base), { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir(base), ATTEMPTS_FILE),
+    `${JSON.stringify(attemptLineOf("accepted", { historyPath: path.relative(base, historyPath) }))}\n`,
+    "utf8",
+  );
+
+  return { base, skillDir, historyPath };
 }
 
 // --metrics is a boolean flag like --defect, so it carries no value, and it takes no other flag: a report of what the index
@@ -2239,6 +2288,34 @@ test("runSkillImprove: --metrics over a base with no attempt says there is nothi
 
   assert.deepEqual(harness.writes, []);
   assert.deepEqual(harness.attempts, []);
+});
+
+// B5: the report over a record the reader now refuses. The line is an acceptance the report cannot count as a gated attempt --
+// the verdict of an acceptance is its record, and this record is not one -- so the rate says there is none, and the coverage
+// line says why. Before the guard of src/ledger.ts this run threw a TypeError out of verdictOf instead of printing anything.
+test("runSkillImprove: --metrics over a broken record reports partial coverage and does not throw", async (t: TestContext) => {
+  const { base } = brokenRecordFixture(t, "sri-command-metrics-broken-");
+  const harness = createHarness({ base });
+
+  await harness.run("--metrics");
+
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "info");
+  const report = harness.notified[0].message;
+  assert.equal(report.includes("acceptance rate: no gated attempt yet."), true);
+  assert.equal(report.includes("recurrence rate: no accepted lesson yet."), true);
+  assert.equal(report.includes("gate regressions: no pair replayed by a gate yet."), true);
+  // The one record the index names is not readable, and the sentence counts it instead of letting the lines above pass for the
+  // series.
+  assert.equal(report.includes("coverage is partial: of the 1 record this index names, 1 could not be read"), true);
+
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.directionalRequests, []);
+  assert.deepEqual(harness.acceptRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -2535,6 +2612,35 @@ test("runSkillImprove: --verify over a base with no acceptance says there is not
   assert.deepEqual(harness.entries, []);
 });
 
+// B5: the check over a record the reader now refuses. The acceptance is in force -- the line says so -- and the record that
+// accepted it cannot be read, so the lesson is a hole in the coverage and not an intact one: it is counted in `missingRecords`
+// and left out of the rows. Before the guard of src/ledger.ts this run threw a TypeError out of record.skill.realDir.
+test("runSkillImprove: --verify counts a broken record in missingRecords and does not throw", async (t: TestContext) => {
+  const { base } = brokenRecordFixture(t, "sri-command-verify-broken-");
+  const harness = createHarness({ base });
+
+  await harness.run("--verify");
+
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "info");
+  // The answer of the check is the sentence of the count, with no row invented for a lesson nobody could compare against a
+  // record: the whole report is the one src/messages.ts builds for one missing record.
+  assert.equal(harness.notified[0].message, standingText({ checks: [], skills: [], missingRecords: 1 }));
+  assert.equal(harness.notified[0].message.includes("1 accepted lesson could not be checked"), true);
+  assert.equal(harness.notified[0].message.includes("worst:"), false);
+
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.completed, []);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.deepEqual(harness.directionalRequests, []);
+  assert.deepEqual(harness.acceptRequests, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+  assert.equal(harness.idleCalls, 0);
+  assert.equal(harness.reloadCalls, 0);
+});
+
 // M3, S10: the check over the index that stops at a cut line answers the report it can build and, under it, the sentence of the
 // cut. A check that read a truncated index would describe a shorter -- and quieter -- series than the one on disk.
 test("runSkillImprove: --verify over a truncated index appends the sentence of the cut", async (t: TestContext) => {
@@ -2791,6 +2897,32 @@ test("runSkillImprove: --retire without an accepted line answers never-accepted 
   assert.equal(fs.existsSync(path.join(skillDir, HISTORY_DIR)), false);
   assert.equal(fs.readFileSync(path.join(skillDir, SKILL_FILE), "utf8"), skillBefore);
   assert.equal(fs.existsSync(path.join(stateDir(base), ATTEMPTS_FILE)), false);
+  assert.equal(harness.idleCalls, 0);
+  assert.equal(harness.reloadCalls, 0);
+});
+
+// B5: the retirement over a record the reader now refuses. A retirement is a protocol over the pair of hashes of the
+// acceptance, and a record nobody can read establishes no pair, so the answer is `never-accepted` -- the same statement the
+// index makes when it holds no acceptance of the slug at all -- and nothing is written. Before the guard of src/ledger.ts this
+// run threw a TypeError out of record.candidate.slug inside acceptedLessonOf.
+test("runSkillImprove: --retire over a broken record answers never-accepted and writes nothing", async (t: TestContext) => {
+  const { base, skillDir } = brokenRecordFixture(t, "sri-command-retire-broken-");
+  const harness = createHarness({
+    base,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    retire: async () => assert.fail("a record nobody can read must not reach the protocol"),
+  });
+
+  await harness.run(`pdf-tools --retire=${LESSON_SLUG} --reason=stale the appendix moved`);
+
+  assert.deepEqual(harness.retireRequests, []);
+  const refusal = harness.notified.at(-1);
+  assert.equal(refusal?.type, "error");
+  assert.equal(refusal?.message.includes("(never-accepted)"), true);
+  assert.equal(refusal?.message.includes("nothing was retired"), true);
+  assert.equal(refusal?.message.includes(`lessons/${LESSON_SLUG}.md`), true);
+  // Nothing was written, and the session is not reloaded for a retirement that did not happen.
+  assert.equal(fs.existsSync(path.join(skillDir, HISTORY_DIR, RETIRE_TIMESTAMP)), false);
   assert.equal(harness.idleCalls, 0);
   assert.equal(harness.reloadCalls, 0);
 });

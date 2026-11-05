@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Api, AssistantMessage, Model, UserMessage } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { SessionEntry, TurnEndEvent } from "@earendil-works/pi-coding-agent";
-import { hashOfArguments, modelIdentity } from "./evidence.ts";
+import { MAX_EXCERPT_CODE_POINTS, hashOfArguments, modelIdentity, textOf } from "./evidence.ts";
 import { sha256Hex } from "./hash.ts";
 import { SIGNALS_FILE } from "./names.ts";
 import { codePointLength, currentTime, cutCodePoints, isMissingPathError, isPlainObject, toErrorMessage } from "./values.ts";
@@ -50,9 +50,11 @@ export const TRACKED_PATHS = 32;
 // of the last few, and a session that asks the same thing twenty turns later is no longer the same request.
 export const REMEMBERED_PROMPTS = 8;
 
-// The cap of an excerpt, the same 200 code points an evidence excerpt uses (src/evidence.ts). It is a named constant
-// because the schema of the file declares it and a reader has to be able to say what the limit is.
-const MAX_EXCERPT_CODE_POINTS = 200;
+// The cap of an excerpt is not a limit of this module: src/evidence.ts owns the number (MAX_EXCERPT_CODE_POINTS),
+// because the excerpt of a suspicion and the excerpt of the evidence it points at are the same text and two numbers would
+// drift. The schema of the file still declares the limit (schemas/signal.schema.json), and a reader of that document has
+// to be able to say what the number is, which is why it travels as a name and not as a literal at the two uses below.
+
 // The floor of a repeat: below three shared tokens, two prompts that share a word are two different questions.
 const MIN_SHARED_TOKENS = 3;
 // What makes a token significant: shorter ones are articles, prepositions and pronouns in most languages.
@@ -453,18 +455,6 @@ function userPromptOf(branch: readonly SessionEntry[]): string | null {
   }
 
   return prompt;
-}
-
-// The text of a message, which is a bare string or parts of which only the text ones count: an image contributes
-// nothing to a prompt.
-function textOf(content: UserMessage["content"]): string {
-  if (typeof content === "string") return content;
-
-  const parts: string[] = [];
-  for (const part of content) {
-    if (part.type === "text" && typeof part.text === "string") parts.push(part.text);
-  }
-  return parts.join("\n");
 }
 
 function sessionModelIdentity(model: Model<Api> | undefined): string | undefined {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isEligible, isEligibleUnderAnySpelling, spellingsOfSkill } from "../../src/eligibility.ts";
+import { eligibilityOfSkill, isEligible, isEligibleUnderAnySpelling, spellingsOfSkill } from "../../src/eligibility.ts";
 import { PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import type { Eligibility, SriConfig } from "../../src/types.ts";
 
@@ -201,6 +201,43 @@ test("spellingsOfSkill: the list is the one the rule of the spellings reads", ()
   assert.equal(spellings.length, 2);
   assert.deepEqual(isEligibleUnderAnySpelling(spellings, { allow: ["system-config"], deny: [] }), ELIGIBLE);
   assert.deepEqual(isEligibleUnderAnySpelling(spellings, { allow: [], deny: ["syscfg"] }), NOT_ELIGIBLE);
+});
+
+// B4: the verdict of one skill over the settings of one run, which is the pair above with one owner. The table of the
+// spellings is the one it decides on, and these two cases are the fact the three sites that used to keep a copy each were
+// trusting: a settings entry written with the name of the frontmatter and one written with the basename of the directory name
+// the same skill, and neither spelling is the one the other spelling's rule would have read.
+test("eligibilityOfSkill: a deny on the name of the frontmatter removes the skill", () => {
+  assert.deepEqual(eligibilityOfSkill({ name: "syscfg", dir: "/skills/system-config" }, { allow: [], deny: ["syscfg"] }), NOT_ELIGIBLE);
+});
+
+test("eligibilityOfSkill: a deny on the basename of the directory removes the skill", () => {
+  assert.deepEqual(
+    eligibilityOfSkill({ name: "syscfg", dir: "/skills/system-config" }, { allow: [], deny: ["system-config"] }),
+    NOT_ELIGIBLE,
+  );
+});
+
+// And the two spellings of one name are not two skills: an allow that names either one admits it, and a non-empty allow
+// that names neither removes it -- the two lists of the rule, read over the spellings.
+test("eligibilityOfSkill: an allow admits the skill whichever spelling it names", () => {
+  const skill = { name: "syscfg", dir: "/skills/system-config" };
+
+  assert.deepEqual(eligibilityOfSkill(skill, { allow: ["syscfg"], deny: [] }), ELIGIBLE);
+  assert.deepEqual(eligibilityOfSkill(skill, { allow: ["system-config"], deny: [] }), ELIGIBLE);
+  assert.deepEqual(eligibilityOfSkill(skill, { allow: ["pdf-tools"], deny: [] }), NOT_ELIGIBLE);
+  assert.deepEqual(eligibilityOfSkill(skill, { allow: [], deny: [] }), ELIGIBLE);
+});
+
+// A directory named after the skill answers one spelling, and then this rule and isEligible are the same rule: the case that
+// keeps the loop from having to know whether a skill has one spelling or two.
+test("eligibilityOfSkill: one spelling answers as isEligible does", () => {
+  const config: SriConfig = { allow: [], deny: ["pdf-tools"] };
+
+  assert.deepEqual(
+    eligibilityOfSkill({ name: "pdf-tools", dir: "/skills/pdf-tools" }, config),
+    isEligible("pdf-tools", config),
+  );
 });
 
 test("isEligible: does not mutate the config it reads", () => {

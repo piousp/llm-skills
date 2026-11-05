@@ -16,6 +16,7 @@ import {
 } from "../../src/case-bank.ts";
 import type { CaseBankError, CaseBankProfile } from "../../src/case-bank.ts";
 import { CASE_CHECK_KINDS } from "../../src/checks.ts";
+import { MAX_EXCERPT_CODE_POINTS } from "../../src/evidence.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { CASE_BANK_FILE } from "../../src/names.ts";
 import { isPlainObject } from "../../src/values.ts";
@@ -582,6 +583,16 @@ test("case-bank.schema.json: the origin kinds of the schema are the ones src/cas
   assert.deepEqual(schemaNode(loadBankSchema(), "properties", "origin", "properties", "kind").enum, [
     ...CASE_BANK_ORIGIN_KINDS,
   ]);
+});
+
+// The cap of the excerpt has one owner (src/evidence.ts) and the schema declares the same number: the reader cuts the
+// field at the constant and the file a user reads states the limit in its own bytes, so a literal in either of the two
+// would let one of them keep a cap the other has already moved.
+test("case-bank.schema.json: the cap of the origin excerpt is the one src/evidence.ts owns", () => {
+  assert.equal(
+    schemaNode(loadBankSchema(), "properties", "origin", "properties", "excerpt").maxLength,
+    MAX_EXCERPT_CODE_POINTS,
+  );
 });
 
 // The checks of a bank and the checks of an expectation are one vocabulary in two schemas: the reader of the format
