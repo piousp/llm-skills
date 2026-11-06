@@ -354,4 +354,18 @@ test("isIntrinsicFailure: the closed list, only for the tools that read (OA7)", 
   assert.equal(isIntrinsicFailure(read, "enoent: missing-probe.txt"), false);
   assert.equal(isIntrinsicFailure(read, "the tool returned an error"), false);
   assert.equal(isIntrinsicFailure(read, ""), false);
+
+  // M3c: the two markers of a permission the machine refuses, measured by the humo that planned a gate with two
+  // of them. The tool still decides: the same sentence under a `write` is replayed, because a skill can name a
+  // path the machine allows.
+  assert.equal(
+    isIntrinsicFailure(read, "EACCES: permission denied, access '/tmp/sri-humo-m3c/sellado/pedido-3.md'"),
+    true,
+  );
+  assert.equal(isIntrinsicFailure(item({ class: "tool_error", version: 1, tool: "ls" }), "permission denied"), true);
+  for (const tool of ["bash", "edit", "write"]) {
+    assert.equal(isIntrinsicFailure(item({ class: "tool_error", version: 1, tool }), "EACCES"), false, tool);
+  }
+  // The spelling is the one the tools of this package emit, and the list is exact: another case is replayed.
+  assert.equal(isIntrinsicFailure(read, "PERMISSION DENIED"), false);
 });

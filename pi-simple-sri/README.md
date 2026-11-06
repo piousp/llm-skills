@@ -169,6 +169,12 @@ that ships with this package is never eligible.
   because one failure compares the skill against itself.
 - The judge is not always spent. It runs only when the bank declares a rubric, and only after the
   mechanical checks already accepted the candidate.
+- The judge is a recorded condition and not a source of truth. It is one model call per case, and it can
+  accept a case whose answer does not satisfy the rubric; what keeps a wrong acceptance out is the
+  unanimity between the cases, so a bank of one case leans on a single judgement.
+- A bank measures the answer, and the replayed turn runs in the working directory of the session. A file
+  of that directory that answers the question makes both arms pass and the gate abstains with
+  `no-improvement`, because what the case measured was the directory and not the skill.
 - A retirement is not undone. There is no `unretire`; the way back is to propose another lesson and
   let it pass its gate.
 - A proposal costs one model call even when the gate later cannot run, for example when the bank is

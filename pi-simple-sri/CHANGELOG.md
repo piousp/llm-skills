@@ -3,6 +3,23 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [0.0.2] - 2026-11-06
+
+### Changed
+
+- A `read`, `grep`, `find` or `ls` that the machine refuses to run is no longer replayed as an item a lesson could
+  fix: `EACCES` and `permission denied` join the list of failures that are intrinsic to the task (OA7), so a gate
+  planned from the session stops counting a permission the skill cannot grant. A `write` the machine refuses stays
+  replayable, because a skill can name a path that is allowed.
+
+### Documented
+
+- The judge is a recorded condition and not a source of truth: it can accept a case whose answer does not satisfy
+  the rubric, and the unanimity between the cases is what keeps a wrong acceptance out. Said in the README and in
+  the manual.
+- A bank is replayed in the working directory of the session, so a file of that directory that answers the case
+  makes both arms pass and the gate abstains with `no-improvement`. Said in the README and in the manual.
+
 ## [0.0.1] - 2026-11-05
 
 ### Milestone M1: the paired replay gate and the acceptance

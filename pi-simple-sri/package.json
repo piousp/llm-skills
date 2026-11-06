@@ -1,6 +1,6 @@
 {
   "name": "pi-simple-sri",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Self-recursive improvement loop for pi skills: observe failures, propose a skill change, gate it against the incumbent, and record the decision.",
   "license": "MIT",
   "private": false,

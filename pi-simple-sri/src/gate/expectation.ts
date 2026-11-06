@@ -47,11 +47,19 @@ const NORMAL_STOP_REASON = "stop";
 // that is not there fails the same way whatever the skill says, so replaying it measures the task. The
 // markers are the whole rule and they match exactly: a failure whose excerpt says none of them is replayed,
 // and a marker spelled otherwise is not an occasion to widen the rule from here.
+//
+// M3c adds the two permission markers, and they were added because a humo measured them: a gate planned three
+// items and two of them were `permission denied` on a `read` and on a `write`, so the reading said a lesson
+// could stop a failure that no skill text changes (tmp/humo-M3c.md). The two are the spelling the tools of
+// this package produce -- Node's `EACCES` and its lowercase sentence -- and only for the readers below: a
+// `write` the machine refuses stays replayable, the way a wrong path in an `edit` always did.
 const INTRINSIC_FAILURE_MARKERS: readonly string[] = [
   "ENOENT",
   "No such file or directory",
   "does not exist",
   "Path not found",
+  "EACCES",
+  "permission denied",
 ];
 
 // Only the tools that read. A failed `edit` or `write` is a failure a lesson can address -- a wrong path is

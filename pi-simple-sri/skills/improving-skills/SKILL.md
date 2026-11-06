@@ -109,6 +109,16 @@ is judged by, and the normalized call; when the evidence carries no arguments, t
 The first of an equivalence survives, in the order the evidence gave it, so the same evidence always plans the same
 runs.
 
+A tool failure that a skill cannot do anything about is not replayed, because it measures the task and not the skill.
+That is a `read`, a `grep`, a `find` or an `ls` whose excerpt names a path that is not there (`ENOENT`, `No such file
+or directory`, `does not exist`, `Path not found`) or a permission the machine refuses (`EACCES`, `permission
+denied`). The list is closed and the match is exact, and the tool decides: a `write` the machine refuses is still
+replayed, because a skill can name a path that is allowed.
+
+A bank is measured in the working directory of the session, and both arms replay there. When a file of that
+directory already answers the case, the incumbent passes too and the gate abstains with `no-improvement`: the case
+measured the directory and not the skill. Write the cases so that the answer can come only from the skill.
+
 The floor is two distinct items and the cap is three measured. Fewer than two and the gate abstains with
 `insufficient-items` before spending a run, because one item compares a run against itself. More than three and the
 gate spends the same budget over the first three, in the order the evidence gave them, so a longer session does not
@@ -141,6 +151,10 @@ The answer of a call carries an outcome, and the outcome decides what happens ne
 The rule of the gate is unanimity plus strict superiority: the candidate has to pass every run of its arm, which is
 four runs with two items and six with three, and the skill it replaces has to miss at least one. The rule is written
 into the record before the first run and cannot be chosen once the result is known.
+
+The judge is the second condition and it is not a source of truth: it is one call per case of the candidate arm,
+and it can accept a case whose answer does not satisfy the rubric. The unanimity between the cases is what keeps a
+wrong acceptance out, so a bank of one case rests on a single judgement and nothing else.
 
 An abstention is not a failure and a rejection is not a mistake. Both are the loop working: the budget was spent,
 the record keeps what it cost, and the skill was left alone.
