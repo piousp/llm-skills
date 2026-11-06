@@ -1,0 +1,42 @@
+# Publishes pi-simple-sri to npm over OIDC (npm trusted publishing).
+#
+# There is no NPM_TOKEN: the npm CLI exchanges the runner's OIDC identity for a
+# short-lived publish token, and npm attaches the provenance attestation on its
+# own. The npm side of the trust relationship is configured per package on
+# npmjs.com (Trusted publisher → GitHub Actions) and names this exact workflow
+# filename, so renaming this file breaks publishing until the connection is
+# deleted and recreated. That connection is separate from the one of
+# publish.yml: one package, one workflow, one trust relationship.
+#
+# The connection allows `npm stage publish` and `npm dist-tag` but not a direct
+# publish, so this job only stages: the version goes live when a human approves
+# it on npmjs.com, which is where the 2FA proof-of-presence happens.
+#
+# Triggered by hand only: the version published is whatever package.json says,
+# so the release is a version bump committed to main, a push, then a dispatch.
+# A version already on the registry fails the last step and nothing is staged.
+name: publish-sri
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi-simple-sri
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm stage publish
