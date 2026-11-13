@@ -530,6 +530,10 @@ more producer of a `CaseBank`, and the plug point does not move: `loadCaseBank(f
 (`src/case-bank.ts:148-151`) stays the only entry point to the format, `readCaseBank` behind it the one parse,
 and no adapter changes the format, the profile or the flow.
 
+The slice stayed closed, and the pending item it left behind was dropped on 2026-11-06: the adapter is not a debt
+to pay later. What stands is the condition above, which is a trigger and not a task -- a second consumer arriving
+with `CaseCheck` predicates opens the work again, and nothing else does.
+
 ### The expectation and its class
 
 - The relation between an expectation and its class is stated three times, and the three say the same
