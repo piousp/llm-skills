@@ -26,14 +26,17 @@ Settings live in the `pi-memory-lite` block of `~/.pi/agent/settings.json`:
 {
   "pi-memory-lite": {
     "dir": "/home/you/memories",
-    "categories": ["general", "decision", "preference", "env", "project"],
+    "categories": [
+      "general", "decision", "preference", "env", "project",
+      "gotcha", "convention", "workflow", "reference", "person"
+    ],
     "allowUnknownCategory": false,
     "exposure": "direct"
   }
 }
 ```
 
-The block is optional and so is every field in it. `categories` replaces the default vocabulary, which is the five
+The block is optional and so is every field in it. `categories` replaces the default vocabulary, which is the ten
 slugs above, in that order. With `allowUnknownCategory` off, a category outside the vocabulary is refused with an
 error that lists the valid ones; with it on, any category that normalizes to a non-empty slug is accepted and created.
 A malformed field falls back to its default and reports a warning in the session instead of stopping the extension.
@@ -45,15 +48,33 @@ A change applies to the next session, or immediately after `/reload`.
 
 `direct`, the default, declares them the way built-in tools are declared. That is the 1352 characters above.
 
-`codemode` and `deferred` keep them out of the prompt entirely, at the price of the model having to discover them.
-With `codemode` they are listed by and called from codemode scripts, which needs `codemode` among the session's tools
-(`"defaultTools": ["+codemode"]`). With `deferred` even that listing leaves them out and `tool_search` finds them and
-declares them, which needs `tool_search` enabled the same way. If nothing can reach them, the model has no memory to
-use, so choose one of the two only when you run the tool that reaches them.
+`codemode` and `deferred` keep those four declarations out of `<tools>`, at the price of the model having to discover
+them. The tools stay registered either way: what changes is what the prompt says about them. With `codemode` active they
+are listed inside the `codemode` description, within a 3000-token budget that every MCP server shares, so the listing can
+drop them; with `deferred` nothing lists them at all.
+
+That is what the `<memory_lite>` section is for. On a turn whose prompt does not declare the four, it names them and the
+mechanism that reaches them in the running session. `tool_search` is named only when the exposure is `codemode` or
+`deferred`: that tool indexes exactly those two and never `direct`, so in a session whose declarations were taken away
+another way a search could not return them. A codemode script is named instead when `codemode` is active, since
+`searchTools("memory")` and `ALL_TOOLS` find them there, and it is the only one of the two that reaches a `direct` tool
+that the prompt does not declare. When neither can reach them the section says that they are unreachable, and names the
+ways out: enable `tool_search` (`"defaultTools": ["+tool_search"]`), enable `codemode`
+(`"defaultTools": ["+codemode"]`), set `exposure` back to `direct`, or check the `tools` allowlist of the session. The
+allowlist is the case no exposure setting repairs: a `-t` list that leaves one of the four out removes it from the
+session registry, so it is neither declared, nor callable from a script, nor visible to `tool_search`.
+
+The section is added on the turn it is needed and removed once the four are declared, so it costs one patch to the system
+message and nothing per turn. It never carries memory content: it names the tools, and the memory itself enters the
+context only when a tool is called and answers.
+
+A session with no way in is not repaired by the package. It is reported: the section in the prompt, and once per instance
+a warning with the same words. That is the promise — never silently unusable — and it is why the two non-default modes
+are opt-in.
 
 ## Where the data lives
 
-One SQLite database at `<agentDir>/memories/memory.db`, in WAL mode, where `agentDir` is pi's agent directory:
+One SQLite database at `<agentDir>/lite-memories/memory.db`, in WAL mode, where `agentDir` is pi's agent directory:
 `~/.pi/agent` unless `PI_CODING_AGENT_DIR` says otherwise. The directory is created the first time a tool opens the
 database. `PI_MEMORY_LITE_DIR` overrides the directory and so does the `dir` setting; the environment wins over the
 setting, and the setting wins over the default. Since the memory is global, deleting that file deletes the memory.

@@ -5,7 +5,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { SETTINGS_KEY, resolveConfig } from "../../src/config.ts";
+import { DEFAULT_CATEGORIES, SETTINGS_KEY, resolveConfig } from "../../src/config.ts";
 import { openStore, type MemoryStore } from "../../src/db.ts";
 import {
   MEMORY_TOOL_NAMES,
@@ -46,7 +46,7 @@ interface Fixture {
 
 /**
  * A store over a temporary directory and the deps that reach it, with the config `resolveConfig` produces for `raw` and
- * for the same directory: the memory opens under `<dir>/memories`, the way a default install puts it under the agent
+ * for the same directory: the memory opens under `<dir>/lite-memories`, the way a default install puts it under the agent
  * directory, and the test removes both afterwards.
  */
 async function fixture(t: TestContext, raw: unknown = {}): Promise<Fixture> {
@@ -99,6 +99,16 @@ async function writeFail(
   assert.ok("error" in details, "el details de un write fallido tiene que nombrar el mensaje");
   assert.equal(textOf(result), details.error, "el texto del error y su details tienen que decir lo mismo");
   return details.error;
+}
+
+/**
+ * The categories a refusal names, parsed out of the sentence: the message is the model's whole view of the vocabulary, so
+ * the assertion reads the list it actually wrote instead of matching a fragment that a shortened list would also match.
+ */
+function listedCategories(message: string): string[] {
+  const match = /The valid categories are: (.+)\.$/.exec(message);
+  assert.ok(match !== null, `el mensaje tiene que nombrar las categorías válidas; llegó: ${message}`);
+  return match[1].split(", ");
 }
 
 // --- declaraciones --------------------------------------------------------------------------------------------------
@@ -270,19 +280,19 @@ test("write: keys que normalizan a nada es error", async (t) => {
   assert.equal(store.totals({}).total, 0);
 });
 
-// §7.1 and §7.6: a category outside the vocabulary is refused by default, and the message lists the valid ones in the
-// configured order so the next call can pick one of them.
+// The refusal names the rejected value and the whole vocabulary, in the configured order: the model's next move is to
+// pick one of them, so a message that listed part of the list would send it back with another refusal.
 test("write: una categoría desconocida se rechaza y el mensaje lista las categorías válidas", async (t) => {
   const { deps, store } = await fixture(t);
   const message = await writeFail(deps, "Una entrada con categoría nueva.", "not-configured", ["nota"]);
 
   assert.match(message, /not-configured/);
-  assert.match(message, /general, decision, preference, env, project/);
+  assert.deepEqual(listedCategories(message), [...DEFAULT_CATEGORIES]);
   assert.equal(store.totals({}).total, 0);
 
   // The empty slug is the other way to name no category, and it is refused with the same list.
   const empty = await writeFail(deps, "Una entrada con categoría vacía.", "!!!", ["nota"]);
-  assert.match(empty, /general, decision, preference, env, project/);
+  assert.deepEqual(listedCategories(empty), [...DEFAULT_CATEGORIES]);
 });
 
 // §7.6: with `allowUnknownCategory` the slug is created on the spot, and the answer names it as the category written.

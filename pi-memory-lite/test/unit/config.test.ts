@@ -11,6 +11,7 @@ import {
   checkNodeVersion,
   resolveConfig,
 } from "../../src/config.ts";
+import { toSlug } from "../../src/query.ts";
 
 // I1: the settings surface, resolved without touching the disk. `resolveConfig` is a function of its three arguments,
 // so this suite is a list of blocks and environments and their expected configuration: a fixture on `settings.json`
@@ -128,6 +129,32 @@ test("resolveConfig: categories que no es arreglo cae en las categorías por def
   assert.match(warnings[0], /categories/);
 });
 
+// The default vocabulary spelled out: the tests above compare against the constant, so a list that lost a slug or repeated
+// one would stay green there. This one pins the ten the README documents, in the order it promises, and checks that each
+// one is already the slug the comparison uses, because a default that normalization would rewrite is a default nobody got.
+test("resolveConfig: las categorías por defecto son diez slugs en orden y sin repeticiones", () => {
+  const { config, warnings } = resolve({});
+
+  assert.deepEqual(config.categories, [
+    "general",
+    "decision",
+    "preference",
+    "env",
+    "project",
+    "gotcha",
+    "convention",
+    "workflow",
+    "reference",
+    "person",
+  ]);
+  assert.deepEqual(warnings, []);
+
+  for (const slug of config.categories) {
+    assert.equal(toSlug(slug), slug, `la categoría por defecto "${slug}" tiene que ser ya un slug`);
+  }
+  assert.equal(new Set(config.categories).size, config.categories.length, "ninguna categoría puede repetirse");
+});
+
 // --- allowUnknownCategory -------------------------------------------------------------------------------------------
 
 // Absent is `false`, and so is a boolean `false`: only the boolean `true` opens the vocabulary.
@@ -189,6 +216,17 @@ test("resolveConfig: dbPath es el archivo de la base dentro del directorio", () 
   const { config } = resolveConfig({ raw: {}, env: { [DIR_ENV_VAR]: ENV_DIR }, agentDir: AGENT_DIR });
 
   assert.equal(config.dbPath, join(ENV_DIR, "memory.db"));
+});
+
+// The default directory is spelled out instead of compared against the constant: the tests above read `MEMORIES_DIR`, so
+// a renamed constant would move the default silently and stay green. This one pins the path the README promises.
+test("resolveConfig: el directorio por defecto es lite-memories bajo agentDir", () => {
+  const { config, warnings } = resolveConfig({ raw: {}, env: {}, agentDir: AGENT_DIR });
+
+  assert.equal(config.dir, join(AGENT_DIR, "lite-memories"), "el directorio por defecto tiene que ser lite-memories");
+  assert.equal(config.dbPath, join(AGENT_DIR, "lite-memories", "memory.db"));
+  assert.equal(config.source, "default");
+  assert.deepEqual(warnings, []);
 });
 
 // --- checkNodeVersion -----------------------------------------------------------------------------------------------

@@ -1,7 +1,8 @@
-// The entrypoint pi loads: the two events of the lifecycle, the settings read where the host allows it, and the four
-// registrations. Nothing else lives here (§13): no SQL, no budget arithmetic, no formatting, no parsing of the settings
-// by hand — `resolveConfig` reads them, `createMemoryTools` decides what a call does, `src/render.ts` decides how a row
-// looks, and this file decides only when each of them is called.
+// The entrypoint pi loads: the three events of the lifecycle, the settings read where the host allows it, the four
+// registrations and the one section the prompt may need. Nothing else lives here (§13): no SQL, no budget arithmetic, no
+// formatting, no parsing of the settings by hand — `resolveConfig` reads them, `createMemoryTools` decides what a call
+// does, `src/render.ts` decides how a row looks, `src/prompt.ts` decides what the model is told about the tools it cannot
+// see, and this file decides only when each of them is called.
 //
 // The load is the constraint that shapes the whole file. `pi.getSettings()` and `pi.getAllTools()` throw while the
 // extensions load (§7.6, D16), so both are read inside `session_start` and the factory itself touches neither, registers
@@ -11,12 +12,13 @@
 //
 // The host surface is narrowed to the slice this package uses, the way the sibling packages do it: the default export
 // takes pi's own `ExtensionAPI` and assigns it to the slice once, so the compile time proof that the slice still fits pi
-// sits on a single line, and the registration itself takes the slice — which is what lets a test drive it with the six
+// sits on a single line, and the registration itself takes the slice — which is what lets a test drive it with the
 // members it declares.
 
-import { getAgentDir, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { checkNodeVersion, resolveConfig } from "../src/config.ts";
+import { getAgentDir, type BeforeAgentStartEvent, type ExtensionAPI, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { checkNodeVersion, resolveConfig, type Exposure } from "../src/config.ts";
 import { openStore, messageOf, type MemoryStore } from "../src/db.ts";
+import { MEMORY_PROMPT_SECTION, memoryPromptSectionFor } from "../src/prompt.ts";
 import { appendUnique } from "../src/query.ts";
 import { createMemoryRenderers } from "../src/render.ts";
 import { MEMORY_TOOL_NAMES, createMemoryTools } from "../src/tools.ts";
@@ -72,10 +74,20 @@ export type MemoryLiteSessionStartHandler = (
 /** The `session_shutdown` handler of §8.3: it closes the connection and reads no context. */
 export type MemoryLiteSessionShutdownHandler = () => void | Promise<void>;
 
+/**
+ * The `before_agent_start` handler of §8.6: it reads the two tool lists of the turn and leaves at most one section in
+ * the map. Typed with the host's own event, so a field renamed there fails to compile here instead of in a real session.
+ */
+export type MemoryLiteBeforeAgentStartHandler = (
+  event: BeforeAgentStartEvent,
+  ctx: MemoryLiteNoticeContext,
+) => void | Promise<void>;
+
 /** The slice of `ExtensionAPI` this package uses. pi's own type satisfies it at the assignment in the factory. */
 export interface MemoryLiteExtensionApi {
   on(event: "session_start", handler: MemoryLiteSessionStartHandler): () => void;
   on(event: "session_shutdown", handler: MemoryLiteSessionShutdownHandler): () => void;
+  on(event: "before_agent_start", handler: MemoryLiteBeforeAgentStartHandler): () => void;
   registerTool(tool: MemoryLiteToolDeclaration): void;
   getSettings(): unknown;
   getAllTools(): readonly MemoryLiteToolInfo[];
@@ -84,7 +96,7 @@ export interface MemoryLiteExtensionApi {
 /**
  * What pi loads and calls once per extension load. It takes pi's own `ExtensionAPI` and narrows it to the slice once, so
  * a member the host renames or retypes fails to compile here instead of in a real session, and a test can drive the
- * registration with the six members the slice declares.
+ * registration with the members the slice declares.
  */
 export default function memoryLiteExtension(pi: ExtensionAPI, seams: MemoryLiteSeams = {}): void {
   const api: MemoryLiteExtensionApi = pi;
@@ -92,7 +104,7 @@ export default function memoryLiteExtension(pi: ExtensionAPI, seams: MemoryLiteS
 }
 
 /**
- * The registration itself, over the slice: synchronous and free of I/O. It resolves the seams, subscribes to the two
+ * The registration itself, over the slice: synchronous and free of I/O. It resolves the seams, subscribes to the three
  * events of the lifecycle and returns. Subscribing is allowed during the load; reading the settings, listing the tools
  * and registering a tool are not, and none of the three happens before `session_start` fires.
  */
@@ -108,6 +120,19 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
 
   /** Whether this instance has already registered its four tools, which is what keeps a second `session_start` silent. */
   let registered = false;
+
+  /**
+   * The `exposure` the settings resolved for this session, or `undefined` until `session_start` has read them. The config
+   * itself is local to that handler; the one field the prompt section needs is kept here, because the schema does not
+   * change mid-session and the section has to know whether `tool_search` can reach these tools at all.
+   */
+  let exposure: Exposure | undefined;
+
+  /**
+   * Whether this instance has already told the user that its tools are unreachable. The section is written on every
+   * turn, but the notice fires once: it describes a configuration that only a person changes.
+   */
+  let unreachableWarned = false;
 
   /**
    * The getter the tools of one session receive. The memo lives in the instance and not in the getter, so the shutdown
@@ -131,10 +156,10 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
       // §7.6: the settings are read here and never at load, and `resolveConfig` never throws on what a user typed.
       const raw = api.getSettings() as unknown as Record<string, unknown>;
       const { config, warnings } = resolveConfig({ raw, env, agentDir: agentDir() });
+      exposure = config.exposure;
       const support = checkNodeVersion(nodeVersion);
 
       if (registered) return;
-      registered = true;
 
       const tools = createMemoryTools({
         store: storeGetterOf(config.dir),
@@ -148,6 +173,12 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
       for (const [index, tool] of tools.entries()) {
         api.registerTool({ ...tool, ...createMemoryRenderers(MEMORY_TOOL_NAMES[index]) });
       }
+
+      // Set after the loop and not before it: the prompt handler gates on this flag, and what it has to gate on is that
+      // the four tools exist, not that the registration was attempted. The loop is synchronous, so the guard above still
+      // sees `true` on a second `session_start`; a registration that threw mid-loop leaves it `false` and the handler
+      // silent, which is the state a session without tools is in.
+      registered = true;
 
       // §12: the names are prefixed, and a second extension that registered one of them is worth a line. The listing is
       // read after the registration, so this instance's own four are part of what the paths are compared against.
@@ -172,6 +203,37 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
 
     const store = await pending.catch(() => undefined);
     store?.close();
+  });
+
+  /**
+   * §8.6: the section the model needs so a session with `codemode` or `deferred` never leaves the memory silently
+   * unusable. The decision is `src/prompt.ts`'; this handler only writes one string into one map or deletes one key, so
+   * the entrypoint keeps its rule — no SQL, no budget arithmetic, no formatting.
+   */
+  api.on("before_agent_start", (event, ctx) => {
+    // A session that never registered its tools has nothing to report about them; the failed `session_start` already
+    // said why, once. A session whose settings were never resolved has not decided its exposure yet, which is the same
+    // situation one step earlier: no section, because the remedy cannot be chosen without knowing the cause.
+    if (!registered || exposure === undefined) return;
+
+    const { selectedTools, hiddenTools } = event.systemPromptOptions;
+    const section = memoryPromptSectionFor({ selectedTools, hiddenTools, exposure });
+
+    // The delete branch is the invariant of this handler: no section means no key at all, so the host never wraps an
+    // empty body and the next turn's patch is the absence of the entry rather than an empty string.
+    if (section === undefined) {
+      delete event.systemPromptOptions.sections[MEMORY_PROMPT_SECTION];
+      return;
+    }
+
+    event.systemPromptOptions.sections[MEMORY_PROMPT_SECTION] = section.text;
+
+    // The unreachable case is the one the user can fix and the model cannot, so it reaches the user once per instance,
+    // through the same `warn` the settings use and with the section's own string: the two channels read the same words.
+    if (section.kind === "unreachable" && !unreachableWarned) {
+      unreachableWarned = true;
+      warn(ctx, section.text);
+    }
   });
 }
 

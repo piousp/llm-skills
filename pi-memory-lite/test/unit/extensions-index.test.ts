@@ -4,9 +4,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, NormalizedBuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import {
   registerMemoryLite,
+  type MemoryLiteBeforeAgentStartHandler,
   type MemoryLiteExtensionApi,
   type MemoryLiteNoticeContext,
   type MemoryLiteSeams,
@@ -15,12 +16,12 @@ import {
   type MemoryLiteToolDeclaration,
   type MemoryLiteToolInfo,
 } from "../../extensions/index.ts";
-import { SETTINGS_KEY } from "../../src/config.ts";
+import { SETTINGS_KEY, resolveConfig } from "../../src/config.ts";
 import { openStore, type MemoryStore } from "../../src/db.ts";
 import { buildCallLine, buildResultRender } from "../../src/render.ts";
 import { MEMORY_TOOL_NAMES } from "../../src/tools.ts";
 
-// The wiring, driven the way pi drives it: a fake extension API that records what the factory registers, the two events
+// The wiring, driven the way pi drives it: a fake extension API that records what the factory registers, the three events
 // fired by hand, and the seams of the entrypoint replaced so no test reads a real settings file, opens the user's memory
 // or waits on a clock. The fake is typed as the slice the registration declares (`MemoryLiteExtensionApi`), which is
 // what lets it be six members and not pi's whole `ExtensionAPI`; the default export takes pi's own type and narrows it,
@@ -45,6 +46,13 @@ const OTHER_SOURCE = "/agent/extensions/pi-other-memory/index.ts";
 /** A Node version that passes the guard of §8.2, pinned so the suite does not depend on the binary running it. */
 const HEALTHY_NODE = "24.19.0";
 
+/**
+ * The tag of the section the entrypoint owns in the host's prompt, spelled out here: the name is part of the contract
+ * with the host — namespaced so it cannot collide with another extension's section — and a test that imported it would
+ * pass with whatever the module decided to call it.
+ */
+const MEMORY_SECTION = "memory_lite";
+
 /** A temporary directory the test removes afterwards, never a fixed one shared between tests. */
 function tempDir(t: TestContext): string {
   const dir = mkdtempSync(join(realpathSync(os.tmpdir()), "pi-memory-lite-ext-"));
@@ -62,6 +70,28 @@ function seamsFor(dir: string, overrides: MemoryLiteSeams = {}): MemoryLiteSeams
   return { env: {}, agentDir: () => dir, nodeVersion: HEALTHY_NODE, now: () => new Date(NOW), ...overrides };
 }
 
+/**
+ * The ten fields of `NormalizedBuildSystemPromptOptions`, all of them present: the host hands the handler a complete
+ * shape, and a tidier fixture would pass while the real one carried a field the section depends on.
+ */
+function promptOptions(
+  overrides: Partial<NormalizedBuildSystemPromptOptions> = {},
+): NormalizedBuildSystemPromptOptions {
+  return {
+    cwd: "/home/test/project",
+    selectedTools: [...MEMORY_TOOL_NAMES],
+    hiddenTools: [],
+    toolSnippets: {},
+    toolGuidelines: {},
+    promptGuidelines: [],
+    appendSystemPrompt: "",
+    sections: {},
+    contextFiles: [],
+    skills: [],
+    ...overrides,
+  };
+}
+
 /** One notice the fake UI received. */
 interface Notified {
   readonly message: string;
@@ -73,6 +103,11 @@ interface HostOptions {
   readonly settings?: unknown;
   /** What `getAllTools()` reports besides the tools this instance registers, which is where a collision comes from. */
   readonly tools?: readonly MemoryLiteToolInfo[];
+  /**
+   * The ordinal of the `registerTool` call that throws, counted from one, for the session whose registration fails in the
+   * middle of the loop: the fake host answers the third registration the way pi answers a name it refuses.
+   */
+  readonly failRegisterAt?: number;
 }
 
 interface Host {
@@ -89,6 +124,11 @@ interface Host {
   enable(): void;
   /** Fires `session_start` with the fake context, which is what pi does once the load is over. */
   start(): Promise<void>;
+  /**
+   * Fires `before_agent_start` over the options built from the overrides, and hands those options back once the handler
+   * has run: a section is a mutation of `sections`, so the assertion has to read the object the handler received.
+   */
+  agentStart(overrides?: Partial<NormalizedBuildSystemPromptOptions>): Promise<NormalizedBuildSystemPromptOptions>;
   /** Fires `session_shutdown`. */
   shutdown(): Promise<void>;
 }
@@ -120,13 +160,18 @@ function makeHost(options: HostOptions = {}): Host {
   }
 
   const pi: MemoryLiteExtensionApi = {
-    on(event, handler) {
+    // Annotated by hand and not inferred: with an overload set TypeScript stops contextually typing the parameters of a
+    // literal, and a handler recorded as `never` could not be called back by the tests.
+    on(event: string, handler: unknown) {
       events.push(event);
       handlers.set(event, handler);
       return () => undefined;
     },
     registerTool(tool) {
       guard("registerTool");
+      if (options.failRegisterAt !== undefined && registered.length + 1 === options.failRegisterAt) {
+        throw new Error(`pi.registerTool rechazó ${tool.name} en la llamada ${options.failRegisterAt}`);
+      }
       registered.push(tool);
     },
     getSettings() {
@@ -154,6 +199,12 @@ function makeHost(options: HostOptions = {}): Host {
     return handler as MemoryLiteSessionShutdownHandler;
   }
 
+  function beforeAgentStartHandler(): MemoryLiteBeforeAgentStartHandler {
+    const handler = handlers.get("before_agent_start");
+    assert.ok(handler !== undefined, "el factory tiene que suscribirse a before_agent_start");
+    return handler as MemoryLiteBeforeAgentStartHandler;
+  }
+
   return {
     pi,
     registered,
@@ -165,6 +216,14 @@ function makeHost(options: HostOptions = {}): Host {
     },
     async start() {
       await startHandler()({ type: "session_start" }, ctx);
+    },
+    async agentStart(overrides = {}) {
+      const options = promptOptions(overrides);
+      await beforeAgentStartHandler()(
+        { type: "before_agent_start", messageType: "user", prompt: "hola", systemPrompt: "", systemPromptOptions: options },
+        ctx,
+      );
+      return options;
     },
     async shutdown() {
       await shutdownHandler()();
@@ -240,7 +299,11 @@ test("factory: no lee settings, no lista las tools y no registra nada durante la
 
   assert.deepEqual(host.calls, [], "el factory no puede llamar a getSettings, getAllTools ni registerTool durante la carga");
   assert.deepEqual(host.registered, [], "el factory no puede registrar tools durante la carga");
-  assert.deepEqual(host.events, ["session_start", "session_shutdown"], "el factory se suscribe a los dos eventos del ciclo de vida y a ninguno más");
+  assert.deepEqual(
+    host.events,
+    ["session_start", "session_shutdown", "before_agent_start"],
+    "el factory se suscribe a los tres eventos y a ninguno más",
+  );
   assert.equal(host.notified.length, 0);
 });
 
@@ -342,6 +405,172 @@ test("exposure: los tres valores de settings llegan a las cuatro tools", async (
   }
 });
 
+// --- la sección del prompt -------------------------------------------------------------------------------------------
+
+// With the default exposure the four declarations are in the prompt and the section has nothing to add: the handler has
+// to leave the options exactly as it found them — the map it received, and every other field of the turn's options. The
+// snapshot is built before the handler runs, with all ten fields, so a write to `selectedTools`, `hiddenTools` or
+// `toolSnippets` fails here and not only a write to `sections`.
+test("prompt: en direct las cuatro declaradas dejan el prompt sin sección", async (t) => {
+  const dir = tempDir(t);
+  const host = makeHost();
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const sections = { tools: "<tools>\n- memory_write: guarda un dato\n</tools>" };
+  const snapshot = promptOptions({ selectedTools: ["read", "bash", ...MEMORY_TOOL_NAMES], sections });
+  const options = await host.agentStart({ selectedTools: ["read", "bash", ...MEMORY_TOOL_NAMES], sections });
+
+  assert.equal(options.sections, sections, "el handler no puede reemplazar el mapa de secciones");
+  assert.deepEqual(
+    sections,
+    { tools: "<tools>\n- memory_write: guarda un dato\n</tools>" },
+    `la sección apareció con las cuatro declaradas; llegó: ${JSON.stringify(sections)}`,
+  );
+  assert.deepEqual(options, snapshot, "el handler no puede escribir en ninguna otra parte de las opciones del turno");
+  assert.deepEqual(host.notified, [], "con las cuatro declaradas no hay nada que avisar");
+});
+
+// `deferred` keeps the four out of the prompt and an active `tool_search` is the mechanism that reaches them: the section
+// names it, costs one key and one patch, and fits under the character ceiling. The exposure has to be one of the two that
+// took the declarations away; with `direct` the section would name the script instead, because `tool_search` indexes only
+// non-`direct` tools.
+test("prompt: con tool_search y sin las tools la sección llega al prompt", async (t) => {
+  const dir = tempDir(t);
+  const host = makeHost({ settings: settings({ exposure: "deferred" }) });
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const options = await host.agentStart({ selectedTools: ["read", "bash", "tool_search"] });
+
+  const section = options.sections[MEMORY_SECTION];
+  assert.ok(section !== undefined, `la sección tiene que llegar al prompt; llegó: ${JSON.stringify(options.sections)}`);
+  assert.deepEqual(Object.keys(options.sections), [MEMORY_SECTION], "la sección agrega una sola clave");
+  assert.equal(section.includes("tool_search"), true, "la sección tiene que nombrar tool_search");
+  assert.equal(section.includes("\n"), false, "la sección es un párrafo y no lleva saltos de línea");
+  assert.ok(section.length <= 360, `la sección no puede pasar 360 caracteres; llegó: ${section.length}`);
+  assert.deepEqual(host.notified, [], "con un mecanismo que las alcanza no hay aviso");
+});
+
+// `codemode` is the other mechanism: the section names the script, which is the only way to call a tool the prompt does
+// not declare. `tool_search` is declared here too and the section still names the script: with the default exposure that
+// search cannot reach these tools, so promising it would be the lie this branch exists to avoid.
+test("prompt: con codemode y sin las tools la sección llega al prompt", async (t) => {
+  const dir = tempDir(t);
+  const host = makeHost();
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const options = await host.agentStart({ selectedTools: ["read", "bash", "codemode", "tool_search"] });
+
+  const section = options.sections[MEMORY_SECTION];
+  assert.ok(section !== undefined, `la sección tiene que llegar al prompt; llegó: ${JSON.stringify(options.sections)}`);
+  assert.deepEqual(Object.keys(options.sections), [MEMORY_SECTION], "la sección agrega una sola clave");
+  assert.equal(section.includes("codemode"), true, "la sección tiene que nombrar codemode");
+  assert.equal(section.includes("tool_search"), false, "con exposure direct la sección no puede prometer tool_search");
+  assert.equal(section.includes("\n"), false, "la sección es un párrafo y no lleva saltos de línea");
+  assert.ok(section.length <= 360, `la sección no puede pasar 360 caracteres; llegó: ${section.length}`);
+  assert.deepEqual(host.notified, [], "con un mecanismo que las alcanza no hay aviso");
+});
+
+// With no mechanism the tools are unreachable, and that does not repair itself: the section says so in the prompt and the
+// warning says it once on both channels, with the section's own string, so the model and the user never read two things.
+test("prompt: sin mecanismo la sección llega y el aviso sale una sola vez", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const dir = tempDir(t);
+  const host = makeHost();
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const first = await host.agentStart({ selectedTools: ["read", "bash"] });
+  const section = first.sections[MEMORY_SECTION];
+  assert.ok(section !== undefined, `la sección tiene que llegar al prompt; llegó: ${JSON.stringify(first.sections)}`);
+  assert.deepEqual(Object.keys(first.sections), [MEMORY_SECTION], "la sección agrega una sola clave");
+  assert.equal(section.includes("unreachable"), true, "sin mecanismo la sección dice que no se alcanzan");
+  assert.equal(section.includes("\n"), false, "la sección es un párrafo y no lleva saltos de línea");
+  assert.ok(section.length <= 360, `la sección no puede pasar 360 caracteres; llegó: ${section.length}`);
+
+  // Second turn: the section is written again — every turn builds the prompt anew — and the warning is not repeated.
+  const second = await host.agentStart({ selectedTools: ["read", "bash"] });
+  assert.equal(second.sections[MEMORY_SECTION], section, "la sección se escribe en cada turno");
+
+  const notices = host.notified.filter((notice) => notice.message === section);
+  assert.equal(notices.length, 1, `el aviso sale una sola vez por instancia; llegó: ${JSON.stringify(host.notified)}`);
+  assert.equal(notices[0]?.type, "warning");
+  assert.deepEqual(
+    consoleWarnings(warn),
+    [`[pi-memory-lite] ${section}`],
+    "el log recibe la misma cadena que la sección, una sola vez",
+  );
+});
+
+// The exposure does not change mid-session, but the list of declared tools does: a `tool_search` that finds them declares
+// them, and on the next turn the section has no reason to exist. The key is deleted, not written empty.
+test("prompt: declarar las tools a mitad de sesión borra la sección", async (t) => {
+  const dir = tempDir(t);
+  const host = makeHost({ settings: settings({ exposure: "deferred" }) });
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const selectedTools = ["read", "bash", "tool_search"];
+  const first = await host.agentStart({ selectedTools });
+  assert.ok(MEMORY_SECTION in first.sections, "el primer turno tiene que llevar la sección");
+
+  selectedTools.push(...MEMORY_TOOL_NAMES);
+  const second = await host.agentStart({ selectedTools });
+
+  assert.equal(
+    MEMORY_SECTION in second.sections,
+    false,
+    `la sección tiene que desaparecer; llegó: ${JSON.stringify(second.sections)}`,
+  );
+  assert.deepEqual(Object.keys(second.sections), [], "el turno que declara las tools no deja la clave vacía");
+});
+
+// A session that never registered its tools has nothing to say about them: the handler returns without touching the
+// prompt and without a word, because the only fact it knows is that its own registration did not happen.
+test("prompt: una sesión que no registró las tools no aporta sección", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const dir = tempDir(t);
+  const host = makeHost();
+  registerMemoryLite(host.pi, seamsFor(dir));
+  // No `enable()`: the session never started, which is the state in which `session_start` fails and registers nothing.
+
+  const sections: Record<string, string> = {};
+  const options = await host.agentStart({ selectedTools: ["read", "bash"], sections });
+
+  assert.deepEqual(options.sections, {}, "sin registro el handler no escribe ninguna clave");
+  assert.deepEqual(host.notified, [], "sin registro no hay aviso que dar");
+  assert.deepEqual(consoleWarnings(warn), [], "sin registro no hay línea que registrar");
+});
+
+// The flag the prompt handler gates on means "the four tools exist", and not "the registration was attempted": a session
+// whose `registerTool` threw halfway has two tools and no way to serve the other two, so the turn gets no section. The
+// failed `session_start` already reported the error, and the handler adds nothing to it.
+test("prompt: una sesión cuyo registro falló a la mitad no aporta sección", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const dir = tempDir(t);
+  const host = makeHost({ failRegisterAt: 3 });
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  assert.equal(host.registered.length, 2, "el registro tiene que haberse cortado en la tercera llamada");
+  const error = host.notified.find((notice) => notice.type === "error");
+  assert.ok(error !== undefined, `el fallo del registro tiene que avisarse como error; llegó: ${JSON.stringify(host.notified)}`);
+
+  const options = await host.agentStart({ selectedTools: ["read", "bash"] });
+
+  assert.deepEqual(options.sections, {}, "una sesión con el registro a medias no escribe la sección");
+  assert.equal(host.notified.length, 1, `el handler del prompt no puede agregar avisos; llegó: ${JSON.stringify(host.notified)}`);
+  assert.deepEqual(consoleWarnings(warn), [], "el handler del prompt no puede agregar líneas al log");
+});
+
 // --- criterios 1 y 2 ------------------------------------------------------------------------------------------------
 
 // Criterion 2 (§10): the permanent cost of the package, measured on the arguments `registerTool` received inside the
@@ -372,7 +601,10 @@ test("criterio 1: ninguna declaración registrada contiene texto guardado en la 
   const text = "La receta del pan de sardinas es un secreto de la familia";
   const key = "sardinas";
 
-  const store = await openStore({ dir: join(dir, "memories") });
+  // El directorio sale de `resolveConfig` y no de una copia del defecto escrito a mano: la base que el test escribe y la
+  // que la extensión abre tienen que ser la misma aunque el defecto cambie de nombre.
+  const { config } = resolveConfig({ raw: {}, env: {}, agentDir: dir });
+  const store = await openStore({ dir: config.dir });
   try {
     const written = store.write({ text, category: "general", keys: [key], ts: NOW });
     // The fixture has to be real: the entry is in the database before the session starts, so a declaration that named it
@@ -402,6 +634,13 @@ test("criterio 1: ninguna declaración registrada contiene texto guardado en la 
     assert.equal(declaration.includes(text), false, `la declaración de ${tool.name} nombra el texto guardado`);
     assert.equal(declaration.includes(key), false, `la declaración de ${tool.name} nombra una key guardada`);
   }
+
+  // La sección del prompt es la otra vía por la que el texto guardado podría llegar al modelo: se mide sobre lo que el
+  // handler dejó en `sections`, con la memoria ya escrita.
+  const options = await host.agentStart({ selectedTools: ["read", "bash", ...MEMORY_TOOL_NAMES] });
+  const section = options.sections[MEMORY_SECTION] ?? "";
+  assert.equal(section.includes(text), false, "la sección del prompt nombra el texto guardado");
+  assert.equal(section.includes(key), false, "la sección del prompt nombra una key guardada");
 });
 
 // --- colisión, guarda de Node y ciclo de vida -----------------------------------------------------------------------

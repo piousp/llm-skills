@@ -14,10 +14,10 @@ category to watch. The README documents that caveat instead of solving it.
 
 Decisions already taken:
 
-- 0.1.0 keeps one global database at `<agentDir>/memories/memory.db`. Nothing in the resolution changes now.
+- 0.1.0 keeps one global database at `<agentDir>/lite-memories/memory.db`. Nothing in the resolution changes now.
 - Project-scoped databases are a later stage, and export/import travels with them, not before.
 - The schema does not have to change. What changes is where `dbPath` points, so the three levels of `resolveDir`
-  (`src/config.ts:210-229`: environment, then the settings block, then the default) have to make room for a fourth.
+  (`src/config.ts:221-241`: environment, then the settings block, then the default) have to make room for a fourth.
 
 Decisions still open, with a recommendation for each:
 
@@ -82,8 +82,11 @@ Two mechanics that the decision depends on, both from the host:
   `"defaultTools": ["+tool_search"]` or `--tools` (`docs/cli.md:184`). Whoever selects `deferred` does that
   themselves, or the tools are unreachable in practice.
 
-The skill exists for that second point: it is the only channel that survives with the tools out of the prompt. Its
-description stays in `<skills>` permanently (85–140 estimated tokens) and its body is read on demand, so the chain is
-skill description, `SKILL.md`, then whichever mechanism the exposure left available. The open decision is whether the
-package ships that skill or documents how to write one, and it waits on the measurement it was always meant to depend
-on: how many writes a session really makes, and how many of them are noise.
+The skill exists for that second point. It is not the only channel: the `<memory_lite>` section of the system prompt
+names the four tools and the mechanism that reaches them on any turn whose prompt does not declare them, so a session
+with `deferred` and an active `tool_search` is told to search. What the skill would add is the body of usage guidance,
+which the section does not carry because it has to stay under 360 characters and free of memory content. Its description
+stays in `<skills>` permanently (85–140 estimated tokens) and its body is read on demand, so the chain is skill
+description, `SKILL.md`, then whichever mechanism the exposure left available. The open decision is whether the package
+ships that skill or documents how to write one, and it waits on the measurement it was always meant to depend on: how
+many writes a session really makes, and how many of them are noise.

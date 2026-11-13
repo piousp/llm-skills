@@ -13,13 +13,24 @@ export const SETTINGS_KEY = "pi-memory-lite";
 export const DIR_ENV_VAR = "PI_MEMORY_LITE_DIR";
 
 /** Directory under `<agentDir>` that holds the memory, when neither the environment nor settings says otherwise. */
-export const MEMORIES_DIR = "memories";
+export const MEMORIES_DIR = "lite-memories";
 
 /** File the database lives in, always under the resolved directory. */
 export const DB_FILE = "memory.db";
 
 /** Category vocabulary used when settings name none; every element is already a slug. */
-export const DEFAULT_CATEGORIES: readonly string[] = ["general", "decision", "preference", "env", "project"];
+export const DEFAULT_CATEGORIES: readonly string[] = [
+  "general",
+  "decision",
+  "preference",
+  "env",
+  "project",
+  "gotcha",
+  "convention",
+  "workflow",
+  "reference",
+  "person",
+];
 
 /** How the tools reach the model: declared, found through `codemode`, or found through `tool_search`. */
 export type Exposure = "direct" | "codemode" | "deferred";
@@ -207,7 +218,7 @@ function resolveAllowUnknownCategory(block: Record<string, unknown>, warnings: s
   return false;
 }
 
-/** Environment, then the block, then `<agentDir>/memories`: first absolute non-empty path wins, rejects warn. */
+/** Environment, then the block, then `<agentDir>/lite-memories`: first absolute non-empty path wins, rejects warn. */
 function resolveDir(
   block: Record<string, unknown>,
   env: Readonly<Record<string, string | undefined>>,

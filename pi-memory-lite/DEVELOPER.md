@@ -7,14 +7,15 @@ documentation: that is `README.md`.
 
 | Path | Contents |
 |---|---|
-| `extensions/index.ts` | The entrypoint pi loads: it subscribes to `session_start` and `session_shutdown`; inside the first it reads the settings, checks the Node version, registers the four tools with their renderers and warns about name collisions; inside the second it closes the connection. No SQL, no budget arithmetic, no formatting. |
+| `extensions/index.ts` | The entrypoint pi loads: it subscribes to `session_start`, `session_shutdown` and `before_agent_start`; inside the first it reads the settings, checks the Node version, registers the four tools with their renderers and warns about name collisions; inside the second it closes the connection; inside the third it puts the one `<memory_lite>` section the turn needs into `systemPromptOptions.sections` or deletes the key, and warns once when the tools turn out to be unreachable. No SQL, no budget arithmetic, no formatting. |
 | `src/config.ts` | `resolveConfig()` and `checkNodeVersion()`: from the raw settings, the environment and `agentDir` to the effective configuration. Pure functions; neither throws on what a user typed into a JSON file. |
 | `src/tools.ts` | The four declarations the host sees (description, `promptSnippet`, schema, `exposure`, annotations) and the four executors: they validate the arguments, normalize the keys and the category, and delegate to the store. |
 | `src/db.ts` | Opening, pragmas, the core schema and the FTS schema kept apart, migrations, the FTS5 probe on `:memory:`, the index `rebuild`, and the whole query layer. `openStore` retries the WAL pragma on `SQLITE_BUSY`, and `createStore` picks the FTS5 or the degraded search-and-count pair once, at open (`QueryLayer`), for the life of the store. The only module that imports `node:sqlite`, and it does it dynamically. |
 | `src/query.ts` | The pure surface of the index: `toTokens()` and `quoteToken()` for FTS5, `toSlug()` for the controlled vocabulary, `distinctSlugs()` for the keys of an entry, `normalizeTextForDuplicate()` for duplicate detection and `toTerms()` for the denormalized column. |
 | `src/format.ts` | The text that goes back to the model: caps for the catalog (1500), search (800), read (2000) and count (1500), the per-fragment budget, and the explicit declaration of what was left out. Pure functions over rows. |
 | `src/render.ts` | The TUI face of the four tools: one line per call and per result while the row is collapsed, and the text the model read when it is expanded. The lines come from `TOOL_LINES`, a private table with one entry per tool name, so a name added to `MEMORY_TOOL_NAMES` without its two lines fails to compile instead of rendering an empty row. |
-| `test/unit/` | One suite per module of `src/` except `src/render.ts`, whose lines are covered by `extensions-index.test.ts` (lifecycle, exposure, budget and rendering), plus `concurrency.test.ts` (two real processes). 170 tests through `npm test`. |
+| `src/prompt.ts` | `MEMORY_PROMPT_SECTION` and `memoryPromptSectionFor()`: the tag and the text of the conditional `<memory_lite>` section, computed from `selectedTools` minus `hiddenTools`, with the resolved `exposure` deciding which of the two mechanisms the section may name — `tool_search` indexes only the non-`direct` tools, so it is a remedy only for the modes that took the declarations away. Pure over those inputs — no host, no I/O, no clock — and the three texts are the contract, which is why the suite pins them whole instead of matching fragments. |
+| `test/unit/` | One suite per module of `src/` — the section of `src/prompt.ts` in `prompt.test.ts` — except `src/render.ts`, whose lines are covered by `extensions-index.test.ts` (lifecycle, exposure, budget, prompt section and rendering), plus `concurrency.test.ts` (two real processes). 190 tests through `npm test`. |
 
 ## Setup
 
@@ -56,12 +57,12 @@ The key is `pi-memory-lite` and it carries four fields:
 | `dir` | Directory that holds the memory database. Must be a non-empty absolute path. |
 | `categories` | The controlled vocabulary of categories the tool accepts. Normalized to slugs, empties and repeats dropped, and a vocabulary that ends up empty degrades to the default list. |
 | `allowUnknownCategory` | Whether a category outside the vocabulary is accepted or refused. Only `true` accepts it. |
-| `exposure` | How the tools are exposed: `direct`, `codemode` or `deferred`. Nothing is ever injected into the system prompt, so the field chooses the mode, not the content. |
+| `exposure` | How the tools are exposed: `direct`, `codemode` or `deferred`. The field chooses the mode, not the content: the two non-default values keep the four declarations out of `<tools>`, and what the prompt then says about them comes from `src/prompt.ts` — one section naming the mechanism that reaches them, or the fact that none does. Memory content never enters the prompt. |
 
-The defaults are `categories = ["general", "decision", "preference", "env", "project"]`,
-`allowUnknownCategory = false` and `exposure = "direct"`.
+The defaults are `categories = ["general", "decision", "preference", "env", "project", "gotcha", "convention",
+"workflow", "reference", "person"]`, `allowUnknownCategory = false` and `exposure = "direct"`.
 
-Directory precedence is `PI_MEMORY_LITE_DIR` > `settings.dir` > `<agentDir>/memories`: the environment variable
+Directory precedence is `PI_MEMORY_LITE_DIR` > `settings.dir` > `<agentDir>/lite-memories`: the environment variable
 exists so a test session can be isolated without touching the settings file. `agentDir` comes from the host's
 `getAgentDir()`, which honours `PI_CODING_AGENT_DIR`.
 
@@ -87,6 +88,7 @@ Every setting is read and applied inside `session_start`; a change applies on th
 | `node:sqlite` is missing from the binary | Same as the case above: the import is dynamic and happens inside the first open, not during the load. |
 | The database was written by a newer version of the package | The open fails with an error naming the stored and the supported version and asking for an update. Nothing is degraded and nothing is truncated. |
 | Invalid settings | The default of that field is used and a warning is reported in the session. |
+| The four tools are not declared in the turn and neither mechanism reaches them | The four tools are installed and callable by name, but nothing in the turn declares them, so the model would never learn they exist. The entrypoint writes the `<memory_lite>` section saying they are unreachable and naming the ways out, and warns once per instance with the same string. The case has more than one cause: an exposure that is not `direct` with neither `tool_search` nor `codemode` declared, a `codemode.mode: "only"` that hides the declarations of the callable `direct` tools, and a `-t` allowlist that leaves one of the four out of the session registry. Nothing self-heals: enabling `tool_search`, enabling `codemode`, setting `exposure` to `direct` and fixing the allowlist are all a person's moves. |
 
 ## Context budget
 
@@ -106,6 +108,26 @@ arguments `registerTool` received and never on a copy built for the measurement.
 where it is: no schema carries a per-property description, and `promptGuidelines` is not declared at all, since
 it would add bullets to `<rules>` and break the criterion that the prompt differs only in the `<tools>` entries
 and in the tool declarations.
+
+The `<memory_lite>` section is not part of that number: it is not paid while the four are declared, and in the two
+non-default modes it is what the prompt pays instead. Its three texts, measured with the four names missing — the longest
+the sentence gets — are:
+
+| Section | Text | Wrapped in its tag |
+|---|---|---|
+| `tool_search` | 199 | 228 |
+| `codemode` | 228 | 257 |
+| `unreachable` | 286 | 315 |
+
+The wrapper is `+29` characters, which is `<memory_lite>`, a newline, the text, a newline and the closing tag; the host
+skips a section whose body is empty, which is why the entrypoint deletes the key instead of emptying it. Growth per turn
+is zero: the section is written once and patched only when the set of declared tools changes. `test/unit/prompt.test.ts`
+asserts each text against the ceiling of 360 characters and the absence of newlines.
+
+The alternative was to declare the guidance as `promptGuidelines` on the four tools, which also survives the declarations
+being hidden. It was not used, for two reasons: those bullets are part of the declaration, so they would be there in
+`direct` as well, where the prompt already names the tools; and a bullet lives inside `<rules>`, so adding or removing it
+makes that whole section the diff unit, while a section of its own is a patch of one key.
 
 ## Test rules
 
