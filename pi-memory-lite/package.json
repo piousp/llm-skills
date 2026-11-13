@@ -1,0 +1,37 @@
+{
+  "name": "pi-memory-lite",
+  "version": "0.1.0",
+  "description": "Global, zero-dependency memory for pi that never injects memory content into the system prompt",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/piousp/llm-skills.git",
+    "directory": "pi-memory-lite"
+  },
+  "keywords": ["pi-package", "pi-extension", "pi", "memory", "sqlite", "fts5"],
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "files": ["extensions", "src", "README.md", "DEVELOPER.md", "CHANGELOG.md", "LICENSE"],
+  "scripts": {
+    "test": "node --test test/unit/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:types": "npm run typecheck"
+  },
+  "engines": { "node": ">=22.14" },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
+    "typebox": "1.3.27",
+    "typescript": "^7.0.2",
+    "@types/node": "^22.0.0"
+  }
+}
