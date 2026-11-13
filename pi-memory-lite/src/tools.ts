@@ -55,11 +55,13 @@ export const ReadParams = Type.Object({ ids: Type.Array(Type.Integer(), { minIte
 export const DeleteParams = Type.Object({ ids: Type.Array(Type.Integer(), { minItems: 1, maxItems: 50 }) });
 
 /**
- * The description of `memory_write` (§7.1): what goes in the memory, and the two exclusions the model would otherwise
- * learn by trial — what a future session does not need, and secrets.
+ * The description of `memory_write` (§7.1): what goes in the memory, that a write needs no permission, and the two
+ * exclusions the model would otherwise learn by trial — what a future session does not need, and secrets. The clause
+ * about initiative is the only channel present on every turn: the skill that says the same is read on demand, and a
+ * session that only advertises it asks the user before writing, which is what four smoke runs showed.
  */
 const WRITE_DESCRIPTION =
-  "Save one durable fact, preference, decision or environment note to global memory. Write only what a future session needs; never secrets.";
+  "Save one durable fact, preference, decision or environment note to global memory. Write on your own initiative, without asking permission; what a future session needs only; never secrets.";
 
 /** The `<tools>` line of `memory_write`: it appears in the default system prompt, so it is budget, not documentation. */
 const WRITE_SNIPPET = "Save a durable fact, preference or decision to global memory";

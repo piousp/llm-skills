@@ -4,6 +4,37 @@ All notable changes to this project are documented in this file. The format is b
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-13
+
+The usage skill that the non-`direct` exposures needed ships with the package.
+
+### Added
+
+- `skills/memory-lite/SKILL.md`: the triggers of the memory, which the four tool descriptions do not carry. When to
+  write without being asked (a working preference the repository does not hold, a design decision with its reason, an
+  environment gotcha, an unwritten convention, the location of an external resource, a stable fact of the setup that
+  changed how something was done), when to search first (a project or a technology the memory may have touched, before
+  a write, when the user says something was already discussed, before proposing a configuration change, and the
+  catalog when no query word is obvious), what never goes in (secrets, what the repository or `AGENTS.md` already
+  states, task state, long dumps, unverified assumptions), the mechanics of a write (one fact per entry, category from
+  the vocabulary in force, one to three slug keys, a soft ceiling of ten unrequested writes per session, one announced
+  line per write, correction as delete plus write) and one line on reaching the tools under `codemode` and `deferred`.
+  It repeats no tool description: the skill says when, the tools say what.
+- The skill is declared in the `pi` manifest as `"skills": ["./skills"]` and carried in the tarball by the `files`
+  list, so an install of the package gets it with no configuration to write.
+- `README.md`: a section on the skill, on its permanent cost and on `/skill:memory-lite`, linked from the saving
+  guidance.
+
+### Changed
+
+- `memory_write` says that a write needs no permission: "Write on your own initiative, without asking permission".
+  The skill that says the same is read on demand, and four smoke runs showed what happens without the clause in the
+  description: the model searched the memory, read the skill, and then asked the user before writing. The four
+  descriptions now spend 1403 of the 1500 characters the budget allows.
+- `ROADMAP.md` records the skill as shipped instead of open. The permanent cost of its description is accepted, not
+  argued away, and the measurement of writes per session, of noise and of the catalog becomes the work that adjusts
+  the content afterwards.
+
 ## [0.1.0] - 2026-11-13
 
 First version: global memory for pi exposed as four tools, with no npm dependencies and no memory content

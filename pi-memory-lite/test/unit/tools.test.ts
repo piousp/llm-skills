@@ -130,7 +130,7 @@ test("tools: las cuatro se declaran en orden con su snippet, sus anotaciones y l
   // The lengths are the ones of the table in the contract: a longer description is permanent context, not documentation.
   assert.deepEqual(
     tools.map((tool) => tool.description.length),
-    [136, 184, 31, 89],
+    [187, 184, 31, 89],
   );
   assert.deepEqual(
     tools.map((tool) => tool.promptSnippet),

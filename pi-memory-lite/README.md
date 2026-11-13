@@ -3,7 +3,7 @@
 Global memory for [pi](https://pi.dev) that never enters the system prompt. It holds the durable facts, preferences
 and decisions a later session would otherwise rediscover, in one SQLite database the model reaches through four tools.
 Nothing the memory holds is injected: under the default exposure the declarations of those four tools are the whole of
-what the model is told, 1352 characters of the 1500 the package allows itself.
+what the model is told, 1403 characters of the 1500 the package allows itself.
 
 [![npm version](https://badge.fury.io/js/pi-memory-lite.svg)](https://badge.fury.io/js/pi-memory-lite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -46,7 +46,7 @@ A change applies to the next session, or immediately after `/reload`.
 
 `exposure` decides how the four tools reach the model, never what the memory holds.
 
-`direct`, the default, declares them the way built-in tools are declared. That is the 1352 characters above.
+`direct`, the default, declares them the way built-in tools are declared. That is the 1403 characters above.
 
 `codemode` and `deferred` keep those four declarations out of `<tools>`, at the price of the model having to discover
 them. The tools stay registered either way: what changes is what the prompt says about them. With `codemode` active they
@@ -92,6 +92,23 @@ share.
 The memory is curated by hand. There is no automatic write at the end of a turn, no summarisation and no
 consolidation: what is in it is what someone chose to put there. Correcting an entry means deleting it and writing it
 again, which gives it a new id, so an id quoted in an older part of a transcript stops pointing at the text it named.
+
+The skill that ships with the package carries the triggers behind that list, for the model rather than for the person
+reading this: see [The skill](#the-skill).
+
+## The skill
+
+`skills/memory-lite/SKILL.md` travels with the package. It holds when to write without being asked, when to search
+before starting or before writing, what never goes in, and the mechanics of a write: one fact per entry, the session's
+category vocabulary, one to three slug keys, a soft ceiling of ten unrequested writes per session, one line announced
+per write. The four tools say what a call takes and returns; the skill says when to make one, so the two do not repeat
+each other.
+
+A skill is advertised by its name and its description, and that pair stays in the system prompt of every session that
+has the package installed. The cost is paid by all of them: by `codemode` and `deferred`, where the guidance is worth
+something, and by `direct` too, where the four tools are already declared and the skill changes nothing about how they
+arrive. The body is only read on demand, and `/skill:memory-lite` forces it when a session has to be sure. Like the
+tool descriptions, the skill adds no memory content to the prompt.
 
 ## Privacy
 

@@ -3,9 +3,10 @@
 What 0.1.0 deliberately does not build, in the order the work would be taken up. This file is tracked by git and left
 out of the `files` list of `package.json`, so it never ships to npm.
 
-Three things are parked here: project-scoped databases, export/import from markdown, and the usage skill that the
-non-`direct` exposures need. The first two are a single stage, because the second is only worth designing once the
-first says where a memory lives.
+Two things are parked here: project-scoped databases, and export/import from markdown. They are a single stage, because
+the second is only worth designing once the first says where a memory lives. The usage skill that the non-`direct`
+exposures need was parked here with them and 0.2.0 ships it, so it is recorded at the end of this file as a decision
+taken rather than as work to take up.
 
 ## Stage 2 — project-scoped memory
 
@@ -59,7 +60,7 @@ Decisions still open:
    avoids. This is an obligation, not a choice.
 6. **Duplicates at import.** Report how many rows were skipped. A silent import that drops half is indistinguishable
    from one that worked.
-7. **Tools or a CLI command.** Two more tools cost permanent prompt on a budget already 148 characters from its
+7. **Tools or a CLI command.** Two more tools cost permanent prompt on a budget already 97 characters from its
    ceiling. A `pi memory export` command costs nothing per turn. Recommend the CLI.
 
 ## The usage skill and the non-`direct` exposures
@@ -84,18 +85,20 @@ Two mechanics that the decision depends on, both from the host:
   `"defaultTools": ["+tool_search"]` or `--tools` (`docs/cli.md:184`). Whoever selects `deferred` does that
   themselves, or the tools are unreachable in practice.
 
-The skill exists for that second point. It is not the only channel: the `<memory_lite>` section of the system prompt
-names the four tools and the mechanism that reaches them on any turn whose prompt does not declare them, so a session
-with `deferred`, an active `tool_search` and a registry that holds the four is told to search. What the skill would add is the body of usage guidance,
-which the section does not carry because it has to stay under 360 characters and free of memory content. Its description
-stays in `<skills>` permanently (85–140 estimated tokens) and its body is read on demand, so the chain is skill
-description, `SKILL.md`, then whichever mechanism the exposure left available. The open decision is whether the package
-ships that skill or documents how to write one, and it waits on the measurement it was always meant to depend on: how
-many writes a session really makes, and how many of them are noise.
+The skill exists for that second point, and it is shipped. 0.2.0 adds `skills/memory-lite/SKILL.md`, declared in the
+`pi` manifest as `"skills": ["./skills"]` and carried in the tarball by the `files` list of `package.json`. Its
+description stays in `<skills>` permanently (85–140 estimated tokens) and its body is read on demand, so the chain is
+skill description, `SKILL.md`, then whichever mechanism the exposure left available.
 
-What would make it fire: more than two or three writes per session that nobody asked for, or a catalog — `memory_search`
-with no query returns counts per category and the most used keys — showing one key repeated across entries. The remedies
-go cheap first. Tighten the four tool descriptions, which have 148 characters of margin in the 1500-character budget, and
-only write the skill if that does not hold. If it is written, it belongs in `~/.pi/agent/skills` as a personal skill
-rather than in what the package ships: a shipped description is paid by every session of every install, the `direct` ones
-included, where it changes nothing.
+The objection that kept it out of 0.1.0 was its cost, and the cost is accepted rather than argued away: a shipped
+description is paid by every session of every install, the `direct` ones included, where it changes nothing. The table
+above counts declarations only, so every row now carries that description on top. The alternative, a personal skill
+under `~/.pi/agent/skills`, keeps the guidance with the person who wrote it and leaves the `deferred` and `codemode`
+users, the ones who need it, without it.
+
+What the decision was meant to depend on is measurement, and it moves to the work that follows: how many writes a
+session really makes, how many of them are noise, and whether the catalog (`memory_search` with no query, which returns
+counts per category and the most used keys) shows one key repeated across entries. That measurement no longer gates the
+skill; it adjusts what the skill says. The cheap remedy stays first on the list: tighten the four tool descriptions,
+which have 97 characters of margin in the 1500-character budget, and change the skill only where the numbers ask for
+it.

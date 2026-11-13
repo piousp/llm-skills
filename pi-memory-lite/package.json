@@ -1,6 +1,6 @@
 {
   "name": "pi-memory-lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Global, zero-dependency memory for pi that never injects memory content into the system prompt",
   "type": "module",
   "license": "MIT",
@@ -12,9 +12,10 @@
   },
   "keywords": ["pi-package", "pi-extension", "pi", "memory", "sqlite", "fts5"],
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
   },
-  "files": ["extensions", "src", "README.md", "DEVELOPER.md", "CHANGELOG.md", "LICENSE"],
+  "files": ["extensions", "skills", "src", "README.md", "DEVELOPER.md", "CHANGELOG.md", "LICENSE"],
   "scripts": {
     "test": "node --test test/unit/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",

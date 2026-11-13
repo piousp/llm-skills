@@ -92,13 +92,13 @@ Every setting is read and applied inside `session_start`; a change applies on th
 
 ## Context budget
 
-The permanent cost of the package with `exposure: "direct"` is **1352 of the 1500 characters allowed**. The count
+The permanent cost of the package with `exposure: "direct"` is **1403 of the 1500 characters allowed**. The count
 is `description + promptSnippet + JSON.stringify(parameters)` over the four tools, as they arrive at
 `pi.registerTool` inside the `session_start` handler:
 
 | Tool | Description | Snippet | Schema | Total |
 |---|---|---|---|---|
-| `memory_write` | 136 | 60 | 259 | 455 |
+| `memory_write` | 187 | 60 | 259 | 506 |
 | `memory_search` | 184 | 69 | 211 | 464 |
 | `memory_read` | 31 | 30 | 128 | 189 |
 | `memory_delete` | 89 | 27 | 128 | 244 |
