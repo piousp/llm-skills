@@ -1,6 +1,6 @@
 // The conditional section this package writes into the system prompt, and the one place its conditions and its wording
 // live. Pure: no host import, no I/O, no clock. The section is a function of the session state the host hands the
-// `before_agent_start` handler, so every branch is a test of two string lists and, for the choice of mechanism, of the
+// `before_agent_start` handler, so every branch is a test of three string lists and, for the choice of mechanism, of the
 // exposure the settings resolved.
 //
 // Why it exists at all: `exposure` and the session's tool list together decide whether the model is told these four tools
@@ -12,6 +12,12 @@
 // What the section never does: carry memory content. It names the tools and the mechanism that reaches them, and the
 // promise of the package is "never silently unusable" — in the unreachable case the section reports and nothing
 // self-heals.
+//
+// Why the registry is read first: the two tool lists say what the prompt declares, and they cannot tell "hidden for this
+// turn" apart from "not there at all". A `-t` allowlist that leaves one of the four out filters it out of the session
+// registry, and a tool the registry does not hold is not merely undeclared: `tool_search` cannot return it and a codemode
+// script cannot call it. `registeredTools` is what carries that distinction, so a name missing from it short-circuits both
+// mechanisms instead of promising one that cannot work.
 //
 // Why the exposure is read here, and at exactly one point: `tool_search` only indexes the tools whose exposure is
 // `codemode` or `deferred` (`isSearchable` of the host's tool-search extension), so it is a remedy only for the modes that
@@ -41,23 +47,31 @@ export type MemoryPromptSection = {
 
 /**
  * The state of the host's prompt the section is a function of, and the whole of its input. The two lists decide whether
- * there is a section and which names it spells; the exposure decides only which of the two mechanisms the section may
- * promise, because `tool_search` indexes only the non-`direct` tools.
+ * there is a section and which names it spells; the registry decides whether any mechanism can reach the tools at all; the
+ * exposure decides only which of the two mechanisms the section may promise, because `tool_search` indexes only the
+ * non-`direct` tools.
  */
 export type MemoryPromptInput = {
   /** `systemPromptOptions.selectedTools`, as the host lists them for this turn. */
   readonly selectedTools: readonly string[];
   /** `systemPromptOptions.hiddenTools`: what `prepareLoadout` removed from the declarations requests. */
   readonly hiddenTools: readonly string[];
+  /**
+   * The names the session registry holds, from `pi.getAllTools()`. The two lists above cannot tell a declaration hidden for
+   * this turn apart from a tool the session does not have, and a `-t` allowlist that leaves one of the four out means the
+   * second: no search returns it and no script calls it.
+   */
+  readonly registeredTools: readonly string[];
   /** The `exposure` resolved from the settings for this session, which is what explains why the declarations are gone. */
   readonly exposure: Exposure;
 };
 
 /**
  * The section this turn needs, or `undefined` when the four tools are declared and the prompt already names them. The
- * order of the branches is the contract: `tool_search` before `codemode`, because a declared `tool_search` keeps the
- * tools declared for the rest of the session and a script would have to be written again on every turn — but only when
- * the exposure is one of the two that `tool_search` indexes.
+ * order of the branches is the contract: a name the registry does not hold comes first, because then neither mechanism can
+ * reach it; then `tool_search` before `codemode`, because a declared `tool_search` keeps the tools declared for the rest of
+ * the session and a script would have to be written again on every turn — but only when the exposure is one of the two
+ * that `tool_search` indexes.
  */
 export function memoryPromptSectionFor(input: MemoryPromptInput): MemoryPromptSection | undefined {
   const declared = input.selectedTools.filter((name) => !input.hiddenTools.includes(name));
@@ -66,6 +80,13 @@ export function memoryPromptSectionFor(input: MemoryPromptInput): MemoryPromptSe
   // Nothing to report, and `undefined` rather than an empty string: an empty body is a section the host skips, so
   // returning one would leave the delete branch of the entrypoint without its invariant.
   if (missing.length === 0) return undefined;
+
+  // A tool the session registry does not hold is out of reach of both mechanisms, so naming one would send the model after
+  // something that never comes back — the defect that four turns of a live session were spent on. The text is unchanged
+  // because it is true here: the tools are not declared, and neither mechanism can call them.
+  if (MEMORY_TOOL_NAMES.some((name) => !input.registeredTools.includes(name))) {
+    return { kind: "unreachable", text: unreachableText(joinNames(missing)) };
+  }
 
   const names = joinNames(missing);
   // The one place the exposure is read: `tool_search` cannot find a tool whose exposure is `direct`, so promising it there

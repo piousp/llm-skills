@@ -75,8 +75,10 @@ permanent prompt savings and costs discoverability:
 
 Two mechanics that the decision depends on, both from the host:
 
-- `codemode` and `deferred` tools stay callable and findable, so they are not lost. `hidden` is the only value that
-  makes a tool unreachable, and `resolveExposure` does not accept it.
+- `codemode` and `deferred` tools stay callable and findable, so they are not lost. `hidden` is the only exposure that
+  makes a tool unreachable, and `resolveExposure` does not accept it. The session's `tools` allowlist is the other way
+  there: it filters the tool out of the registry altogether, which is why the section reads the registry and reports
+  that case as unreachable.
 - pi does not turn on `tool_search` or `codemode` for extension tools; only the MCP extension activates them, and
   only for MCP servers that need them (`docs/mcp.md:206`). `tool_search` is off by default and is enabled with
   `"defaultTools": ["+tool_search"]` or `--tools` (`docs/cli.md:184`). Whoever selects `deferred` does that
@@ -84,7 +86,7 @@ Two mechanics that the decision depends on, both from the host:
 
 The skill exists for that second point. It is not the only channel: the `<memory_lite>` section of the system prompt
 names the four tools and the mechanism that reaches them on any turn whose prompt does not declare them, so a session
-with `deferred` and an active `tool_search` is told to search. What the skill would add is the body of usage guidance,
+with `deferred`, an active `tool_search` and a registry that holds the four is told to search. What the skill would add is the body of usage guidance,
 which the section does not carry because it has to stay under 360 characters and free of memory content. Its description
 stays in `<skills>` permanently (85–140 estimated tokens) and its body is read on demand, so the chain is skill
 description, `SKILL.md`, then whichever mechanism the exposure left available. The open decision is whether the package

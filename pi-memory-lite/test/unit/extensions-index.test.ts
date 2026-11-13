@@ -104,6 +104,11 @@ interface HostOptions {
   /** What `getAllTools()` reports besides the tools this instance registers, which is where a collision comes from. */
   readonly tools?: readonly MemoryLiteToolInfo[];
   /**
+   * The names the session registry holds, when a test pins them instead of letting the listing answer what the
+   * registration recorded. It is the state a `-t` allowlist leaves: the tools this instance registered are not there.
+   */
+  readonly registry?: readonly string[];
+  /**
    * The ordinal of the `registerTool` call that throws, counted from one, for the session whose registration fails in the
    * middle of the loop: the fake host answers the third registration the way pi answers a name it refuses.
    */
@@ -180,8 +185,10 @@ function makeHost(options: HostOptions = {}): Host {
     },
     getAllTools() {
       guard("getAllTools");
-      // The listing pi answers after the registration: the seeded tools of other extensions plus this instance's own,
-      // each one labelled with the file that registered it.
+      // A test that pins the registry gets exactly the names it pinned: that is what a `-t` allowlist leaves, a listing
+      // without the tools this instance registered. Otherwise the listing pi answers after the registration: the seeded
+      // tools of other extensions plus this instance's own, each one labelled with the file that registered it.
+      if (options.registry !== undefined) return options.registry.map((name) => ({ name }));
       const own = registered.map((tool) => ({ name: tool.name, sourceInfo: { path: OUR_SOURCE } }));
       return [...(options.tools ?? []), ...own];
     },
@@ -435,7 +442,8 @@ test("prompt: en direct las cuatro declaradas dejan el prompt sin sección", asy
 // `deferred` keeps the four out of the prompt and an active `tool_search` is the mechanism that reaches them: the section
 // names it, costs one key and one patch, and fits under the character ceiling. The exposure has to be one of the two that
 // took the declarations away; with `direct` the section would name the script instead, because `tool_search` indexes only
-// non-`direct` tools.
+// non-`direct` tools. The fake host's registry mirrors what this instance registered, which is the session whose allowlist
+// did name the four — the opposite state of the case right below this one.
 test("prompt: con tool_search y sin las tools la sección llega al prompt", async (t) => {
   const dir = tempDir(t);
   const host = makeHost({ settings: settings({ exposure: "deferred" }) });
@@ -452,6 +460,36 @@ test("prompt: con tool_search y sin las tools la sección llega al prompt", asyn
   assert.equal(section.includes("\n"), false, "la sección es un párrafo y no lleva saltos de línea");
   assert.ok(section.length <= 360, `la sección no puede pasar 360 caracteres; llegó: ${section.length}`);
   assert.deepEqual(host.notified, [], "con un mecanismo que las alcanza no hay aviso");
+});
+
+// The other half of the same question: the model is told to search only when the registry holds the four tools. A `-t`
+// allowlist that leaves them out removes them from the session, so `tool_search` could never return one — the section has to
+// say they are unreachable and name the allowlist among the ways out, even with `tool_search` declared and `deferred` set.
+test("prompt: una allowlist que filtra las tools lleva a la sección inalcanzable", async (t) => {
+  const warn = t.mock.method(console, "warn", () => undefined);
+  const dir = tempDir(t);
+  const host = makeHost({
+    settings: settings({ exposure: "deferred" }),
+    registry: ["read", "bash", "tool_search"],
+  });
+  registerMemoryLite(host.pi, seamsFor(dir));
+  host.enable();
+  await host.start();
+
+  const options = await host.agentStart({ selectedTools: ["read", "bash", "tool_search"] });
+
+  const section = options.sections[MEMORY_SECTION];
+  assert.ok(section !== undefined, `la sección tiene que llegar al prompt; llegó: ${JSON.stringify(options.sections)}`);
+  assert.deepEqual(Object.keys(options.sections), [MEMORY_SECTION], "la sección agrega una sola clave");
+  assert.equal(section.includes("unreachable"), true, `sin las tools en el registro la sección dice que no se alcanzan; llegó: ${section}`);
+  assert.equal(section.includes("tool_search; a match"), false, "no puede prometer una búsqueda que no puede devolverlas");
+  assert.equal(section.includes("tools allowlist"), true, "la sección tiene que nombrar la allowlist entre las salidas");
+  assert.ok(section.length <= 360, `la sección no puede pasar 360 caracteres; llegó: ${section.length}`);
+
+  // Unreachable is the case the user has to fix, so it warns once per instance with the section's own words.
+  const notices = host.notified.filter((notice) => notice.message === section);
+  assert.equal(notices.length, 1, `el aviso sale una sola vez por instancia; llegó: ${JSON.stringify(host.notified)}`);
+  assert.deepEqual(consoleWarnings(warn), [`[pi-memory-lite] ${section}`], "el log recibe la misma cadena que la sección");
 });
 
 // `codemode` is the other mechanism: the section names the script, which is the only way to call a tool the prompt does

@@ -16,9 +16,13 @@ const TOOL_SEARCH = "tool_search";
 /** The host's `codemode`, whose scripts call any registered tool by name. */
 const CODEMODE = "codemode";
 
-/** The input of a session that declares the four, which is the state the default exposure leaves. */
+/**
+ * The input of a session that declares the four, which is the state the default exposure leaves. The registry holds them
+ * too: the default state of a session is that the four declarations exist and are in the prompt, and every test that is
+ * about another branch overrides only what that branch reads.
+ */
 function input(overrides: Partial<MemoryPromptInput> = {}): MemoryPromptInput {
-  return { selectedTools: [...ALL], hiddenTools: [], exposure: "direct", ...overrides };
+  return { selectedTools: [...ALL], hiddenTools: [], exposure: "direct", registeredTools: [...ALL], ...overrides };
 }
 
 // The default exposure: the four declarations are in `<tools>` already, so the section would repeat the prompt.
@@ -95,6 +99,33 @@ test("prompt: con exposure direct el aviso no promete tool_search", () => {
   assert.equal(section?.kind, "codemode", `con exposure direct la sección no puede nombrar tool_search; llegó: ${section?.text}`);
   assert.equal(section?.text.includes("tool_search"), false, "la sección no puede prometer una búsqueda que no indexa estas tools");
   assert.equal(section?.text.includes("searchTools"), true, "la sección nombra el script, que sí las alcanza");
+});
+
+// The defect this branch exists for: a `-t` allowlist that does not name the four filters them out of the session
+// registry, so they are not merely undeclared — they are not there for `tool_search` to find and not there for a script to
+// call. The section has to say they are unreachable even though `tool_search` is declared.
+test("prompt: una tool ausente del registro de la sesión lleva al caso inalcanzable", () => {
+  const section = memoryPromptSectionFor(
+    input({
+      selectedTools: ["read", "bash", TOOL_SEARCH],
+      exposure: "deferred",
+      registeredTools: ALL.filter((name) => name !== "memory_write"),
+    }),
+  );
+
+  assert.equal(section?.kind, "unreachable", `sin la tool en el registro la sección no puede prometer un mecanismo; llegó: ${section?.text}`);
+  assert.equal(section?.text.includes("unreachable"), true, "la sección tiene que decir que no se alcanzan");
+  assert.equal(section?.text.includes("tool_search; a match"), false, "la búsqueda no puede devolver una tool que no está");
+});
+
+// El registro con las cuatro no cambia nada: la comprobación nueva no puede tragarse el camino normal, y la exposición
+// sigue decidiendo cuál de los dos mecanismos nombra la sección.
+test("prompt: el registro con las cuatro deja decidir a la exposición", () => {
+  const section = memoryPromptSectionFor(
+    input({ selectedTools: ["read", "bash", TOOL_SEARCH], exposure: "deferred", registeredTools: [...ALL] }),
+  );
+
+  assert.equal(section?.kind, "tool_search", `con las cuatro en el registro la exposición decide; llegó: ${section?.text}`);
 });
 
 // The list is a sentence and not a dump: one name alone, two joined by "and", and the rest by commas with the last one

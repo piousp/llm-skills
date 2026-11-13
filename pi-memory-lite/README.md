@@ -56,7 +56,9 @@ drop them; with `deferred` nothing lists them at all.
 That is what the `<memory_lite>` section is for. On a turn whose prompt does not declare the four, it names them and the
 mechanism that reaches them in the running session. `tool_search` is named only when the exposure is `codemode` or
 `deferred`: that tool indexes exactly those two and never `direct`, so in a session whose declarations were taken away
-another way a search could not return them. A codemode script is named instead when `codemode` is active, since
+another way a search could not return them. It is also named only when the session registry holds the four, since it can
+find nothing the registry does not list: an explicit `-t` allowlist that leaves them out lands in the unreachable case
+instead, even with `tool_search` active. A codemode script is named instead when `codemode` is active, since
 `searchTools("memory")` and `ALL_TOOLS` find them there, and it is the only one of the two that reaches a `direct` tool
 that the prompt does not declare. When neither can reach them the section says that they are unreachable, and names the
 ways out: enable `tool_search` (`"defaultTools": ["+tool_search"]`), enable `codemode`

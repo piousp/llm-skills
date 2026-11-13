@@ -217,7 +217,11 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
     if (!registered || exposure === undefined) return;
 
     const { selectedTools, hiddenTools } = event.systemPromptOptions;
-    const section = memoryPromptSectionFor({ selectedTools, hiddenTools, exposure });
+    // The registry as the session holds it, which is what a `-t` allowlist filters and what the turn's two lists cannot
+    // express: a name missing here is reachable by neither `tool_search` nor a codemode script. Read inside the handler
+    // and not at load, where `getAllTools()` still throws.
+    const registeredTools = api.getAllTools().map((tool) => tool.name);
+    const section = memoryPromptSectionFor({ selectedTools, hiddenTools, registeredTools, exposure });
 
     // The delete branch is the invariant of this handler: no section means no key at all, so the host never wraps an
     // empty body and the next turn's patch is the absence of the entry rather than an empty string.

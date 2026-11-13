@@ -39,9 +39,12 @@ ever entering the system prompt.
   scripts, and `deferred` leaves them to `tool_search`; the last two cost nothing per request.
 - `src/prompt.ts` and a third handler: when a turn does not declare the four tools, the extension adds one
   `<memory_lite>` section naming them and the mechanism that reaches them — `tool_search` when the exposure is
-  `codemode` or `deferred`, a codemode script, or the fact that neither can reach them, with the ways out, the
-  tools allowlist among them. The section is deleted again once the tools are declared, costs one patch and nothing
-  per turn, and never carries memory content. The unreachable case also warns once per instance, in the same words.
+  `codemode` or `deferred` and the session registry holds the four, a codemode script, or the fact that neither can
+  reach them, with the ways out, the tools allowlist among them. The registry check is what tells a declaration hidden
+  for the turn apart from a tool the session does not have: a `-t` allowlist that leaves one of the four out lands in
+  the unreachable case instead of being pointed at a search that cannot return it. The section is deleted again once
+  the tools are declared, costs one patch and nothing per turn, and never carries memory content. The unreachable case
+  also warns once per instance, in the same words.
 - The default data directory is `<agentDir>/lite-memories`.
 - The default category vocabulary is ten slugs: `general`, `decision`, `preference`, `env`, `project`, `gotcha`,
   `convention`, `workflow`, `reference` and `person`, in that order.
@@ -58,7 +61,7 @@ earlier build has to be moved by hand, or copied over with `memory_write`.
   used for duplicate detection and the denormalized `terms` column.
 - Documentation: `README.md` for the user who installs the package, `DEVELOPER.md` for whoever maintains it, and
   this changelog.
-- Test suites over `node --test`, one per module plus the extension entrypoint and a concurrency suite: 190
+- Test suites over `node --test`, one per module plus the extension entrypoint and a concurrency suite: 193
   tests, among them the context budget measured on what `registerTool` receives, the truncated-caps arithmetic,
   the degraded search, the index resynchronization, the migration path and two real processes writing to the
   same database at once.
