@@ -3,8 +3,10 @@
 Run: cd pablo-pr-review && python3 -m unittest discover -s evals -p 'test_*.py' -v
 """
 
+import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -127,6 +129,105 @@ class BuildOutput(unittest.TestCase):
     def test_no_report_means_no_candidates(self):
         out = fc.build_output({"number": 1}, "me", "t", [], [], [], {"head": {}}, None)
         self.assertNotIn("candidates", out)
+
+
+def page(*threads, has_next=False, cursor="c1"):
+    return {"data": {"repository": {"pullRequest": {"reviewThreads": {
+        "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
+        "nodes": [{"isResolved": r, "isOutdated": o, "comments": {"nodes": [{"databaseId": i} for i in ids]}}
+                  for r, o, ids in threads]}}}}}
+
+
+class ThreadStates(unittest.TestCase):
+    def test_every_comment_of_a_thread_gets_its_state(self):
+        got = fc.thread_states([page((True, False, [1, 2]), (False, True, [3]))])
+        self.assertEqual(got, {1: {"resolved": True, "outdated": False}, 2: {"resolved": True, "outdated": False},
+                               3: {"resolved": False, "outdated": True}})
+
+    def test_empty_or_malformed_pages_give_no_states(self):
+        self.assertEqual(fc.thread_states([{}, {"data": None}, page()]), {})
+
+
+class CommentStatus(unittest.TestCase):
+    def test_resolved_wins_then_outdated_then_open(self):
+        states = {1: {"resolved": True, "outdated": True}, 2: {"resolved": False, "outdated": True},
+                  3: {"resolved": False, "outdated": False}}
+        self.assertEqual([fc.comment_status({"id": i, "line": 5}, states) for i in (1, 2, 3)],
+                         ["resolved", "outdated", "open"])
+
+    def test_null_line_is_outdated_without_thread_state(self):
+        self.assertEqual(fc.comment_status({"id": 9, "line": None}, {}), "outdated")
+        self.assertEqual(fc.comment_status({"id": 9, "line": 4}, {}), "open")
+
+
+class BuildAllAuthorsOutput(unittest.TestCase):
+    PR = {"host": "github.example.com", "org": "acme", "repo": "widget", "number": 42}
+
+    def build(self, states):
+        inline = [
+            dict(comment(1, "src/main/java/com/acme/widget/Backoff.java", 25), user={"login": "other"}, line=25,
+                 html_url="https://h/pull/42#discussion_r1", body="b"),
+            dict(comment(2, "src/main/java/com/acme/widget/Backoff.java", 25), user={"login": "me"}, line=None,
+                 html_url="https://h/pull/42#discussion_r2", body="c"),
+        ]
+        return fc.build_all_authors_output(
+            self.PR, "t", inline,
+            [{"id": 9, "user": {"login": "author"}, "state": "COMMENTED", "body": "r", "html_url": "https://h/r9"}],
+            [{"id": 8, "user": {"login": "bot"}, "body": "i", "html_url": "https://h/i8"}],
+            {"state": "open", "head": {"sha": HEAD}}, states, {"head_sha": HEAD, "findings": FINDINGS})
+
+    def test_keeps_every_author_with_link_and_status(self):
+        out = self.build({1: {"resolved": True, "outdated": False}})
+        self.assertEqual([(c["author"], c["link"], c["status"]) for c in out["inline"]],
+                         [("other", "https://h/pull/42#discussion_r1", "resolved"),
+                          ("me", "https://h/pull/42#discussion_r2", "outdated")])
+        self.assertEqual((out["reviews"][0]["author"], out["reviews"][0]["link"]), ("author", "https://h/r9"))
+        self.assertEqual((out["issue"][0]["author"], out["issue"][0]["link"]), ("bot", "https://h/i8"))
+        self.assertTrue(out["resolved_state"])
+        self.assertEqual(out["candidates"][0]["comment_id"], 1)
+
+    def test_failed_graphql_degrades_to_open_and_outdated(self):
+        out = self.build(None)
+        self.assertFalse(out["resolved_state"])
+        self.assertEqual([c["status"] for c in out["inline"]], ["open", "outdated"])
+
+    def test_default_output_is_unchanged(self):
+        out = fc.build_output({"number": 1}, "me", "t", [dict(comment(1, "a", 1), user={"login": "me"})], [], [], {"head": {}}, None)
+        self.assertNotIn("author", out["inline"][0])
+        self.assertNotIn("resolved_state", out)
+
+
+class GhThreads(unittest.TestCase):
+    def run_pages(self, outputs):
+        results = [mock.Mock(returncode=0, stdout=json.dumps(o), stderr="") for o in outputs]
+        with mock.patch.object(fc.subprocess, "run", side_effect=results) as run:
+            return fc.gh_threads("h.example.com", {"org": "acme", "repo": "widget", "number": 42}), run
+
+    def test_follows_pagination_cursor(self):
+        (pages, run) = self.run_pages([page((False, False, [1]), has_next=True, cursor="abc"), page((True, False, [2]))])
+        self.assertEqual(len(pages), 2)
+        self.assertNotIn("after=abc", run.call_args_list[0].args[0])
+        self.assertIn("after=abc", run.call_args_list[1].args[0])
+        self.assertEqual(run.call_args_list[0].args[0][:5], ["gh", "api", "--hostname", "h.example.com", "graphql"])
+
+    def test_gh_failure_raises(self):
+        bad = mock.Mock(returncode=1, stdout="", stderr="denied")
+        with mock.patch.object(fc.subprocess, "run", return_value=bad):
+            with self.assertRaises(RuntimeError):
+                fc.gh_threads("h", {"org": "o", "repo": "r", "number": 1})
+
+
+class MainAllAuthors(unittest.TestCase):
+    def test_graphql_failure_still_outputs_without_resolved_state(self):
+        def fake_api(host, endpoint, paginate=True):
+            return {"state": "open", "head": {"sha": HEAD}} if not paginate else []
+        buf = mock.Mock()
+        with mock.patch.object(fc, "gh_api", side_effect=fake_api), \
+             mock.patch.object(fc, "gh_threads", side_effect=RuntimeError("denied")), \
+             mock.patch.object(fc, "_emit", side_effect=lambda out, path: (buf(out), 0)[1]):
+            rc = fc.main(["https://h.example.com/acme/widget/pull/42", "--all-authors"])
+        self.assertEqual(rc, 0)
+        self.assertFalse(buf.call_args.args[0]["resolved_state"])
 
 
 if __name__ == "__main__":

@@ -87,10 +87,13 @@ step to a subagent.
    select's findings verbatim as the step-7 meta findings and put `lessons_mode`, `lessons_applied` and
    `lessons_shadow` into the meta. [NEVER] drop an item; in live mode demoted items appear as `Demoted by lessons: ...`.
 
+5c. **Match existing PR comments** (PR URL input only, every round). Follow
+   `references/existing-comments.md`: the coordinator matches, tiers never change.
+
 6. **Add corrections and draft comments yourself.** Once the merge is done, the coordinator,
    not a subagent, drafts the ≥2 corrections/alternatives per Blocking/Major finding required by the Output
    format below, using its own judgment plus the subagents' problem descriptions as input, then one
-   `Draft comment:` line per item (`references/draft-comments.md`). [NEVER] re-invoke a lens or ask a subagent for fixes.
+   `> Draft comment: <text>` blockquote line per item (`references/draft-comments.md`). [NEVER] re-invoke a lens or ask a subagent for fixes.
 7. **Persist, then print.** Persisting is MANDATORY and the review is not done until
    `write-report` has returned the stored file path. Persist FIRST, with tool calls, before the
    final message (`references/learning-loop.md` § Report file): write the exact report text to a `mktemp`
@@ -139,6 +142,7 @@ Verdict: PASS | NEEDS WORK | BLOCK - <N> blocking, <N> major, <N> minor (outside
 <one line if the diff serves a single purpose; if it bundles several, enumerate each as its own
 line ("1. <purpose>; 2. <purpose>"). Must appear before any file's findings.>
 <up to 3 lines `Resolved by lookup: <id> <one-line answer>` (step 4)>
+<only if the fetch of step 5c failed: `Existing comments: not checked (<reason>)`>
 <on a rebased PR: `PR was rebased; no incremental diff` (merge-rules.md § Re-review)>
 <at most one line, only if a lens flagged build metadata: **FYI (not counted):** <artifact/version note> (merge-rules.md § Routing)>
 <optional **Strengths:** 1-2 concrete lines, only if genuine; never counted.>
@@ -158,7 +162,7 @@ is what the reader uses to judge every finding below it.>
 
 <then every item for this file, in tier order. Every item's head opens with its id and tier, in
 this one shape for B/M/Q/I/G/T/O: `**<id> [<tier> - <lens(es)>] <location>: <text>**`.
-Every B/M/Q/I/T/O item ends with one extra `Draft comment:` line. Blocking and Major use this four-part shape; Question and Minor use the one-line shapes below it:>
+Every B/M/Q/I/T/O item ends with one extra `Draft comment:` line, written as a blockquote `> Draft comment: <text>` after a blank line. Blocking and Major use this four-part shape; Question and Minor use the one-line shapes below it:>
 
 **M1 [Major - <lens(es)>] <file:line or file:L12-L18 or file:L12,L27,L41>: <title: the comment you would post on that line, plain language>**  (Blocking: `B1 [Blocking - ...]`)
 - **What:** what the defect/violation is, in one or two plain sentences.
@@ -173,20 +177,26 @@ Every B/M/Q/I/T/O item ends with one extra `Draft comment:` line. Blocking and M
   trade-offs, so the user picks which one (if any) to apply. [NEVER]
   apply a fix yourself, [NEVER] present a single "the fix is X" without
   an alternative to weigh against it.
-Draft comment: <the comment to post, addressed to the author, 1-2 sentences>
+
+Already raised by <author> (<link>, <open|resolved|outdated>)   <- only on an item matched in step 5c; any tier, right before its Draft comment
+
+> Draft comment: <the comment to post, addressed to the author, 1-2 sentences>
 
 Cite the exact location inline; for a multi-line issue cite the full set,
 [NEVER] just its first or most visible line.
 
 **Q1 [Question - <lens(es)>] <file:line>: <the question to post>** · What to check: <exact lookup> · If <answer>: <tier it would become>
-Draft comment: <...>
+
+> Draft comment: <...>
+
 **I1 [Minor - <lens(es)>] <file:line>: <the comment to post>** · <one sentence: why it matters> · Suggestion: <replacement or comment-ready text>
-Draft comment: <...>
+
+> Draft comment: <...>
 
 **Nits (optional):** <one line each: `**T1 [Nit - <lens>] <file:line>: <comment to post> → <exact replacement>**`,
-each followed by its `Draft comment:` line; checklist Nits only, never counted.>
+each followed by its `> Draft comment:` blockquote; checklist Nits only, never counted.>
 
-**Observations (not actionable):** <one line each: `**O1 [Observation - refactor-identification] <file:line>: <note>**` + `Draft comment:` line,
+**Observations (not actionable):** <one line each: `**O1 [Observation - refactor-identification] <file:line>: <note>**` + `> Draft comment:` blockquote,
 P2/P3 observations ("pre-existing, not actionable in this diff"). Never counted in the Summary.>
 
 ### <next file>
@@ -251,6 +261,8 @@ On "harvest PR <url>" (or when offered at a re-review) follow `references/learni
 - [NEVER] ask a subagent for fixes (the coordinator drafts them, step 6). Exception: naming
   the missing assertion/test is part of a pablo-test-review finding.
 - [ALWAYS] read `references/draft-comments.md` before drafting; [NEVER] delegate drafting.
+- [NEVER] let an existing-comment match (step 5c) change a tier or the verdict, count in the
+  tally, or drop an item; a matched item keeps its tier and gets a supportive draft.
 - [ALWAYS] persist per step 7 (`scripts/store.py write-report`, git-ignored `reviews/`
   ledger): the only file this skill keeps from a review.
 - [NEVER] preview the four subagent prompts before dispatching: the diff and the lens are already fixed.

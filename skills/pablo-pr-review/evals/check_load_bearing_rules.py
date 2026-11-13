@@ -19,6 +19,7 @@ MERGE_RULES = SKILL_MD.parent / "references" / "merge-rules.md"
 LEARNING_LOOP = SKILL_MD.parent / "references" / "learning-loop.md"
 TAXONOMY = SKILL_MD.parent / "references" / "taxonomy.md"
 DRAFT_COMMENTS = SKILL_MD.parent / "references" / "draft-comments.md"
+EXISTING_COMMENTS = SKILL_MD.parent / "references" / "existing-comments.md"
 GITIGNORE = SKILL_MD.parent / ".gitignore"
 LENS_SKILLS = [
     SKILL_MD.parent.parent / n / "SKILL.md"
@@ -457,10 +458,36 @@ def check_draft_comment_line(text: str) -> bool:
     draft = _norm(_read(DRAFT_COMMENTS))
     return (
         "Every B/M/Q/I/T/O item ends with one extra `Draft comment:` line" in t
+        and "`> Draft comment: <text>`" in t
+        and "> Draft comment: <" in text
+        and "`> Draft comment: " in draft
         and "references/draft-comments.md" in t
         and "[NEVER] delegate drafting" in t
         and "The coordinator writes every line itself" in draft
         and "[NEVER] delegate drafting to a subagent" in draft
+    )
+
+
+def check_existing_comments_match(text: str) -> bool:
+    """SKILL.md step 5c points to existing-comments.md and pins the marker and the failure line; the
+    reference says the coordinator matches and that tiers never change."""
+    t = _norm(text)
+    ref = _norm(_read(EXISTING_COMMENTS))
+    return (
+        "5c. **Match existing PR comments**" in t
+        and "references/existing-comments.md" in t
+        and "the coordinator matches, tiers never change" in t
+        and "Already raised by <author> (<link>, <open|resolved|outdated>)" in t
+        and "`Existing comments: not checked (<reason>)`" in t
+        and "[NEVER] let an existing-comment match (step 5c) change a tier or the verdict" in t
+        and "The coordinator matches. [NEVER] use a subagent or any extra call." in ref
+        and "never change a tier, the verdict, or the Summary tally" in ref
+        and "[NEVER] suppress, merge or drop a matched item" in ref
+        and "Existing comments: not checked (<reason>)" in ref
+        and "Already raised by <author> (<link>, <open|resolved|outdated>)" in ref
+        and "--all-authors" in ref
+        and "already matched to a prior report item" in ref
+        and "supportive reply" in ref
     )
 
 
@@ -502,6 +529,7 @@ CHECKS = [
     ("blocking_validation_step", check_blocking_validation_step),
     ("blocking_validation_rules", check_blocking_validation_rules),
     ("draft_comment_line", check_draft_comment_line),
+    ("existing_comments_match", check_existing_comments_match),
 ]
 
 

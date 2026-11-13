@@ -123,6 +123,7 @@ When the user already commented on the PR:
 1. `gh api --hostname <host> user -q .login`, then
    `gh api --hostname <host> --paginate repos/<org>/<repo>/pulls/<n>/comments`, filtered to
    that login, and read the previous report(s) in `reviews/<repo>/pr<n>-r*.md`.
+   Comments matched here get no `Already raised by` marker (`existing-comments.md`).
 2. Open the report with a table, one row per prior comment or prior item. The status table
    has EXACTLY three columns: `Prior item | Title | Status` (Status = `resolved` | `open` |
    `outdated`, optionally with a short reason after a colon). A full re-run adds no extra

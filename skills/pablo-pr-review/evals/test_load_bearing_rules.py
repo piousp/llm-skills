@@ -197,8 +197,8 @@ class NeverSuppressList(unittest.TestCase):
 
 
 class CheckCount(unittest.TestCase):
-    def test_thirty_seven_checks(self):
-        self.assertEqual(len(c.CHECKS), 37)
+    def test_thirty_eight_checks(self):
+        self.assertEqual(len(c.CHECKS), 38)
 
 
 if __name__ == "__main__":

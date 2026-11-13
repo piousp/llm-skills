@@ -46,12 +46,14 @@ under a second, offline.
 | `approval_message_shape` | `learning-loop.md` pins the English approval message: header line, max 3 questions, answers a-f, proposals line, reply grammar, nothing written before the reply. |
 | `blocking_validation_step` | SKILL.md has step 5a and points to `merge-rules.md` § Blocking validation. |
 | `blocking_validation_rules` | `merge-rules.md` has `## Blocking validation`: CONFIRMED / REFUTED / UNVERIFIABLE handling, and timeout, failed call or no verdict counts as UNVERIFIABLE. |
-| `draft_comment_line` | B/M/Q/I/T/O items end with a `Draft comment:` line; `draft-comments.md` exists and the coordinator drafts, never a subagent. |
+| `draft_comment_line` | B/M/Q/I/T/O items end with a `> Draft comment:` blockquote line; `draft-comments.md` exists and the coordinator drafts, never a subagent. |
+| `existing_comments_match` | SKILL.md step 5c points to `references/existing-comments.md`, pins the `Already raised by <author> (<link>, <open\|resolved\|outdated>)` marker, the `Existing comments: not checked (<reason>)` failure line and the never-change-tier rule; the reference says the coordinator matches (no subagent) and tiers, verdict and tally never change. |
 
 Also: `test_scripts.py` holds the unit tests for `scripts/store.py` (taxonomy parsing, report
 validation against `evals/fixtures/`, `set-feedback`); `test_fetch_comments.py` tests the pure
 functions of `scripts/fetch_comments.py` (`parse_pr_url`, `filter_login`, `mark_pre_skill`,
-`location_candidates`) on synthetic JSON. Neither touches the network. Run with the command below.
+`location_candidates`, plus the `--all-authors` helpers `thread_states`, `comment_status`,
+`build_all_authors_output`, with `gh` mocked) on synthetic JSON. Neither touches the network. Run with the command below.
 
 ## How to run it
 
