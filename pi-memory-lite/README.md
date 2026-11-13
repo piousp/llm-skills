@@ -25,7 +25,7 @@ Settings live in the `pi-memory-lite` block of `~/.pi/agent/settings.json`:
 ```json
 {
   "pi-memory-lite": {
-    "dir": "/home/you/memories",
+    "dir": "/home/you/lite-memories",
     "categories": [
       "general", "decision", "preference", "env", "project",
       "gotcha", "convention", "workflow", "reference", "person"

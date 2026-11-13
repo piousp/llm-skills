@@ -45,12 +45,6 @@ ever entering the system prompt.
   the unreachable case instead of being pointed at a search that cannot return it. The section is deleted again once
   the tools are declared, costs one patch and nothing per turn, and never carries memory content. The unreachable case
   also warns once per instance, in the same words.
-- The default data directory is `<agentDir>/lite-memories`.
-- The default category vocabulary is ten slugs: `general`, `decision`, `preference`, `env`, `project`, `gotcha`,
-  `convention`, `workflow`, `reference` and `person`, in that order.
-
-The previous default path, `<agentDir>/memories`, is no longer read. No migration touches it: a memory written by an
-earlier build has to be moved by hand, or copied over with `memory_write`.
 - A readable error instead of a failed load on a Node older than 22.14, where every call names the version
   found and the one required.
 - `src/render.ts`: call and result renderers for the TUI, one collapsed line per call and per result, the text
@@ -65,3 +59,13 @@ earlier build has to be moved by hand, or copied over with `memory_write`.
   tests, among them the context budget measured on what `registerTool` receives, the truncated-caps arithmetic,
   the degraded search, the index resynchronization, the migration path and two real processes writing to the
   same database at once.
+
+### Changed
+
+- The default data directory is `<agentDir>/lite-memories`, and the previous default path, `<agentDir>/memories`, is
+  no longer read. No migration touches it: a memory written by an earlier build has to be moved by hand, or copied over
+  with `memory_write`. `PI_MEMORY_LITE_DIR` and `settings.dir` still win over the default, so a configured install keeps
+  reading the directory it names.
+- The default category vocabulary went from five slugs to ten: `general`, `decision`, `preference`, `env`, `project`,
+  `gotcha`, `convention`, `workflow`, `reference` and `person`, in that order. The vocabulary is closed by default
+  (`allowUnknownCategory: false`), so this widens what can be written without configuring anything.

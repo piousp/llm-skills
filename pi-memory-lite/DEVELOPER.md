@@ -129,6 +129,40 @@ being hidden. It was not used, for two reasons: those bullets are part of the de
 `direct` as well, where the prompt already names the tools; and a bullet lives inside `<rules>`, so adding or removing it
 makes that whole section the diff unit, while a section of its own is a patch of one key.
 
+### Measuring the prompt
+
+No test can see the rendered system prompt: the host builds it after the handlers run and does not export the builder.
+The suite pins what can be pinned — the section map is not mutated in `direct`, the texts and their ceilings — and the
+rest is measured in a real session with a probe that costs nothing:
+
+```ts
+// A throwaway extension, loaded after the package's own: it captures the prompt and exits before the model is called.
+import { writeFileSync } from "node:fs";
+export default function probe(pi: any) {
+  pi.on("before_agent_start", (event: any, ctx: any) => {
+    writeFileSync(process.env.PROBE_OUT!, JSON.stringify({
+      prompt: event.systemPrompt,
+      sections: event.systemPromptOptions.sections,
+      selectedTools: event.systemPromptOptions.selectedTools,
+      registry: pi.getAllTools().map((tool: any) => `${tool.name}:${tool.exposure}`),
+    }));
+    process.exit(0);
+  });
+}
+```
+
+`PROBE_OUT=out.json pi --no-session -e extensions/index.ts -e probe.ts -t read,bash \
+  memory_write,memory_search,memory_read,memory_delete -p ok` writes the prompt and stops; the `-p` text never reaches a
+model. Three rules make the number mean something: pass `-e` for the probe **after** the package's extension, because
+handlers run in load order and the section is written by the package's handler; use the same `-t` on both sides of a
+diff, or the allowlist difference is measured instead of the extension; and never measure in `session_start`, where the
+tools are not registered yet and the diff is empty for the wrong reason.
+
+What that measurement has to keep showing: `direct` differs from a session without the extension in exactly the four
+`<tools>` lines, 255 bytes; a mode that keeps them out adds exactly one `<memory_lite>` block; and no stored memory text
+appears in the prompt in either case. A configuration change is checked the same way, with the block edited in the
+project's `.pi/settings.json` under `--approve`.
+
 ## Test rules
 
 - One file per module, named after the module: `src/query.ts` is tested in `test/unit/query.test.ts`. The
