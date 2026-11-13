@@ -21,7 +21,7 @@ by step.
 ## Process
 
 1. **Get the scope.** Ask the user for exactly one of:
-   - A diff/branch/PR link → resolve like `pablo-code-review` step 1 (`gh pr diff <url>`,
+   - A diff/branch/PR link → resolve like `pablo-pr-review` step 1 (`gh pr diff <url>`,
      `git diff <range>`, or `git diff origin/<parent>...HEAD`).
    - A file path → read it in full.
    - A function/symbol name → locate it and read its containing file in full.
@@ -209,4 +209,4 @@ Load methodology from its owner by name; never duplicate it.
   instead of new behavior.
 - `pablo-tdd`: seam mechanics: tests observe behavior at public boundaries only, and the seam
   is confirmed with the user before any test is written.
-- `pablo-code-review`: the diff-resolution and parallel-dispatch pattern this skill follows.
+- `pablo-pr-review`: the diff-resolution and parallel-dispatch pattern this skill follows.

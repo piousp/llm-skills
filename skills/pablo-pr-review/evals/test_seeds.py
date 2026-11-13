@@ -1,7 +1,7 @@
 """Tests for the seed lessons in ml-lessons/ (and, when present, the git-ignored repo-lessons/).
 
 They check the schema and the trigger/action contract select_lessons.py relies on, never the ledger
-counts (those move with every harvest). Run: cd pablo-code-review && python3 -m unittest discover -s evals -p 'test_*.py'
+counts (those move with every harvest). Run: cd pablo-pr-review && python3 -m unittest discover -s evals -p 'test_*.py'
 """
 
 import json

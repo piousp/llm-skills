@@ -1,6 +1,6 @@
 """Unit tests for scripts/fetch_comments.py: pure functions on synthetic JSON, no network.
 
-Run: cd pablo-code-review && python3 -m unittest discover -s evals -p 'test_*.py' -v
+Run: cd pablo-pr-review && python3 -m unittest discover -s evals -p 'test_*.py' -v
 """
 
 import sys

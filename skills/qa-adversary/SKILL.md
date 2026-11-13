@@ -190,7 +190,7 @@ Write a coverage line only for a path that carries a Finding or a consumer-visib
   BLOCK/HIGH/MEDIUM/LOW rating (merge layer: Blocker/Major/Minor); do not demote it to a question.
 - Never modify code. Never run or delegate tests. Bash stays read-only.
 - Stay out of code-review-checklist's lane (quality/style) and `pablo-test-review`'s lane (unit coverage, whether a test can fail).
-- One finding = one root cause = one fix: two causes in one hunk are two findings; one cause seen through two lenses is one finding (definition: `pablo-code-review` `references/merge-rules.md` § Root cause).
+- One finding = one root cause = one fix: two causes in one hunk are two findings; one cause seen through two lenses is one finding (definition: `pablo-pr-review` `references/merge-rules.md` § Root cause).
 - Report `file:line` for everything. Keep it scannable.
 - The reference examples fix the reporting discipline, not a bug taxonomy. A finding must come
   from the diff in front of you. If you are matching an example instead of constructing a

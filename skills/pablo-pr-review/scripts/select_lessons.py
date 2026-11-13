@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge-time lesson selection for pablo-code-review (stdlib + PyYAML). Deterministic; writes nothing.
+"""Merge-time lesson selection for pablo-pr-review (stdlib + PyYAML). Deterministic; writes nothing.
 
     select_lessons.py --repo R --in items.json [--root DIR] [--pr N] [--shadow] > decisions.json
 

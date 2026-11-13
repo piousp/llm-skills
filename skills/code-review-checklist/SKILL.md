@@ -1,7 +1,7 @@
 ---
 name: code-review-checklist
 description: >-
-  Read-only quality review of the current changes against Pablo's checklist. Use for "checklist", "review my changes" or "ready to merge". [DO NOT] use for bugs (use qa-adversary) or test quality (use pablo-test-review).
+  Read-only quality review of a diff against Pablo's checklist; most items carry a pablo-code-philosophy principle tag. Use for "checklist" or "code review checklist". [DO NOT] use for bugs (use qa-adversary), test quality (use pablo-test-review), or a full branch or PR review (use pablo-code-review or pablo-pr-review).
 ---
 
 Applying this lens, you act as a code reviewer. Your job is to validate changes against a strict checklist. You do NOT modify code.
@@ -44,6 +44,14 @@ Every comment gets exactly one tier; tag each reported line with it:
 - **Question**: missing context the author should clarify; not a violation by itself
 - **FYI**: informational point, no action required
 
+## Principle tags
+
+Each reported line carries exactly one principle tag when its section or item has one, after its tier: `YAGNI`, `KISS`, `DRY`, `SOLID`,
+`FP`, `Data` or `Boundaries` (the `pablo-code-philosophy` principles). A section header names
+its default tag (`tag: X`); an item with an inline `(tag: X)` overrides it. Sections with no tag
+emit none. A merging caller reads the tag to apply its own strictness; the tier you assign is
+unchanged by it.
+
 ## When NOT to report (gate)
 
 Run every candidate violation through these gates before reporting it. A
@@ -72,7 +80,12 @@ silence is the output).
   file the branch touched for other reasons: FYI at most, one line.
 - **G5**: one item per root cause. Violations that one fix removes are one item listing every
   rule they break; an item needing two independent fixes is two items (definition:
-  `pablo-code-review` `references/merge-rules.md` § Root cause).
+  `pablo-pr-review` `references/merge-rules.md` § Root cause).
+
+- **G6**: conflict rule. When fixing one candidate would create another, report only the one
+  precedence favors. YAGNI gates everything: never suggest an abstraction or GoF pattern for a
+  variation that doesn't exist in the diff today. Then KISS > DRY > SOLID; exception: DRY vs
+  SRP, SRP wins. A Suggestion never violates a higher-precedence principle.
 
 Nits (Consistency, Naming, Comments) survive the gate but never flip a
 verdict and never take more than one line each.
@@ -91,21 +104,28 @@ verdict and never take more than one line each.
 
 ### Design & Functionality (Minor; Major with a named consequence)
 
-- Duplicate functionality: the same behavior already exists in a library or module the change
-  should reuse
-- Abstraction-level mismatch: generic code embedded in a specific module where it can't be reused
-- New architectural pattern where the project already has an established one
-- Feature or abstraction added before it's needed (YAGNI); ask the "right time" question
+- Duplicate functionality (tag: DRY): the same behavior already exists in a library or module
+  the change should reuse
+- Abstraction-level mismatch (tag: SOLID): generic code embedded in a specific module where it
+  can't be reused
+- New architectural pattern where the project already has an established one (tag: DRY)
+- Feature or abstraction added before it's needed (tag: YAGNI); ask the "right time" question
 - Functionality doesn't do what the author intends: edge cases, error paths, concurrency,
   user-visible behavior
+- Assumption not pinned: the added code relies on an invariant (non-empty, present, ordered,
+  unique, validated) that no comment, test or type in the diff pins. If the invariant can
+  actually break, that is `qa-adversary`'s finding; G5 merges the two
 - Examples per language: read `references/design-functionality.scala.md`,
   `references/design-functionality.java.md`, `references/design-functionality.ts.md`
 
-### Data Shape (Minor; Major with a named consequence)
+### Data Shape (Minor; Major with a named consequence; tag: Data)
 
 - New conditionals that could be eliminated by fixing the data structure
 - Boolean parameter added by the diff that selects between two behaviors, with ≥1 caller passing a literal `true`/`false` (should be two functions); a flag fed from config or request data is not a violation
-- Inheritance where composition suffices (excluding ADTs)
+- Inheritance where composition suffices (excluding ADTs) (tag: SOLID)
+- Placeholder value: a neutral, empty or sentinel instance added to satisfy a caller, not a
+  real domain case (e.g. `Order.empty`, `""`, `-1` meaning none). Reference:
+  `pablo-code-philosophy` `references/principles/KISS.md#every-value-of-a-type-must-name-a-domain-case`
 - Special-case insanity: a pile of conditionals patching around a data model that should encode
   the case directly
 - Closed set of strings: ≥2 string constants added by the diff that are the allowed values of
@@ -115,7 +135,7 @@ verdict and never take more than one line each.
 - Examples per language: read `references/datashape.scala.md`, `references/datashape.java.md`,
   `references/datashape.ts.md`
 
-### Complexity (Minor; Major with a named consequence)
+### Complexity (Minor; Major with a named consequence; tag: KISS)
 
 - Size: report growth relative to the function's size, caused by the diff: doubling a
   50-line function is a violation, a few lines added to an already long one is not. No
@@ -131,31 +151,35 @@ verdict and never take more than one line each.
 - Examples per language: read `references/complexity.scala.md`, `references/complexity.java.md`,
   `references/complexity.ts.md`
 
-### Boundaries (Minor; Major with a named consequence)
+### Boundaries (Minor; Major with a named consequence; tag: Boundaries)
 
 - Business logic in controller/handler/entry point
-- Side effects mixed with pure computation in same function
-- Implicit dependency instead of explicit injection
-- Brain-damaged API: interface shape makes the common case awkward to call correctly
-- Object orgy: a caller reaches through an object's internals instead of going through its interface
+- Side effects mixed with pure computation in same function (tag: FP)
+- Implicit dependency instead of explicit injection (tag: FP)
+- Brain-damaged API: interface shape makes the common case awkward to call correctly (tag: KISS)
+- Object orgy: a caller reaches through an object's internals instead of going through its interface (tag: SOLID)
+- Orchestrator returns instructions instead of the result, or re-asks what the callee already
+  answered. Reference: `pablo-code-philosophy`
+  `references/principles/KISS.md#return-the-result-not-the-instructions`
 - Examples per language: read `references/boundaries.scala.md`, `references/boundaries.java.md`,
   `references/boundaries.ts.md`
 
 ### Scope Discipline (Question, at most 1 per review)
 
-- A file or element unrelated to the task: one Question anchored on its first added line
+- Every changed line traces to the change's objective (as stated by the caller; else inferred
+  from commit messages or the PR description). A file or element that doesn't: one Question anchored on its first added line
   ("why is X in this change?"); [NEVER] ask to split the PR
 - Adjacent code reformatted beyond the request, or imports/variables removed that weren't
   left unused by this change: Nit
 - Garbage patch (broad, unrelated changes disguised as cleanup): the one Question above,
   naming them
 
-### Abstractions (Minor; Major with a named consequence)
+### Abstractions (Minor; Major with a named consequence; tag: YAGNI)
 
 - New abstraction without a second concrete use case today (YAGNI)
 - Generic utility for a single call site
 - Error handling for a scenario that cannot occur
-- Enterprise sludge: factories/builders/managers/config knobs layered onto a trivial task
+- Enterprise sludge (tag: KISS): factories/builders/managers/config knobs layered onto a trivial task
 - Added class, method, parameter or dependency with zero callers in the repo: Question "who uses this?" (Scope law grep, Process step 3)
 - Examples per language: read `references/abstractions.scala.md`, `references/abstractions.java.md`,
   `references/abstractions.ts.md`
@@ -169,7 +193,7 @@ verdict and never take more than one line each.
 - Production code only: constants in test code (timeouts, poll intervals,
   fixture values) are test data, not config candidates; see gate G1
 
-### Immutability & FP (Minor; Major with a named consequence)
+### Immutability & FP (Minor; Major with a named consequence; tag: FP)
 
 - Mutable variable where const/final/readonly works
 - Function modifies its input arguments
@@ -186,7 +210,7 @@ verdict and never take more than one line each.
 - Examples per language: read `references/error-handling.scala.md`,
   `references/error-handling.java.md`, `references/error-handling.ts.md`
 
-### Structural Code Smells (Minor; Major with a named consequence)
+### Structural Code Smells (Minor; Major with a named consequence; tag: SOLID)
 
 Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512298570/article1.pdf)
 (Bloater / OO Abuser / Change Preventer / Dispensable / Coupler):
@@ -195,7 +219,7 @@ Tagged by [Mäntylä–Lassenius bucket](http://lib.tkk.fi/Diss/2009/isbn9789512
 - Circular dependency [Coupler]: at module or build-graph level (SBT subproject / Maven module cycles); package cycles inside one module are not reported as findings (see `Data:` line in Output format)
 - Constant interface [OO Abuser]: Java only: interface used solely to hold constants (Effective
   Java, Item 22, "use interfaces only to define types")
-- Sequential coupling [Coupler]: API requires calls in an undocumented, easy-to-get-wrong order
+- Sequential coupling [Coupler] (tag: KISS): API requires calls in an undocumented, easy-to-get-wrong order
 
 Deliberately NOT checked here (documented so they aren't silently reintroduced): *Anemic domain
 model* - contradicts `pablo-code-philosophy`'s (and its FP mechanics reference's) prescribed separation of
@@ -213,10 +237,13 @@ already covered under Red Flags.
 - Hand-wavy claims: a statement about performance, safety, or correctness in a comment/PR
   description with no test or benchmark backing it
 
-### Consistency (Nit)
+### Consistency (Nit, except the precedent item)
 
 - Change doesn't match the surrounding file/module's existing idioms, even where no style guide
   covers it explicitly
+- Closest precedent ignored: the nearest existing code solves the same problem differently and
+  the diff gives no reason why. Minor (the only non-Nit item here), with the precedent's
+  file:line in the suggestion
 
 ### Naming clarity (Nit)
 
@@ -246,40 +273,40 @@ already covered under Red Flags.
 - [Blocker] file:line: violation
 
 ### Design & Functionality: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Data Shape: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Complexity: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Boundaries: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Scope Discipline: pass | FAIL
 - [Question] file:line: why is <element> in this change?
 
 ### Abstractions: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Config vs Code: pass | FAIL
 - [Minor|Major] file:line: description
 
 ### Immutability & FP: pass | FAIL
-- [Minor|Major] file:line: description
+- [Minor|Major] [tag] file:line: description
 
 ### Error Handling & Resources: pass | FAIL
 - [Minor|Major] file:line: description
 
 ### Structural Code Smells: pass | FAIL
-- [Minor|Major] file:line: smell name [bucket]: description
+- [Minor|Major] [tag] file:line: smell name [bucket]: description
 
 ### Comments & Documentation: pass | FAIL
 - [Nit|Major] file:line: description
 
 ### Consistency: pass | FAIL
-- [Nit] file:line: description
+- [Nit|Minor] file:line: description
 
 ### Naming clarity: pass | FAIL
 - [Nit] file:line: description
@@ -289,10 +316,13 @@ already covered under Red Flags.
 Data: <optional, only when package cycles were observed; never a finding>
 ```
 
+Line shape: `- [Minor] [KISS] file:line: description` (tier first, then the tag when the item
+has one; `[tag]` in the sections above is optional and omitted for untagged items).
+
 ## Rules
 
 - NEVER modify source code or test code
-- Report violations with file:line references, each tagged with its severity tier
+- Report violations with file:line references, each tagged with its severity tier, then its principle tag when the section or item has one (`- [Minor] [KISS] file:line: ...`)
 - If a section has zero violations, print "pass", do not elaborate
 - Keep output scannable: one line per violation
 - A single Blocker means the verdict is NEEDS WORK regardless of everything else; otherwise NEEDS WORK iff ≥1 Major. Minor, Nit, Question and FYI never flip the verdict

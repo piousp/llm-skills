@@ -7,7 +7,7 @@ agents"](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 `code-review-checklist` is a **process lens invoked explicitly**: the skill
 is a read-only review methodology, not a base-model capability gap. It IS
 auto-discovered from its description — the trigger phrases ("checklist",
-"review my changes", "am I ready to merge") live there, and trigger probes
+"code review checklist") live there, and trigger probes
 (negative control, English trigger phrase) plus L3 LLM-judge specs verify
 that discovery and post-trigger behavior. What the eval does NOT tune is the
 description text itself; it adapts the articles' method: define success
@@ -84,7 +84,7 @@ working files (or in the prompt-embedded diff for the self-contained case),
 that fixture A's `src/orders.ts` really contains an over-complex (>25-line) `processOrders`,
 that every `expected_checks` id exists in `CHECK_REGISTRY`, and runs
 synthetic-transcript smoke tests for the key checks, including
-`minor_has_suggestion` (expected-pass / expected-fail pairs). No LLM tokens are spent.
+`minor_has_suggestion` and `planted_bool_param_tagged_data` (expected-pass / expected-fail pairs). No LLM tokens are spent.
 
 Live runs cost real LLM tokens and are gated behind `PI_LIVE_EVAL=1`, not
 part of any default/offline suite:
@@ -126,8 +126,8 @@ pointed at a subagent extension would be the next addition.
 ## Prompt language
 
 All prompts and judge specs are in English (the skill is public). One prompt
-(`english_trigger_phrase`) locks in the description's trigger phrases ("Am I
-ready to merge?", "Run the code review checklist"). The checks grade the
+(`english_trigger_phrase`) locks in the description's trigger phrase ("Run the
+code review checklist"). The checks grade the
 *response* against SKILL.md's English output contract (`## Review:`,
 `Verdict:`): the lens's output format is
 the contract. `minor_has_suggestion` enforces that every `[Minor]` line

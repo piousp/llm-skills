@@ -229,6 +229,23 @@ def _make_planted_check(name: str):
     return check
 
 
+def check_planted_bool_param_tagged_data(tool_calls, final_text, **ctx) -> bool:
+    """The planted boolean parameter is reported as a `- [Minor] [Data] file:line:`
+    line. Every Minor line naming the planted token and file must carry the
+    `[Data]` principle tag (Data Shape section default); an untagged one, or
+    no such Minor line at all, fails."""
+    planted = _planted(ctx, "bool_param")
+    if planted is None:
+        return False
+    token, file = planted
+    lines = [
+        m.group(1)
+        for m in (re.match(r"\s*- \[Minor\](.*)", ln) for ln in final_text.splitlines())
+        if m and file in m.group(1) and token.lower() in m.group(1).lower()
+    ]
+    return bool(lines) and all(re.match(r"\s*\[Data\]\s", ln) for ln in lines)
+
+
 def check_clean_diff_all_pass(tool_calls, final_text, **ctx) -> bool:
     """A clean diff must yield no violations (Blocker/Major/Nit) and no FAIL
     section; Question/FYI are informational, not violations. Verdict must be
@@ -306,6 +323,7 @@ CHECK_REGISTRY = {
     "no_diff_graceful_base": check_no_diff_graceful_base,
     "negative_control_no_review": check_negative_control_no_review,
     "minor_has_suggestion": check_minor_has_suggestion,
+    "planted_bool_param_tagged_data": check_planted_bool_param_tagged_data,
 }
 for _planted_name in (
     "secret", "mutable_let", "swallowed_catch", "bool_param", "complexity",
@@ -572,6 +590,16 @@ def _run_smoke_tests() -> list[str]:
             problems.append("smoke minor_has_suggestion: Minor without suggestion accepted")
         if not check_minor_has_suggestion([], "- [Nit] a.ts:3: naming"):
             problems.append("smoke minor_has_suggestion: no-Minor review rejected")
+
+        # --- planted_bool_param_tagged_data
+        _bp = CHECK_REGISTRY["planted_bool_param_tagged_data"]
+        _bp_fx = {"planted": {"bool_param": ("verbose", "orders.ts")}}
+        if not _bp([], "- [Minor] [Data] orders.ts:12: boolean param `verbose`; use `formatVerbose()`", fixture=_bp_fx):
+            problems.append("smoke planted_bool_param_tagged_data: tagged Minor rejected")
+        if _bp([], "- [Minor] orders.ts:12: boolean param `verbose`; use `formatVerbose()`", fixture=_bp_fx):
+            problems.append("smoke planted_bool_param_tagged_data: untagged Minor accepted")
+        if _bp([], "- [Minor] [KISS] orders.ts:12: boolean param `verbose`; split it", fixture=_bp_fx):
+            problems.append("smoke planted_bool_param_tagged_data: wrong tag accepted")
 
         # --- clean_diff_all_pass counts Minor as a violation
         if check_clean_diff_all_pass([], "- [Minor] a.ts:1: x; use y\nREADY"):

@@ -210,7 +210,7 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
    pattern; update each candidate's measure. Drop candidates below threshold.
    Verify: every surviving candidate's measure meets its row's threshold.
 8b. Merge candidates that share a root-cause line into one RF (one root cause = one fix;
-    definition: `pablo-code-review` `references/merge-rules.md` § Root cause); name the
+    definition: `pablo-pr-review` `references/merge-rules.md` § Root cause); name the
     merged ones in its Evidence line as "also: A<n> <smell row>".
     Verify: no two candidates share a root-cause line.
 9. Gate every candidate through N1–N10. Name the one fact that decides the row before picking

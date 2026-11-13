@@ -1,6 +1,6 @@
 """Unit tests for scripts/lint_ml_lessons.py (planted leaks use FAKE names only).
 
-Run: cd pablo-code-review && python3 -m unittest discover -s evals -p 'test_*.py' -v
+Run: cd pablo-pr-review && python3 -m unittest discover -s evals -p 'test_*.py' -v
 """
 
 import contextlib

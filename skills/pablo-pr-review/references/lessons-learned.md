@@ -1,4 +1,4 @@
-# Lessons learned — `pablo-code-review` calibration
+# Lessons learned — `pablo-pr-review` calibration
 
 *Working notes from calibrating this skill and its four lenses against real usage.
 Read before changing the output format or adding/removing checklist rules — it explains
@@ -12,7 +12,7 @@ does" explanation with more examples, and (2) every finding structured as
 what / why it happens / consequences / solutions.
 
 **Method:** mined ~40 real session transcripts (the agent session directory) where
-`pablo-code-review` or its four lenses (`qa-adversary`, `code-review-checklist`,
+`pablo-pr-review` or its four lenses (`qa-adversary`, `code-review-checklist`,
 `refactor-identification`) were used, looking for explicit rejections and implicit
 signals (silence, selective posting) in Pablo's follow-up turns.
 
@@ -35,7 +35,7 @@ or fixed in code) vs. silently dropped.
    duplication.
 
 **Edits applied as a result** (all in the 4 skill files, before/after in commit history):
-- `pablo-code-review/SKILL.md`: mandatory "What this code does" walkthrough per file
+- `pablo-pr-review/SKILL.md`: mandatory "What this code does" walkthrough per file
   (plain language, ≥1 worked data example) before any finding; every actionable finding
   restructured as What / Why it happens (≥2 examples) / Consequences / Solutions (≥2
   alternatives); non-actionable P2/P3 observations and nits compacted into a one-line
@@ -96,7 +96,7 @@ declared refactor, or scope creep riding along with it?") and gives Scope Discip
 violations a named baseline to be checked against, instead of discovering the mixing
 mid-review.
 
-**Edit applied:** `pablo-code-review/SKILL.md` — new Process step "Identify the diff's
+**Edit applied:** `pablo-pr-review/SKILL.md` — new Process step "Identify the diff's
 objective(s)" before dispatching the lenses; the `### Summary` output block now
 requires an enumerated list when multiple purposes are present; a corresponding
 `[ALWAYS]` rule was added under `## Rules`.

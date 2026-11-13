@@ -1,7 +1,7 @@
 [
   {
     "id": "dirty_diff_unstaged",
-    "prompt": "Review my uncommitted changes with the code review checklist. I'm about to open a PR for the order and payment processing.",
+    "prompt": "Review my uncommitted changes with the code review checklist. They cover the order and payment processing.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -24,7 +24,7 @@
   },
   {
     "id": "clean_diff_all_pass",
-    "prompt": "Review my changes with the checklist: is this ready to merge?",
+    "prompt": "Review my changes with the checklist.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -56,7 +56,7 @@
   },
   {
     "id": "feature_branch_diff",
-    "prompt": "Review my feature branch against main with the checklist: is it ready for the PR?",
+    "prompt": "Review my feature branch against main with the checklist.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -66,6 +66,7 @@
       "severity_tagged",
       "has_file_line_refs",
       "found_planted_bool_param",
+      "planted_bool_param_tagged_data",
       "no_praise"
     ]
   },
@@ -123,7 +124,7 @@
   },
   {
     "id": "english_trigger_phrase",
-    "prompt": "Am I ready to merge? Run the code review checklist on my changes.",
+    "prompt": "Run the code review checklist on my changes.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",
@@ -138,7 +139,7 @@
   },
   {
     "id": "nit_only_ready",
-    "prompt": "Review these changes with the checklist: can I merge?",
+    "prompt": "Review these changes with the checklist.",
     "should_trigger": true,
     "expected_checks": [
       "no_code_mutation",

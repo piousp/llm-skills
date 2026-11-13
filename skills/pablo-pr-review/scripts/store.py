@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report ledger for pablo-code-review (stdlib + PyYAML).
+"""Report ledger for pablo-pr-review (stdlib + PyYAML).
 
 Commands:
     store.py write-report --meta <json|-> --body <md> [--root DIR] [--backfill]

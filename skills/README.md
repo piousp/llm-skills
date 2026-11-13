@@ -29,11 +29,17 @@ legitimate, which patterns are anti-patterns. Apply it whenever a code change ne
 
 ## Review and QA
 
-**`pablo-code-review`**
+**`pablo-pr-review`**
 Runs four read-only lenses on the same diff and merges them into one report: `qa-adversary` for
 bugs, `code-review-checklist` for style, `refactor-identification` for structural debt, `pablo-test-review` for test quality. Use it for
 a full PR review in one pass. For a narrower question, call one of the lenses directly
 instead.
+
+**`pablo-code-review`**
+Strict review of your own branch before a PR opens. Diffs the branch against the merge-base with
+the default branch, runs the same four lenses, and prints one tier-grouped report where any
+violation of a `pablo-code-philosophy` principle is Major. Print-only: no ledger, no lessons, no
+files kept.
 
 **`qa-adversary`**
 Adversarial QA. Assumes the change is broken until proven otherwise and goes looking for logic
@@ -92,7 +98,7 @@ revising anything longer than a one-line reply.
 
 The `pablo-*` skills form a loose pipeline: `pablo-goal-discovery` clarifies the ask,
 `pablo-code-planning` scopes the work, `pablo-tdd` drives the implementation, and
-`pablo-code-review` (or its component lenses) gates the result before merge.
+`pablo-code-review` gates the branch before the PR opens; `pablo-pr-review` (or its lenses) reviews the open PR.
 `pablo-code-philosophy` sits underneath all of them as the shared rulebook; when a decision needs
 mechanical detail rather than a principle, its `references/fp/` and `references/gof/` carry that
 material.
