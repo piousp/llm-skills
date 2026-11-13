@@ -92,3 +92,10 @@ stays in `<skills>` permanently (85–140 estimated tokens) and its body is read
 description, `SKILL.md`, then whichever mechanism the exposure left available. The open decision is whether the package
 ships that skill or documents how to write one, and it waits on the measurement it was always meant to depend on: how
 many writes a session really makes, and how many of them are noise.
+
+What would make it fire: more than two or three writes per session that nobody asked for, or a catalog — `memory_search`
+with no query returns counts per category and the most used keys — showing one key repeated across entries. The remedies
+go cheap first. Tighten the four tool descriptions, which have 148 characters of margin in the 1500-character budget, and
+only write the skill if that does not hold. If it is written, it belongs in `~/.pi/agent/skills` as a personal skill
+rather than in what the package ships: a shipped description is paid by every session of every install, the `direct` ones
+included, where it changes nothing.
