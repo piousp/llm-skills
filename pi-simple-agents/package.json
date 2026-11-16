@@ -28,6 +28,7 @@
     ]
   },
   "type": "module",
+  "files": ["extensions", "src", "skills", "agents-examples", "README.md", "CHANGELOG.md", "DEVELOPER.md", "LICENSE"],
   "scripts": {
     "test": "node --experimental-strip-types --test test/unit/*.test.ts",
     "test:types": "tsc --noEmit -p tsconfig.json",
