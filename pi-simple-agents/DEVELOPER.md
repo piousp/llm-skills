@@ -51,14 +51,19 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
   (`TranscriptEntry`/`TranscriptState`, pure `applySessionEvent` reducer, one `createTranscriptSink`
   factory). Fed through `runSingleTask`'s `onSessionEvent` seam (`src/run.ts` → `src/task-runner.ts` →
   `src/background-jobs.ts`, which exposes it as `jobs.getTranscript(id)`); append-only, render-free —
-  capturing costs nothing unless a peek window renders it.
+  capturing costs nothing unless a peek window renders it. Every field of `TranscriptState` and of each
+  `TranscriptEntry` variant is `readonly`. `TranscriptSink.snapshot()` returns the live state itself, not
+  a copy: the reducer never mutates, so the reference's identity is the transcript's version (it changes
+  exactly when a fold changes the state, and `tool_execution_update` leaves it alone). `pushEntry`
+  computes how many head entries to evict and builds the new array with a single `slice`.
 - `src/peek-window.ts` — the `/subagents peek` overlay: pure `buildPeekLines` (transcript tail —
   text, 5-line thinking cap, tool starts/ends, elision, frozen settled result), the
   `PeekOverlayComponent` (owns the 250 ms pulse that stops itself once the job settles), and
   `createPeekManager` (fire-and-forget `ctx.ui.custom` fullscreen overlay — one mode, no
   window-size toggle — warn-path on rejection, and a frame whose header is followed by the job's
   model ref on a dim line of its own). Structural `Peek*` theme/keybindings/tui subsets keep it
-  testable without pi-tui.
+  testable without pi-tui. Rendering is cached on two levels: `createEntryWrapCache()` and a per-frame
+  cache inside the component (see [Peek window caches](#peek-window-caches)).
 - `src/session-reconcile.ts` — pure reconciliation of a session's subagent spend from disk
   (backing `/subagents session`): structural shapes for pi `.jsonl` entries, ports of pi's
   `getSessionStats`/`getUsageCostBreakdown`/`computeCacheWaste`, and `buildSubagentSessionReport`
@@ -489,7 +494,10 @@ abort — not just success. It reflects only the tokens/cost accumulated *during
 plain `agentSession.subscribe` listener registered unconditionally alongside the tool-event and
 turn-counter subscriptions (not via the SDK's `AgentSession.getSessionStats()`, which would
 include the caller's forked history for `defaultContext: "forked"` agents). `getContextUsage()` is
-read from the session before it's disposed.
+read from the session before it's disposed. While the run is live, the progress `usage` events read it
+through `throttledContextUsage` (`src/run.ts`): at most one `getContextUsage()` call per 1000 ms, reusing
+the last value inside the window, so the figure can lag by up to a second. `settleOnce` still calls
+`getContextUsage()` fresh, so the final value is exact.
 
 `sessionFile` is attached in that same chokepoint, from `options.sessionManager?.getSessionFile?.()`
 — the run's own persisted session path (see `childSessionDir`, below), or `undefined` when the
@@ -615,7 +623,10 @@ After the bind, `runAgentViaSdk` grants a grace window for background MCP regist
 connects the configured servers when session_start fires but does not await them (pi 1.0.4
 verified, 1.1.0 documented), so `bindExtensions()` resolves before any server has registered a
 tool. When `missingRequestedTools` (the same shared predicate that feeds the bind gate, now
-pattern-aware via `matchesToolEntries` in `src/extension-binding.ts`) reports anything
+pattern-aware via `matchesToolEntries` in `src/extension-binding.ts`; both it and
+`missingRequestedTools` build their `*` regexes with the module's `toolPattern(entry)`, which
+escapes every regex metacharacter except `*`, and `missingRequestedTools` compiles each pattern once
+per call against a `Set` of registered names) reports anything
 unsatisfied right after the bind, `waitForRequestedTools` polls `getAllTools()` every 100 ms
 until every requested name or pattern registers, for at most `REQUESTED_TOOL_GRACE_MS` (10 s —
 the same wait the host's own first prompt grants direct-tool servers; overridable via
@@ -871,7 +882,11 @@ const snapshot = registry.peek(process.cwd());
 The extension at `extensions/index.ts` registers the `subagent` tool with pi's `ExtensionAPI`. Its
 default export is now `async function (pi: ExtensionAPI): Promise<void>` (was sync); activation
 awaits `registry.load(process.cwd())` before building the tool description and calling
-`pi.registerTool(...)`. It:
+`pi.registerTool(...)`. `createModelRuntime()` is started first as `runtimePending`, a promise that
+never rejects (a synchronous throw or a rejection becomes a `ValidationResult` error), and the
+factory awaits it together with the first agent load through `Promise.all([runtimePending,
+registry.load(process.cwd())])`. Every closure that reads the runtime result is registered after
+that await. It:
 
 1. Loads agents and settings via one `createAgentRegistry({ agentsDir, userSettingsPath })`
    instance created **inside the factory** (per session — a nested child session loading this
@@ -1284,7 +1299,14 @@ export function usageCostBreakdown(entries: readonly SessionEntry[]): UsageBreak
 export function computeCacheWaste(entries: readonly SessionEntry[]): CacheWaste;
 export function assistantTurnCount(entries: readonly SessionEntry[]): number;
 export function buildSubagentSessionReport(rootSessionFile: string, fs: ReconcileFs,
-  activeRunIds?: ReadonlySet<string>, mainEntries?: readonly SessionEntry[]): SubagentSessionReport;
+  activeRunIds?: ReadonlySet<string>, mainEntries?: readonly SessionEntry[],
+  opts?: SubagentSessionReportOptions): SubagentSessionReport;
+
+export interface SubagentSessionReportOptions {
+  readonly maxDepth?: number;   // deepest level walked (root's children are depth 1); unbounded when absent
+  readonly withStats?: boolean; // false skips per-child usage stats (left undefined)
+  readonly rootEntries?: readonly SessionEntry[]; // pre-parsed root; it is not read from disk when present
+}
 
 export interface ReconcileFs {
   readTextFile(path: string): string | undefined; // undefined = missing/unreadable
@@ -1369,8 +1391,12 @@ that settled `failed`/`errored`/`cancelled` or orphaned with status `unknown` �
 orphan (a live job in THIS session, via the same `activeRunIds` argument) is never a
 candidate, and deeper descendants/completed runs never qualify. Orphans display as
 `interrupted`: crash, kill, and disconnect are indistinguishable from disk. Orphan
-enrichment reads the parent file a SECOND time (tiny files, accepted cost) for the launch
-acks — `subagentAckEntryOf` reads the persisted `toolResult` of the `subagent` launch (the
+enrichment reuses the parent entries parsed once at the top (`buildRelaunchCandidates(sessionFile,
+fs, activeRunIds?, rootEntries?)` takes them as an optional fourth argument, else reads the file
+once) and passes them to the report with `{ maxDepth: 1, withStats: false, rootEntries }`: the walk
+stops at depth 1 and computes no usage stats, so grandchildren are never read and no longer consume
+the `MAX_CHILDREN_VISITED` budget. For the launch acks,
+`subagentAckEntryOf` reads the persisted `toolResult` of the `subagent` launch (the
 `details: { jobId, runId, task: { agent, task }, params? }` shape `buildSubagentAckResult`
 writes; old pre-1.2.0 acks with their `details.runs` array are tolerated and ignored), giving the
 resume candidate its real `jobId`, agent, and task where `makeRun`'s orphan branch only knew
@@ -1444,6 +1470,37 @@ value, emitted on every change. Three decisions keep it cheap and honest:
 - `onEvent` owns the single post-`done` guard, so late events (usage snapshots riding on the settle
   path, a lost delta) can no longer bring a finished job's progress back.
 
+### Peek window caches
+
+`src/peek-window.ts` avoids re-wrapping and re-assembling a frame that did not change.
+
+- `createEntryWrapCache()` returns `{ lines(seq, content, width), prune(firstSeq), clear(), size() }`.
+  It holds the wrapped lines of `text` and `thinking` entries, keyed by `seq` for one width at a time
+  (a width change clears it) and checked against the entry's content. Tool entries are one line and
+  depend on prefs and theme, so they never go through it; the live `currentText`/`currentThinking`
+  tails are wrapped on every frame. Returned arrays are shared and must not be mutated.
+  `buildFullBody(..., cache?)` takes it as an optional last parameter; without it the body is built
+  exactly as before, so `buildPeekLines` and `peekScrollCap` keep their signatures. The component
+  prunes the cache to `entries[0].seq` after each build (and clears it when there is no transcript),
+  so head eviction cannot make it grow.
+- `thinkingKeptLines` walks the thinking segments from the last one and stops wrapping once it has
+  the last `THINKING_TAIL_LINES` lines; older segments yield `[]`. The `… ` marker still sits on the
+  first visible line of the oldest kept segment.
+- `assemblePeekFrame(job, fullBody, dropped, now, theme, width, offset)` is everything `buildPeekLines`
+  does after `buildFullBody`: scroll slice, elision line, settled result, header and footer. It copies
+  the body before adding lines, so a cached or shared array is never mutated. `buildPeekLines` is
+  `buildFullBody` plus this; `render()` calls `buildFullBody` once, derives the scroll cap from it
+  and clamps the offset, then assembles.
+- Frame key: `FrameKey` is `job.id`, the reference of `job.state`, the reference of
+  `job.progress.usage`, the transcript snapshot's reference, `hideThinking`, `toolsExpanded`,
+  the scroll offset, the elapsed bucket and the theme reference. The bucket is `"settled"` once the
+  job has `settledAt`, else `floor((now - startedAt) / 1000)`. `render(width)` returns a copy of the
+  cached lines when the key and the width match; `invalidate()` drops both the frame and the wrap cache.
+  Prefs and theme changes reach the output through the key, not through the wrap cache.
+- The 250 ms pulse (`tick`) computes the key for an active job and calls `requestRender` only when it
+  differs from the last rendered one, then reschedules. An idle job therefore repaints once per
+  elapsed second. A settled or pruned job gets one final render and the pulse stops.
+
 ### src/job-widget.ts
 
 ```typescript
@@ -1468,6 +1525,11 @@ wires the real `schedule`/`cancel` to `setTimeout`/`clearTimeout` (the handle `u
 never by itself keep the process alive) and `getUi` to whatever `ExtensionContext` was last
 captured from any handler call, gated on `ctx.hasUI` — there is no "current context" otherwise
 reachable from the registry's async `onChange` callback.
+
+The widget remembers the last push as `lastPushed: { ui, key }`, with `key` the lines joined by `\n`.
+A render whose `ui` and `key` both match skips `setWidget`, so a tick or a progress event that
+changes nothing visible costs no host repaint. `setWidget(undefined)` (the lines are gone, or
+`dispose()`) resets `lastPushed`, so the next refresh pushes again.
 
 ## Extension wiring (background jobs)
 
@@ -2026,6 +2088,18 @@ npm run test:types # tsc --noEmit type check
 ```
 
 Tests use Node's built-in test runner (`node:test`) with `node --experimental-strip-types`.
+
+### Benchmarks
+
+`test/bench/` holds microbenchmarks (`peek`, `session`, `widget`, `binding`), outside the `npm test`
+glob. Each prints the median and p95 of about 200 iterations, or call counts. Run one with:
+
+```bash
+node --experimental-strip-types test/bench/<name>.bench.ts
+```
+
+They import only public APIs, so the same file can run against another checkout for a
+before/after comparison.
 
 ### Live e2e smoke test
 
