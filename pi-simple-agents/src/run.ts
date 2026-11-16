@@ -141,6 +141,8 @@ type CreateSessionOpts = Pick<
   "modelRuntime" | "model" | "thinkingLevel" | "tools" | "excludeTools" | "resourceLoader" | "sessionManager"
 >;
 
+export const CONTEXT_USAGE_THROTTLE_MS = 1000;
+
 export interface RunAgentViaSdkOptions {
   modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
   createSession: (opts: CreateSessionOpts) => Promise<Pick<CreateAgentSessionResult, "session">>;
@@ -167,6 +169,9 @@ export interface RunAgentViaSdkOptions {
    * abort, requested tools) — so a consumer never gets a handle on a session
    * the run will not actually use. */
   onSessionReady?: (session: CreateAgentSessionResult["session"]) => void;
+  /** Test seam for the context-usage throttle clock; read only by the
+   * throttle (startedAt/durationMs keep using Date.now). */
+  now?: () => number;
   /** Counterpart to onSessionReady: the session handle is gone (the run's
    * prompt phase ended on any path — success, error, timeout, maxTurns, or
    * abort). Fires at the top of the run's final teardown, before extension
@@ -488,11 +493,16 @@ export function runAgentViaSdk(
         let sessionAborted = false;
         let lastCtx: ReturnType<typeof agentSession.getContextUsage>;
         let lastCtxAt = -Infinity;
+        let ctxSkipped = false;
+        const now = options.now ?? Date.now;
         const throttledContextUsage = () => {
-          const now = Date.now();
-          if (now - lastCtxAt >= 1000) {
+          const t = now();
+          if (t - lastCtxAt >= CONTEXT_USAGE_THROTTLE_MS) {
             lastCtx = agentSession.getContextUsage();
-            lastCtxAt = now;
+            lastCtxAt = t;
+            ctxSkipped = false;
+          } else {
+            ctxSkipped = true;
           }
           return lastCtx;
         };
@@ -508,6 +518,15 @@ export function runAgentViaSdk(
           if (!onProgressEvent) return;
           const progressEvent = toSubagentToolEvent(event) ?? toStreamPhaseEvent(event);
           if (progressEvent) onProgressEvent(progressEvent);
+          if (event.type === "tool_execution_start" && ctxSkipped) {
+            lastCtx = agentSession.getContextUsage();
+            lastCtxAt = now();
+            ctxSkipped = false;
+            onProgressEvent({
+              type: "usage",
+              usage: toRunUsage(usageAcc, lastCtx, isSubscription),
+            });
+          }
           if (usageAcc !== before) {
             onProgressEvent({
               type: "usage",

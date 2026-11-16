@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns } from "../../src/run.ts";
+import { runAgentViaSdk, runWithTimeoutAndAbort, awaitAtMost, clampThinkingLevel, resolveTimeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, resolveMaxTurns, CONTEXT_USAGE_THROTTLE_MS } from "../../src/run.ts";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { MAX_TURNS_LIMIT } from "../../src/overrides.ts";
 import { applyOverrides, applyInvocationOverride, type AgentConfig } from "../../src/agents.ts";
@@ -1617,17 +1617,18 @@ test("runAgentViaSdk: getContextUsage is read before the session is disposed", a
   assert.deepEqual(order, ["getContextUsage", "dispose"]);
 });
 
-test("runAgentViaSdk: two message_end events within 1s read getContextUsage once while streaming", async () => {
+async function runWithClock(times: number[], toolEvents: any[] = []) {
   let calls = 0;
   const u = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.001 };
   const fakeSession = new FakeAgentSession("done", {
     messageEvents: [assistantMessageEnd(u), assistantMessageEnd(u)],
+    toolEvents,
     contextUsage: { tokens: 10, contextWindow: 200000, percent: 0.01 },
   });
   fakeSession._getContextUsageHook = () => { calls++; };
   const createSession = async () => ({ session: fakeSession as any });
   const events: SubagentProgressEvent[] = [];
-
+  let i = 0;
   await runAgentViaSdk(
     makeAgent(),
     "find things",
@@ -1637,12 +1638,38 @@ test("runAgentViaSdk: two message_end events within 1s read getContextUsage once
       resourceLoader: {} as any,
       sessionManager: {} as any,
       onProgressEvent: (e) => events.push(e),
+      now: () => times[Math.min(i++, times.length - 1)],
     },
   );
+  return { calls, usageEvents: events.filter((e) => e.type === "usage").length };
+}
 
-  assert.equal(events.filter((e) => e.type === "usage").length, 2);
+test("runAgentViaSdk: two message_end events within the throttle window read getContextUsage once while streaming", async () => {
+  const { calls, usageEvents } = await runWithClock([0, 0]);
+  assert.equal(usageEvents, 2);
   // 1 throttled live read + 1 fresh read at settle
   assert.equal(calls, 2);
+});
+
+test("runAgentViaSdk: a read THROTTLE-1 ms after the previous one is still throttled", async () => {
+  const { calls } = await runWithClock([0, CONTEXT_USAGE_THROTTLE_MS - 1]);
+  assert.equal(calls, 2);
+});
+
+test("runAgentViaSdk: a read exactly THROTTLE ms after the previous one reads again", async () => {
+  const { calls } = await runWithClock([0, CONTEXT_USAGE_THROTTLE_MS]);
+  assert.equal(calls, 3);
+});
+
+test("runAgentViaSdk: a tool_execution_start after a skipped context read refreshes it and emits one more usage event", async () => {
+  const { calls, usageEvents } = await runWithClock(
+    [0, 500],
+    [{ type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} }],
+  );
+  // 2 message_end usage events + 1 refresh at tool start
+  assert.equal(usageEvents, 3);
+  // live read + refresh at tool start + settle read
+  assert.equal(calls, 3);
 });
 
 test("runAgentViaSdk: getAllTools with an origin:package tool triggers bindExtensions with the host's mode (tui)", async () => {
