@@ -43,7 +43,8 @@ export interface TranscriptState {
   readonly dropped: number;
   /** Running total of stored entry characters; keeps eviction O(evicted). */
   readonly chars: number;
-  /** A text run was split mid-stream: its text_end content is already stored. */
+  /** A text run was split mid-stream: its text_end content is already stored.
+   * Flags hold until the next *_end of the same block or the message_end. */
   readonly textSplit: boolean;
   /** Same as textSplit, for the thinking run. */
   readonly thinkingSplit: boolean;
@@ -128,30 +129,46 @@ function pushEntry(
   return { ...state, entries, chars, dropped: state.dropped + k };
 }
 
+type RunKind = "text" | "thinking";
+
+function runOf(state: TranscriptState, kind: RunKind): { acc: string; split: boolean } {
+  return kind === "text"
+    ? { acc: state.currentText, split: state.textSplit }
+    : { acc: state.currentThinking, split: state.thinkingSplit };
+}
+
+function withRun(state: TranscriptState, kind: RunKind, acc: string, split: boolean): TranscriptState {
+  return kind === "text"
+    ? { ...state, currentText: acc, textSplit: split }
+    : { ...state, currentThinking: acc, thinkingSplit: split };
+}
+
+// Accumulates one delta; an over-long run is cut into a stored segment.
+function appendDelta(state: TranscriptState, kind: RunKind, delta: string): TranscriptState {
+  if (!delta) return state;
+  const { acc, split } = runOf(state, kind);
+  const next = acc + delta;
+  if (next.length <= SEGMENT_SPLIT_CHARS) return withRun(state, kind, next, split);
+  const cut = segmentCut(next);
+  return pushEntry(withRun(state, kind, next.slice(cut), true), { kind, content: next.slice(0, cut) }, cut);
+}
+
 // Closes a text/thinking run: deltas already accumulated are the live
-// truth, `end.content` only closes the run — and covers the redacted /
+// truth, `endContent` only closes the run — and covers the redacted /
 // complete-at-start case where the provider never emitted deltas.
-function finalizeRun(
-  state: TranscriptState,
-  kind: "text" | "thinking",
-  accumulator: string,
-  endContent: string | undefined,
-): TranscriptState {
-  const flag = kind === "text" ? "textSplit" : "thinkingSplit";
-  const cleared =
-    kind === "text"
-      ? { ...state, currentText: "", textSplit: false }
-      : { ...state, currentThinking: "", thinkingSplit: false };
-  if (accumulator === "") {
+function finalizeRun(state: TranscriptState, kind: RunKind, endContent: string | undefined): TranscriptState {
+  const { acc, split } = runOf(state, kind);
+  const cleared = withRun(state, kind, "", false);
+  if (acc === "") {
     // A mid-stream split already stored the whole block: end content is a duplicate.
-    if (state[flag]) return cleared;
+    if (split) return cleared;
     // No deltas and no content: nothing to finalize -> identity.
     if (!endContent) return state;
     // Redacted thinking (or a complete-at-start block): no deltas to
     // preserve — this single entry IS the content.
     return pushEntry(cleared, { kind, content: endContent }, endContent.length);
   }
-  return pushEntry(cleared, { kind, content: accumulator }, accumulator.length);
+  return pushEntry(cleared, { kind, content: acc }, acc.length);
 }
 
 // Folds one raw session event. Identity-preserving by design (progress.ts
@@ -161,36 +178,13 @@ function finalizeRun(
 export function applySessionEvent(state: TranscriptState, event: AgentSessionEvent): TranscriptState {
   if (event.type === "message_update") {
     const a = event.assistantMessageEvent;
-    if (a.type === "text_delta") {
-      if (!a.delta) return state;
-      const currentText = state.currentText + a.delta;
-      if (currentText.length > SEGMENT_SPLIT_CHARS) {
-        const cut = segmentCut(currentText);
-        return pushEntry(
-          { ...state, currentText: currentText.slice(cut), textSplit: true },
-          { kind: "text", content: currentText.slice(0, cut) },
-          cut,
-        );
-      }
-      return { ...state, currentText };
-    }
-    if (a.type === "thinking_delta") {
-      if (!a.delta) return state;
-      const currentThinking = state.currentThinking + a.delta;
-      if (currentThinking.length > SEGMENT_SPLIT_CHARS) {
-        const cut = segmentCut(currentThinking);
-        return pushEntry(
-          { ...state, currentThinking: currentThinking.slice(cut), thinkingSplit: true },
-          { kind: "thinking", content: currentThinking.slice(0, cut) },
-          cut,
-        );
-      }
-      return { ...state, currentThinking };
-    }
-    if (a.type === "text_end") return finalizeRun(state, "text", state.currentText, a.content);
-    if (a.type === "thinking_end") return finalizeRun(state, "thinking", state.currentThinking, a.content);
+    if (a.type === "text_delta") return appendDelta(state, "text", a.delta);
+    if (a.type === "thinking_delta") return appendDelta(state, "thinking", a.delta);
+    if (a.type === "text_end") return finalizeRun(state, "text", a.content);
+    if (a.type === "thinking_end") return finalizeRun(state, "thinking", a.content);
     return state;
   }
+  if (event.type === "message_end") return finalizeRun(finalizeRun(state, "text", undefined), "thinking", undefined);
   if (event.type === "tool_execution_start") {
     const label = formatToolCall(event.toolName, event.args);
     return pushEntry(state, { kind: "tool-start", toolCallId: event.toolCallId, label }, label.length);

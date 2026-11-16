@@ -290,6 +290,35 @@ test("unknown events are identity: message_end, queue_update, whatever else", ()
   assert.equal(applySessionEvent(state, asEvent({ type: "session_start" })), state);
 });
 
+// --- message_end closes open runs ---
+
+const messageEnd = asEvent({ type: "message_end", message: {} });
+const fold = (events: AgentSessionEvent[]) => events.reduce(applySessionEvent, initialTranscriptState());
+const contents = (state: ReturnType<typeof fold>) =>
+  state.entries.map((e) => (e.kind === "text" || e.kind === "thinking" ? e.content : ""));
+
+test("message_end stores an open text run when no text_end arrived", () => {
+  const state = fold([textDelta("abc"), messageEnd, textEnd("whole")]);
+  assert.deepEqual(contents(state), ["abc", "whole"]);
+});
+
+test("message_end clears a text split flag so a later text_end is not swallowed", () => {
+  const state = fold([textDelta("x".repeat(SEGMENT_SPLIT_CHARS + 1)), messageEnd, textEnd("whole")]);
+  assert.equal(state.entries.length, 2);
+  assert.equal(state.textSplit, false);
+});
+
+test("message_end keeps the partial and the retry run apart", () => {
+  const state = fold([textDelta("partial"), messageEnd, textDelta("retry"), textEnd("")]);
+  assert.deepEqual(contents(state), ["partial", "retry"]);
+});
+
+test("message_end clears a thinking split flag so a later thinking_end is not swallowed", () => {
+  const state = fold([thinkingDelta("x".repeat(SEGMENT_SPLIT_CHARS + 1)), messageEnd, thinkingEnd("whole")]);
+  assert.equal(state.entries.length, 2);
+  assert.equal(state.thinkingSplit, false);
+});
+
 // --- eviction ---
 
 test("entry-cap eviction drops the oldest entries and increments dropped", () => {
