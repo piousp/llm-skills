@@ -7,6 +7,8 @@ follows Keep a Changelog, and this project uses semantic versioning.
 
 ### Added
 
+- `publish-syntax-highlight` GitHub Actions workflow: manual dispatch, OIDC trusted
+  publishing with `npm stage publish`, after typecheck and tests.
 - `package.json` gains a `files` allowlist (`extensions`, `src`, `README.md`,
   `CHANGELOG.md`, `DEVELOPER.md`, `LICENSE`), and the repo gains the MIT
   `LICENSE` file its manifest already declared.

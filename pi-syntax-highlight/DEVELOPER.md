@@ -82,6 +82,19 @@ Seams the tests rely on:
 
 To try a working copy without installing it, run `pi -e .` from the package directory. With `node_modules` present the extension can import a second copy of pi next to the host's: `keyHint` therefore comes from the render context, never from a module-level import, and languages beyond the eager set (about 21) are registered asynchronously, so the first render of a rarer language can be flat.
 
+## Release
+
+The package is published from `.github/workflows/publish-syntax-highlight.yml`, which lives at the root of the
+monorepo and runs with `working-directory: pi-syntax-highlight`. It is triggered by hand only
+(`workflow_dispatch`), over OIDC with `npm stage publish`. There is no `NPM_TOKEN`: the npm CLI exchanges the
+runner's OIDC identity for a short-lived publish token. The trust relationship is configured on npmjs.com and
+names the exact filename of that workflow, so renaming it breaks publishing until the connection is deleted and
+created again. The publish stays in stage and goes to production when a person approves it on npmjs.com.
+
+The job order is `npm ci`, `npm run typecheck`, `npm test` and `npm stage publish`. The version published is the
+one in `package.json` at that commit, so a release is a version bump committed to `main`, a push and then the
+dispatch; a version already on the registry fails the last step and leaves nothing staged.
+
 ## License
 
 MIT
