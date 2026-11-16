@@ -63,7 +63,13 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
   safe boundary). The entry is an exact prefix of the accumulator, `chars` grows by the cut length
   only, and there is one push per event. `TranscriptState.textSplit`/`thinkingSplit` record that a
   split already stored part of the block, so `text_end`/`thinking_end` with an empty accumulator do
-  not append their `content` a second time; both flags reset when the block ends.
+  not append their `content` a second time. The flags hold until the next `*_end` of the same block
+  or the `message_end`. `message_end` closes any open text or thinking run and stores its partial
+  text, so an errored or retried message does not paste its partial onto the retry or drop the
+  next block. Providers emit no `*_end` when a message fails mid-block; the agent loop always emits
+  `message_end`. Internally `appendDelta`, `finalizeRun` and the two private accessors `runOf` and
+  `withRun` serve text and thinking alike; a no-op (empty delta, nothing open) returns the same
+  state object.
 - `src/peek-window.ts` — the `/subagents peek` overlay: pure `buildPeekLines` (transcript tail —
   text, 5-line thinking cap, tool starts/ends, elision, frozen settled result), the
   `PeekOverlayComponent` (owns the 250 ms pulse that stops itself once the job settles), and
@@ -503,8 +509,11 @@ plain `agentSession.subscribe` listener registered unconditionally alongside the
 turn-counter subscriptions (not via the SDK's `AgentSession.getSessionStats()`, which would
 include the caller's forked history for `defaultContext: "forked"` agents). `getContextUsage()` is
 read from the session before it's disposed. While the run is live, the progress `usage` events read it
-through `throttledContextUsage` (`src/run.ts`): at most one `getContextUsage()` call per 1000 ms, reusing
-the last value inside the window, so the figure can lag by up to a second. `settleOnce` still calls
+through `throttledContextUsage` (`src/run.ts`): at most one `getContextUsage()` call per `CONTEXT_USAGE_THROTTLE_MS` (1000, exported), reusing
+the last value inside the window, so the figure can lag by up to a second. When the throttle skipped
+a read, the next `tool_execution_start` forces a fresh read and emits one more `usage` event, so the
+figure catches up at the next tool start. `RunAgentViaSdkOptions.now?: () => number` is a test seam
+for the throttle clock only; `startedAt` and `durationMs` keep using `Date.now`. `settleOnce` still calls
 `getContextUsage()` fresh, so the final value is exact.
 
 `sessionFile` is attached in that same chokepoint, from `options.sessionManager?.getSessionFile?.()`
@@ -1307,14 +1316,13 @@ export function usageCostBreakdown(entries: readonly SessionEntry[]): UsageBreak
 export function computeCacheWaste(entries: readonly SessionEntry[]): CacheWaste;
 export function assistantTurnCount(entries: readonly SessionEntry[]): number;
 export function buildSubagentSessionReport(rootSessionFile: string, fs: ReconcileFs,
-  activeRunIds?: ReadonlySet<string>, mainEntries?: readonly SessionEntry[],
+  activeAgents?: ReadonlyMap<string, string>, mainEntries?: readonly SessionEntry[],
   opts?: SubagentSessionReportOptions): SubagentSessionReport;
 
 export interface SubagentSessionReportOptions {
   readonly maxDepth?: number;   // deepest level walked (root's children are depth 1); unbounded when absent
-  readonly withStats?: boolean; // false skips per-child usage stats (left undefined)
+  readonly usage?: "skip";      // "skip" leaves per-child usage stats (`stats`) undefined
   readonly rootEntries?: readonly SessionEntry[]; // pre-parsed root; it is not read from disk when present
-  readonly activeAgents?: ReadonlyMap<string, string>; // raw runId -> agent name of live jobs; labels a running child with no completion message
 }
 
 export interface ReconcileFs {
@@ -1354,9 +1362,10 @@ closes that gap entirely from already-persisted data — nothing new is written:
   completion message's aggregate `details.usage` feeds an `unattributed` breakdown bucket. A
   completion whose status is `errored` (no `run`, no usage) counts as a run at zero usage; a
   child dir with no matching completion message has its task recovered from the child's first user
-  message. When its runId is in `activeRunIds` it is `running` and not orphaned, and its agent comes
-  from `opts.activeAgents` (raw runId to agent name, normalized with `runIdDirName`), or `unknown` when
-  the map has no entry. Otherwise it is an orphan: agent `unknown`, status `unknown (orphaned)`. The
+  message. When its runId is a key of `activeAgents` (the third parameter, raw runId to agent name of
+  the live jobs) it is `running`, not orphaned, and labelled with that agent. The report normalizes the
+  keys once with `runIdDirName` into a single segment-to-agent map; if two raw ids collapse to the
+  same segment, the last one wins. Otherwise it is an orphan: agent `unknown`, status `unknown (orphaned)`. The
   registry feeds only state and agent labels, never a usage source. `ReconciledRun.orphaned` means
   no completion message and no live job.
 - **Branches**: the whole parent file is read, no branch filtering — the same scope as pi's
@@ -1401,12 +1410,12 @@ invocation override, present only when the candidate's launch ack recorded one �
 omitted, never undefined-valued, because candidates are pinned by full deepEqual). It reuses the SAME `buildSubagentSessionReport` walk (one
 descent over the child tree, statuses from the completion messages) and keeps depth-1 runs
 that settled `failed`/`errored`/`cancelled` or orphaned with status `unknown` — the `running`
-orphan (a live job in THIS session, via the same `activeRunIds` argument) is never a
+orphan (a live job in THIS session, via the same `activeAgents` map) is never a
 candidate, and deeper descendants/completed runs never qualify. Orphans display as
 `interrupted`: crash, kill, and disconnect are indistinguishable from disk. Orphan
 enrichment reuses the parent entries parsed once at the top (`buildRelaunchCandidates(sessionFile,
-fs, activeRunIds?, rootEntries?)` takes them as an optional fourth argument, else reads the file
-once) and passes them to the report with `{ maxDepth: 1, withStats: false, rootEntries }`: the walk
+fs, activeAgents?)` parses the root once itself) and passes them to the report with
+`{ maxDepth: 1, usage: "skip", rootEntries }`: the walk
 stops at depth 1 and computes no usage stats, so grandchildren are never read and no longer consume
 the `MAX_CHILDREN_VISITED` budget. For the launch acks,
 `subagentAckEntryOf` reads the persisted `toolResult` of the `subagent` launch (the
@@ -1487,7 +1496,8 @@ value, emitted on every change. Three decisions keep it cheap and honest:
 
 `src/peek-window.ts` avoids re-wrapping and re-assembling a frame that did not change.
 
-- `createEntryWrapCache()` returns `{ lines(seq, content, width), prune(firstSeq), clear(), size() }`.
+- `createEntryWrapCache()` returns `{ lines(seq, content, width), prune(firstSeq), clear(), size() }`;
+  `lines` returns `readonly string[]`.
   It holds the wrapped lines of `text` and `thinking` entries, keyed by `seq` for one width at a time
   (a width change clears it) and checked against the entry's content. Tool entries are one line and
   depend on prefs and theme, so they never go through it; the live `currentText`/`currentThinking`
@@ -1495,8 +1505,11 @@ value, emitted on every change. Three decisions keep it cheap and honest:
   `wrapLines` drops the empty last line that wrapping produces when the content ends in `\n`, so an
   entry cut right after a newline renders like the uncut text. A closed entry that really ends in a
   newline loses that blank line too.
-  `buildFullBody(..., cache?)` takes it as an optional last parameter; without it the body is built
-  exactly as before, so `buildPeekLines` and `peekScrollCap` keep their signatures. The component
+  `buildFullBody(..., wrap)` takes a `Pick<EntryWrapCache, "lines">` as a required last parameter;
+  `buildPeekLines` passes `UNCACHED_WRAP` (it wraps without storing), so its signature and output are
+  unchanged, and the component passes its cache. The scroll cap comes from the private
+  `scrollCapOf(body)`; `peekScrollCap` no longer exists. The elapsed bucket and the settled check use
+  `isSettled`, exported from `src/background-jobs.ts`. The component
   prunes the cache to `entries[0].seq` after each build (and clears it when there is no transcript),
   so head eviction cannot make it grow.
 - `thinkingKeptLines` walks the thinking segments from the last one and stops wrapping once it has
@@ -1512,7 +1525,8 @@ value, emitted on every change. Three decisions keep it cheap and honest:
   the scroll offset, the elapsed bucket and the theme reference. The bucket is `"settled"` once the
   job has `settledAt`, else `floor((now - startedAt) / 1000)`. `render(width)` returns a copy of the
   cached lines when the key and the width match; `invalidate()` drops both the frame and the wrap cache.
-  Prefs and theme changes reach the output through the key, not through the wrap cache.
+  Prefs and theme changes reach the output through the key; they invalidate the wrap cache only
+  through `invalidate()`.
 - The 250 ms pulse (`tick`) computes the key for an active job and calls `requestRender` only when it
   differs from the last rendered one, then reschedules. An idle job therefore repaints once per
   elapsed second. A settled or pruned job gets one final render and the pulse stops.
@@ -1575,8 +1589,9 @@ the message renderer, the `/subagents` command, and three event handlers — all
   `CONTINUATION_PROMPT`, retry's `seedSessionFileOf` always `undefined` and continue's the
   candidate's `sessionFile`. Inside the closure, the chain is guarded by
   the same persisted-session precondition `session` uses, resolved from
-  `buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunIds-from-jobs)`
-  (`src/session-reconcile.ts`) via `resolveRelaunchTarget` (`src/job-view.ts`), through the
+  `buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunAgents())`
+  (`src/session-reconcile.ts`; `activeRunAgents()` in `extensions/index.ts` is the one accessor that
+  maps the active jobs' raw `runId` to `task.agent`, shared with `/subagents session`) via `resolveRelaunchTarget` (`src/job-view.ts`), through the
   SAME `registry.load(ctx.cwd)` + `resolveAgent` path a tool call resolves its agent with
   (verbatim error text, warning, no launch). Closure-scoped state mirrors the registry:
   `consumedOrphanSegments` (each orphaned child is consumed once per session — only
@@ -2164,6 +2179,10 @@ Three consequences drive the process:
 - The connection allows `npm stage publish` and `npm dist-tag`, not a direct publish. The workflow
   therefore stages the tarball and a human approves it afterwards on npmjs.com, which is where the
   2FA proof-of-presence happens; the dispatch alone publishes nothing.
+
+The published tarball is limited by the `files` allowlist in `package.json`: `extensions`, `src`,
+`skills`, `agents-examples`, `README.md`, `CHANGELOG.md`, `DEVELOPER.md`, `LICENSE` and
+`docs/REFERENCE.md` (the README links to the last one).
 
 Publish procedure, in order:
 

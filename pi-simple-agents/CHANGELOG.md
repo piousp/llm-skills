@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Fix: an errored or retried message no longer pastes its partial text onto the retry, nor drops the next block.** `message_end` now closes any open text or thinking run and stores its partial text, and the `textSplit`/`thinkingSplit` flags hold only until the next `*_end` of the same block or the `message_end`. Providers emit no `*_end` when a message fails mid-block, so before this the stale accumulator and flag leaked into the next message.
+- **Fix: the live context percentage catches up at the next tool start.** The 1 s throttle on `getContextUsage()` skipped reads, so the figure could stay stale until the next usage change. A `tool_execution_start` that follows a skipped read now forces a fresh one and emits a `usage` event. Cost: one extra event per skipped read. The throttle interval is exported as `CONTEXT_USAGE_THROTTLE_MS`, and `RunAgentViaSdkOptions.now` is a test seam for its clock.
+- **Packaging: `docs/REFERENCE.md` ships with the package.** The README links to it, and the `files` allowlist now includes it (+46.7 KB).
+- **Internal:** `buildSubagentSessionReport` takes a single `ReadonlyMap` (runId to agent) as its third parameter, replacing the `Set` of active run ids plus `opts.activeAgents`. `withStats` becomes `usage: "skip"`, `buildRelaunchCandidates` loses its `rootEntries` parameter and parses the root itself, `createEntryWrapCache().lines` returns `readonly string[]`, `peekScrollCap` is removed, `isSettled` is exported from `background-jobs.ts`, and the transcript's text and thinking handlers share code. No behavior change beyond the fixes above. An external caller that passed a `Set` must pass a `Map`.
+- Tests: 1009, up from 1003, no assertion loosened. Eight are new (four for the transcript's `message_end`, three for the throttle and its clock, one for the widget) and two were deleted because their subject no longer exists.
+- Docs: `DEVELOPER.md` (the new `buildSubagentSessionReport`, `SubagentSessionReportOptions` and `buildRelaunchCandidates` signatures and the single `activeRunAgents()` accessor, the wrap cache's return type and `buildFullBody`'s `wrap` parameter, `scrollCapOf` replacing `peekScrollCap`, `isSettled` in the peek window, the transcript's `message_end` rule and flag lifetime, the throttle constant, the `now` seam and the tool-start refresh, and the `files` allowlist).
+
 ## 1.5.10
 
 - **Fix: the package no longer installs `glob`.** It was listed under `dependencies` but nothing in `src/`, `extensions/` or the skills imports it, so every install pulled `glob` and its tree (including `minimatch`) for nothing, and both showed up in `npm audit` as moderate vulnerabilities. Only `yaml` remains as a runtime dependency. `peerDependencies` are unchanged.
