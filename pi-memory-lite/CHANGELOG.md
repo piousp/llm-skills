@@ -35,6 +35,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - The degraded search missed entries that differ only by an accent.
 - The next write could reuse the id of a deleted entry.
+- Degraded search showed the wrong fragment for some Hangul, ligature and decomposed-accent text.
 
 ## [0.2.0] - 2026-11-13
 

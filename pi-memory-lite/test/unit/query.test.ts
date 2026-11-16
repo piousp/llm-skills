@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { distinctSlugs, fromTerms, mergeKeys, normalizeTextForDuplicate, quoteToken, toMatchTerm, toSlug, toTerms, toTokens } from "../../src/query.ts";
+import { distinctSlugs, foldedIndexToOriginal, foldForSearch, fromTerms, mergeKeys, normalizeTextForDuplicate, quoteToken, toMatchTerm, toSlug, toTerms, toTokens } from "../../src/query.ts";
 
 // I1: the pure surface of the index, on its own. Every function of src/query.ts is a function of its argument, so this
 // suite is a list of inputs and their expected output and it reads no file: a fixture on disk would prove something the
@@ -199,4 +199,29 @@ test("mergeKeys: descarta slugs vacíos y repeticiones, y las que ya existen, en
     droppedKeys: [],
     terms: "x fe gracia",
   });
+});
+
+test("foldedIndexToOriginal: acento descompuesto, hangul, ligadura y letra astral apuntan al carácter original", () => {
+  assert.equal(foldedIndexToOriginal("Cafe\u0301", 3), 3);
+  assert.equal(foldedIndexToOriginal("가나", 1), 0);
+  assert.equal(foldedIndexToOriginal("가나", 2), 1);
+  assert.equal(foldedIndexToOriginal("가나", 3), 1);
+  assert.equal(foldedIndexToOriginal("가나", 4), 2);
+  assert.equal(foldedIndexToOriginal("ﬁle", 1), 0);
+  assert.equal(foldedIndexToOriginal("ﬁle", 2), 1);
+  assert.equal(foldedIndexToOriginal("𝐀b", 1), 2);
+});
+
+test("foldedIndexToOriginal: en los bordes devuelve 0 o el largo del texto", () => {
+  assert.equal(foldedIndexToOriginal("", 0), 0);
+  assert.equal(foldedIndexToOriginal("abc", 3), 3);
+  assert.equal(foldedIndexToOriginal("abc", 0), 0);
+});
+
+test("foldedIndexToOriginal: la suma de los largos por punto de código es el largo del pliegue entero", () => {
+  const samples = ["ΟΔΟΣ ΟΔΟΣΑ ΣΑΣ", "İstanbul", "ﬁle ﬂow", "𝐀𝐁c", "ǅ ① ㎞ ﬀ", "e\u0301\u0302\u0300x", "ﷺ x"];
+  for (const sample of samples) {
+    const sum = [...sample].reduce((total, codePoint) => total + foldForSearch(codePoint).length, 0);
+    assert.equal(sum, foldForSearch(sample).length, sample);
+  }
 });

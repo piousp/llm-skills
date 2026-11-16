@@ -28,6 +28,25 @@ function canonical(raw: string): string {
 /** The canonical form as the degraded search applies it to stored text, so `cafe` finds `Café`. */
 export const foldForSearch = canonical;
 
+/**
+ * The offset in `text` of the code point whose fold contains unit `foldedIndex` of `foldForSearch(text)`, or
+ * `text.length` at or past the end. Folding changes length (Hangul to jamo, ligatures, decomposed marks, astral
+ * letters), so a match found in the folded string cannot slice the original directly. Only per-code-point lengths are
+ * summed: the match itself is searched in the whole-string fold, because per-character lowercasing differs for
+ * Final_Sigma.
+ */
+export function foldedIndexToOriginal(text: string, foldedIndex: number): number {
+  let folded = 0;
+  let original = 0;
+  for (const codePoint of text) {
+    const length = canonical(codePoint).length;
+    if (folded + length > foldedIndex) return original;
+    folded += length;
+    original += codePoint.length;
+  }
+  return text.length;
+}
+
 /** NFKD, diacritics stripped, lowercased, alphanumeric runs, capped at 16 tokens. Never throws. */
 export function toTokens(raw: string): string[] {
   const tokens = canonical(raw).match(/[\p{L}\p{N}]+/gu) ?? [];

@@ -19,7 +19,7 @@ export const KEYS_PER_CATEGORY = 4;
 /** Smallest fragment budget worth showing; below it the page drops rows instead of clipping words to nothing. */
 export const MIN_SNIPPET = 12;
 
-/** A search hit: the row, its whole text and the fragment `snippet()` produced, which a search line shows when the text does not fit. */
+/** A search hit: the row, its whole text and the fragment the search produced, which a search line shows when the text does not fit. */
 export interface SearchRow {
   readonly id: number;
   readonly ts: string;

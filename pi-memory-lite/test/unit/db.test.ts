@@ -18,6 +18,7 @@ import {
   type WriteResult,
 } from "../../src/db.ts";
 import { KEYS_PER_CATEGORY } from "../../src/format.ts";
+import { toTokens } from "../../src/query.ts";
 
 // I1: the schema, the migrations and the query layer against a real SQLite file, one temporary directory per test. This
 // is the module that decides whether the memory survives a reopen, whether a duplicate is refused, whether a key that
@@ -727,6 +728,48 @@ test("degradación: el hit trae el texto entero y un fragmento de 40 caracteres 
 
   assert.equal(hit.text, text);
   assert.equal(hit.fragment, `...${text.slice(text.indexOf("router") - 40, text.indexOf("router") - 40 + 240)}`);
+});
+
+test("degradado: el fragmento contiene la coincidencia en un texto hangul largo", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  const text = "가".repeat(150) + "서울" + "나".repeat(158);
+  store.write(entry(text));
+  const [hit] = store.search(searchInput(toTokens("서울")));
+  const at = text.indexOf("서울");
+
+  assert.equal(hit.fragment, `...${text.slice(at - 40, at + 200)}`);
+  assert.ok(hit.fragment.includes("서울"));
+});
+
+test("degradado: el fragmento contiene la coincidencia con acentos descompuestos", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  const text = "Re\u0301sume\u0301 ".repeat(120) + "router " + "x".repeat(300);
+  store.write(entry(text));
+  const [hit] = store.search(searchInput(["router"]));
+  const at = text.indexOf("router");
+
+  assert.equal(hit.fragment, `...${text.slice(at - 40, at + 200)}`);
+  assert.ok(hit.fragment.includes("router"));
+});
+
+test("degradado: con varias palabras el fragmento empieza en la primera coincidencia hangul", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  const text = "가".repeat(150) + "서울 " + "나".repeat(150) + " router";
+  store.write(entry(text));
+  const [hit] = store.search(searchInput([...toTokens("서울"), "router"], null, 10, 0, "all"));
+  const at = text.indexOf("서울");
+
+  assert.ok(hit.fragment.startsWith(`...${text.slice(at - 40, at)}`));
+  assert.ok(hit.fragment.includes("서울"));
 });
 
 test("búsqueda FTS: el hit trae el texto entero", async (t) => {

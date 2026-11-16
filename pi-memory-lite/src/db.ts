@@ -13,8 +13,8 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DB_FILE } from "./config.ts";
-import { KEYS_PER_CATEGORY } from "./format.ts";
-import { foldForSearch, fromTerms, mergeKeys, normalizeTextForDuplicate, toMatchTerm } from "./query.ts";
+import { KEYS_PER_CATEGORY, type SearchRow } from "./format.ts";
+import { foldedIndexToOriginal, foldForSearch, fromTerms, mergeKeys, normalizeTextForDuplicate, toMatchTerm } from "./query.ts";
 
 /** A value a statement accepts, as the rest of the package is allowed to see it. */
 export type SqlValue = string | number | null | Uint8Array;
@@ -53,15 +53,6 @@ export interface MemoryRow {
   readonly category: string;
   readonly text: string;
   readonly terms: string;
-}
-
-/** A search hit: the row, its whole text and the fragment the search produced, which a search line shows when the text does not fit. */
-export interface SearchHit {
-  readonly id: number;
-  readonly ts: string;
-  readonly category: string;
-  readonly text: string;
-  readonly fragment: string;
 }
 
 /** One term of a category in the catalog, with the id of the newest entry of that category that declares it. */
@@ -127,7 +118,7 @@ export interface MemoryStore {
   readonly fts: boolean;
   readonly db: SqlExecutor;
   write(input: WriteInput): WriteResult;
-  search(input: SearchInput): SearchHit[];
+  search(input: SearchInput): SearchRow[];
   countSearch(input: Omit<SearchInput, "limit" | "offset">): number;
   catalog(): CatalogPage;
   read(ids: readonly number[]): { readonly found: readonly MemoryRow[]; readonly missing: readonly number[] };
@@ -620,13 +611,13 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
     ? { search: searchFts, countSearch: countFts }
     : { search: searchLike, countSearch: countLike };
 
-  function search(input: SearchInput): SearchHit[] {
+  function search(input: SearchInput): SearchRow[] {
     if (input.tokens.length === 0) return [];
     return queries.search(input);
   }
 
   /** The FTS5 path: a failure of `MATCH` leaves as an Error that carries the SQLite message, never as a silent zero. */
-  function searchFts(input: SearchInput): SearchHit[] {
+  function searchFts(input: SearchInput): SearchRow[] {
     try {
       const rows = prepare(SEARCH_FTS_SQL).all(matchExpression(input.tokens, input.match), input.category, input.limit, input.offset);
       return rows.map((row) => ({
@@ -645,7 +636,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
    * The degraded search: the frame of `degradedStatement` around the columns the fragment is cut from, with the
    * paging of the page. The statement is prepared per call because its parameter count follows the token count.
    */
-  function searchLike(input: SearchInput): SearchHit[] {
+  function searchLike(input: SearchInput): SearchRow[] {
     const { sql, params, tokens } = degradedStatement(input, DEGRADED_SEARCH_COLUMNS, {
       limit: input.limit,
       offset: input.offset,
@@ -914,12 +905,13 @@ function ftsFragment(row: Record<string, unknown>): string {
 
 /**
  * The fragment of a degraded hit: the window around the earliest match in the text, or the vocabulary when the row
- * matched through a key that its text does not contain. Whatever comes out is clipped to the page budget afterwards.
+ * matched through a key that its text does not contain. The match index is found in the folded text and mapped back
+ * to the original, because folding can change its length. Whatever comes out is clipped to the page budget afterwards.
  */
 function degradedFragment(text: string, terms: string, tokens: readonly string[]): string {
   const at = firstMatch(foldForSearch(text), tokens);
   if (at !== -1) {
-    const start = Math.max(0, Math.min(at, text.length) - DEGRADED_LEAD);
+    const start = Math.max(0, foldedIndexToOriginal(text, at) - DEGRADED_LEAD);
     const head = start === 0 ? "" : "...";
     return `${head}${text.slice(start, start + DEGRADED_FRAGMENT)}`;
   }
