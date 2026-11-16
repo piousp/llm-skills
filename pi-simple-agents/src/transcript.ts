@@ -18,22 +18,29 @@ const TOOL_RESULT_MAX_CHARS = 200;
 export { MAX_TRANSCRIPT_ENTRIES, MAX_TRANSCRIPT_CHARS, SEGMENT_SPLIT_CHARS, TOOL_RESULT_MAX_CHARS };
 
 export type TranscriptEntry =
-  | { kind: "text"; seq: number; content: string }
-  | { kind: "thinking"; seq: number; content: string }
-  | { kind: "tool-start"; seq: number; toolCallId: string; label: string }
-  | { kind: "tool-end"; seq: number; toolCallId: string; ok: boolean; summary: string; durationMs?: number };
+  | { readonly kind: "text"; readonly seq: number; readonly content: string }
+  | { readonly kind: "thinking"; readonly seq: number; readonly content: string }
+  | { readonly kind: "tool-start"; readonly seq: number; readonly toolCallId: string; readonly label: string }
+  | {
+      readonly kind: "tool-end";
+      readonly seq: number;
+      readonly toolCallId: string;
+      readonly ok: boolean;
+      readonly summary: string;
+      readonly durationMs?: number;
+    };
 
 export interface TranscriptState {
   /** Bounded ring: entries[0] is the oldest surviving entry (head-evicted). */
-  entries: readonly TranscriptEntry[];
+  readonly entries: readonly TranscriptEntry[];
   /** Accumulating text_delta run, cleared per segment/end. */
-  currentText: string;
+  readonly currentText: string;
   /** Accumulating thinking_delta run, cleared per segment/end. */
-  currentThinking: string;
+  readonly currentThinking: string;
   /** Count of entries evicted by the caps (never decremented). */
-  dropped: number;
+  readonly dropped: number;
   /** Running total of stored entry characters; keeps eviction O(evicted). */
-  chars: number;
+  readonly chars: number;
 }
 
 export function initialTranscriptState(): TranscriptState {
@@ -88,18 +95,20 @@ function pushEntry(
   contentChars: number,
 ): TranscriptState {
   const seq = state.dropped + state.entries.length;
-  let entries: readonly TranscriptEntry[] = [...state.entries, { ...entry, seq } as TranscriptEntry];
+  const added = { ...entry, seq } as TranscriptEntry;
+  const old = state.entries;
+  const total = old.length + 1;
   let chars = state.chars + contentChars;
-  let dropped = state.dropped;
-  while (entries.length > MAX_TRANSCRIPT_ENTRIES || chars > MAX_TRANSCRIPT_CHARS) {
-    const head = entries[0];
-    if (!head) break; // defense against a chars bookkeeping drift: never spin
-    chars -= storedChars(head);
-    entries = entries.slice(1);
-    dropped += 1;
+  // k = heads to evict; the new entry is the last candidate once the old ones are gone.
+  let k = 0;
+  while (total - k > MAX_TRANSCRIPT_ENTRIES || chars > MAX_TRANSCRIPT_CHARS) {
+    if (k === total) break; // defense against a chars bookkeeping drift: never spin
+    chars -= storedChars(k < old.length ? old[k] : added);
+    k += 1;
   }
-  if (dropped === state.dropped) return { ...state, entries, chars };
-  return { ...state, entries, chars, dropped };
+  const entries: readonly TranscriptEntry[] = k > old.length ? [] : [...old.slice(k), added];
+  if (k === 0) return { ...state, entries, chars };
+  return { ...state, entries, chars, dropped: state.dropped + k };
 }
 
 // Closes a text/thinking run: deltas already accumulated are the live
@@ -184,6 +193,8 @@ export function applySessionEvent(state: TranscriptState, event: AgentSessionEve
 // feeding it — no close/flush API (YAGNI).
 export interface TranscriptSink {
   onSessionEvent(event: AgentSessionEvent): void;
+  /** The live state itself (immutable): its reference identity is the
+   * transcript's version — it changes exactly when a fold changes it. */
   snapshot(): TranscriptState;
 }
 
@@ -195,7 +206,7 @@ export function createTranscriptSink(): TranscriptSink {
       state = applySessionEvent(state, event);
     },
     snapshot() {
-      return { ...state, entries: [...state.entries] };
+      return state;
     },
   };
 }

@@ -267,6 +267,18 @@ test("char-cap eviction drops the oldest entry when the total exceeds MAX_TRANSC
   assert.equal(state.entries.at(-1)?.seq, 64);
 });
 
+test("a single entry above MAX_TRANSCRIPT_CHARS evicts everything before it, chars stays exact", () => {
+  let state = initialTranscriptState();
+  for (let i = 0; i < 3; i += 1) state = applySessionEvent(state, toolEnd(`t${i}`, `r${i}`));
+  assert.equal(state.entries.length, 3);
+
+  state = applySessionEvent(state, textEnd("x".repeat(MAX_TRANSCRIPT_CHARS + 1)));
+  assert.equal(state.entries.length, 0); // the oversized entry cannot fit either
+  assert.equal(state.chars, 0);
+  assert.equal(state.dropped, 4); // 3 older + the oversized one
+  assert.ok(!state.entries.some((e) => e.kind === "tool-end"));
+});
+
 // --- sink ---
 
 test("createTranscriptSink: onSessionEvent folds events, snapshot reflects them", () => {
@@ -286,4 +298,17 @@ test("createTranscriptSink: snapshot is isolated from later mutations", () => {
   sink.onSessionEvent(toolStart("t1", "read", { path: "a.ts" }));
   assert.equal(snap.entries.length, 1); // old snapshot untouched
   assert.equal(sink.snapshot().entries.length, 2);
+});
+
+test("createTranscriptSink: snapshot() is the same object until an event changes the state", () => {
+  const sink = createTranscriptSink();
+  sink.onSessionEvent(toolStart("t1", "read", { path: "a.ts" }));
+  const first = sink.snapshot();
+  assert.equal(sink.snapshot(), first);
+
+  sink.onSessionEvent(asEvent({ type: "tool_execution_update", toolCallId: "t1", toolName: "read", args: {}, partialResult: "p" }));
+  assert.equal(sink.snapshot(), first);
+
+  sink.onSessionEvent(textDelta("hi"));
+  assert.notEqual(sink.snapshot(), first);
 });

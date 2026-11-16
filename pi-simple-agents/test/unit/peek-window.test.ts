@@ -931,3 +931,206 @@ test("createPeekManager: onToggleTools flips the ui's tool expansion through the
 
   assert.equal(doneInvoked, false); // done() never fired: the window stays open
 });
+
+// --- thinking tail across segments ---
+
+test("buildPeekLines: thinking tail spans segments from the newest — older ones render nothing, the marker lands on the oldest kept line", () => {
+  const transcript = state([
+    entry({ kind: "thinking", content: lines(3, "alpha") }),
+    entry({ kind: "thinking", content: lines(2, "beta") }),
+    entry({ kind: "thinking", content: lines(6, "gamma") }),
+  ]);
+  const frame = buildPeekLines(runningJob(), transcript, 1_000, theme, 80).join("\n");
+
+  assert.doesNotMatch(frame, /alpha|beta/);
+  assert.doesNotMatch(frame, /gamma 1\b/);
+  assert.match(frame, /<dim>\u2026 gamma 2<\/dim>/);
+  assert.match(frame, /<dim>gamma 6<\/dim>/);
+});
+
+// --- wrap cache + frame cache ---
+
+function mixedTranscript(n: number, firstDropped = 0): TranscriptState {
+  const entries: TranscriptEntry[] = [];
+  for (let i = 0; i < n; i += 1) {
+    entries.push(entry({ kind: "text", content: `text ${i} ${"word ".repeat(30)}` }));
+    entries.push(entry({ kind: "thinking", content: lines(3, `think${i}`) }));
+    entries.push(entry({ kind: "tool-start", toolCallId: `t${i}`, label: `read f${i}` }));
+    entries.push(entry({ kind: "tool-end", toolCallId: `t${i}`, ok: true, summary: `result ${i}`, durationMs: 5 }));
+  }
+  return state(entries.slice(firstDropped), { currentText: "live tail", currentThinking: "live thought", dropped: firstDropped });
+}
+
+function countingTheme() {
+  const calls = { n: 0 };
+  const t: PeekTheme = { fg: (c, text) => { calls.n += 1; return `<${c}>${text}</${c}>`; } };
+  return { theme: t, calls };
+}
+
+function mountStable(
+  jobRef: { current: JobSnapshot | undefined },
+  tr: { current: TranscriptState | undefined },
+  opts: { clock?: { t: number }; prefs?: { current: PeekRenderPrefs | undefined }; theme?: PeekTheme } = {},
+) {
+  const scheduler = fakeScheduler();
+  const { tui, renders } = fakeTui();
+  const clock = opts.clock ?? { t: 1_000 };
+  const component = new PeekOverlayComponent(tui, opts.theme ?? theme, keybindings, () => {}, {
+    getJob: () => jobRef.current,
+    getTranscript: () => tr.current,
+    now: () => clock.t,
+    schedule: scheduler.schedule,
+    cancel: scheduler.cancel,
+    getPrefs: () => opts.prefs?.current,
+  });
+  let handle = 1;
+  return { component, renders, clock, scheduler, tick: () => scheduler.fire(handle++), pending: () => scheduler.pendingCount() };
+}
+
+test("PeekOverlayComponent render: wrap cache gives the same frames as uncached buildPeekLines across width changes", () => {
+  const tr = { current: mixedTranscript(40) as TranscriptState | undefined };
+  const job = runningJob();
+  const { component } = mountStable({ current: job }, tr);
+
+  for (const width of [80, 50, 80, 120, 50]) {
+    assert.deepEqual(
+      component.render(width),
+      buildPeekLines(job, tr.current, 1_000, theme, width, undefined, { offset: 0 }),
+      `width ${width}`,
+    );
+  }
+});
+
+test("PeekOverlayComponent render: head eviction keeps frames equal to uncached and the wrap cache bounded", () => {
+  const full = mixedTranscript(40);
+  const trimmed = mixedTranscript(40, 20);
+  const tr = { current: full as TranscriptState | undefined };
+  const job = runningJob();
+  const { component } = mountStable({ current: job }, tr);
+  const cacheSize = () => (component as unknown as { wrapCache: { size(): number } }).wrapCache.size();
+
+  component.render(80);
+  const before = cacheSize();
+  tr.current = trimmed;
+  assert.deepEqual(component.render(80), buildPeekLines(job, trimmed, 1_000, theme, 80, undefined, { offset: 0 }));
+
+  const live = trimmed.entries.filter((e) => e.kind === "text" || e.kind === "thinking").length;
+  assert.ok(cacheSize() <= live, `cache ${cacheSize()} > live entries ${live}`);
+  assert.ok(cacheSize() < before);
+});
+
+test("PeekOverlayComponent render: toolsExpanded false -> true matches uncached output both times", () => {
+  const tr = { current: mixedTranscript(5) as TranscriptState | undefined };
+  const job = runningJob();
+  const prefs = { current: { toolsExpanded: false } as PeekRenderPrefs | undefined };
+  const { component } = mountStable({ current: job }, tr, { prefs });
+
+  const collapsed = component.render(80);
+  assert.deepEqual(collapsed, buildPeekLines(job, tr.current, 1_000, theme, 80, { toolsExpanded: false }, { offset: 0 }));
+  prefs.current = { toolsExpanded: true };
+  const expanded = component.render(80);
+  assert.deepEqual(expanded, buildPeekLines(job, tr.current, 1_000, theme, 80, { toolsExpanded: true }, { offset: 0 }));
+  assert.notDeepEqual(collapsed, expanded);
+});
+
+test("PeekOverlayComponent render: prefs that differ give different output (hideThinking)", () => {
+  const tr = { current: state([entry({ kind: "thinking", content: "secret thought" })]) as TranscriptState | undefined };
+  const prefs = { current: undefined as PeekRenderPrefs | undefined };
+  const { component } = mountStable({ current: runningJob() }, tr, { prefs });
+
+  assert.match(component.render(80).join("\n"), /secret thought/);
+  prefs.current = { hideThinking: true };
+  assert.doesNotMatch(component.render(80).join("\n"), /secret thought/);
+});
+
+test("PeekOverlayComponent render: a scrolled short body rendered twice does not duplicate the elision or result line", () => {
+  const result = { agent: "scout", task: "t", durationMs: 1, status: "success" as const };
+  const job = runningJob({ state: { status: "completed", settledAt: 1_000, result } });
+  const tr = { current: state([entry({ kind: "text", content: "short" })], { dropped: 3 }) as TranscriptState | undefined };
+  const { component } = mountStable({ current: job }, tr);
+
+  const first = component.render(80);
+  const second = component.render(80);
+  assert.deepEqual(second, first);
+  assert.deepEqual(first, buildPeekLines(job, tr.current, 1_000, theme, 80, undefined, { offset: 0 }));
+  assert.equal(first.filter((l) => l.includes("earlier")).length, 1);
+  assert.equal(first.filter((l) => l.includes("(+3 earlier)")).length, 1);
+});
+
+test("PeekOverlayComponent render: a cached frame is returned as a copy and survives caller mutation", () => {
+  const tr = { current: mixedTranscript(2) as TranscriptState | undefined };
+  const { component } = mountStable({ current: runningJob() }, tr);
+  const first = component.render(80);
+  const snapshot = [...first];
+  first.length = 0;
+  assert.deepEqual(component.render(80), snapshot);
+});
+
+test("PeekOverlayComponent render: same key and width reuse the frame; another width or invalidate() recomputes", () => {
+  const { theme: counting, calls } = countingTheme();
+  const tr = { current: mixedTranscript(3) as TranscriptState | undefined };
+  const { component } = mountStable({ current: runningJob() }, tr, { theme: counting });
+
+  component.render(80);
+  const afterFirst = calls.n;
+  component.render(80);
+  assert.equal(calls.n, afterFirst); // cache hit: no theming at all
+
+  component.render(100);
+  assert.ok(calls.n > afterFirst);
+
+  const afterWidth = calls.n;
+  component.invalidate();
+  component.render(100);
+  assert.ok(calls.n > afterWidth);
+});
+
+test("PeekOverlayComponent tick: nothing changed -> no requestRender and the pulse is rescheduled", () => {
+  const tr = { current: mixedTranscript(2) as TranscriptState | undefined };
+  const { component, renders, tick, pending } = mountStable({ current: runningJob() }, tr);
+  component.render(80);
+
+  tick();
+
+  assert.equal(renders.length, 0);
+  assert.equal(pending(), 1);
+});
+
+test("PeekOverlayComponent tick: a changed transcript requests exactly one render", () => {
+  const tr = { current: mixedTranscript(2) as TranscriptState | undefined };
+  const { component, renders, tick, pending } = mountStable({ current: runningJob() }, tr);
+  component.render(80);
+
+  tr.current = { ...tr.current!, currentText: "more" };
+  tick();
+
+  assert.equal(renders.length, 1);
+  assert.equal(pending(), 1);
+});
+
+test("PeekOverlayComponent tick: crossing a second boundary requests one render, staying within it requests none", () => {
+  const tr = { current: mixedTranscript(2) as TranscriptState | undefined };
+  const { component, renders, clock, tick } = mountStable({ current: runningJob() }, tr);
+  component.render(80); // elapsed bucket 1 (now 1_000, startedAt 0)
+
+  clock.t = 1_500;
+  tick();
+  assert.equal(renders.length, 0);
+
+  clock.t = 2_000;
+  tick();
+  assert.equal(renders.length, 1);
+});
+
+test("PeekOverlayComponent tick: a new usage reference requests one render", () => {
+  const tr = { current: mixedTranscript(2) as TranscriptState | undefined };
+  const jobRef = { current: runningJob() as JobSnapshot | undefined };
+  const { component, renders, tick } = mountStable(jobRef, tr);
+  component.render(80);
+
+  const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, isSubscription: false, context: undefined };
+  jobRef.current = runningJob({ progress: { agent: "scout", runningTools: [], history: [], done: false, usage } });
+  tick();
+
+  assert.equal(renders.length, 1);
+});

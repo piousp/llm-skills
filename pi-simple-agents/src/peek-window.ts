@@ -89,25 +89,73 @@ function wrapLines(text: string, width: number): string[] {
   return wrapTextWithAnsi(text, width);
 }
 
+export interface EntryWrapCache {
+  lines(seq: number, content: string, width: number): string[];
+  prune(firstSeq: number): void;
+  clear(): void;
+  size(): number;
+}
+
+// Wrap results of immutable transcript entries, keyed by seq for one width at
+// a time (a width change drops everything). Returned arrays are shared:
+// callers must not mutate them. Only text/thinking entries go through it;
+// theme and prefs never invalidate (they are applied after wrapping).
+export function createEntryWrapCache(): EntryWrapCache {
+  let cachedWidth = -1;
+  const byseq = new Map<number, { content: string; lines: string[] }>();
+  return {
+    lines(seq, content, width) {
+      if (width !== cachedWidth) {
+        byseq.clear();
+        cachedWidth = width;
+      }
+      const hit = byseq.get(seq);
+      if (hit && hit.content === content) return hit.lines;
+      const lines = wrapLines(content, width);
+      byseq.set(seq, { content, lines });
+      return lines;
+    },
+    prune(firstSeq) {
+      for (const seq of byseq.keys()) if (seq < firstSeq) byseq.delete(seq);
+    },
+    clear() {
+      byseq.clear();
+    },
+    size: () => byseq.size,
+  };
+}
+
 // The thinking cap: across every thinking entry plus the live currentThinking
 // run, only the last THINKING_TAIL_LINES display lines survive; the first
 // visible one carries the dim ellipsis marker. Segments outside the window
 // render nothing, so interleaved thinking keeps its position in the flow.
-function thinkingKeptLines(segments: string[][], width: number, theme: PeekTheme): string[][] {
-  const wrapped = segments.map((s) => wrapLines(s.join("\n"), width));
-  const total = wrapped.reduce((n, w) => n + w.length, 0);
-  const skip = Math.max(0, total - THINKING_TAIL_LINES);
-  let seen = 0;
-  let marked = false;
-  return wrapped.map((lines) => {
-    const start = seen;
-    seen += lines.length;
-    const from = Math.max(start, skip);
-    if (from >= seen) return [];
-    const kept = lines.slice(from - start);
-    if (marked) return kept.map((l) => theme.fg("dim", l));
-    marked = true;
-    return [theme.fg("dim", `\u2026 ${kept[0].trim()}`), ...kept.slice(1).map((l) => theme.fg("dim", l))];
+interface ThinkingSegment {
+  content: string;
+  /** Set for transcript entries (cacheable); absent for the live run. */
+  seq?: number;
+}
+
+function thinkingKeptLines(
+  segments: ThinkingSegment[],
+  width: number,
+  theme: PeekTheme,
+  cache?: EntryWrapCache,
+): string[][] {
+  const raw: string[][] = segments.map(() => []);
+  let need = THINKING_TAIL_LINES;
+  let oldest = -1;
+  // Walk from the newest segment, wrapping only until the tail is full.
+  for (let i = segments.length - 1; i >= 0 && need > 0; i--) {
+    const seg = segments[i];
+    const lines = cache && seg.seq !== undefined ? cache.lines(seg.seq, seg.content, width) : wrapLines(seg.content, width);
+    if (lines.length === 0) continue;
+    raw[i] = lines.slice(-need);
+    need -= raw[i].length;
+    oldest = i;
+  }
+  return raw.map((lines, i) => {
+    if (i !== oldest) return lines.map((l) => theme.fg("dim", l));
+    return [theme.fg("dim", `\u2026 ${lines[0].trim()}`), ...lines.slice(1).map((l) => theme.fg("dim", l))];
   });
 }
 
@@ -125,6 +173,7 @@ function buildFullBody(
   theme: PeekTheme,
   width: number,
   prefs: PeekRenderPrefs | undefined,
+  cache?: EntryWrapCache,
 ): { body: string[]; dropped: number } {
   const settled = !isActive(job.state);
   const hideThinking = prefs?.hideThinking === true;
@@ -140,15 +189,15 @@ function buildFullBody(
   // Blocks keep the render order: plain line groups and thinking slots,
   // whose lines are only known after the global thinking cap is computed.
   const blocks: Array<{ kind: "lines"; lines: string[] } | { kind: "thinking"; index: number }> = [];
-  const thinkingSegments: string[][] = [];
+  const thinkingSegments: ThinkingSegment[] = [];
   for (const e of transcript.entries) {
     if (e.kind === "thinking") {
       if (!hideThinking) {
         blocks.push({ kind: "thinking", index: thinkingSegments.length });
-        thinkingSegments.push([e.content]);
+        thinkingSegments.push({ content: e.content, seq: e.seq });
       }
     } else if (e.kind === "text") {
-      blocks.push({ kind: "lines", lines: wrapLines(e.content, width) });
+      blocks.push({ kind: "lines", lines: cache ? cache.lines(e.seq, e.content, width) : wrapLines(e.content, width) });
     } else if (e.kind === "tool-start") {
       blocks.push({ kind: "lines", lines: [`\u25b8 ${e.label}`] });
     } else if (!collapseTools) {
@@ -168,12 +217,12 @@ function buildFullBody(
   if (!settled) {
     if (transcript.currentThinking !== "" && !hideThinking) {
       blocks.push({ kind: "thinking", index: thinkingSegments.length });
-      thinkingSegments.push([transcript.currentThinking]);
+      thinkingSegments.push({ content: transcript.currentThinking });
     }
     if (transcript.currentText !== "") blocks.push({ kind: "lines", lines: wrapLines(transcript.currentText, width) });
   }
 
-  const kept = thinkingKeptLines(thinkingSegments, width, theme);
+  const kept = thinkingKeptLines(thinkingSegments, width, theme, cache);
   const body: string[] = [];
   for (const block of blocks) {
     body.push(...(block.kind === "lines" ? block.lines : kept[block.index]));
@@ -219,6 +268,21 @@ export function buildPeekLines(
 ): string[] {
   const inner = Math.max(1, Math.max(4, width) - 4);
   const { body: fullBody, dropped } = buildFullBody(job, transcript, theme, inner, prefs);
+  return assemblePeekFrame(job, fullBody, dropped, now, theme, width, scroll?.offset);
+}
+
+// Everything after the full body: scroll slice, elision line, settled result,
+// header/footer and the frame. `offset` undefined = the plain tail slice.
+// Never mutates `fullBody` (a cached/shared array may be passed in).
+function assemblePeekFrame(
+  job: JobSnapshot,
+  fullBody: readonly string[],
+  dropped: number,
+  now: number,
+  theme: PeekTheme,
+  width: number,
+  offset: number | undefined,
+): string[] {
   const cap = Math.max(0, fullBody.length - BODY_LINES);
 
   // Scrolled mode slices the full body `offset` lines up from the bottom;
@@ -227,16 +291,16 @@ export function buildPeekLines(
   // above it joins the transcript's own dropped entries in the elision count.
   let elided = dropped;
   let body: string[];
-  if (scroll) {
-    const offset = Math.max(0, scroll.offset);
-    const start = Math.max(0, fullBody.length - BODY_LINES - offset);
+  if (offset !== undefined) {
+    const off = Math.max(0, offset);
+    const start = Math.max(0, fullBody.length - BODY_LINES - off);
     elided += start;
-    body = fullBody.slice(start, Math.max(0, fullBody.length - offset));
+    body = fullBody.slice(start, Math.max(0, fullBody.length - off));
   } else if (fullBody.length > BODY_LINES) {
     elided += fullBody.length - BODY_LINES;
     body = fullBody.slice(-BODY_LINES);
   } else {
-    body = fullBody;
+    body = fullBody.slice();
   }
   if (elided > 0) body.unshift(theme.fg("dim", `\u2026 (+${elided} earlier)`));
 
@@ -303,6 +367,24 @@ export interface PeekOverlayDeps {
   onToggleTools?: () => void;
 }
 
+interface FrameKey {
+  id: string;
+  state: JobState;
+  usage: unknown;
+  transcript: TranscriptState | undefined;
+  hideThinking: boolean;
+  toolsExpanded: boolean | undefined;
+  scrollOffset: number;
+  bucket: number | "settled";
+  theme: PeekTheme;
+}
+
+function sameKey(a: FrameKey, b: FrameKey): boolean {
+  return a.id === b.id && a.state === b.state && a.usage === b.usage && a.transcript === b.transcript &&
+    a.hideThinking === b.hideThinking && a.toolsExpanded === b.toolsExpanded &&
+    a.scrollOffset === b.scrollOffset && a.bucket === b.bucket && a.theme === b.theme;
+}
+
 /** One overlay instance per open (one-interaction-per-instance rule): it owns
  * the pulse timer and resolves `done` exactly once from its own input
  * handling. `dispose()` only stops the timer — the shutdown path may call it
@@ -320,6 +402,9 @@ export class PeekOverlayComponent {
   // Scroll capacity, re-derived on every render (the full body grows and
   // shrinks); until the first render arrives there is nothing to scroll.
   private scrollCap = 0;
+  private wrapCache = createEntryWrapCache();
+  // Last frame computed, and the key of the last render (tick compares it).
+  private frame: { key: FrameKey; width: number; lines: string[] } | undefined;
 
   constructor(
     tui: PeekTui,
@@ -337,14 +422,33 @@ export class PeekOverlayComponent {
     this.timer = this.deps.schedule(() => this.tick(), PULSE_MS);
   }
 
-  // Pulse tick: re-render while the target job is active; on the first
-  // observation of a settled (or pruned) job, render once more — freezing the
-  // frame to the final result — and stop rescheduling.
+  // Everything a frame depends on except the width: references for the
+  // immutable inputs (the transcript snapshot's identity is its version) plus
+  // the one-second elapsed bucket the header shows.
+  private frameKey(job: JobSnapshot, transcript: TranscriptState | undefined, prefs: PeekRenderPrefs | undefined): FrameKey {
+    return {
+      id: job.id,
+      state: job.state,
+      usage: job.progress.usage,
+      transcript,
+      hideThinking: prefs?.hideThinking === true,
+      toolsExpanded: prefs?.toolsExpanded,
+      scrollOffset: this.scrollOffset,
+      bucket: "settledAt" in job.state ? "settled" : Math.floor((this.deps.now() - job.startedAt) / 1000),
+      theme: this.theme,
+    };
+  }
+
+  // Pulse tick: while the target job is active, ask for a render only when
+  // the frame key moved since the last render; on the first observation of a
+  // settled (or pruned) job, render once more — freezing the frame to the
+  // final result — and stop rescheduling.
   private tick(): void {
     this.timer = undefined; // this invocation consumed the scheduled handle
     const job = this.deps.getJob();
     if (job && isActive(job.state)) {
-      this.tui.requestRender();
+      const key = this.frameKey(job, this.deps.getTranscript(), this.deps.getPrefs?.());
+      if (!this.frame || !sameKey(this.frame.key, key)) this.tui.requestRender();
       this.timer = this.deps.schedule(() => this.tick(), PULSE_MS);
     } else {
       this.tui.requestRender();
@@ -370,16 +474,24 @@ export class PeekOverlayComponent {
         width,
       );
     }
-    // Prefs are read live on every render (never cached); the scroll offset
-    // is clamped against the (text-dependent) cap before it reaches the
-    // body slice. The cap is measured at the body's own wrap width (the
-    // frame's inner width), the same one buildPeekLines wraps the body at.
+    // Prefs are read live on every render; the scroll offset is clamped
+    // against the (text-dependent) cap before it reaches the body slice. The
+    // cap is measured at the body's own wrap width (the frame's inner width).
     const prefs = this.deps.getPrefs?.();
     const transcript = this.deps.getTranscript();
+    const key = this.frameKey(job, transcript, prefs);
+    if (this.frame && this.frame.width === width && sameKey(this.frame.key, key)) return this.frame.lines.slice();
+
     const inner = Math.max(1, Math.max(4, width) - 4);
-    this.scrollCap = peekScrollCap(job, transcript, this.theme, inner, prefs);
+    const { body, dropped } = buildFullBody(job, transcript, this.theme, inner, prefs, this.wrapCache);
+    const firstSeq = transcript?.entries[0]?.seq;
+    if (firstSeq === undefined) this.wrapCache.clear();
+    else this.wrapCache.prune(firstSeq);
+    this.scrollCap = Math.max(0, body.length - BODY_LINES);
     const offset = this.clampScroll(this.scrollOffset, this.scrollCap);
-    return buildPeekLines(job, transcript, this.deps.now(), this.theme, width, prefs, { offset });
+    const lines = assemblePeekFrame(job, body, dropped, this.deps.now(), this.theme, width, offset);
+    this.frame = { key, width, lines };
+    return lines.slice();
   }
 
   // Scroll offset, counted in full-body lines up from the bottom (0 = follow
@@ -450,8 +562,12 @@ export class PeekOverlayComponent {
     return { handled: true };
   }
 
-  // All themed output is computed per render; nothing to invalidate.
-  invalidate(): void {}
+  // Themes/prefs are not part of the wrap cache; a host invalidation (theme
+  // change) drops both caches so the next render recomputes everything.
+  invalidate(): void {
+    this.frame = undefined;
+    this.wrapCache.clear();
+  }
 
   dispose(): void {
     this.stopPulse();
