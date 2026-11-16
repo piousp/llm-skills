@@ -93,12 +93,13 @@ export function missingRequestedTools(
   tools: readonly ToolSource[],
   requestedToolNames: readonly string[] = [],
 ): string[] {
-  const registered = new Set(tools.map((tool) => tool.name));
+  const names = tools.map((tool) => tool.name);
+  const registered = new Set(names);
   return requestedToolNames.filter((name) => {
     if (PACKAGE_TOOL_NAMES.has(name) || CLAUDE_INERT_TOOLS.has(name)) return false;
     if (!name.includes("*")) return !registered.has(name);
     const pattern = toolPattern(name);
-    return ![...registered].some((toolName) => pattern.test(toolName));
+    return !names.some((toolName) => pattern.test(toolName));
   });
 }
 
