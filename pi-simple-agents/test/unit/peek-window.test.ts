@@ -14,7 +14,7 @@ import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui"
 import { formatRunUsage } from "../../src/usage.ts";
 import { WARN_PREFIX } from "../../src/warn.ts";
 import type { JobSnapshot } from "../../src/background-jobs.ts";
-import { applySessionEvent, initialTranscriptState, type EntryDraft, type TranscriptEntry, type TranscriptState } from "../../src/transcript.ts";
+import { applySessionEvent, initialTranscriptState, SEGMENT_SPLIT_CHARS, type EntryDraft, type TranscriptEntry, type TranscriptState } from "../../src/transcript.ts";
 
 const theme: PeekTheme = { fg: (c, t) => `<${c}>${t}</${c}>` };
 
@@ -164,10 +164,15 @@ test("buildPeekLines: a word straddling the split limit renders whole after a re
   const msg = (delta: string) =>
     ({ type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta } }) as never;
   let t = initialTranscriptState();
-  t = applySessionEvent(t, msg("word ".repeat(398) + " subag"));
+  // The first delta ends mid-word exactly when the accumulator passes the
+  // limit: cutting at acc.length would leave `subag` ending one entry and
+  // `ent_job` starting the next.
+  t = applySessionEvent(t, msg("word ".repeat(SEGMENT_SPLIT_CHARS / 5) + "subag"));
   t = applySessionEvent(t, msg("ent_job tail"));
-  const body = buildPeekLines(runningJob(), t, 1_000, theme, 40).map(visible).join("\n");
-  assert.match(body, /subagent_job/);
+  assert.ok(t.entries.length > 0, "fixture must cross the split limit");
+  const body = buildPeekLines(runningJob(), t, 1_000, theme, 40).map(visible);
+  assert.ok(body.some((l) => l.includes("subagent_job")), "subagent_job must sit whole on one line");
+  assert.ok(!body.some((l) => /subag\s*\u2502?\s*$/.test(l)), "no line may end mid-word in `subag`");
 });
 
 test("buildPeekLines: an entry ending in a newline renders no trailing blank line", () => {
