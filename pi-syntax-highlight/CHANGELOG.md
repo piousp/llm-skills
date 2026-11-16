@@ -5,6 +5,8 @@ follows Keep a Changelog, and this project uses semantic versioning.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-16
+
 ### Added
 
 - `publish-syntax-highlight` GitHub Actions workflow: manual dispatch, OIDC trusted
