@@ -264,6 +264,22 @@ test("makefile: .PHONY, or a rule with dependencies and a tab recipe", () => {
   assert.equal(detectOutputLanguage(`build: main.o\n\tcc -o app main.o`), "makefile");
 });
 
+test("makefile: a JVM stack trace is not a rule", () => {
+  const trace = `java.net.ConnectException: Connection refused\n\tat java.base/sun.nio.ch.Net.connect0(Native Method)\n\tat Main.main(Main.java:10)`;
+  assert.equal(detectLanguage(trace), undefined);
+  assert.equal(detectOutputLanguage(trace), undefined);
+});
+
+test("makefile: an RFC822 folded header is not a rule", () => {
+  assert.notEqual(detectLanguage(`Received: from a by b\n\tid 1`), "makefile");
+});
+
+test("makefile: dotted and pattern targets stay rules", () => {
+  assert.equal(detectLanguage(`%.o: %.c\n\t$(CC) -c $< -o $@`), "makefile");
+  assert.equal(detectLanguage(`Main.class: Main.java\n\tjavac Main.java`), "makefile");
+  assert.equal(detectLanguage(`build-all: deps\n\t./build.sh`), "makefile");
+});
+
 test("c and cpp: an include picks c, cpp-only syntax picks cpp", () => {
   assert.equal(detectLanguage(`#include <stdio.h>\nint main(void) { return 0; }`), "c");
   assert.equal(detectLanguage(`#include "a.h"\nint x;`), "c");

@@ -134,10 +134,10 @@ test("highlightLines: a budget cuts the highlighted head and paints the tail fla
   assert.equal(painted[400], "flat:line 400");
 });
 
-test("highlight: a result painted entirely in the code-block color is not cached", () => {
+test("highlight: a result painted entirely in the code-block color is returned empty and not cached", () => {
   clearHighlightCache();
   const first = highlight("plain text", UNKNOWN_LANG);
-  assert.deepEqual(first, ["<mdCodeBlock>plain text</mdCodeBlock>"]);
+  assert.deepEqual(first, []);
   // A grammar that loads later must get another chance, so a repaint is a new array.
   assert.notEqual(highlight("plain text", UNKNOWN_LANG), first);
 });

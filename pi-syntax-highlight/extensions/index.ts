@@ -12,6 +12,6 @@ import { resolveToolRenderers } from "../src/resolve-renderers.ts";
 export default function piSyntaxHighlight(pi: ExtensionAPI): void {
   pi.registerToolRenderer(resolveToolRenderers);
   pi.registerMarkdownTransformer(createMarkdownTransformer(), {
-    messageTypes: ["assistant", "assistant-thinking", "custom", "summary"],
+    messageTypes: ["user", "assistant", "assistant-thinking", "custom", "summary"],
   });
 }

@@ -16,6 +16,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Text, imageFallback, setCapabilityOverrides, stripTerminalSequences, type Component } from "@earendil-works/pi-tui";
 import type { ThemeBg, ThemeColor, ToolRenderers, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import { highlight } from "../../src/highlight.ts";
+import { buildEditDiffText } from "../../src/render-edit.ts";
 import { resolveToolRenderers } from "../../src/resolve-renderers.ts";
 
 // Only the slots are under test, so the components themselves are opaque.
@@ -259,6 +261,18 @@ function withHostTheme(run: (theme: Theme) => void): void {
   }
 }
 
+// For the tests that need the host's module-global theme to be a given one.
+function withGlobalTheme(theme: unknown, run: () => void): void {
+  const holder = globalThis as unknown as Record<symbol, unknown>;
+  const previous = holder[HOST_THEME_KEY];
+  holder[HOST_THEME_KEY] = theme;
+  try {
+    run();
+  } finally {
+    holder[HOST_THEME_KEY] = previous;
+  }
+}
+
 test("resolveToolRenderers: a partial shell result is rendered by the built-in renderResult", () => {
   withHostTheme((theme) => {
     for (const toolName of ["bash", "powershell"]) {
@@ -434,6 +448,10 @@ test("resolveToolRenderers: edit replaces the stock diff in the box and keeps th
     );
     assert.deepEqual(component.render(80), []);
     assert.equal(box.children.length, 3);
+    assert.deepEqual(
+      box.children[2].render(80),
+      new Text(buildEditDiffText({ diff, path: "a.ts", theme, highlight }), 0, 0).render(80),
+    );
     const rendered = stripTerminalSequences(box.render(80).join("\n"));
     assert.match(rendered, /edit\s+a\.ts/);
     assert.match(rendered, /-2 const b = 2;/);
@@ -455,6 +473,8 @@ test("resolveToolRenderers: edit without a box replaces the body of the containe
     assert.equal(component instanceof Container, true);
     const lines = (component as Container).render(80).map(stripTerminalSequences);
     assert.equal(lines.length, 3);
+    const body = buildEditDiffText({ diff, path: "a.ts", theme, highlight });
+    assert.deepEqual((component as Container).children[1].render(80), new Text(body, 2, 0).render(80));
     assert.match(lines[1], /^ {2}-1 const a = 1;/);
   });
 });
@@ -520,10 +540,11 @@ test("resolveToolRenderers: the collapsed shell preview takes its expand hint fr
 test("resolveToolRenderers: a context without keyHint still shows the expand hint", () => {
   // `rawKeyHint` paints through the host's module-global theme, which only exists
   // after the host initializes it.
-  Object.assign(globalThis, { [Symbol.for("@earendil-works/pi-coding-agent:theme")]: fakeTheme });
-  const lines = Array.from({ length: 30 }, (_, index) => `src/file${index}.ts`).join("\n");
-  const context = { ...hostContext({ isPartial: false }), keyHint: undefined } as unknown as HostContext;
-  assert.match(renderResultWith("find", lines, context), /ctrl\+o.*to expand/);
+  withGlobalTheme(fakeTheme, () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `src/file${index}.ts`).join("\n");
+    const context = { ...hostContext({ isPartial: false }), keyHint: undefined } as unknown as HostContext;
+    assert.match(renderResultWith("find", lines, context), /ctrl\+o.*to expand/);
+  });
 });
 
 
@@ -545,6 +566,30 @@ function detailsThrowingOnce(text: string): HostResult {
   };
 }
 
+// Same as `detailsThrowingOnce`, but the generic builder reads `content` first.
+function contentThrowingOnce(text: string): HostResult {
+  let reads = 0;
+  return {
+    get content() {
+      reads += 1;
+      if (reads === 1) throw new Error("boom");
+      return [{ type: "text" as const, text }];
+    },
+    details: undefined,
+  };
+}
+
+test("resolveToolRenderers: genericOverlayFallsBackToPlainBodyWhenBuilderThrows", () => {
+  const resolved = resolveToolRenderers("codemode", () => baseRenderersWithoutResult());
+  const component = resolved?.renderResult?.(
+    contentThrowingOnce("alpha\nbeta"),
+    { expanded: false, isPartial: false },
+    fakeTheme,
+    hostContext({ isPartial: false }),
+  );
+  assert.deepEqual(renderedLines(component), ["<toolOutput>alpha</toolOutput>", "<toolOutput>beta</toolOutput>"]);
+});
+
 test("resolveToolRenderers: a throwing builder renders the stock output", () => {
   withHostTheme((theme) => {
     const lines = Array.from({ length: 30 }, (_, index) => `src/a.ts:${index + 1}: line ${index}`).join("\n");
@@ -559,6 +604,19 @@ test("resolveToolRenderers: a throwing builder renders the stock output", () => 
 });
 
 for (const toolName of ["bash", "powershell"]) {
+  test(`resolveToolRenderers: a final ${toolName} result renders the same styled body for isError true and false`, () => {
+    const render = (isError: boolean): string[] =>
+      renderedLines(
+        resolveToolRenderers(toolName, () => stockFor(toolName))!.renderResult!(
+          shellResult("diff --git a/x b/x\n+x"),
+          { expanded: false, isPartial: false },
+          fakeTheme,
+          hostContext({ isPartial: false, durationMs: 1500, isError }),
+        ),
+      );
+    assert.deepEqual(render(true), render(false));
+  });
+
   test(`contract: stock ${toolName} renderCall sets a numeric state.startedAt`, () => {
     withHostTheme((theme) => {
       const state: Record<string, unknown> = {};

@@ -1,4 +1,5 @@
 import { getMarkdownTheme, highlightCode, type ThemeColor } from "@earendil-works/pi-coding-agent";
+import { LruCache } from "./lru-cache.ts";
 
 export type HighlightFn = (code: string, lang: string) => string[];
 
@@ -12,7 +13,7 @@ const CACHE_LIMIT = 64;
 // by language and code only, so the cached lines go stale as soon as the theme
 // changes: `syncHighlightTheme` is what drops them, and every renderer calls it
 // with the theme it is about to paint with.
-const cache = new Map<string, string[]>();
+const cache = new LruCache<string, string[]>(CACHE_LIMIT);
 
 // The tokens `highlightCode` paints with. Reading their sequences is the only
 // observable the theme offers that changes when the user switches themes.
@@ -73,7 +74,7 @@ export function syncHighlightTheme(theme: unknown): void {
 
 // `highlightCode` paints with the code-block color when it has no grammar for the
 // language, which is also what a grammar that has not loaded yet looks like.
-// Such a result carries no syntax, so it is neither cached nor trusted.
+// Such a result carries no syntax, so `highlight` returns it empty and uncached.
 function isCodeBlockPaint(code: string, lines: readonly string[]): boolean {
   try {
     const input = code.split("\n");
@@ -87,18 +88,9 @@ function isCodeBlockPaint(code: string, lines: readonly string[]): boolean {
 export const highlight: HighlightFn = (code, lang) => {
   const key = `${lang}\u0000${code}`;
   const cached = cache.get(key);
-  if (cached !== undefined) {
-    // Re-inserting moves the entry to the back, so the front is the least recently used.
-    cache.delete(key);
-    cache.set(key, cached);
-    return cached;
-  }
+  if (cached !== undefined) return cached;
   const lines = highlightCode(code, lang);
-  if (isCodeBlockPaint(code, lines)) return lines;
-  if (cache.size >= CACHE_LIMIT) {
-    const oldest = cache.keys().next();
-    if (!oldest.done) cache.delete(oldest.value);
-  }
+  if (isCodeBlockPaint(code, lines)) return [];
   cache.set(key, lines);
   return lines;
 };
@@ -123,8 +115,6 @@ export function highlightLines(
   let highlighted: string[] = [];
   try {
     highlighted = highlightFn(head.join("\n"), lang);
-    // No syntax in the result: the caller's flat color is the honest paint.
-    if (isCodeBlockPaint(head.join("\n"), highlighted)) highlighted = [];
   } catch {
     highlighted = [];
   }

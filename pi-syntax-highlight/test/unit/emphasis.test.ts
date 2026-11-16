@@ -156,3 +156,18 @@ test("findMatchRanges: a line over the length cap gets no emphasis", () => {
   assert.deepEqual(findMatchRanges(`${"x".repeat(500)}`, "x", LITERAL).length, 1);
   assert.deepEqual(findMatchRanges(`${"x".repeat(501)}`, "x", LITERAL), []);
 });
+
+test("findMatchRanges: a named backreference is rejected, a named group alone is allowed", () => {
+  assert.deepEqual(findMatchRanges("aa", "(?<n>a)\\k<n>", REGEX), []);
+  assert.deepEqual(findMatchRanges("ab", "(?<n>a)b", REGEX), [{ start: 0, end: 2 }]);
+});
+
+test("findMatchRanges: a repeated group whose body repeats or branches is rejected", () => {
+  assert.deepEqual(findMatchRanges("aaaa", "(?:a+)+", REGEX), []);
+  assert.deepEqual(findMatchRanges("abab", "(a|b)*", REGEX), []);
+  assert.deepEqual(findMatchRanges("aa", "((a)?)+", REGEX), []);
+});
+
+test("findMatchRanges: a parenthesis inside a character class does not open a group", () => {
+  assert.deepEqual(findMatchRanges("((x", "[(]+x", REGEX), [{ start: 0, end: 3 }]);
+});

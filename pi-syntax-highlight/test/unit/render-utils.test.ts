@@ -9,7 +9,6 @@ import {
   moreLinesFooter,
   replaceTabs,
   reuseText,
-  splitTrailingNotice,
   styleDiffLine,
   textOutput,
   truncatedNotice,
@@ -94,29 +93,6 @@ test("replaceTabs: every tab of the line is replaced", () => {
 test("replaceTabs: a line without tabs is unchanged", () => {
   assert.equal(replaceTabs("  indented with spaces"), "  indented with spaces");
   assert.equal(replaceTabs(""), "");
-});
-
-test("splitTrailingNotice: a blank-line-separated bracket block becomes the notice", () => {
-  assert.deepEqual(splitTrailingNotice("a.ts:1: x  \n\n[3 matches limit]"), {
-    body: "a.ts:1: x",
-    notice: "3 matches limit",
-  });
-});
-
-test("splitTrailingNotice: a trailing bracket with no blank line before it stays in the body", () => {
-  assert.deepEqual(splitTrailingNotice("const x = a[0]"), { body: "const x = a[0]" });
-});
-
-test("splitTrailingNotice: a block containing a newline is not a notice", () => {
-  const output = "a.ts:1: x\n\n[first line,\nsecond line]";
-  assert.deepEqual(splitTrailingNotice(output), { body: output });
-});
-
-test("splitTrailingNotice: an output that is only a notice has an empty body", () => {
-  assert.deepEqual(splitTrailingNotice("\n\n[12 matches limit]"), {
-    body: "",
-    notice: "12 matches limit",
-  });
 });
 
 test("moreLinesFooter: byte-identical to the built-in footer", () => {

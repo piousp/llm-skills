@@ -26,7 +26,7 @@ const ESCAPE = "\x1b";
 // Past these sizes the backtracking matcher is not worth the risk on a render
 // path; the cost is a line without emphasis, never a missing line.
 const MAX_REGEX_LENGTH = 256;
-export const GREP_MAX_LINE_LENGTH = 500;
+const GREP_MAX_LINE_LENGTH = 500;
 
 function escapeLiteral(pattern: string): string {
   return pattern.replace(REGEXP_METACHARACTERS, "\\$&");
@@ -104,6 +104,34 @@ function skipGroupPrefix(source: string, index: number): number {
   return next === "<" ? index + 3 : index + 2;
 }
 
+// Index past a two-character escape, or -1 for a backreference (`\1`-`\9`,
+// `\k<name>`), which no static check can bound.
+function skipEscape(source: string, index: number): number {
+  const next = source[index + 1];
+  if ((next >= "1" && next <= "9") || (next === "k" && source[index + 2] === "<")) return -1;
+  return index + 2;
+}
+
+// Index just past the `]` closing the class that opens at `index`.
+function skipCharClass(source: string, index: number): number {
+  let cursor = index + 1;
+  while (cursor < source.length && source[cursor] !== "]") cursor += source[cursor] === "\\" ? 2 : 1;
+  return cursor + 1;
+}
+
+// Pops the group closed at `index`: false when it is repeated while its body can
+// repeat or branch, otherwise the parent frame inherits what the group held.
+function closeGroup(stack: GroupFrame[], source: string, index: number): boolean {
+  const frame = stack.pop() as GroupFrame;
+  const parent = stack[stack.length - 1];
+  const after = source[index + 1];
+  const repeated = after === "+" || after === "*" || after === "{";
+  if (repeated && (frame.hasQuantifier || frame.hasAlternation)) return false;
+  parent.hasQuantifier ||= frame.hasQuantifier || repeated || after === "?";
+  parent.hasAlternation ||= frame.hasAlternation;
+  return true;
+}
+
 // Catastrophic backtracking needs a repeated group whose body can repeat or
 // branch, and a backreference defeats any static check: both are rejected by a
 // scan that follows escapes, character classes and the group nesting. A lone
@@ -113,38 +141,23 @@ function isBacktrackingSafe(source: string): boolean {
   let index = 0;
   while (index < source.length) {
     const char = source[index];
-    if (char === "\\") {
-      const next = source[index + 1];
-      if ((next >= "1" && next <= "9") || (next === "k" && source[index + 2] === "<")) return false;
-      index += 2;
-      continue;
-    }
-    if (char === "[") {
-      index += 1;
-      while (index < source.length && source[index] !== "]") index += source[index] === "\\" ? 2 : 1;
-      index += 1;
-      continue;
-    }
     const top = stack[stack.length - 1];
-    if (char === "(") {
+    if (char === "\\") {
+      index = skipEscape(source, index);
+      if (index === -1) return false;
+    } else if (char === "[") {
+      index = skipCharClass(source, index);
+    } else if (char === "(") {
       stack.push({ hasQuantifier: false, hasAlternation: false });
       index = skipGroupPrefix(source, index + 1);
-      continue;
+    } else if (char === ")" && stack.length > 1) {
+      if (!closeGroup(stack, source, index)) return false;
+      index += 1;
+    } else {
+      if (char === "|") top.hasAlternation = true;
+      else if (char === "+" || char === "*" || char === "?" || char === "{") top.hasQuantifier = true;
+      index += 1;
     }
-    if (char === ")" && stack.length > 1) {
-      const frame = stack.pop() as GroupFrame;
-      const parent = stack[stack.length - 1];
-      const after = source[index + 1];
-      const repeated = after === "+" || after === "*" || after === "{";
-      if (repeated && (frame.hasQuantifier || frame.hasAlternation)) return false;
-      parent.hasQuantifier ||= frame.hasQuantifier || repeated || after === "?";
-      parent.hasAlternation ||= frame.hasAlternation;
-    } else if (char === "|") {
-      top.hasAlternation = true;
-    } else if (char === "+" || char === "*" || char === "?" || char === "{") {
-      top.hasQuantifier = true;
-    }
-    index += 1;
   }
   return true;
 }

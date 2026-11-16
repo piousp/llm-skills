@@ -54,19 +54,21 @@ function hasImageBlock(result: AgentToolResult<unknown>): boolean {
   return result.content.some((block) => block.type === "image");
 }
 
-// Every styled list result turns plain text into themed text from the same
-// render inputs. The call arguments come last because only grep reads them
-// today: its pattern drives the match emphasis. `isError` follows them because
-// only the renderers that paint a failure differently read it.
-type ResultTextBuilder<TDetails> = (
-  output: string,
-  details: TDetails,
-  expanded: boolean,
-  theme: Theme,
-  expandHint: string,
-  args: unknown,
-  isError: boolean,
-) => string;
+// Every styled result turns plain text into themed text from the same render
+// inputs. Only grep reads the call arguments (its pattern drives the match
+// emphasis); only the renderers that paint a failure differently read `isError`.
+// The builders read `result.details` themselves, inside the guarded region.
+interface ResultTextInput {
+  output: string;
+  result: AgentToolResult<unknown>;
+  expanded: boolean;
+  theme: Theme;
+  expandHint: string;
+  args: unknown;
+  isError: boolean;
+}
+
+type ResultTextBuilder = (input: ResultTextInput) => string;
 
 // `rawKeyHint` takes no keybinding lookup, so the fallback cannot throw outside
 // a session (export, headless).
@@ -86,13 +88,15 @@ function withStockFallback(ours: ResultRenderer, stock: ResultRenderer | undefin
     try {
       return ours(result, options, theme, context);
     } catch {
+      // Nothing is logged: a write to stdout/stderr would corrupt the TUI frame.
+      // The contract and stock-parity tests are the detection path.
       if (stock !== undefined) return stock(result, options, theme, { ...context, lastComponent: undefined });
       return new Text(fallbackBody(textOutput(result, context.showImages), options.expanded, theme), 0, 0);
     }
   };
 }
 
-function wrapResultRenderer<TDetails>(build: ResultTextBuilder<TDetails>): ResultRenderer {
+function wrapResultRenderer(build: ResultTextBuilder): ResultRenderer {
   return (result, options, theme, context) => {
     // The cached highlight lines were painted with the previous theme, if any.
     syncHighlightTheme(theme);
@@ -102,7 +106,7 @@ function wrapResultRenderer<TDetails>(build: ResultTextBuilder<TDetails>): Resul
     // renderer carries no `isError`, so reading it there would always be false.
     const isError = context.isError === true;
     component.setText(
-      build(output, result.details, options.expanded, theme, expandHint(context), context.args, isError),
+      build({ output, result, expanded: options.expanded, theme, expandHint: expandHint(context), args: context.args, isError }),
     );
     return component;
   };
@@ -117,48 +121,45 @@ function fallbackBody(output: string, expanded: boolean, theme: Theme): string {
   return visible.map((line) => theme.fg(TOKEN.content, line)).join("\n");
 }
 
-const GREP_RESULT = wrapResultRenderer<GrepDetails>((output, details, expanded, theme, expandHint, args) =>
-  buildGrepResultText({ output, details, expanded, pattern: grepArgs(args), theme, expandHint, highlight }),
+const GREP_RESULT = wrapResultRenderer(({ output, result, expanded, theme, expandHint, args }) =>
+  buildGrepResultText({
+    output,
+    details: result.details as GrepDetails,
+    expanded,
+    pattern: grepArgs(args),
+    theme,
+    expandHint,
+    highlight,
+  }),
 );
 
-const FIND_RESULT = wrapResultRenderer<FindDetails>((output, details, expanded, theme, expandHint, _args, isError) =>
-  buildFindResultText({ output, details, expanded, isError, theme, expandHint }),
+const FIND_RESULT = wrapResultRenderer(({ output, result, expanded, theme, expandHint, isError }) =>
+  buildFindResultText({ output, details: result.details as FindDetails, expanded, isError, theme, expandHint }),
 );
 
-const LS_RESULT = wrapResultRenderer<LsDetails>((output, details, expanded, theme, expandHint, _args, isError) =>
-  buildLsResultText({ output, details, expanded, isError, theme, expandHint }),
+const LS_RESULT = wrapResultRenderer(({ output, result, expanded, theme, expandHint, isError }) =>
+  buildLsResultText({ output, details: result.details as LsDetails, expanded, isError, theme, expandHint }),
 );
 
 // Fallback for every tool this package does not style: the body is painted, the
 // header stays whatever the tool brought (usually nothing).
-const GENERIC_RESULT = wrapResultRenderer<unknown>(
-  (output, _details, expanded, theme, expandHint, _args, isError) =>
-    buildGenericResultText({ output, expanded, isError, theme, expandHint }),
+const GENERIC_RESULT = wrapResultRenderer(({ output, expanded, theme, expandHint, isError }) =>
+  buildGenericResultText({ output, expanded, isError, theme, expandHint }),
 );
 
-const READ_RESULT: ResultRenderer = (result, options, theme, context) => {
-  // The cached highlight lines were painted with the previous theme, if any.
-  syncHighlightTheme(theme);
-  const component = reuseText(context);
-  const output = textOutput(result, context.showImages);
-  component.setText(
-    buildReadResultText({
-      output,
-      path: readPath(context.args),
-      details: readDetails(result.details),
-      expanded: options.expanded,
-      // The TUI hands the failure through the context; the result it passes to
-      // the renderer carries no `isError`, so reading it there would always be
-      // false.
-      isError: context.isError === true,
-      hasImage: hasImageBlock(result),
-      theme,
-      expandHint: expandHint(context),
-      highlight,
-    }),
-  );
-  return component;
-};
+const READ_RESULT = wrapResultRenderer(({ output, result, expanded, theme, expandHint, args, isError }) =>
+  buildReadResultText({
+    output,
+    path: readPath(args),
+    details: readDetails(result.details),
+    expanded,
+    isError,
+    hasImage: hasImageBlock(result),
+    theme,
+    expandHint,
+    highlight,
+  }),
+);
 
 // The built-in `renderCall` of edit keeps its `Box` in the renderer state, and
 // the built-in `renderResult` writes the diff into that same box. The header the
@@ -210,25 +211,13 @@ function editSlot(base: { renderResult: ResultRenderer }): ToolRenderers {
   return { renderResult: withStockFallback(ours, stock) };
 }
 
-// The host's own definitions, by tool name: a slot is overlaid only when the base
-// renderResult is the one of these.
-const STOCK_DEFINITIONS: Record<string, (cwd: string) => unknown> = {
-  grep: createGrepToolDefinition,
-  find: createFindToolDefinition,
-  ls: createLsToolDefinition,
-  read: createReadToolDefinition,
-  edit: createEditToolDefinition,
-  bash: createBashToolDefinition,
-  powershell: createPowerShellToolDefinition,
-};
-
 const stockResultCache = new Map<string, ResultRenderer | undefined>();
 
 function stockResult(toolName: string): ResultRenderer | undefined {
   if (stockResultCache.has(toolName)) return stockResultCache.get(toolName);
   let stock: ResultRenderer | undefined;
   try {
-    stock = (STOCK_DEFINITIONS[toolName]?.(process.cwd()) as ToolRenderers | undefined)?.renderResult;
+    stock = (STYLED_TOOLS.get(toolName)?.stockDefinition(process.cwd()) as ToolRenderers | undefined)?.renderResult;
   } catch {
     stock = undefined;
   }
@@ -331,14 +320,16 @@ function shellSlot(base: { renderResult: ResultRenderer }): ToolRenderers {
 }
 
 // Keyed by name because the resolver is the single entry point for every tool.
-const STYLED_SLOTS = new Map<string, SlotFactory>([
-  ["grep", resultSlot(GREP_RESULT)],
-  ["find", resultSlot(FIND_RESULT)],
-  ["ls", resultSlot(LS_RESULT)],
-  ["read", resultSlot(READ_RESULT)],
-  ["edit", editSlot],
-  ["bash", shellSlot],
-  ["powershell", shellSlot],
+// The slot is overlaid only when the base renderResult is the one of the host's
+// own `stockDefinition`.
+const STYLED_TOOLS: ReadonlyMap<string, { stockDefinition: (cwd: string) => unknown; slot: SlotFactory }> = new Map([
+  ["grep", { stockDefinition: createGrepToolDefinition, slot: resultSlot(GREP_RESULT) }],
+  ["find", { stockDefinition: createFindToolDefinition, slot: resultSlot(FIND_RESULT) }],
+  ["ls", { stockDefinition: createLsToolDefinition, slot: resultSlot(LS_RESULT) }],
+  ["read", { stockDefinition: createReadToolDefinition, slot: resultSlot(READ_RESULT) }],
+  ["edit", { stockDefinition: createEditToolDefinition, slot: editSlot }],
+  ["bash", { stockDefinition: createBashToolDefinition, slot: shellSlot }],
+  ["powershell", { stockDefinition: createPowerShellToolDefinition, slot: shellSlot }],
 ]);
 
 // `undefined` ends the chain the way the host expects, so it passes through. A
@@ -350,7 +341,7 @@ export function resolveToolRenderers(toolName: string, next: () => ToolRenderers
   if (base === undefined) return undefined;
   const current = base.renderResult;
   if (current === undefined) return { ...base, renderResult: withStockFallback(GENERIC_RESULT, undefined) };
-  const slot = STYLED_SLOTS.get(toolName);
+  const slot = STYLED_TOOLS.get(toolName)?.slot;
   if (slot === undefined || !isStockSlot(toolName, current)) return base;
   return { ...base, ...slot({ ...base, renderResult: current }) };
 }

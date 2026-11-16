@@ -68,17 +68,6 @@ export function replaceTabs(text: string): string {
   return text.replace(/\t/g, "   ");
 }
 
-// The generic overlay receives an output that ends with a notice such as
-// "\n\n[100 matches limit]". The blank line is the only separator, so a block
-// that itself contains a newline is body text, not a notice.
-export function splitTrailingNotice(output: string): { body: string; notice?: string } {
-  const start = output.lastIndexOf("\n\n[");
-  if (start === -1) return { body: output };
-  const block = output.slice(start + 2);
-  if (!block.endsWith("]") || block.includes("\n")) return { body: output };
-  return { body: output.slice(0, start).trimEnd(), notice: block.slice(1, -1) };
-}
-
 // Byte-identical to the built-in footer (renderers/grep.ts, find.ts, ls.ts):
 // any divergence here is a visible difference against stock pi.
 export function moreLinesFooter(hidden: number, theme: StyleTheme, expandHint: string): string {

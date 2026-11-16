@@ -60,7 +60,7 @@ test("the markdown transformer leaves a fence that already names a language alon
   assert.equal(transformers[0](markdown, { messageType: "assistant", isStreaming: false, availableWidth: 80 }), markdown);
 });
 
-test("the markdown transformer is registered for assistant, thinking, custom and summary messages", () => {
+test("the markdown transformer is registered for user, assistant, thinking, custom and summary messages", () => {
   const { transformerOptions } = loadExtension();
-  assert.deepEqual(transformerOptions, [{ messageTypes: ["assistant", "assistant-thinking", "custom", "summary"] }]);
+  assert.deepEqual(transformerOptions, [{ messageTypes: ["user", "assistant", "assistant-thinking", "custom", "summary"] }]);
 });

@@ -47,7 +47,7 @@ Nothing else in the markdown is restyled.
 - A tool whose result renderer this package does not recognize keeps its own look.
 - No initialized theme, no color: the renderers fall back to plain tool output.
 
-## ## Development
+## Development
 
 ```bash
 npm install

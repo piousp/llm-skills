@@ -6,7 +6,7 @@ Needs Node 24 or newer (the tests run through `--experimental-strip-types`) and 
 
 ## Layout
 
-`extensions/index.ts` is the whole public surface: it registers the tool renderer resolver and one markdown transformer (messages `assistant`, `assistant-thinking`, `custom`, `summary`). Everything else under `src/` is internal.
+`extensions/index.ts` is the whole public surface: it registers the tool renderer resolver and one markdown transformer (messages `user`, `assistant`, `assistant-thinking`, `custom`, `summary`). Everything else under `src/` is internal.
 
 - `resolve-renderers.ts` is the resolver; see below.
 - `render-*.ts` turn a tool result into the text of a `Text` node: `grep`, `find`, `ls`, `bash`, `read`, `edit`, and `generic` (extension tools without a result renderer).
@@ -25,7 +25,7 @@ Needs Node 24 or newer (the tests run through `--experimental-strip-types`) and 
 - Otherwise the slot is overlaid only if it is the stock one. Detection is by identity against the host's own `create*ToolDefinition(cwd)` result, then by `toString()` equality, because the stock `bash` and `powershell` renderers are built per definition. Anything undecidable counts as foreign and is returned unchanged, so MCP tools and extensions that bring their own renderer keep it.
 - Styled slots: `grep`, `find`, `ls`, `read` (result only), `edit` (the highlighted diff is swapped into the box stock filled), `bash`/`powershell` (final results only; partial results stay on stock, which owns the elapsed line and repaint interval).
 - Every overlay is wrapped: if ours throws, stock renders the result with a fresh component; the generic renderer falls back to the plain body.
-- `write`, and the `read`/`write` call headers, are stock. Error results are delegated to stock.
+- `write`, and the `read`/`write` call headers, are stock. Error results render like stock; final `bash`/`powershell` results keep the styled body, including failures.
 - The key hint comes from `context.keyHint`, with `rawKeyHint` as the fallback outside a session.
 
 The overlays depend on host internals, and contract tests fail when pi renames them: `state.callComponent` (edit's call box, header first), `state.startedAt` and `state.interval` (shell clock).
@@ -73,7 +73,7 @@ npm test
 
 Seams the tests rely on:
 
-- `stock-parity.test.ts` renders the same input through stock pi and through the resolver and compares text and shape (errors, read/write calls, generic fallback, edit diff).
+- `stock-parity.test.ts` renders the same input through stock pi and through the resolver and compares text and shape (errors except final shell results, read/write calls, generic fallback, edit diff).
 - `resolve-renderers.test.ts` covers slot detection, fallback to stock on error, the shell clock, and the contract tests on `state.callComponent`, `state.startedAt` and `state.interval`.
 - `markdown-fence-lang.test.ts` and `markdown-render-parity.test.ts` cover the fence labeling and that the visible text is unchanged.
 - `extensions-index.test.ts` covers what is registered.

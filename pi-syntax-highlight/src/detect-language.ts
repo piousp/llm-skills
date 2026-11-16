@@ -65,7 +65,7 @@ const DOCKER_INSTRUCTION = /^(?:RUN|COPY|ADD|CMD|ENTRYPOINT|WORKDIR|ENV|EXPOSE|A
 // A rule needs at least one dependency: `default:` and `else:` followed by an
 // indented line are C and shell, and `make: *** [all] Error 1` has no tab recipe.
 const MAKE_PHONY = /^\.PHONY:/m;
-const MAKE_RULE = /^[\w.%-]+[ \t]*:(?![=:])[ \t]+[\w.%$()/-][ \t\w.%$()/-]*\n\t\S/m;
+const MAKE_RULE = /^(?:[\w%-]*\.)*(?![A-Z])[\w%-]+[ \t]*:(?![=:])[ \t]+[\w.%$()/-][ \t\w.%$()/-]*\n\t\S/m;
 
 const C_INCLUDE = /^[ \t]*#include[ \t]*[<"]/m;
 const CPP_SIGNAL = /std::|\btemplate[ \t]*<|\bnamespace\b|\bclass[ \t]+\w+|\bcout\b/;
@@ -204,7 +204,6 @@ const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
   "rust", // cat of source files
   "xml",
   "html", // curl
-  "json", // NDJSON only; a single document is the caller's own check
   "dockerfile",
   "makefile",
   "c",
@@ -244,9 +243,12 @@ function detectShebang(text: string): string | undefined {
 
 function detectMarkup(text: string): string | undefined {
   const first = firstNonBlankLine(text);
+  return declaredMarkup(first) ?? (first.includes("<html") ? "html" : undefined);
+}
+
+function declaredMarkup(first: string): "php" | "xml" | undefined {
   if (first.includes(PHP_OPENER)) return "php";
-  if (MARKUP_DECLARATIONS.some((declaration) => first.includes(declaration))) return "xml";
-  return first.includes("<html") ? "html" : undefined;
+  return MARKUP_DECLARATIONS.some((declaration) => first.includes(declaration)) ? "xml" : undefined;
 }
 
 function detectHtmlFragment(text: string): string | undefined {
@@ -255,7 +257,7 @@ function detectHtmlFragment(text: string): string | undefined {
 }
 
 function detectDockerfile(text: string): string | undefined {
-  const instructions = text.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
+  const instructions = nonBlankLines(text).filter((line) => !line.startsWith("#"));
   if (!DOCKER_FROM.test(instructions[0] ?? "")) return undefined;
   return DOCKER_INSTRUCTION.test(instructions.slice(1).join("\n")) ? "dockerfile" : undefined;
 }
@@ -304,12 +306,12 @@ function detectPowerShell(text: string): string | undefined {
 
 function detectTypeScript(text: string): string | undefined {
   if (!hasTypeScriptSignal(text)) return undefined;
-  return countSignals(text, JSX_SIGNALS) > 0 ? "tsx" : "typescript";
+  return hasJsxSignal(text) ? "tsx" : "typescript";
 }
 
 function detectJavaScript(text: string): string | undefined {
   if (countSignals(text, JAVASCRIPT_SIGNALS) === 0) return undefined;
-  return countSignals(text, JSX_SIGNALS) > 0 ? "jsx" : "javascript";
+  return hasJsxSignal(text) ? "jsx" : "javascript";
 }
 
 function detectGo(text: string): string | undefined {
@@ -435,7 +437,8 @@ export function detectOutputLanguage(text: string): string | undefined {
   const language = detectLanguage(text);
   if (language === undefined) return undefined;
   // The caller checks these two shapes over the whole body, so a sample that
-  // parses as JSON is a prefix of it, not the document; NDJSON is the exception.
+  // parses as JSON is a prefix of it, not the document; NDJSON is the exception
+  // (the only case where "json" gets past this line, so it needs no allowlist entry).
   if (language === "json") return isJsonDocument(text) ? undefined : language;
   if (language === "diff") return undefined;
   if (!OUTPUT_LANGUAGES.has(language)) return undefined;
@@ -465,9 +468,8 @@ function isJsonDocument(text: string): boolean {
 function hasStrongSignal(text: string, lines: readonly string[]): boolean {
   if (isJsonDocument(text)) return true;
   const first = lines[0] ?? "";
-  if (first.startsWith("#!") || first.includes(PHP_OPENER)) return true;
-  if (first.startsWith("diff --git")) return true;
-  return MARKUP_DECLARATIONS.some((declaration) => first.includes(declaration));
+  if (first.startsWith("#!") || first.startsWith("diff --git")) return true;
+  return declaredMarkup(first) !== undefined;
 }
 
 // Every pattern passed here carries the global flag, so `match` returns all the
@@ -482,4 +484,8 @@ function countSignals(text: string, signals: readonly RegExp[]): number {
 
 function hasTypeScriptSignal(text: string): boolean {
   return countSignals(text, TYPESCRIPT_SIGNALS) > 0;
+}
+
+function hasJsxSignal(text: string): boolean {
+  return countSignals(text, JSX_SIGNALS) > 0;
 }

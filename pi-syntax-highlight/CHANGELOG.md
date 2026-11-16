@@ -5,6 +5,13 @@ follows Keep a Changelog, and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Stack traces and RFC822 folded headers are no longer labeled `makefile`.
+  Cost: a target whose last segment starts with a capital letter (e.g. `Main:`)
+  is no longer detected as makefile.
+- The fence-label transformer runs for `user` messages again.
+
 ## [0.2.1] - 2026-11-16
 
 ### Added
@@ -28,6 +35,8 @@ follows Keep a Changelog, and this project uses semantic versioning.
   restored inline-code backticks). The markdown transformer now only labels
   unlabeled closed fences.
 - The `read` line-number gutter and the `write` content overlay.
+- Fence info strings are now copied as written, so `{.ts}` and `js title="a"`
+  are no longer normalized.
 
 ### Changed
 
@@ -36,8 +45,9 @@ follows Keep a Changelog, and this project uses semantic versioning.
   `summary` messages.
 - Colors follow stock pi (`toolOutput`), so a restyled result looks like the
   stock one apart from the highlighting.
-- `read` and `write` calls, and every error result, are delegated to the stock
-  renderer. A renderer this package does not recognize is left untouched, and an
+- `read` and `write` calls are delegated to the stock renderer; error results
+  render like stock; final `bash`/`powershell` results keep the styled body,
+  including failures. A renderer this package does not recognize is left untouched, and an
   exception in ours falls back to stock.
 - The generic renderer for tools without a result renderer mirrors the host's
   fallback; MCP tools use pi's renderers.

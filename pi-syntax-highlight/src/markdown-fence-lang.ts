@@ -1,5 +1,6 @@
 import type { MarkdownTransformer } from "@earendil-works/pi-coding-agent";
 import { detectLanguage } from "./detect-language.ts";
+import { LruCache } from "./lru-cache.ts";
 
 // CommonMark allows up to three spaces of indentation; four spaces open an
 // indented code block and a blockquote prefix is not a fence at all, so neither
@@ -48,14 +49,10 @@ export function transformFenceLanguages(markdown: string): string {
 // again. The transcript holds several messages, hence a small LRU; the width is not
 // part of the key because no stage reads it.
 export function createMarkdownTransformer(): MarkdownTransformer {
-  const memo = new Map<string, string>();
+  const memo = new LruCache<string, string>(MEMO_SIZE);
   return (markdown) => {
     const cached = memo.get(markdown);
-    if (cached !== undefined) {
-      memo.delete(markdown);
-      memo.set(markdown, cached);
-      return cached;
-    }
+    if (cached !== undefined) return cached;
     let output = markdown;
     try {
       output = transformFenceLanguages(markdown);
@@ -64,7 +61,6 @@ export function createMarkdownTransformer(): MarkdownTransformer {
       // original markdown still renders with flat colors.
     }
     memo.set(markdown, output);
-    if (memo.size > MEMO_SIZE) memo.delete(memo.keys().next().value as string);
     return output;
   };
 }
