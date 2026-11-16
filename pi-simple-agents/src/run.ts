@@ -486,6 +486,16 @@ export function runAgentViaSdk(
         // 1.0.x hosts the field is absent (undefined) and the settle-path
         // heuristics keep their current behavior.
         let sessionAborted = false;
+        let lastCtx: ReturnType<typeof agentSession.getContextUsage>;
+        let lastCtxAt = -Infinity;
+        const throttledContextUsage = () => {
+          const now = Date.now();
+          if (now - lastCtxAt >= 1000) {
+            lastCtx = agentSession.getContextUsage();
+            lastCtxAt = now;
+          }
+          return lastCtx;
+        };
         const onSessionEvent = (event: AgentSessionEvent) => {
           // The transcript hook fires first, before usage/translation logic,
           // so it sees every raw event even when the progress collector is
@@ -503,7 +513,7 @@ export function runAgentViaSdk(
               type: "usage",
               usage: toRunUsage(
                 usageAcc,
-                agentSession.getContextUsage(),
+                throttledContextUsage(),
                 isSubscription,
               ),
             });

@@ -664,6 +664,15 @@ function effectiveTotals(run: ReconciledRun): UsageTotals | undefined {
   };
 }
 
+export interface SubagentSessionReportOptions {
+  /** Deepest level to walk (root's children are depth 1); unbounded when absent. */
+  readonly maxDepth?: number;
+  /** false skips per-child usage stats (they stay undefined). */
+  readonly withStats?: boolean;
+  /** Pre-parsed entries of the root file; the root is not read from disk when present. */
+  readonly rootEntries?: readonly SessionEntry[];
+}
+
 /**
  * Reconciles a session's subagent usage from disk into one report.
  *
@@ -694,6 +703,7 @@ export function buildSubagentSessionReport(
   activeRunIds?: ReadonlySet<string>,
   /** The parent session's own entries (in-memory, host-validated); a report without them has no main/combined fields. */
   mainEntries?: readonly SessionEntry[],
+  opts?: SubagentSessionReportOptions,
 ): SubagentSessionReport {
   // Registry runIds are raw; the comparison happens against directory
   // segments, so normalize both sides through the same transformation
@@ -703,8 +713,11 @@ export function buildSubagentSessionReport(
   const budget = { remaining: MAX_CHILDREN_VISITED };
   const runs: ReconciledRun[] = [];
 
-  const reconcile = (sessionFile: string, depth: number): void => {
-    const parentEntries = parseOrEmpty(fs.readTextFile(sessionFile));
+  const maxDepth = opts?.maxDepth ?? Infinity;
+  const withStats = opts?.withStats !== false;
+
+  const reconcile = (sessionFile: string, depth: number, preParsed?: readonly SessionEntry[]): void => {
+    const parentEntries = preParsed ?? parseOrEmpty(fs.readTextFile(sessionFile));
     // Completion messages of THIS file, keyed by the directory segment their
     // runId maps to. Duplicated segments (sanitization collisions, including
     // the deep-<hash16> collapse case) collapse to the first message — the
@@ -738,9 +751,9 @@ export function buildSubagentSessionReport(
           visited.add(resolvedChild);
           matchedSegments.add(childName);
           runs.push(
-            makeRun(childFile, childName, depth, resultBySegment.get(childName), activeSegments, fs),
+            makeRun(childFile, childName, depth, resultBySegment.get(childName), activeSegments, fs, withStats),
           );
-          reconcile(childFile, depth + 1);
+          if (depth < maxDepth) reconcile(childFile, depth + 1);
         }
       }
     }
@@ -754,7 +767,7 @@ export function buildSubagentSessionReport(
     }
   };
 
-  reconcile(rootSessionFile, 1);
+  reconcile(rootSessionFile, 1, opts?.rootEntries);
 
   const report = mergeReport(runs);
   // Without mainEntries the report keeps exactly its previous shape — the
@@ -825,13 +838,15 @@ function makeRun(
   matched: SubagentResultEntry | undefined,
   activeSegments: ReadonlySet<string>,
   fs: ReconcileFs,
+  withStats: boolean,
 ): ReconciledRun {
   const childEntries = parseOrEmpty(fs.readTextFile(childFile));
-  const stats = childEntries.length > 0 ? buildSessionUsageStats(childEntries) : undefined;
+  const stats = withStats && childEntries.length > 0 ? buildSessionUsageStats(childEntries) : undefined;
+  const sessionFile = childEntries.length > 0 ? childFile : undefined;
 
   if (matched) {
     const details = matched.details ?? {};
-    return completedRun(details, segment, depth, matched.timestamp, stats, stats ? childFile : undefined);
+    return completedRun(details, segment, depth, matched.timestamp, stats, sessionFile);
   }
   // Orphan: the child dir is on disk but its completion message never made
   // it into the parent (the process died mid-run).
@@ -842,7 +857,7 @@ function makeRun(
     status: activeSegments.has(segment) ? "running" : "unknown",
     task: childEntries.length > 0 ? firstUserMessage(childEntries) : undefined,
     stats,
-    sessionFile: stats ? childFile : undefined,
+    sessionFile,
     orphaned: true,
   };
 }
@@ -961,13 +976,21 @@ export function buildRelaunchCandidates(
   sessionFile: string,
   fs: ReconcileFs,
   activeRunIds?: ReadonlySet<string>,
+  rootEntries?: readonly SessionEntry[],
 ): SubagentRelaunchCandidate[] {
   // Registry runIds are raw; normalize through runIdDirName exactly like
   // buildSubagentSessionReport does, so the "running" orphan (a live job in
   // THIS session) is excluded and never offered for relaunch.
-  const report = buildSubagentSessionReport(sessionFile, fs, activeRunIds);
+  // The root is parsed once and shared with the report. Candidates are
+  // depth-1 only, so the walk stops there and skips usage stats; the
+  // MAX_CHILDREN_VISITED budget is therefore no longer consumed by grandchildren.
+  const parentEntries = rootEntries ?? parseOrEmpty(fs.readTextFile(sessionFile));
+  const report = buildSubagentSessionReport(sessionFile, fs, activeRunIds, undefined, {
+    maxDepth: 1,
+    withStats: false,
+    rootEntries: parentEntries,
+  });
 
-  const parentEntries = parseOrEmpty(fs.readTextFile(sessionFile));
   const ackBySegment = new Map<string, SubagentAckDetails>();
   const jobIdBySegment = new Map<string, string>();
   for (const entry of parentEntries) {

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DefaultResourceLoader, type ExtensionAPI, type ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -1008,6 +1009,48 @@ test("wiring: the subagent-result message renderer renders a themed block and to
   assert.ok(afterClick.join("\n").includes("Hello from scout"));
 });
 
+test("wiring: the subagent-result message renderer does not rebuild on repeated renders, rebuilds after click, and invalidate keeps content", async () => {
+  const pi = makeFakePi();
+  await extensionFactory(pi as unknown as ExtensionAPI);
+  const renderer = pi.messageRenderers.get("subagent-result")!;
+  let themeCalls = 0;
+  const countingTheme = {
+    ...fakeTheme,
+    fg: (c: string, t: string) => { themeCalls++; return (fakeTheme as any).fg(c, t); },
+  };
+  const message = {
+    customType: "subagent-result",
+    content: "Background subagent job S1001 finished \u2014 completed\n\nHello from scout",
+    display: true as const,
+    details: {
+      jobId: "S1001", runId: "call-1", status: "completed",
+      task: { agent: "scout", task: "x" },
+      run: { agent: "scout", task: "x", durationMs: 1, status: "success" as const, finalText: "Hello from scout" },
+      usage: undefined, isError: false,
+    },
+  };
+  const component = renderer(message as any, { expanded: false, outputPad: 1 }, countingTheme as any) as any;
+
+  const first = component.render(80);
+  const afterFirst = themeCalls;
+  const second = component.render(80);
+  assert.ok(afterFirst > 0);
+  assert.equal(themeCalls, afterFirst);
+  assert.deepEqual(second, first);
+
+  component.handleMouse({
+    type: "click", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 1,
+    shift: false, alt: false, ctrl: false,
+  });
+  const clicked = component.render(80);
+  assert.ok(themeCalls > afterFirst);
+  assert.notDeepEqual(clicked, first);
+  assert.ok(clicked.join("\n").includes("Hello from scout"));
+
+  component.invalidate();
+  assert.deepEqual(component.render(80), clicked);
+});
+
 // (wiring) A failed job's completion message carries the failed-shape details
 // ({jobId, runId, status: "failed", task, isError: true} — no run/usage keys,
 // per the SubagentJobMessageDetails union) and must render with the error
@@ -1641,6 +1684,32 @@ test("execute: when ModelRuntime.create() rejects, the tool still registers and 
   assert.equal(result.isError, true);
   const text = result.content[0].text as string;
   assert.match(text, /failed to initialize model runtime/);
+});
+
+test("factory: ModelRuntime creation and the first registry load both start before either resolves", async (t) => {
+  const fixture = makeAgentFixture(t);
+  const realReaddir = fsPromises.readdir;
+  let readdirCalled = false;
+  t.mock.method(fsPromises, "readdir", ((...args: Parameters<typeof realReaddir>) => {
+    readdirCalled = true;
+    return (realReaddir as any)(...args);
+  }) as typeof realReaddir);
+  let runtimeCalled = false;
+  let releaseRuntime!: () => void;
+  const slowRuntime = () => {
+    runtimeCalled = true;
+    return new Promise<ModelRuntime>((resolve) => {
+      releaseRuntime = () => resolve({} as unknown as ModelRuntime);
+    });
+  };
+
+  const done = extensionFactory(makeFakePi() as unknown as ExtensionAPI, slowRuntime, undefined, fixture.paths);
+  try {
+    await waitFor(() => runtimeCalled && readdirCalled, 2000, "runtime creation and registry load to both start");
+  } finally {
+    releaseRuntime();
+    await done;
+  }
 });
 
 // Root-cause wiring for the nested loader: the agentDir the child session's

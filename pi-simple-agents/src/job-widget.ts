@@ -31,6 +31,7 @@ export interface JobWidget {
 export function createJobWidget(deps: JobWidgetDeps): JobWidget {
   let lastJobs: readonly JobSnapshot[] = [];
   let tickHandle: unknown;
+  let lastPushed: { ui: JobWidgetUi; key: string } | undefined;
 
   function stopTicking(): void {
     if (tickHandle !== undefined) {
@@ -41,7 +42,16 @@ export function createJobWidget(deps: JobWidgetDeps): JobWidget {
 
   function render(ui: JobWidgetUi): string[] | undefined {
     const lines = buildJobsWidgetLines(lastJobs, deps.now(), ui.theme);
-    ui.setWidget(JOBS_WIDGET_KEY, lines, { placement: "belowEditor" });
+    if (lines === undefined) {
+      ui.setWidget(JOBS_WIDGET_KEY, undefined, { placement: "belowEditor" });
+      lastPushed = undefined;
+      return lines;
+    }
+    const key = lines.join("\n");
+    if (lastPushed?.ui !== ui || lastPushed.key !== key) {
+      ui.setWidget(JOBS_WIDGET_KEY, lines, { placement: "belowEditor" });
+      lastPushed = { ui, key };
+    }
     return lines;
   }
 
@@ -78,6 +88,7 @@ export function createJobWidget(deps: JobWidgetDeps): JobWidget {
   function dispose(): void {
     stopTicking();
     deps.getUi()?.setWidget(JOBS_WIDGET_KEY, undefined);
+    lastPushed = undefined;
   }
 
   return { refresh, dispose };

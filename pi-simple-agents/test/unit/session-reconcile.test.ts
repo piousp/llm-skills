@@ -1074,3 +1074,64 @@ test("buildSubagentSessionReport: a continued run's timestamped fork file is nev
   );
   approx(report.totals.cost, 0.12, "totals.cost");
 });
+
+// --- relaunch: single root read, depth-1 walk -----------------------------------
+
+function countingFs(files: Record<string, string>): { fs: ReconcileFs; reads: string[] } {
+  const base = memFs(files);
+  const reads: string[] = [];
+  return {
+    reads,
+    fs: {
+      readTextFile: (p) => {
+        reads.push(p);
+        return base.readTextFile(p);
+      },
+      listDir: base.listDir,
+    },
+  };
+}
+
+const grandchildFileFor = (runId: string, grandId: string) =>
+  `/rl/session/${runId}/run-0/session/${grandId}/run-0/session.jsonl`;
+
+function twoLevelOrphanFixture(): Record<string, string> {
+  return {
+    [RELAUNCH_ROOT]: jsonl(HEADER, subagentAck("S1", "orph-a", "scout", "task a"), subagentResult({
+      jobId: "S2", runId: "call-f", status: "failed", task: { agent: "scout", task: "f" }, isError: true,
+    })),
+    [childFileFor("orph-a")]: jsonl(HEADER, messageUserMessage),
+    [childFileFor("call-f")]: jsonl(HEADER, messageUserMessage, subagentResult({
+      jobId: "G1", runId: "grand-1", status: "failed", task: { agent: "scout", task: "g" }, isError: true,
+    })),
+    [grandchildFileFor("call-f", "grand-1")]: jsonl(HEADER, messageUserMessage),
+    [grandchildFileFor("orph-a", "grand-2")]: jsonl(HEADER, messageUserMessage),
+  };
+}
+
+test("buildRelaunchCandidates: reads the root once and never reads grandchildren", () => {
+  const { fs, reads } = countingFs(twoLevelOrphanFixture());
+  buildRelaunchCandidates(RELAUNCH_ROOT, fs);
+  assert.equal(reads.filter((p) => p === RELAUNCH_ROOT).length, 1);
+  assert.deepEqual(reads.filter((p) => p.includes("/grand-")), []);
+});
+
+test("buildRelaunchCandidates: rootEntries given means the root is not read from disk", () => {
+  const files = twoLevelOrphanFixture();
+  const rootEntries = parseSessionEntries(files[RELAUNCH_ROOT]);
+  const { fs, reads } = countingFs(files);
+  const candidates = buildRelaunchCandidates(RELAUNCH_ROOT, fs, undefined, rootEntries);
+  assert.equal(reads.filter((p) => p === RELAUNCH_ROOT).length, 0);
+  assert.deepEqual(candidates, buildRelaunchCandidates(RELAUNCH_ROOT, memFs(files)));
+});
+
+test("buildSubagentSessionReport: maxDepth 1 plus withStats false match the full walk on depth-1 identity fields", () => {
+  const files = twoLevelOrphanFixture();
+  const full = buildSubagentSessionReport(RELAUNCH_ROOT, memFs(files));
+  const light = buildSubagentSessionReport(RELAUNCH_ROOT, memFs(files), undefined, undefined, { maxDepth: 1, withStats: false });
+  assert.ok(full.runs.some((r) => r.depth === 2));
+  assert.ok(light.runs.every((r) => r.depth === 1));
+  assert.ok(light.runs.every((r) => r.stats === undefined));
+  const identity = (r: (typeof full.runs)[number]) => ({ runId: r.runId, status: r.status, agent: r.agent, task: r.task, orphaned: r.orphaned, sessionFile: r.sessionFile });
+  assert.deepEqual(light.runs.map(identity), full.runs.filter((r) => r.depth === 1).map(identity));
+});

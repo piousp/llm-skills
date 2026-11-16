@@ -1617,6 +1617,34 @@ test("runAgentViaSdk: getContextUsage is read before the session is disposed", a
   assert.deepEqual(order, ["getContextUsage", "dispose"]);
 });
 
+test("runAgentViaSdk: two message_end events within 1s read getContextUsage once while streaming", async () => {
+  let calls = 0;
+  const u = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.001 };
+  const fakeSession = new FakeAgentSession("done", {
+    messageEvents: [assistantMessageEnd(u), assistantMessageEnd(u)],
+    contextUsage: { tokens: 10, contextWindow: 200000, percent: 0.01 },
+  });
+  fakeSession._getContextUsageHook = () => { calls++; };
+  const createSession = async () => ({ session: fakeSession as any });
+  const events: SubagentProgressEvent[] = [];
+
+  await runAgentViaSdk(
+    makeAgent(),
+    "find things",
+    {
+      createSession,
+      modelRuntime: { isUsingSubscription: () => false, getModel: () => undefined } as any,
+      resourceLoader: {} as any,
+      sessionManager: {} as any,
+      onProgressEvent: (e) => events.push(e),
+    },
+  );
+
+  assert.equal(events.filter((e) => e.type === "usage").length, 2);
+  // 1 throttled live read + 1 fresh read at settle
+  assert.equal(calls, 2);
+});
+
 test("runAgentViaSdk: getAllTools with an origin:package tool triggers bindExtensions with the host's mode (tui)", async () => {
   const fakeSession = new FakeAgentSession("done", {
     tools: [{ sourceInfo: { origin: "package", source: "some-extension-package" } }],

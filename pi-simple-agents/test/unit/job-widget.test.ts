@@ -146,3 +146,29 @@ test("getUi() returning undefined means nothing is called", () => {
 
   assert.equal(scheduler.pendingCount(), 0);
 });
+
+test("two identical refreshes call setWidget once; changed text calls it again", () => {
+  const scheduler = fakeScheduler();
+  const { ui, calls } = fakeUi();
+  const widget = createJobWidget({ getUi: () => ui, now: () => 0, schedule: scheduler.schedule, cancel: scheduler.cancel });
+
+  widget.refresh([runningJob(0)]);
+  widget.refresh([runningJob(0)]);
+  assert.equal(calls.length, 1);
+
+  widget.refresh([{ ...runningJob(0), task: { agent: "other", task: "y" } }]);
+  assert.equal(calls.length, 2);
+});
+
+test("a refresh after dispose pushes the widget again", () => {
+  const scheduler = fakeScheduler();
+  const { ui, calls } = fakeUi();
+  const widget = createJobWidget({ getUi: () => ui, now: () => 0, schedule: scheduler.schedule, cancel: scheduler.cancel });
+
+  widget.refresh([runningJob(0)]);
+  widget.dispose();
+  widget.refresh([runningJob(0)]);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].lines, undefined);
+  assert.ok(calls[2].lines);
+});

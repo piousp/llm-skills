@@ -59,6 +59,14 @@ export function needsExtensionBinding(
   return missingRequestedTools(tools, requestedToolNames).length > 0;
 }
 
+function toolPattern(entry: string): RegExp {
+  const source = entry
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}$`);
+}
+
 /** Matches a tool name against entries (exact names or `*` patterns).
  * Inline mirror of the SDK's core/mcp-servers.ts createToolNameMatcher (not exported from the
  * package root — same inlining precedent as ExtensionMode): `*` matches any characters,
@@ -67,15 +75,8 @@ export function matchesToolEntries(entries: readonly string[], name: string): bo
   const literals = new Set<string>();
   const patterns: RegExp[] = [];
   for (const entry of entries) {
-    if (!entry.includes("*")) {
-      literals.add(entry);
-    } else {
-      const source = entry
-        .split("*")
-        .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join(".*");
-      patterns.push(new RegExp(`^${source}$`));
-    }
+    if (!entry.includes("*")) literals.add(entry);
+    else patterns.push(toolPattern(entry));
   }
   if (literals.has(name)) return true;
   return patterns.some((pattern) => pattern.test(name));
@@ -92,11 +93,12 @@ export function missingRequestedTools(
   tools: readonly ToolSource[],
   requestedToolNames: readonly string[] = [],
 ): string[] {
-  const registered = tools.map((tool) => tool.name);
+  const registered = new Set(tools.map((tool) => tool.name));
   return requestedToolNames.filter((name) => {
     if (PACKAGE_TOOL_NAMES.has(name) || CLAUDE_INERT_TOOLS.has(name)) return false;
-    if (!name.includes("*")) return !registered.includes(name);
-    return !registered.some((toolName) => matchesToolEntries([name], toolName));
+    if (!name.includes("*")) return !registered.has(name);
+    const pattern = toolPattern(name);
+    return ![...registered].some((toolName) => pattern.test(toolName));
   });
 }
 

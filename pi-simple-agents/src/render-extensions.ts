@@ -120,6 +120,7 @@ export const renderSubagentResultMessage: MessageRenderer<SubagentJobMessageDeta
   const bgToken = details?.isError ? "toolErrorBg" : "toolSuccessBg";
 
   let expanded = options.expanded;
+  let builtFor: boolean | undefined;
   const box = new Box(1, 1, (t) => theme.bg(bgToken, t));
 
   // `run` exists on the completed/cancelled and (since the 1.2.0 remap) the
@@ -138,10 +139,16 @@ export const renderSubagentResultMessage: MessageRenderer<SubagentJobMessageDeta
   return new MouseRegion(
     {
       render: (width: number) => {
-        refreshBox();
+        if (builtFor !== expanded) {
+          refreshBox();
+          builtFor = expanded;
+        }
         return box.render(width);
       },
-      invalidate: () => box.invalidate(),
+      invalidate: () => {
+        builtFor = undefined;
+        box.invalidate();
+      },
     },
     (event) => {
       if (event.type !== "click" || event.button !== "left") return undefined;

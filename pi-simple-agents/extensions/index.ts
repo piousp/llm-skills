@@ -326,12 +326,14 @@ export default async function (
   const registry = createAgentRegistry({ agentsDir, userSettingsPath });
   const getAgents: GetAgents = (cwd) => registry.peek(cwd)?.agents ?? [];
 
-  let modelRuntimeResult: ValidationResult<ModelRuntime>;
-  try {
-    modelRuntimeResult = { ok: true, value: await createModelRuntime() };
-  } catch (error) {
-    modelRuntimeResult = { ok: false, error: toErrorMessage(error) };
-  }
+  // Started now, awaited together with the first registry load below; every
+  // closure that reads modelRuntimeResult is only registered after that await.
+  const runtimePending: Promise<ValidationResult<ModelRuntime>> = Promise.resolve()
+    .then(createModelRuntime)
+    .then(
+      (value): ValidationResult<ModelRuntime> => ({ ok: true, value }),
+      (error): ValidationResult<ModelRuntime> => ({ ok: false, error: toErrorMessage(error) }),
+    );
 
   // Captured from whichever handler last ran (execute(), the /subagents
   // command, or any pi.on() handler below) — there is no "current context"
@@ -685,7 +687,7 @@ export default async function (
     return handleRelaunch(RELAUNCH_SPECS[action], { kind: action, id }, ctx);
   }
 
-  const { agents } = await registry.load(process.cwd());
+  const [modelRuntimeResult, { agents }] = await Promise.all([runtimePending, registry.load(process.cwd())]);
   const description = buildSubagentToolDescription(agents);
   pi.registerTool({
     name: SUBAGENT_TOOL_NAME,

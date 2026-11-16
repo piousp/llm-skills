@@ -143,3 +143,8 @@ test("missingRequestedTools: inert names and the subagent tool are still never m
     [],
   );
 });
+
+test("missingRequestedTools: a pattern's regex metacharacters are literal (a.b* does not match aXb)", () => {
+  assert.deepEqual(missingRequestedTools([{ name: "aXb1", sourceInfo: { origin: "top-level" } } as ToolSource], ["a.b*"]), ["a.b*"]);
+  assert.deepEqual(missingRequestedTools([{ name: "a.b1", sourceInfo: { origin: "top-level" } } as ToolSource], ["a.b*"]), []);
+});
