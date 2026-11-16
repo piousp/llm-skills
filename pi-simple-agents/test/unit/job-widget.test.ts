@@ -93,6 +93,21 @@ test("refresh with no running jobs clears the widget and cancels the ticker", ()
   assert.equal(scheduler.pendingCount(), 0);
 });
 
+test("a cleared widget is pushed again when the same lines return", () => {
+  const scheduler = fakeScheduler();
+  const { ui, calls } = fakeUi();
+  const widget = createJobWidget({ getUi: () => ui, now: () => 0, schedule: scheduler.schedule, cancel: scheduler.cancel });
+
+  widget.refresh([runningJob(0)]);
+  const finished: JobSnapshot = { ...runningJob(), state: { status: "completed", settledAt: 0, result: { agent: "scout", task: "x", durationMs: 1, status: "success", finalText: "done" } } };
+  widget.refresh([finished]);
+  widget.refresh([runningJob(0)]);
+
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].lines, undefined);
+  assert.ok(calls[2].lines);
+});
+
 test("repeated refresh calls while jobs stay active do not stack tickers", () => {
   const scheduler = fakeScheduler();
   const { ui } = fakeUi();
