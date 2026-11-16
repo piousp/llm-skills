@@ -7,7 +7,7 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { isActive, type JobSnapshot, type JobState } from "./background-jobs.ts";
+import { isActive, isSettled, type JobSnapshot, type JobState } from "./background-jobs.ts";
 import { buildFinishedTaskLine, formatElapsed, formatToolDuration } from "./job-view.ts";
 import { firstLine } from "./text-utils.ts";
 import type { TranscriptState } from "./transcript.ts";
@@ -63,7 +63,7 @@ function buildHeader(job: JobSnapshot, now: number, theme: PeekTheme): string {
   // Settled jobs freeze the elapsed clock at settle time (the same rule
   // buildJobListEntry applies in src/job-view.ts): re-opening one no longer
   // recomputes elapsed from `now`.
-  const elapsedUntil = "settledAt" in job.state ? job.state.settledAt : now;
+  const elapsedUntil = isSettled(job.state) ? job.state.settledAt : now;
   const parts = [
     job.id,
     theme.fg("accent", job.task.agent),
@@ -93,8 +93,10 @@ function wrapLines(text: string, width: number): string[] {
   return lines;
 }
 
+const UNCACHED_WRAP: Pick<EntryWrapCache, "lines"> = { lines: (_seq, content, width) => wrapLines(content, width) };
+
 export interface EntryWrapCache {
-  lines(seq: number, content: string, width: number): string[];
+  lines(seq: number, content: string, width: number): readonly string[];
   prune(firstSeq: number): void;
   clear(): void;
   size(): number;
@@ -103,10 +105,10 @@ export interface EntryWrapCache {
 // Wrap results of immutable transcript entries, keyed by seq for one width at
 // a time (a width change drops everything). Returned arrays are shared:
 // callers must not mutate them. Only text/thinking entries go through it;
-// theme and prefs never invalidate (they are applied after wrapping).
+// theme and prefs invalidate the wrap cache only through invalidate().
 export function createEntryWrapCache(): EntryWrapCache {
   let cachedWidth = -1;
-  const byseq = new Map<number, { content: string; lines: string[] }>();
+  const byseq = new Map<number, { content: string; lines: readonly string[] }>();
   return {
     lines(seq, content, width) {
       if (width !== cachedWidth) {
@@ -143,7 +145,7 @@ function thinkingKeptLines(
   segments: ThinkingSegment[],
   width: number,
   theme: PeekTheme,
-  cache?: EntryWrapCache,
+  wrap: Pick<EntryWrapCache, "lines">,
 ): string[][] {
   const raw: string[][] = segments.map(() => []);
   let need = THINKING_TAIL_LINES;
@@ -151,7 +153,7 @@ function thinkingKeptLines(
   // Walk from the newest segment, wrapping only until the tail is full.
   for (let i = segments.length - 1; i >= 0 && need > 0; i--) {
     const seg = segments[i];
-    const lines = cache && seg.seq !== undefined ? cache.lines(seg.seq, seg.content, width) : wrapLines(seg.content, width);
+    const lines = seg.seq !== undefined ? wrap.lines(seg.seq, seg.content, width) : wrapLines(seg.content, width);
     if (lines.length === 0) continue;
     raw[i] = lines.slice(-need);
     need -= raw[i].length;
@@ -177,7 +179,7 @@ function buildFullBody(
   theme: PeekTheme,
   width: number,
   prefs: PeekRenderPrefs | undefined,
-  cache?: EntryWrapCache,
+  wrap: Pick<EntryWrapCache, "lines">,
 ): { body: string[]; dropped: number } {
   const settled = !isActive(job.state);
   const hideThinking = prefs?.hideThinking === true;
@@ -192,7 +194,7 @@ function buildFullBody(
 
   // Blocks keep the render order: plain line groups and thinking slots,
   // whose lines are only known after the global thinking cap is computed.
-  const blocks: Array<{ kind: "lines"; lines: string[] } | { kind: "thinking"; index: number }> = [];
+  const blocks: Array<{ kind: "lines"; lines: readonly string[] } | { kind: "thinking"; index: number }> = [];
   const thinkingSegments: ThinkingSegment[] = [];
   for (const e of transcript.entries) {
     if (e.kind === "thinking") {
@@ -201,7 +203,7 @@ function buildFullBody(
         thinkingSegments.push({ content: e.content, seq: e.seq });
       }
     } else if (e.kind === "text") {
-      blocks.push({ kind: "lines", lines: cache ? cache.lines(e.seq, e.content, width) : wrapLines(e.content, width) });
+      blocks.push({ kind: "lines", lines: wrap.lines(e.seq, e.content, width) });
     } else if (e.kind === "tool-start") {
       blocks.push({ kind: "lines", lines: [`\u25b8 ${e.label}`] });
     } else if (!collapseTools) {
@@ -226,7 +228,7 @@ function buildFullBody(
     if (transcript.currentText !== "") blocks.push({ kind: "lines", lines: wrapLines(transcript.currentText, width) });
   }
 
-  const kept = thinkingKeptLines(thinkingSegments, width, theme, cache);
+  const kept = thinkingKeptLines(thinkingSegments, width, theme, wrap);
   const body: string[] = [];
   for (const block of blocks) {
     body.push(...(block.kind === "lines" ? block.lines : kept[block.index]));
@@ -271,7 +273,7 @@ export function buildPeekLines(
   scroll?: { offset: number },
 ): string[] {
   const inner = Math.max(1, Math.max(4, width) - 4);
-  const { body: fullBody, dropped } = buildFullBody(job, transcript, theme, inner, prefs);
+  const { body: fullBody, dropped } = buildFullBody(job, transcript, theme, inner, prefs, UNCACHED_WRAP);
   return assemblePeekFrame(job, fullBody, dropped, now, theme, width, scroll?.offset);
 }
 
@@ -287,7 +289,7 @@ function assemblePeekFrame(
   width: number,
   offset: number | undefined,
 ): string[] {
-  const cap = Math.max(0, fullBody.length - BODY_LINES);
+  const cap = scrollCapOf(fullBody);
 
   // Scrolled mode slices the full body `offset` lines up from the bottom;
   // follow mode keeps the plain tail slice — the two coincide at offset 0.
@@ -309,9 +311,8 @@ function assemblePeekFrame(
   if (elided > 0) body.unshift(theme.fg("dim", `\u2026 (+${elided} earlier)`));
 
   // Settled jobs append their final outcome right after the body — outside
-  // the scroll window, so it stays visible while scrolled. Narrowing via
-  // "settledAt" in state: TS cannot narrow job.state through a boolean.
-  if ("settledAt" in job.state) {
+  // the scroll window, so it stays visible while scrolled.
+  if (isSettled(job.state)) {
     const state = job.state;
     body.push(state.status === "errored" ? `  ${state.error}` : buildFinishedTaskLine(state.result, theme));
   }
@@ -328,17 +329,8 @@ function assemblePeekFrame(
   return withFrame(content, `peek \u00b7 ${job.id} \u00b7 ${job.task.agent}`, theme, width);
 }
 
-/** How far the peek body can scroll up: full-body lines past the visible
- * BODY_LINES window (0 when everything already fits). The component asks for
- * this once per render to keep its scroll offset clamped. */
-export function peekScrollCap(
-  job: JobSnapshot,
-  transcript: TranscriptState | undefined,
-  theme: PeekTheme,
-  width: number,
-  prefs?: PeekRenderPrefs,
-): number {
-  return Math.max(0, buildFullBody(job, transcript, theme, width, prefs).body.length - BODY_LINES);
+function scrollCapOf(body: readonly string[]): number {
+  return Math.max(0, body.length - BODY_LINES);
 }
 
 /** Result delivered to the manager through ctx.ui.custom's `done`:
@@ -374,7 +366,7 @@ export interface PeekOverlayDeps {
 interface FrameKey {
   id: string;
   state: JobState;
-  usage: unknown;
+  usage: JobSnapshot["progress"]["usage"];
   transcript: TranscriptState | undefined;
   hideThinking: boolean;
   toolsExpanded: boolean | undefined;
@@ -438,7 +430,7 @@ export class PeekOverlayComponent {
       hideThinking: prefs?.hideThinking === true,
       toolsExpanded: prefs?.toolsExpanded,
       scrollOffset: this.scrollOffset,
-      bucket: "settledAt" in job.state ? "settled" : Math.floor((this.deps.now() - job.startedAt) / 1000),
+      bucket: isSettled(job.state) ? "settled" : Math.floor((this.deps.now() - job.startedAt) / 1000),
       theme: this.theme,
     };
   }
@@ -491,7 +483,7 @@ export class PeekOverlayComponent {
     const firstSeq = transcript?.entries[0]?.seq;
     if (firstSeq === undefined) this.wrapCache.clear();
     else this.wrapCache.prune(firstSeq);
-    this.scrollCap = Math.max(0, body.length - BODY_LINES);
+    this.scrollCap = scrollCapOf(body);
     const offset = this.clampScroll(this.scrollOffset, this.scrollCap);
     const lines = assemblePeekFrame(job, body, dropped, this.deps.now(), this.theme, width, offset);
     this.frame = { key, width, lines };

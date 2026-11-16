@@ -118,7 +118,7 @@ const MAX_RECENT_JOBS = 50;
 // (S1001, S1002, …) rather than a counter that looks like an array index.
 const FIRST_JOB_NUMBER = 1001;
 
-function isSettled(state: JobState): state is Extract<JobState, { settledAt: number }> {
+export function isSettled(state: JobState): state is Extract<JobState, { settledAt: number }> {
   return "settledAt" in state;
 }
 
