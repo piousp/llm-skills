@@ -111,3 +111,48 @@ test("applyEmphasis: the bold markers bracket every occurrence found on the styl
     `${BOLD_ON}\x1b[36mfunction${BOLD_OFF} f(\x1b[39m`,
   );
 });
+
+test("findMatchRanges: a nested-quantifier pattern is rejected without running the matcher", () => {
+  const text = `${"a".repeat(30)}!`;
+  for (const pattern of ["(a+)+$", "(a|aa)*$", "(\\w+\\s?)+$", "((a+)b)+$", "(a{2,})+$", "(?:a+)*$"]) {
+    const startedAt = performance.now();
+    assert.deepEqual(findMatchRanges(text, pattern, REGEX), [], pattern);
+    assert.ok(performance.now() - startedAt < 100, `${pattern} took too long`);
+  }
+});
+
+test("findMatchRanges: a backreference or a pattern over 256 characters is rejected", () => {
+  assert.deepEqual(findMatchRanges("abab", "(ab)\\1", REGEX), []);
+  assert.deepEqual(findMatchRanges("abab", "(?<x>ab)\\k<x>", REGEX), []);
+  assert.deepEqual(findMatchRanges("a".repeat(300), "a".repeat(257), REGEX), []);
+  assert.deepEqual(findMatchRanges("a".repeat(256), "a".repeat(256), REGEX), [{ start: 0, end: 256 }]);
+});
+
+test("findMatchRanges: a literal is never rejected, whatever it looks like", () => {
+  assert.deepEqual(findMatchRanges("x (a+)+ y", "(a+)+", LITERAL), [{ start: 2, end: 7 }]);
+  assert.deepEqual(findMatchRanges(`${"a".repeat(300)}`, "a".repeat(300), LITERAL), [{ start: 0, end: 300 }]);
+});
+
+test("findMatchRanges: ordinary regexes keep their emphasis", () => {
+  assert.deepEqual(findMatchRanges("foo 1 bar", "foo.*bar", REGEX), [{ start: 0, end: 9 }]);
+  assert.deepEqual(findMatchRanges("pub fn main()", "\\bfn\\s+\\w+", REGEX), [{ start: 4, end: 11 }]);
+  assert.deepEqual(findMatchRanges("ababc", "(ab)+", REGEX), [{ start: 0, end: 4 }]);
+  assert.deepEqual(findMatchRanges("foo bar", "(?:foo|bar)", REGEX), [
+    { start: 0, end: 3 },
+    { start: 4, end: 7 },
+  ]);
+  assert.deepEqual(findMatchRanges("see https://x", "(https?://)?x", REGEX), [{ start: 4, end: 13 }]);
+});
+
+test("findMatchRanges: quantifier characters in a class or after an escape do not count", () => {
+  assert.deepEqual(findMatchRanges("a+b+", "([+])+", REGEX), [
+    { start: 1, end: 2 },
+    { start: 3, end: 4 },
+  ]);
+  assert.deepEqual(findMatchRanges("(a+)+", "\\(a\\+\\)\\+", REGEX), [{ start: 0, end: 5 }]);
+});
+
+test("findMatchRanges: a line over the length cap gets no emphasis", () => {
+  assert.deepEqual(findMatchRanges(`${"x".repeat(500)}`, "x", LITERAL).length, 1);
+  assert.deepEqual(findMatchRanges(`${"x".repeat(501)}`, "x", LITERAL), []);
+});

@@ -221,15 +221,17 @@ test("truncatedNotice: the caller's own notices come last", () => {
   );
 });
 
-test("diffChangeLine: added and removed lines carry their foreground over their own background", () => {
+test("diffChangeLine: added and removed lines carry the diff foreground and no background", () => {
   assert.equal(
     diffChangeLine("+const b = 2;", fakeTheme),
-    "<bg:toolSuccessBg><toolDiffAdded>+const b = 2;</toolDiffAdded></bg:toolSuccessBg>",
+    "<toolDiffAdded>+const b = 2;</toolDiffAdded>",
   );
   assert.equal(
     diffChangeLine("-const c = 3;", fakeTheme),
-    "<bg:toolErrorBg><toolDiffRemoved>-const c = 3;</toolDiffRemoved></bg:toolErrorBg>",
+    "<toolDiffRemoved>-const c = 3;</toolDiffRemoved>",
   );
+  // A background would add a colored block to the otherwise flat tool output.
+  assert.equal(diffChangeLine("+x", fakeTheme).includes("bg:"), false);
 });
 
 test("styleDiffLine: the three header forms share the function color", () => {
@@ -241,19 +243,19 @@ test("styleDiffLine: the three header forms share the function color", () => {
 test("styleDiffLine: added and removed lines go through the diff tokens", () => {
   assert.equal(
     styleDiffLine("+const b = 2;", fakeTheme),
-    "<bg:toolSuccessBg><toolDiffAdded>+const b = 2;</toolDiffAdded></bg:toolSuccessBg>",
+    "<toolDiffAdded>+const b = 2;</toolDiffAdded>",
   );
   assert.equal(
     styleDiffLine("-const c = 3;", fakeTheme),
-    "<bg:toolErrorBg><toolDiffRemoved>-const c = 3;</toolDiffRemoved></bg:toolErrorBg>",
+    "<toolDiffRemoved>-const c = 3;</toolDiffRemoved>",
   );
 });
 
 test("styleDiffLine: an unchanged line, and the diff header, stay in the content color", () => {
-  assert.equal(styleDiffLine(" const a = 1;", fakeTheme), "<text> const a = 1;</text>");
+  assert.equal(styleDiffLine(" const a = 1;", fakeTheme), "<toolOutput> const a = 1;</toolOutput>");
   assert.equal(
     styleDiffLine("diff --git a/x.ts b/x.ts", fakeTheme),
-    "<text>diff --git a/x.ts b/x.ts</text>",
+    "<toolOutput>diff --git a/x.ts b/x.ts</toolOutput>",
   );
 });
 

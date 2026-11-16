@@ -127,7 +127,7 @@ test("buildGrepResultText: expanded shows the notice painted in the warning colo
   const text = buildGrepResultText(grepInput({ output: BODY_WITH_NOTICE, expanded: true }));
   assert.equal(text.includes("more lines,"), false);
   assert.ok(
-    text.endsWith(`\n<text></text>\n<warning>[${NOTICE}]</warning>`),
+    text.endsWith(`\n<toolOutput></toolOutput>\n<warning>[${NOTICE}]</warning>`),
     `expected the blank line and the notice at the end of: ${text}`,
   );
 });
@@ -138,10 +138,10 @@ test("buildGrepResultText: empty and blank outputs render nothing", () => {
 });
 
 test("buildGrepResultText: a path with no known language falls back to the content color", () => {
-  assert.equal(TOKEN.content, "text");
+  assert.equal(TOKEN.content, "toolOutput");
   const calls: HighlightCall[] = [];
   const text = buildGrepResultText(grepInput({ output: "notes:12: plain text", highlight: makeHighlight(calls) }));
-  assert.equal(text, ["", matchLine("notes", 12, "<text>plain text</text>")].join("\n"));
+  assert.equal(text, ["", matchLine("notes", 12, "<toolOutput>plain text</toolOutput>")].join("\n"));
   assert.deepEqual(calls, []);
 });
 
@@ -222,7 +222,7 @@ test("buildGrepResultText: the truncation warning lists the limits that were hit
     text,
     [
       "",
-      matchLine("notes", 1, "<text>x</text>"),
+      matchLine("notes", 1, "<toolOutput>x</toolOutput>"),
       `<warning>[Truncated: 100 matches limit, ${formatSize(1048576)} limit, some lines truncated]</warning>`,
     ].join("\n"),
   );

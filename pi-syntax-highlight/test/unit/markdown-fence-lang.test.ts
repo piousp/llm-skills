@@ -1,28 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeInfoString, transformFenceLanguages } from "../../src/markdown-fence-lang.ts";
+import { createMarkdownTransformer, transformFenceLanguages } from "../../src/markdown-fence-lang.ts";
 
 const PROSE = "This paragraph explains why the transformer runs before rendering.\nIt keeps the fence character and the body untouched.";
-
-test("normalizeInfoString: an empty info string takes the detected language", () => {
-  assert.equal(normalizeInfoString("", `{\n  "name": "pi"\n}`), "json");
-  // Nothing detected and nothing declared stays empty: the fence keeps the flat
-  // color instead of gaining a wrong one.
-  assert.equal(normalizeInfoString("  ", PROSE), "");
-});
-
-test("normalizeInfoString: a known name or alias is returned as written", () => {
-  assert.equal(normalizeInfoString("ts", "const x = 1;"), "ts");
-  assert.equal(normalizeInfoString("{.ts}", "const x = 1;"), "ts");
-  assert.equal(normalizeInfoString(`js title="a"`, "const x = 1;"), "js");
-});
-
-test("normalizeInfoString: a token the author wrote is returned as written, whatever the body is", () => {
-  assert.equal(normalizeInfoString("foo", PROSE), "foo");
-  // Detection only fills a gap: a recognizable body never overrides a label.
-  assert.equal(normalizeInfoString("foo", "git clone https://example.com/repo.git\ncd repo"), "foo");
-  assert.equal(normalizeInfoString("powershell", `{\n  "name": "pi"\n}`), "powershell");
-});
 
 test("an unlabeled fence gets the detected language and the text around it is copied", () => {
   const markdown = `Here is the config:\n\n\`\`\`\n{\n  "name": "pi"\n}\n\`\`\`\n\nThat is all.\n`;
@@ -37,11 +17,9 @@ test("a fence that already names a language is left alone", () => {
   assert.equal(transformFenceLanguages(markdown), markdown);
 });
 
-test("an info string with attributes keeps only its language", () => {
-  assert.equal(
-    transformFenceLanguages(`\`\`\`js title="a"\nconst x = 1;\n\`\`\`\n`),
-    "```js\nconst x = 1;\n```\n",
-  );
+test("an info string with attributes is copied as written", () => {
+  const markdown = `\`\`\`js title="a"\nconst x = 1;\n\`\`\`\n`;
+  assert.equal(transformFenceLanguages(markdown), markdown);
 });
 
 test("an unknown info string survives, and the body is not detected for it", () => {
@@ -86,11 +64,9 @@ test("a closing fence may be longer than the opening one", () => {
   );
 });
 
-test("a pandoc attribute list naming the language is unwrapped", () => {
-  assert.equal(
-    transformFenceLanguages(`\`\`\`{.ts}\ninterface User {\n  id: number;\n}\n\`\`\`\n`),
-    "```ts\ninterface User {\n  id: number;\n}\n```\n",
-  );
+test("a pandoc attribute list is copied as written", () => {
+  const markdown = "```{.ts}\ninterface User {\n  id: number;\n}\n```\n";
+  assert.equal(transformFenceLanguages(markdown), markdown);
 });
 
 test("the transform is idempotent", () => {
@@ -128,4 +104,27 @@ test("a backtick in the info string of a backtick fence opens nothing", () => {
 test("a tilde in the info string of a tilde fence opens nothing", () => {
   const markdown = "~~~js~~~ is the info string.\n\n~~~js\nconst x = 1;\n~~~\n";
   assert.equal(transformFenceLanguages(markdown), markdown);
+});
+
+test("a body that already carries escape sequences is left alone", () => {
+  const markdown = "```\ninterface A {\n  id: number;\n}\n\x1b[0m\n```\n";
+  assert.equal(transformFenceLanguages(markdown), markdown);
+});
+
+const CONTEXT = { messageType: "custom", isStreaming: false, availableWidth: 80 } as const;
+
+test("the transformer labels fences whatever the message type", () => {
+  const transformer = createMarkdownTransformer();
+  const markdown = '```\n{\n  "name": "pi"\n}\n```\n';
+  for (const messageType of ["assistant", "assistant-thinking", "custom", "summary", "user"] as const) {
+    assert.equal(transformer(markdown, { ...CONTEXT, messageType }), '```json\n{\n  "name": "pi"\n}\n```\n', messageType);
+  }
+});
+
+test("the transformer memo keeps 32 entries and returns the same output for a repeated input", () => {
+  const transformer = createMarkdownTransformer();
+  const markdown = '```\n{\n  "name": "pi"\n}\n```\n';
+  const first = transformer(markdown, CONTEXT);
+  for (let index = 0; index < 40; index += 1) transformer(`message ${index}`, CONTEXT);
+  assert.equal(transformer(markdown, CONTEXT), first);
 });

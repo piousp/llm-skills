@@ -108,10 +108,9 @@ function classifies(line: string): boolean {
 
 function styleDetectedLines(lines: string[], language: string, theme: StyleTheme, highlight: HighlightFn): string[] {
   const fallback = (line: string): string => theme.fg(TOKEN.content, line);
-  const painted = highlightLines(lines.join("\n"), language, fallback, highlight);
-  // A painted line cannot be recolored from the inside (see `AnsiTheme` in
-  // tokens.ts), so a classified line replaces the highlighted one instead of
-  // being wrapped. `highlightLines` splits the same code, which is what keeps
+  const painted = highlightLines(lines.join("\n"), language, fallback, highlight, HIGHLIGHT_LINE_BUDGET);
+  // A painted line cannot be recolored from the inside, so a classified
+  // line replaces the highlighted one instead of being wrapped. `highlightLines` splits the same code, which is what keeps
   // the two arrays aligned.
   return painted.map((line, index) => (classifies(lines[index]) ? styleLine(lines[index], theme) : line));
 }
@@ -123,7 +122,7 @@ function styleOutput(output: string, theme: StyleTheme, highlight: HighlightFn):
     // Whole-block highlighting keeps keys, strings and numbers distinct; the
     // fallback protects readers when the tokenizer throws.
     const fallback = (line: string): string => theme.fg(TOKEN.content, line);
-    return highlightLines(output, "json", fallback, highlight).join("\n");
+    return highlightLines(output, "json", fallback, highlight, HIGHLIGHT_LINE_BUDGET).join("\n");
   }
   const language = detectOutputLanguage(detectionSample(lines));
   if (language !== undefined) return styleDetectedLines(lines, language, theme, highlight).join("\n");

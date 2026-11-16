@@ -23,6 +23,11 @@ const ANSI_SEQUENCE = /\x1b\[[0-9;]*m|\x1b\][^\x07]*\x07/y;
 
 const ESCAPE = "\x1b";
 
+// Past these sizes the backtracking matcher is not worth the risk on a render
+// path; the cost is a line without emphasis, never a missing line.
+const MAX_REGEX_LENGTH = 256;
+export const GREP_MAX_LINE_LENGTH = 500;
+
 function escapeLiteral(pattern: string): string {
   return pattern.replace(REGEXP_METACHARACTERS, "\\$&");
 }
@@ -82,10 +87,73 @@ function clipRanges(ranges: Range[], limit: number): Range[] {
   return mergeRanges(clipped);
 }
 
+interface GroupFrame {
+  hasQuantifier: boolean;
+  hasAlternation: boolean;
+}
+
+// Index just past the `?` prefix of a group (`?:`, `?=`, `?!`, `?<=`, `?<!`,
+// `?<name>`), so that prefix is not mistaken for a quantifier.
+function skipGroupPrefix(source: string, index: number): number {
+  if (source[index] !== "?") return index;
+  const next = source[index + 1];
+  if (next === "<" && source[index + 2] !== "=" && source[index + 2] !== "!") {
+    const close = source.indexOf(">", index);
+    return close === -1 ? source.length : close + 1;
+  }
+  return next === "<" ? index + 3 : index + 2;
+}
+
+// Catastrophic backtracking needs a repeated group whose body can repeat or
+// branch, and a backreference defeats any static check: both are rejected by a
+// scan that follows escapes, character classes and the group nesting. A lone
+// `?` after a group repeats nothing, so `(https?://)?` stays allowed.
+function isBacktrackingSafe(source: string): boolean {
+  const stack: GroupFrame[] = [{ hasQuantifier: false, hasAlternation: false }];
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === "\\") {
+      const next = source[index + 1];
+      if ((next >= "1" && next <= "9") || (next === "k" && source[index + 2] === "<")) return false;
+      index += 2;
+      continue;
+    }
+    if (char === "[") {
+      index += 1;
+      while (index < source.length && source[index] !== "]") index += source[index] === "\\" ? 2 : 1;
+      index += 1;
+      continue;
+    }
+    const top = stack[stack.length - 1];
+    if (char === "(") {
+      stack.push({ hasQuantifier: false, hasAlternation: false });
+      index = skipGroupPrefix(source, index + 1);
+      continue;
+    }
+    if (char === ")" && stack.length > 1) {
+      const frame = stack.pop() as GroupFrame;
+      const parent = stack[stack.length - 1];
+      const after = source[index + 1];
+      const repeated = after === "+" || after === "*" || after === "{";
+      if (repeated && (frame.hasQuantifier || frame.hasAlternation)) return false;
+      parent.hasQuantifier ||= frame.hasQuantifier || repeated || after === "?";
+      parent.hasAlternation ||= frame.hasAlternation;
+    } else if (char === "|") {
+      top.hasAlternation = true;
+    } else if (char === "+" || char === "*" || char === "?" || char === "{") {
+      top.hasQuantifier = true;
+    }
+    index += 1;
+  }
+  return true;
+}
+
 export function findMatchRanges(text: string, pattern: string, options: MatchOptions): Range[] {
   // An empty pattern matches everywhere and nowhere at once, and grep never
   // sends it; treating it as "no match" keeps the line plain.
-  if (pattern === "") return [];
+  if (pattern === "" || text.length > GREP_MAX_LINE_LENGTH) return [];
+  if (!options.literal && (pattern.length > MAX_REGEX_LENGTH || !isBacktrackingSafe(pattern))) return [];
   const source = options.literal ? escapeLiteral(pattern) : pattern;
   let regex: RegExp;
   try {

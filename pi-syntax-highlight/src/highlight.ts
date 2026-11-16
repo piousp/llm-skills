@@ -1,8 +1,9 @@
-import { highlightCode, type ThemeColor } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, highlightCode, type ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export type HighlightFn = (code: string, lang: string) => string[];
 
-// One batched pass over a huge blob is the slowest step of a render, so past
+// One batched pass over a huge blob is the slowest step of a render. Only the
+// shell, whose output is unbounded, passes it as a `highlightLines` budget: past
 // this many lines the tail is painted with the caller's plain fallback.
 export const HIGHLIGHT_LINE_BUDGET = 400;
 
@@ -24,6 +25,10 @@ const SYNC_TOKENS = [
   "syntaxType",
   "syntaxVariable",
   "syntaxPunctuation",
+  "syntaxOperator",
+  "toolDiffAdded",
+  "toolDiffRemoved",
+  "mdCodeBlock",
   "text",
   "muted",
 ] as const satisfies readonly ThemeColor[];
@@ -66,13 +71,31 @@ export function syncHighlightTheme(theme: unknown): void {
   syncedThemeSet = true;
 }
 
+// `highlightCode` paints with the code-block color when it has no grammar for the
+// language, which is also what a grammar that has not loaded yet looks like.
+// Such a result carries no syntax, so it is neither cached nor trusted.
+function isCodeBlockPaint(code: string, lines: readonly string[]): boolean {
+  try {
+    const input = code.split("\n");
+    const { codeBlock } = getMarkdownTheme();
+    return lines.length === input.length && input.every((line, index) => lines[index] === codeBlock(line));
+  } catch {
+    return false;
+  }
+}
+
 export const highlight: HighlightFn = (code, lang) => {
   const key = `${lang}\u0000${code}`;
   const cached = cache.get(key);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    // Re-inserting moves the entry to the back, so the front is the least recently used.
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
   const lines = highlightCode(code, lang);
+  if (isCodeBlockPaint(code, lines)) return lines;
   if (cache.size >= CACHE_LIMIT) {
-    // FIFO: the oldest insertion goes, hits do not refresh order.
     const oldest = cache.keys().next();
     if (!oldest.done) cache.delete(oldest.value);
   }
@@ -92,13 +115,16 @@ export function highlightLines(
   lang: string,
   fallback: (line: string) => string,
   highlightFn: HighlightFn,
+  budget = Infinity,
 ): string[] {
   const lines = code.split("\n");
-  const headCount = Math.min(lines.length, HIGHLIGHT_LINE_BUDGET);
+  const headCount = Math.min(lines.length, budget);
   const head = lines.slice(0, headCount);
   let highlighted: string[] = [];
   try {
     highlighted = highlightFn(head.join("\n"), lang);
+    // No syntax in the result: the caller's flat color is the honest paint.
+    if (isCodeBlockPaint(head.join("\n"), highlighted)) highlighted = [];
   } catch {
     highlighted = [];
   }

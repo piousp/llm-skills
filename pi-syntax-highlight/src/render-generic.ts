@@ -1,5 +1,5 @@
 import { highlight as builtInHighlight, highlightLines, type HighlightFn } from "./highlight.ts";
-import { DIFF_HEADER, isJsonDocument, moreLinesFooter, splitTrailingNotice, styleDiffLine } from "./render-utils.ts";
+import { DIFF_HEADER, isJsonDocument, moreLinesFooter, styleDiffLine } from "./render-utils.ts";
 import { TOKEN, type StyleTheme } from "./tokens.ts";
 
 // Tools with no renderer of their own collapse to the line count the built-in
@@ -43,7 +43,6 @@ function detectBodyKind(body: string): BodyKind {
 // regardless of how much the tool returned. JSON is the one batch call: a
 // per-line pass would break multi-line strings and map keys out of context.
 function styleLines(kind: BodyKind, lines: string[], theme: StyleTheme, highlightFn: HighlightFn): string[] {
-  if (lines.length === 0) return [];
   const fallback = (line: string): string => theme.fg(TOKEN.content, line);
   switch (kind) {
     case "json":
@@ -57,30 +56,20 @@ function styleLines(kind: BodyKind, lines: string[], theme: StyleTheme, highligh
 
 /**
  * Body-only rendering for tools that bring no renderer of their own (MCP
- * servers, codemode, names the host does not know). There is no header to
- * reproduce: the generic overlay never invents one.
+ * servers, codemode, names the host does not know). It mirrors the host's own
+ * result fallback line for line, so the only difference a reader can see is the
+ * highlighting of a JSON or diff body.
  *
  * `highlightFn` is injected in tests, where `highlightCode` reads the
  * module-global theme.
  */
 export function buildGenericResultText(input: GenericInput, highlightFn: HighlightFn = builtInHighlight): string {
-  const output = input.output.trim();
-  // An error has no notice slot to split off: every line keeps the content
-  // color, which is the rule find and ls follow too.
-  const { body, notice } = input.isError ? { body: output, notice: undefined } : splitTrailingNotice(output);
-  const lines = body === "" ? [] : body.split("\n");
+  if (input.output === "") return "";
+  const lines = input.output.split("\n");
   const visible = input.expanded ? lines : lines.slice(0, COLLAPSED_LINES);
-  const styled = input.isError
-    ? visible.map((line) => input.theme.fg(TOKEN.content, line))
-    : styleLines(detectBodyKind(body), visible, input.theme, highlightFn);
-
-  let text = "";
-  if (styled.length > 0) {
-    text += `\n${styled.join("\n")}`;
-    // The notice is split off first, so it never counts as a hidden line.
-    const hidden = lines.length - styled.length;
-    if (hidden > 0) text += moreLinesFooter(hidden, input.theme, input.expandHint);
-  }
-  if (notice) text += `\n${input.theme.fg(TOKEN.notice, `[${notice}]`)}`;
+  const kind = input.isError ? "plain" : detectBodyKind(input.output);
+  let text = styleLines(kind, visible, input.theme, highlightFn).join("\n");
+  const hidden = lines.length - visible.length;
+  if (hidden > 0) text += moreLinesFooter(hidden, input.theme, input.expandHint);
   return text;
 }

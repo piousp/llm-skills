@@ -110,13 +110,13 @@ test("buildLsResultText: the tool's own entries notice is a body line, so the fo
 });
 
 test("buildLsResultText: an error result is painted flat in the content color", () => {
-  assert.equal(TOKEN.content, "text");
+  assert.equal(TOKEN.content, "toolOutput");
   const text = buildLsResultText(lsInput({ output: "src/a.ts\nsrc/\n(empty directory)", isError: true }));
   // No bold, no file-family color, and no sentinel dimming: the failure is the
   // whole message, so every line keeps the one weight.
   assert.equal(
     text,
-    ["", "<text>src/a.ts</text>", "<text>src/</text>", "<text>(empty directory)</text>"].join("\n"),
+    ["", "<toolOutput>src/a.ts</toolOutput>", "<toolOutput>src/</toolOutput>", "<toolOutput>(empty directory)</toolOutput>"].join("\n"),
   );
 });
 

@@ -27,10 +27,6 @@ function styled(color: string, text: string): string {
   return `<${color}>${text}</${color}>`;
 }
 
-function styledDiffChange(background: string, foreground: string, line: string): string {
-  return `<bg:${background}>${styled(foreground, line)}</bg:${background}>`;
-}
-
 function bashInput(overrides: Partial<BashInput> = {}): BashInput {
   return {
     output: "",
@@ -41,7 +37,7 @@ function bashInput(overrides: Partial<BashInput> = {}): BashInput {
   };
 }
 
-test("buildBashBody: a diff is painted per line, headers in the function color and changes over their own background", () => {
+test("buildBashBody: a diff is painted per line, headers in the function color and changes in the diff colors", () => {
   const output = [
     "diff --git a/x.ts b/x.ts",
     "--- a/x.ts",
@@ -55,13 +51,13 @@ test("buildBashBody: a diff is painted per line, headers in the function color a
   assert.equal(
     body,
     [
-      styled("text", "diff --git a/x.ts b/x.ts"),
+      styled("toolOutput", "diff --git a/x.ts b/x.ts"),
       styled("syntaxFunction", "--- a/x.ts"),
       styled("syntaxFunction", "+++ b/x.ts"),
       styled("syntaxFunction", "@@ -1,2 +1,3 @@"),
-      styled("text", " const a = 1;"),
-      styledDiffChange("toolSuccessBg", "toolDiffAdded", "+const b = 2;"),
-      styledDiffChange("toolErrorBg", "toolDiffRemoved", "-const c = 3;"),
+      styled("toolOutput", " const a = 1;"),
+      styled("toolDiffAdded", "+const b = 2;"),
+      styled("toolDiffRemoved", "-const c = 3;"),
     ].join("\n"),
   );
   assert.equal(warnings, undefined);
@@ -78,7 +74,7 @@ test("buildBashBody: JSON output is highlighted as one block", () => {
 
 test("buildBashBody: output that starts like JSON but does not parse is painted per line", () => {
   const { body } = buildBashBody(bashInput({ output: '{"a": }', highlight: makeHighlight([]) }));
-  assert.equal(body, styled("text", '{"a": }'));
+  assert.equal(body, styled("toolOutput", '{"a": }'));
 });
 
 test("buildBashBody: error and warning lines get their own colors", () => {
@@ -90,7 +86,7 @@ test("buildBashBody: error and warning lines get their own colors", () => {
     [
       styled("error", "error: boom"),
       styled("warning", "warning: careful"),
-      styled("text", "plain text"),
+      styled("toolOutput", "plain text"),
     ].join("\n"),
   );
 });
@@ -105,7 +101,7 @@ test("buildBashBody: a path, line and text line is split into its three colors",
       styled("syntaxNumber", "12"),
       styled("dim", ":"),
       " ",
-      styled("text", "some text"),
+      styled("toolOutput", "some text"),
     ].join(""),
   );
 });
@@ -118,7 +114,7 @@ test("buildBashBody: line truncation is reported with the shown and total line c
     }),
   );
   assert.equal(warnings, "Truncated: showing 10 of 500 lines");
-  assert.equal(body, [styled("text", "line1"), styled("text", "line2")].join("\n"));
+  assert.equal(body, [styled("toolOutput", "line1"), styled("toolOutput", "line2")].join("\n"));
 });
 
 test("buildBashBody: byte truncation reports the limit through formatSize", () => {
@@ -147,7 +143,7 @@ test("buildBashBody: the full output block moves from the body to the warnings",
       },
     }),
   );
-  assert.equal(body, [styled("text", "line1"), styled("text", "line2")].join("\n"));
+  assert.equal(body, [styled("toolOutput", "line1"), styled("toolOutput", "line2")].join("\n"));
   assert.equal(warnings, "Full output: /tmp/pi-bash-1.log. Truncated: showing 2 of 900 lines");
 });
 
@@ -158,9 +154,9 @@ test("buildBashBody: a full output path without truncation is warned and stays i
   assert.equal(
     body,
     [
-      styled("text", "line1"),
-      styled("text", ""),
-      styled("text", "[Full output: /tmp/x.log]"),
+      styled("toolOutput", "line1"),
+      styled("toolOutput", ""),
+      styled("toolOutput", "[Full output: /tmp/x.log]"),
     ].join("\n"),
   );
 });
@@ -232,7 +228,7 @@ test("buildBashBody: a path, line and text line inside a detected body keeps its
     styled("syntaxNumber", "12"),
     styled("dim", ":"),
     " ",
-    styled("text", "some text"),
+    styled("toolOutput", "some text"),
   ].join("");
   assert.equal(
     body,
@@ -247,7 +243,7 @@ test("buildBashBody: the highlight budget leaves the tail of a detected body fla
   const painted = body.split("\n");
   assert.equal(painted.length, 401);
   assert.equal(painted[399], "<yaml>key399: value399</yaml>");
-  assert.equal(painted[400], styled("text", "tail text"));
+  assert.equal(painted[400], styled("toolOutput", "tail text"));
 });
 
 test("buildBashBody: a signal past the highlight budget is not detected", () => {
@@ -258,7 +254,7 @@ test("buildBashBody: a signal past the highlight budget is not detected", () => 
   assert.deepEqual(calls, []);
   const painted = body.split("\n");
   assert.equal(painted.length, 401);
-  assert.equal(painted[400], styled("text", "apiVersion: v1"));
+  assert.equal(painted[400], styled("toolOutput", "apiVersion: v1"));
 });
 
 test("buildBashBody: a long directory listing keeps the flat paint", () => {
@@ -273,9 +269,9 @@ test("buildBashBody: a long directory listing keeps the flat paint", () => {
   assert.equal(
     body,
     [
-      styled("text", "total 8"),
-      styled("text", "-rw-r--r-- 1 pi pi  512 Jan  1 12:00 package.json"),
-      styled("text", "drwxr-xr-x 3 pi pi 4096 Jan  1 12:00 src"),
+      styled("toolOutput", "total 8"),
+      styled("toolOutput", "-rw-r--r-- 1 pi pi  512 Jan  1 12:00 package.json"),
+      styled("toolOutput", "drwxr-xr-x 3 pi pi 4096 Jan  1 12:00 src"),
     ].join("\n"),
   );
 });
@@ -294,9 +290,9 @@ test("buildBashBody: a traceback keeps the flat paint and its error line", () =>
     body,
     [
       styled("error", "Traceback (most recent call last):"),
-      styled("text", '  File "app.py", line 3, in <module>'),
-      styled("text", "    main()"),
-      styled("text", "ValueError: boom"),
+      styled("toolOutput", '  File "app.py", line 3, in <module>'),
+      styled("toolOutput", "    main()"),
+      styled("toolOutput", "ValueError: boom"),
     ].join("\n"),
   );
 });

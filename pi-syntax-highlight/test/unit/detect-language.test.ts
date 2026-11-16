@@ -72,7 +72,7 @@ test("detectLanguage: only an XML declaration, a doctype, or an html tag are mar
   assert.equal(detectLanguage(`<?xml version="1.0"?>\n<root>\n  <item/>\n</root>`), "xml");
   assert.equal(detectLanguage(`<!DOCTYPE html>\n<html lang="en">\n<body>hi</body>\n</html>`), "xml");
   assert.equal(detectLanguage(`<html lang="en">\n<body>hi</body>\n</html>`), "html");
-  assert.equal(detectLanguage(`<div class="x">\n  <span>hello</span>\n</div>`), undefined);
+  assert.equal(detectLanguage(`<div class="x">\n  <span>hello</span>\n</div>`), "html");
 });
 
 test("detectLanguage: an access modifier next to a class or void keyword is java", () => {
@@ -221,4 +221,122 @@ test("detectOutputLanguage: a bare parent key with a list is yaml", () => {
 
 test("detectOutputLanguage: a lowercase query with no terminator stays flat", () => {
   assert.equal(detectOutputLanguage("SELECT id\nfrom users\nwhere active"), undefined);
+});
+
+// Phase 6: one block per added language. Each has positives, log-shaped
+// negatives, and an assertion on whether the language may paint shell output.
+
+test("php: an opening tag on the first line is php, before the xml rule", () => {
+  assert.equal(detectLanguage(`<?php\necho "hi";`), "php");
+  assert.equal(detectLanguage("<?php echo 1;"), "php");
+  assert.equal(detectLanguage(`<?xml version="1.0"?>\n<root>\n</root>`), "xml");
+  assert.equal(detectLanguage("PHP Warning:  Undefined variable $x in /app/a.php on line 3\nPHP Stack trace:"), undefined);
+  assert.equal(detectOutputLanguage(`<?php\necho "hi";\n$x = 1;`), "php");
+});
+
+test("ndjson: two or more json lines are json, one line is not ndjson", () => {
+  assert.equal(detectLanguage(`{"a":1}\n{"a":2}\n{"a":3}`), "json");
+  assert.equal(detectLanguage(`{"a":1}\n[1,2]`), "json");
+  assert.equal(detectLanguage(`{"a":1}\n{"a":2\nplain text here and more to pass the gate`), undefined);
+  assert.equal(detectLanguage(`2024-01-02 {"a":1}\n2024-01-03 {"a":2}\n2024-01-04 done ok`), undefined);
+});
+
+test("ndjson: in output it is json only when the sample is not one document", () => {
+  assert.equal(detectOutputLanguage(`{"a":1}\n{"a":2}`), "json");
+  assert.equal(detectOutputLanguage(`{\n  "a": 1\n}`), undefined);
+  assert.equal(detectOutputLanguage(`[1, 2,\n3`), undefined);
+});
+
+test("dockerfile: FROM first, then another instruction", () => {
+  assert.equal(detectLanguage(`FROM node:20\nRUN npm ci\nCMD ["node", "index.js"]`), "dockerfile");
+  assert.equal(detectLanguage(`# syntax=docker/dockerfile:1\n\nFROM alpine AS base\nWORKDIR /app`), "dockerfile");
+  assert.equal(detectLanguage(`FROM scratch\nfoo bar baz and some more text here`), undefined);
+  assert.equal(detectLanguage(`Step 1/5 : FROM node:20\n ---> abc123\nStep 2/5 : RUN npm ci`), undefined);
+  assert.equal(detectOutputLanguage(`FROM node:20\nRUN npm ci\nCOPY . .`), "dockerfile");
+});
+
+test("makefile: .PHONY, or a rule with dependencies and a tab recipe", () => {
+  assert.equal(detectLanguage(`.PHONY: all clean\nall: build\n\techo done`), "makefile");
+  assert.equal(detectLanguage(`build: main.o util.o\n\tcc -o app main.o util.o`), "makefile");
+  // Two `key: value` lines are yaml to the older detector; what matters is makefile.
+  assert.notEqual(detectLanguage(`make: *** [all] Error 1\nmake: Leaving directory '/app'`), "makefile");
+  assert.equal(detectLanguage(`switch (x) {\ndefault:\n\treturn 1;\n}`), undefined);
+  assert.equal(detectOutputLanguage(`build: main.o\n\tcc -o app main.o`), "makefile");
+});
+
+test("c and cpp: an include picks c, cpp-only syntax picks cpp", () => {
+  assert.equal(detectLanguage(`#include <stdio.h>\nint main(void) { return 0; }`), "c");
+  assert.equal(detectLanguage(`#include "a.h"\nint x;`), "c");
+  assert.equal(detectLanguage(`#include <iostream>\nint main() { std::cout << 1; }`), "cpp");
+  assert.equal(detectLanguage(`#include <vector>\ntemplate <typename T>\nT id(T t) { return t; }`), "cpp");
+  assert.equal(detectLanguage(`#include <a.h>\nnamespace app { int x; }`), "cpp");
+  assert.equal(detectLanguage(`x.c:3:10: fatal error: foo.h: No such file or directory\n    3 | #include <foo.h>`), undefined);
+  assert.notEqual(detectLanguage(`warning: unused variable\nnote: declared here too and longer`), "c");
+  assert.equal(detectOutputLanguage(`#include <stdio.h>\nint main(void) { return 0; }`), "c");
+  assert.equal(detectOutputLanguage(`#include <iostream>\nint main() { std::cout << 1; }`), "cpp");
+});
+
+test("ruby: needs two signals; python def with a colon is still python", () => {
+  assert.equal(detectLanguage(`class Foo < Bar\n  def hello\n    puts "hi"\n  end\nend`), "ruby");
+  assert.equal(detectLanguage(`require 'json'\nitems.each do |item|\n  puts item\nend`), "ruby");
+  assert.equal(detectLanguage(`attr_reader :name\ndef name\n  @name\nend`), "ruby");
+  assert.equal(detectLanguage(`def f(x):\n    return x\n`), "python");
+  assert.equal(detectLanguage(`class Box<T> {\n  v: string;\n}\nend of the line is here`), "typescript");
+  assert.equal(detectLanguage(`the end\nend\nsome words are here to pass the gate ok`), undefined);
+  assert.equal(detectOutputLanguage(`require 'json'\nputs JSON.dump({})`), "ruby");
+});
+
+test("powershell: two signals; header-like and table output are not powershell", () => {
+  assert.equal(detectLanguage(`Get-ChildItem | Where-Object { $_.Length -gt 1 }`), "powershell");
+  assert.equal(detectLanguage(`param($Name)\nWrite-Host $env:USERNAME`), "powershell");
+  assert.equal(detectLanguage(`[CmdletBinding()]\nparam([string]$Path)`), "powershell");
+  assert.equal(detectLanguage(`if ($a -eq 1) {\n  Write-Output $a\n}`), "powershell");
+  assert.equal(
+    detectLanguage(`Mode                 LastWriteTime         Length Name\n----                 -------------         ------ ----\nd-----        1/1/2024  12:00 PM                src`),
+    undefined,
+  );
+  assert.notEqual(detectLanguage(`HTTP/1.1 200 OK\nSet-Cookie: a=1\nContent-Type: text/html`), "powershell");
+  assert.equal(detectOutputLanguage(`param($Name)\nWrite-Host $env:USERNAME`), "powershell");
+});
+
+test("properties: dotted lowercase keys only, fence detection only", () => {
+  const body = `# server\nserver.port=8080\nspring.application.name = pi\n`;
+  assert.equal(detectLanguage(body), "properties");
+  assert.equal(detectLanguage(`a.b=1\nc.d=2\nsome other line that is not a pair`), undefined);
+  assert.equal(detectLanguage(`path.home=$HOME\nuser.name=pi`), undefined);
+  assert.equal(detectLanguage(`window.x = 1;\nwindow.y = 2;`), undefined);
+  assert.equal(detectLanguage(`PATH=/usr/bin\nHOME=/home/pi\nLANG=en_US`), "bash");
+  assert.equal(detectOutputLanguage(body), undefined);
+});
+
+test("jsx and tsx: element syntax promotes the javascript and typescript answers", () => {
+  assert.equal(
+    detectLanguage(`const App = () => {\n  return (\n    <div>hi</div>\n  );\n};`),
+    "jsx",
+  );
+  assert.equal(detectLanguage(`const a = 1;\nconst b = <Button onClick={f}>go</Button>;`), "jsx");
+  assert.equal(detectLanguage(`const a = <div className="x" />;\nexport default a;`), "jsx");
+  assert.equal(
+    detectLanguage(`interface P { n: number }\nconst C = (p: P) => <Item n={p.n} />;`),
+    "tsx",
+  );
+  assert.equal(detectLanguage(`const id = <T>(x: T) => x;\nconst n: number = 1;\nconst m = new Map<Foo, Bar>();`), "typescript");
+  assert.equal(detectLanguage(`const a = 1;\nconst b = a < 2 && a > 0;`), "javascript");
+  assert.equal(detectOutputLanguage(`const a = <div className="x" />;\nexport default a;`), "jsx");
+  assert.equal(detectOutputLanguage(`interface P { n: number }\nconst C = () => <Item n={1} />;`), "tsx");
+});
+
+test("html fragment: a known tag or a comment first, with a closing tag, is html", () => {
+  assert.equal(detectLanguage(`<div class="x">\n  <span>hello</span>\n</div>`), "html");
+  assert.equal(detectLanguage(`<!-- header -->\n<nav>\n  <a href="/">home</a>\n</nav>`), "html");
+  assert.equal(detectOutputLanguage(`<ul>\n  <li>one</li>\n  <li>two</li>\n</ul>`), "html");
+});
+
+test("html fragment: generics, jsx, unknown-tag xml and logs are not html", () => {
+  assert.notEqual(detectLanguage(`<div className="x">\n  <span>hi</span>\n</div>`), "html");
+  assert.notEqual(detectLanguage(`<button onClick={go}>\n  <b>go</b>\n</button>`), "html");
+  assert.equal(detectLanguage(`<config>\n  <entry>value</entry>\n</config>`), undefined);
+  assert.equal(detectLanguage(`Array<string> is a generic\nMap<string, number> too, </p> aside`), undefined);
+  assert.equal(detectLanguage(`<div>\nno closing tag here, just a log line`), undefined);
+  assert.equal(detectOutputLanguage(`<6> kernel: started\n<6> kernel: stopped </b>`), undefined);
 });

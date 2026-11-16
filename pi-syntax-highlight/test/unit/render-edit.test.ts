@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import type { HighlightFn } from "../../src/highlight.ts";
 import {
   buildEditDiffText,
-  buildEditErrorText,
   classifyEditDiffLine,
   type EditDiffInput,
 } from "../../src/render-edit.ts";
@@ -108,7 +107,7 @@ test("buildEditDiffText: a kind change starts a new run and a new call", () => {
 });
 
 test("buildEditDiffText: without a grammar the content keeps its kind's color", () => {
-  assert.equal(TOKEN.content, "text");
+  assert.equal(TOKEN.content, "toolOutput");
   const calls: HighlightCall[] = [];
   const text = buildEditDiffText(diffInput({ diff: "+1 one\n 2 two", path: "notes", highlight: makeHighlight(calls) }));
   assert.deepEqual(calls, []);
@@ -130,7 +129,7 @@ test("buildEditDiffText: the elision is painted as metainformation", () => {
 
 test("buildEditDiffText: a line outside the grammar keeps the content color", () => {
   const text = buildEditDiffText(diffInput({ diff: "not a diff line" }));
-  assert.equal(text, "<text>not a diff line</text>");
+  assert.equal(text, "<toolOutput>not a diff line</toolOutput>");
 });
 
 test("buildEditDiffText: an empty diff renders nothing", () => {
@@ -198,17 +197,4 @@ test("buildEditDiffText: the changed span is inverted inside an already colored 
       ),
     ].join("\n"),
   );
-});
-
-test("buildEditErrorText: the failure is painted in the error color without a leading newline", () => {
-  assert.equal(TOKEN.broken, "error");
-  assert.equal(buildEditErrorText("no such file", fakeTheme), "<error>no such file</error>");
-});
-
-test("buildEditErrorText: several text blocks stay inside the one wrapper", () => {
-  assert.equal(buildEditErrorText("first\nsecond", fakeTheme), "<error>first\nsecond</error>");
-});
-
-test("buildEditErrorText: an empty failure renders nothing", () => {
-  assert.equal(buildEditErrorText("", fakeTheme), "");
 });

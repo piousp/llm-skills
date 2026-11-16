@@ -199,9 +199,3 @@ export function buildEditDiffText(input: EditDiffInput): string {
   }
   return styled.join("\n");
 }
-
-// The body the built-in paints inside the call's `Box`: the failure text in the
-// error color, with no newline of its own because the box adds the gap.
-export function buildEditErrorText(output: string, theme: StyleTheme): string {
-  return output === "" ? "" : theme.fg(TOKEN.broken, output);
-}

@@ -115,7 +115,7 @@ test("buildFindResultText: the tool's own results notice is a body line, so the 
 });
 
 test("buildFindResultText: an error result is painted flat in the content color", () => {
-  assert.equal(TOKEN.content, "text");
+  assert.equal(TOKEN.content, "toolOutput");
   const text = buildFindResultText(
     findInput({ output: "src/a.ts\ndir/\nNo files found matching pattern", isError: true }),
   );
@@ -123,7 +123,7 @@ test("buildFindResultText: an error result is painted flat in the content color"
   // whole message, so every line keeps the one weight.
   assert.equal(
     text,
-    ["", "<text>src/a.ts</text>", "<text>dir/</text>", "<text>No files found matching pattern</text>"].join("\n"),
+    ["", "<toolOutput>src/a.ts</toolOutput>", "<toolOutput>dir/</toolOutput>", "<toolOutput>No files found matching pattern</toolOutput>"].join("\n"),
   );
 });
 

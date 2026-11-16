@@ -6,6 +6,7 @@ import {
   imageFallback,
   stripTerminalSequences,
   type Component,
+  type Keybinding,
 } from "@earendil-works/pi-tui";
 import { TOKEN, type StyleTheme } from "./tokens.ts";
 
@@ -19,6 +20,9 @@ export interface RenderContext {
   state: Record<string, unknown>;
   showImages: boolean;
   durationMs: number | undefined;
+  // Owned by the copy of pi that runs the row, which is the one that knows the
+  // user's keybindings; an imported `keyHint` may resolve to another copy.
+  keyHint?: (keybinding: Keybinding, description: string) => string;
 }
 
 // Control characters crash `string-width`; tab and newline stay because the body
@@ -150,13 +154,11 @@ function truncationWarning(parts: TruncationParts): string {
 // before the body counts as one is up to each renderer.
 export const DIFF_HEADER = /^(diff --git|--- |\+\+\+ |@@ )/;
 
-// Added and removed lines of a diff: the foreground token alone is a thin strip
-// of color on a dark terminal, so the state is repeated on the background. Both
-// diff-aware renderers share this so the two bodies cannot drift apart.
+// Added and removed lines of a diff: foreground only, as the host paints a
+// result body; a background would add a colored block the host never draws.
+// Both diff-aware renderers share this so the two bodies cannot drift apart.
 export function diffChangeLine(line: string, theme: StyleTheme): string {
-  return line.startsWith("+")
-    ? theme.bg("toolSuccessBg", theme.fg("toolDiffAdded", line))
-    : theme.bg("toolErrorBg", theme.fg("toolDiffRemoved", line));
+  return theme.fg(line.startsWith("+") ? "toolDiffAdded" : "toolDiffRemoved", line);
 }
 
 // The three header forms get the function color, added and removed lines the

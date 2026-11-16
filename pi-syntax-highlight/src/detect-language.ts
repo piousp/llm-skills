@@ -23,6 +23,22 @@ const DIFF_HEADER = /^(diff --git|--- |\+\+\+ |@@ )/;
 
 const MARKUP_DECLARATIONS = ["<?xml", "<!DOCTYPE"];
 
+// A fragment has no declaration to lean on, so it needs a lowercase tag from the
+// HTML vocabulary (or a comment) first and a closing tag somewhere. `className=`
+// and `={` are JSX, and an unknown tag is XML or a generic, which stay flat.
+const HTML_FRAGMENT_START = new RegExp(
+  `^(?:<!--|<(?:${[
+    "div", "span", "p", "a", "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th",
+    "h1", "h2", "h3", "h4", "h5", "h6", "head", "body", "section", "article", "nav", "header",
+    "footer", "main", "form", "button", "label", "select", "option", "textarea", "pre", "code",
+    "script", "style", "strong", "em", "b", "i",
+  ].join("|")})[\\s>/])`,
+);
+const HTML_CLOSING_TAG = /<\/[a-z][a-z0-9]*>/;
+const JSX_ONLY = /className=|=\{/;
+
+const PHP_OPENER = "<?php";
+
 const SHEBANG = /^#!/;
 
 // Every interpreter here is painted by the one shell grammar, which highlight.js
@@ -43,6 +59,17 @@ const CSS_DECLARATION = /^\s*[-a-zA-Z][-\w]*\s*:\s*[^;{}\n]+;$/gm;
 const CSS_FOREIGN_SIGNAL =
   /(?:=>|\bfunction\s|\bdef\s|\bconst\s|\binterface\s|\btype[ \t]+\w+[ \t]*=|\bexport\s|\bimport\s)/;
 
+const DOCKER_FROM = /^FROM[ \t]+\S/;
+const DOCKER_INSTRUCTION = /^(?:RUN|COPY|ADD|CMD|ENTRYPOINT|WORKDIR|ENV|EXPOSE|ARG|USER|LABEL)[ \t]/m;
+
+// A rule needs at least one dependency: `default:` and `else:` followed by an
+// indented line are C and shell, and `make: *** [all] Error 1` has no tab recipe.
+const MAKE_PHONY = /^\.PHONY:/m;
+const MAKE_RULE = /^[\w.%-]+[ \t]*:(?![=:])[ \t]+[\w.%$()/-][ \t\w.%$()/-]*\n\t\S/m;
+
+const C_INCLUDE = /^[ \t]*#include[ \t]*[<"]/m;
+const CPP_SIGNAL = /std::|\btemplate[ \t]*<|\bnamespace\b|\bclass[ \t]+\w+|\bcout\b/;
+
 const SQL_STATEMENT_KEYWORD = /^(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|WITH)\b/i;
 const SQL_CLAUSE_KEYWORD = /\b(?:FROM|WHERE|VALUES|TABLE)\b/i;
 const SQL_CLAUSE_KEYWORD_UPPER = /\b(?:FROM|WHERE|VALUES|TABLE)\b/g;
@@ -61,6 +88,37 @@ const PYTHON_SIGNALS: readonly RegExp[] = [
 // Indentation is spaces and tabs only: a `\s` here would let the line break
 // before a top-level `key:` line count as one of the two indented blocks.
 const PYTHON_BLOCK_LINE = /^[ \t]+\S.*:[ \t]*$/gm;
+
+// Two of these: `puts`, `end` and `def` without a colon each show up elsewhere.
+// `class A < B` needs the spaces, so a generic `class Box<T>` is not one.
+const RUBY_SIGNALS: readonly RegExp[] = [
+  /^[ \t]*def[ \t]+[\w.?!=]+(?:\(.*\))?[ \t]*$/m,
+  /^[ \t]*end[ \t]*$/m,
+  /^[ \t]*require(?:_relative)?[ \t]+['"]/m,
+  /\bdo[ \t]*\|[^|\n]*\|/,
+  /^[ \t]*class[ \t]+[A-Z]\w*[ \t]+<[ \t]+[A-Z]/m,
+  /^[ \t]*puts[ \t]+\S/m,
+  /^[ \t]*attr_(?:reader|writer|accessor)\b/m,
+];
+
+// Verb-Noun with a verb from the approved list: `Content-Type` and the like are
+// header names, and a header such as `Set-Cookie:` is excluded by the colon.
+const POWERSHELL_SIGNALS: readonly RegExp[] = [
+  /\b(?:Get|Set|New|Remove|Write|Invoke|Import|Export|Select|Where|ForEach|Test|Start|Stop|Add|Out|Format|Read|Install|Copy|Move|Clear)-[A-Z]\w+\b(?!:)/,
+  /\$env:\w+/i,
+  /\bparam[ \t]*\(/i,
+  /\[CmdletBinding\(/i,
+  /[ \t]-(?:eq|ne|like|match|notmatch|gt|lt)\b/i,
+  /\|[ \t]*(?:Where|Select|ForEach)-Object\b/,
+];
+
+const JSX_SIGNALS: readonly RegExp[] = [
+  /<\/[A-Z]\w*>/,
+  /<[A-Z]\w*[ \t]+[\w-]+=/,
+  /<[A-Z]\w*[ \t]*\/>/,
+  /\bclassName=/,
+  /\breturn[ \t]*\(\s*</,
+];
 
 const TYPESCRIPT_SIGNALS: readonly RegExp[] = [
   /\binterface\s+\w+/,
@@ -115,6 +173,9 @@ const YAML_DOCUMENT_KEY = /^[a-z_][\w.-]*:[ \t]*(?:\S.*)?$/gm;
 const TOML_SECTION = /^\[[\w.-]+\][ \t]*$/m;
 const TOML_KEY_VALUE = /^\w[\w.-]*[ \t]*=/gm;
 
+const PROPERTIES_LINE = /^[a-z][\w-]*(?:\.[\w-]+)+[ \t]*=.*$/;
+const PROPERTIES_COMMENT = /^[ \t]*[#!]/;
+
 const SHELL_COMMAND =
   /^(?:\$[ \t]|\w+=|export[ \t]|cd[ \t]|sudo[ \t]|git[ \t]|npm[ \t]|node[ \t]|ls[ \t]|cat[ \t]|echo[ \t]|mkdir[ \t]|rm[ \t]|cp[ \t]|mv[ \t]|make[ \t]|docker[ \t])/gm;
 const SHELL_PIPELINE = /\|[ \t]*[\w./-]+/gm;
@@ -129,8 +190,8 @@ const TABLE_RULE = "|---";
 // is strict enough not to fire on a log. Left out for the first reason or the
 // second: java, csharp and kotlin (`public`, `static`, `using`, `fun` are log
 // words), css, scss and less (`key: value;` is also every environment dump),
-// lua, haskell, elixir, cmake, gradle, protobuf, clojure, erlang and properties
-// (no realistic shell-output scenario).
+// lua, haskell, elixir, cmake, gradle, protobuf, clojure and erlang (no realistic
+// shell-output scenario), and properties (`key=value` is every config dump).
 const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
   "yaml", // kubectl, helm, compose
   "toml", // cat pyproject.toml, Cargo.toml
@@ -143,12 +204,29 @@ const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
   "rust", // cat of source files
   "xml",
   "html", // curl
+  "json", // NDJSON only; a single document is the caller's own check
+  "dockerfile",
+  "makefile",
+  "c",
+  "cpp",
+  "php",
+  "ruby",
+  "powershell",
+  "jsx",
+  "tsx",
 ]);
 
 type Detector = (text: string) => string | undefined;
 
 function detectJson(text: string): string | undefined {
   return isJsonDocument(text) ? "json" : undefined;
+}
+
+// Two or more lines that each parse as an object or array. A single document
+// never reaches this: `detectJson` answers first.
+function detectNdjson(text: string): string | undefined {
+  const lines = nonBlankLines(text);
+  return lines.length >= 2 && lines.every((line) => isJsonDocument(line)) ? "json" : undefined;
 }
 
 function detectDiff(text: string): string | undefined {
@@ -166,8 +244,29 @@ function detectShebang(text: string): string | undefined {
 
 function detectMarkup(text: string): string | undefined {
   const first = firstNonBlankLine(text);
+  if (first.includes(PHP_OPENER)) return "php";
   if (MARKUP_DECLARATIONS.some((declaration) => first.includes(declaration))) return "xml";
   return first.includes("<html") ? "html" : undefined;
+}
+
+function detectHtmlFragment(text: string): string | undefined {
+  if (!HTML_FRAGMENT_START.test(firstNonBlankLine(text).trimStart())) return undefined;
+  return HTML_CLOSING_TAG.test(text) && !JSX_ONLY.test(text) ? "html" : undefined;
+}
+
+function detectDockerfile(text: string): string | undefined {
+  const instructions = text.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
+  if (!DOCKER_FROM.test(instructions[0] ?? "")) return undefined;
+  return DOCKER_INSTRUCTION.test(instructions.slice(1).join("\n")) ? "dockerfile" : undefined;
+}
+
+function detectMakefile(text: string): string | undefined {
+  return MAKE_PHONY.test(text) || MAKE_RULE.test(text) ? "makefile" : undefined;
+}
+
+function detectC(text: string): string | undefined {
+  if (!C_INCLUDE.test(text)) return undefined;
+  return CPP_SIGNAL.test(text) ? "cpp" : "c";
 }
 
 function detectCss(text: string): string | undefined {
@@ -195,12 +294,22 @@ function detectPython(text: string): string | undefined {
   return countMatches(text, PYTHON_BLOCK_LINE) >= 2 ? "python" : undefined;
 }
 
+function detectRuby(text: string): string | undefined {
+  return countSignals(text, RUBY_SIGNALS) >= 2 ? "ruby" : undefined;
+}
+
+function detectPowerShell(text: string): string | undefined {
+  return countSignals(text, POWERSHELL_SIGNALS) >= 2 ? "powershell" : undefined;
+}
+
 function detectTypeScript(text: string): string | undefined {
-  return hasTypeScriptSignal(text) ? "typescript" : undefined;
+  if (!hasTypeScriptSignal(text)) return undefined;
+  return countSignals(text, JSX_SIGNALS) > 0 ? "tsx" : "typescript";
 }
 
 function detectJavaScript(text: string): string | undefined {
-  return countSignals(text, JAVASCRIPT_SIGNALS) > 0 ? "javascript" : undefined;
+  if (countSignals(text, JAVASCRIPT_SIGNALS) === 0) return undefined;
+  return countSignals(text, JSX_SIGNALS) > 0 ? "jsx" : "javascript";
 }
 
 function detectGo(text: string): string | undefined {
@@ -245,6 +354,14 @@ function detectToml(text: string): string | undefined {
   return countMatches(text, TOML_KEY_VALUE) >= 2 ? "toml" : undefined;
 }
 
+// Every non-comment line is a dotted lowercase pair: one stray line, a `$`
+// expansion or a statement terminator means a shell script or a program.
+function detectProperties(text: string): string | undefined {
+  if (text.includes("$") || STATEMENT_TERMINATOR.test(text)) return undefined;
+  const lines = nonBlankLines(text).filter((line) => !PROPERTIES_COMMENT.test(line));
+  return lines.length >= 2 && lines.every((line) => PROPERTIES_LINE.test(line)) ? "properties" : undefined;
+}
+
 function detectShell(text: string): string | undefined {
   if (text.includes(TABLE_RULE)) return undefined;
   const body = nonTableLines(text);
@@ -273,20 +390,28 @@ function nonTableLines(text: string): string {
 // assignments is the YAML document.
 const DETECTORS: readonly Detector[] = [
   detectJson,
+  detectNdjson,
   detectDiff,
   detectShebang,
   detectMarkup,
+  detectHtmlFragment,
+  detectDockerfile,
+  detectMakefile,
+  detectC,
   detectCss,
   detectSql,
   detectPython,
+  detectRuby,
   detectGo,
   detectRust,
   detectYamlKeys,
+  detectPowerShell,
   detectTypeScript,
   detectJavaScript,
   detectManagedLanguage,
   detectYaml,
   detectToml,
+  detectProperties,
   detectShell,
 ];
 
@@ -310,8 +435,9 @@ export function detectOutputLanguage(text: string): string | undefined {
   const language = detectLanguage(text);
   if (language === undefined) return undefined;
   // The caller checks these two shapes over the whole body, so a sample that
-  // parses as JSON is a prefix of it, not the document.
-  if (language === "json" || language === "diff") return undefined;
+  // parses as JSON is a prefix of it, not the document; NDJSON is the exception.
+  if (language === "json") return isJsonDocument(text) ? undefined : language;
+  if (language === "diff") return undefined;
   if (!OUTPUT_LANGUAGES.has(language)) return undefined;
   if (language === "yaml") return yamlSurvivesOutput(text) ? language : undefined;
   if (language === "sql") return sqlSurvivesOutput(text) ? language : undefined;
@@ -339,7 +465,7 @@ function isJsonDocument(text: string): boolean {
 function hasStrongSignal(text: string, lines: readonly string[]): boolean {
   if (isJsonDocument(text)) return true;
   const first = lines[0] ?? "";
-  if (first.startsWith("#!")) return true;
+  if (first.startsWith("#!") || first.includes(PHP_OPENER)) return true;
   if (first.startsWith("diff --git")) return true;
   return MARKUP_DECLARATIONS.some((declaration) => first.includes(declaration));
 }

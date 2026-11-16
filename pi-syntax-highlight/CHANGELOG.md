@@ -3,6 +3,46 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [Unreleased]
+
+## [0.2.0] - 2026-11-16
+
+### Removed
+
+- Markdown styling of assistant messages (heading colors, blockquote text,
+  restored inline-code backticks). The markdown transformer now only labels
+  unlabeled closed fences.
+- The `read` line-number gutter and the `write` content overlay.
+
+### Changed
+
+- Requires pi 1.5.1 or newer.
+- The markdown transformer also runs for `assistant-thinking`, `custom` and
+  `summary` messages.
+- Colors follow stock pi (`toolOutput`), so a restyled result looks like the
+  stock one apart from the highlighting.
+- `read` and `write` calls, and every error result, are delegated to the stock
+  renderer. A renderer this package does not recognize is left untouched, and an
+  exception in ours falls back to stock.
+- The generic renderer for tools without a result renderer mirrors the host's
+  fallback; MCP tools use pi's renderers.
+- The 400-line tokenizing cap applies to `bash` and `powershell` only.
+- `keyHint` comes from the render context instead of a captured theme.
+
+### Fixed
+
+- The `bash` duration: the row's clock stops at the final result and the
+  recorded duration wins.
+- `grep` emphasis no longer risks catastrophic backtracking: lines over 500
+  characters and backtracking-prone patterns skip it.
+
+### Added
+
+- Language detection for Dockerfile, Makefile, C, C++, PHP, Ruby, PowerShell,
+  JSX, TSX and properties, and HTML fragments without a declaration.
+- Contract tests that fail when pi changes `state.callComponent`,
+  `state.startedAt` or `state.interval`.
+
 ## [0.1.2] - 2026-10-26
 
 ### Added
