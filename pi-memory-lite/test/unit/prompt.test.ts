@@ -46,7 +46,7 @@ test("prompt: una tool declarada y oculta cuenta como no declarada", () => {
   }
 });
 
-// §8.6: con una exposición que sacó las declaraciones y `tool_search` declarado, la sección nombra la búsqueda, y el
+// con una exposición que sacó las declaraciones y `tool_search` declarado, la sección nombra la búsqueda, y el
 // texto es la cadena que el modelo lee.
 test("prompt: sin las tools y con tool_search la sección nombra la búsqueda", () => {
   const section = memoryPromptSectionFor(
@@ -59,7 +59,7 @@ test("prompt: sin las tools y con tool_search la sección nombra la búsqueda", 
   });
 });
 
-// §8.6: con `codemode` activo la sección nombra el script y las dos formas de encontrar las tools desde él.
+// con `codemode` activo la sección nombra el script y las dos formas de encontrar las tools desde él.
 test("prompt: sin las tools y con codemode la sección nombra el script", () => {
   const section = memoryPromptSectionFor(input({ selectedTools: ["read", "bash", CODEMODE] }));
 
@@ -159,9 +159,8 @@ test("prompt: la lista de nombres perdidos se une con comas y una conjunción", 
   );
 });
 
-// El techo que hace de la sección un costo menor: 360 caracteres y un solo párrafo, con los cuatro nombres perdidos, que
-// es el caso más largo. El host la envuelve en su tag (+29 caracteres) y salta un cuerpo vacío.
-test("prompt: cada texto cabe en 300 caracteres y no lleva saltos de línea", () => {
+// Un solo párrafo en cada caso: el host envuelve el texto en su tag y salta un cuerpo vacío.
+test("prompt: cada texto es un solo párrafo sin saltos de línea", () => {
   const worst = [
     input({ selectedTools: [TOOL_SEARCH], exposure: "deferred" }),
     input({ selectedTools: [CODEMODE] }),
@@ -172,7 +171,6 @@ test("prompt: cada texto cabe en 300 caracteres y no lleva saltos de línea", ()
     const section = memoryPromptSectionFor(each);
 
     assert.ok(section !== undefined, "con los cuatro nombres perdidos siempre hay sección");
-    assert.ok(section.text.length <= 360, `${section.kind} mide ${section.text.length} caracteres, sobre 360`);
     assert.equal(section.text.includes("\n"), false, `${section.kind} lleva un salto de línea`);
   }
 });

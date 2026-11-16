@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CATEGORIES, SETTINGS_KEY, resolveConfig } from "../../src/config.ts";
-import { openStore, type MemoryStore } from "../../src/db.ts";
+import { MAX_KEYS, openStore, type MemoryStore } from "../../src/db.ts";
 import {
   MEMORY_TOOL_NAMES,
   createMemoryTools,
@@ -17,10 +17,10 @@ import {
   type MemoryToolDeps,
 } from "../../src/tools.ts";
 
-// I1: the four tools of §7 against a real store over a real file, one temporary directory per test. The declarations are
+// I1: the four tools against a real store over a real file, one temporary directory per test. The declarations are
 // asserted as declarations — names, snippets, annotations, exposure and the character budget of criterion 2 — and the
 // executors are called directly, which is what makes this suite the place where the caps, the three search modes and the
-// error paths of §7.1 are visible without a host. The store is never faked: a write that the database refuses, a
+// error paths are visible without a host. The store is never faked: a write that the database refuses, a
 // vocabulary the settings reject and a page the formatter has to cut are facts about the whole chain, not about a stub.
 
 /** The clock every fixture hands the tools, so a date in the output is a constant of the suite. */
@@ -44,6 +44,11 @@ interface Fixture {
   readonly store: MemoryStore;
 }
 
+/** The number of rows in `entries`, read straight from the store's connection. */
+function entryCount(store: MemoryStore): number {
+  return Number(store.db.prepare("SELECT COUNT(*) AS n FROM entries").get()?.n);
+}
+
 /**
  * A store over a temporary directory and the deps that reach it, with the config `resolveConfig` produces for `raw` and
  * for the same directory: the memory opens under `<dir>/lite-memories`, the way a default install puts it under the agent
@@ -58,7 +63,7 @@ async function fixture(t: TestContext, raw: unknown = {}): Promise<Fixture> {
   return { deps: { store: async () => store, config, now: () => new Date(NOW) }, store };
 }
 
-/** The text the model reads, which is where the caps and the declarations of §7 are visible. */
+/** The text the model reads, which is where the caps and the declarations are visible. */
 function textOf(result: AgentToolResult<unknown>): string {
   return result.content.map((part) => ("text" in part ? part.text : "")).join("");
 }
@@ -113,7 +118,7 @@ function listedCategories(message: string): string[] {
 
 // --- declaraciones --------------------------------------------------------------------------------------------------
 
-// §7 and §8.6: the four tools in the order of the contract, each with the label, the description length, the snippet and
+// the four tools in the order of the contract, each with the label, the description length, the snippet and
 // the annotations of the table, all of them with the exposure the settings resolved.
 test("tools: las cuatro se declaran en orden con su snippet, sus anotaciones y la exposición por defecto", async (t) => {
   const { deps } = await fixture(t);
@@ -130,7 +135,7 @@ test("tools: las cuatro se declaran en orden con su snippet, sus anotaciones y l
   // The lengths are the ones of the table in the contract: a longer description is permanent context, not documentation.
   assert.deepEqual(
     tools.map((tool) => tool.description.length),
-    [187, 184, 31, 89],
+    [187, 140, 31, 89],
   );
   assert.deepEqual(
     tools.map((tool) => tool.promptSnippet),
@@ -156,7 +161,7 @@ test("tools: las cuatro se declaran en orden con su snippet, sus anotaciones y l
   );
 });
 
-// §8.6: the exposure of the settings reaches all four declarations, which is what keeps them out of the system prompt.
+// the exposure of the settings reaches all four declarations, which is what keeps them out of the system prompt.
 test("tools: la exposición codemode de la configuración se traslada a las cuatro", async (t) => {
   const { deps } = await fixture(t, settings({ exposure: "codemode" }));
 
@@ -166,8 +171,8 @@ test("tools: la exposición codemode de la configuración se traslada a las cuat
   );
 });
 
-// §10 criterion 2, measured at the level of a tool: descriptions, snippets and schemas of the four tools together.
-test("presupuesto: descripciones, snippets y esquemas suman menos de 1500 caracteres", async (t) => {
+// At the level of a tool: the schemas carry no per-property description; the size is reported, not capped.
+test("presupuesto: ningún esquema lleva descripciones y se informa el tamaño", async (t) => {
   const { deps } = await fixture(t);
   const tools = createMemoryTools(deps);
 
@@ -179,13 +184,43 @@ test("presupuesto: descripciones, snippets y esquemas suman menos de 1500 caract
     total += tool.description.length + (tool.promptSnippet?.length ?? 0) + schema.length;
   }
 
-  t.diagnostic(`criterio 2: ${total} caracteres de los 1500 del presupuesto`);
-  assert.ok(total < 1500, `las cuatro tools suman ${total} caracteres y el presupuesto es 1500`);
+  t.diagnostic(`criterio 2: ${total} caracteres entre descripciones, snippets y esquemas`);
+});
+
+// The category of the write schema is the vocabulary as an enum, unless unknown categories are allowed.
+test("tools: el esquema de memory_write lleva la categoría como enum del vocabulario", async (t) => {
+  const { deps } = await fixture(t);
+  const schema = JSON.parse(JSON.stringify(createMemoryTools(deps)[0].parameters));
+
+  assert.deepEqual(schema.properties.category, { enum: [...DEFAULT_CATEGORIES] });
+  assert.deepEqual(schema.properties.keys.minItems, 1);
+  assert.equal(JSON.stringify(schema).includes('"description"'), false);
+});
+
+test("tools: con allowUnknownCategory el esquema de memory_write deja la categoría como string libre", async (t) => {
+  const { deps } = await fixture(t, settings({ allowUnknownCategory: true }));
+  const schema = JSON.parse(JSON.stringify(createMemoryTools(deps)[0].parameters));
+
+  assert.deepEqual(schema.properties.category, { type: "string", minLength: 1 });
+});
+
+test("tools: la categoría de memory_search sigue siendo un string libre", async (t) => {
+  const { deps } = await fixture(t);
+  const schema = JSON.parse(JSON.stringify(createMemoryTools(deps)[1].parameters));
+
+  assert.deepEqual(schema.properties.category, { type: "string" });
+});
+
+// The enum constrains what the host validates, not the executor: a direct call with "Decision" is still slugged.
+test("write: executeWrite directo sigue convirtiendo 'Decision' en 'decision'", async (t) => {
+  const { deps } = await fixture(t);
+
+  assert.equal((await writeOk(deps, "Elegimos sqlite.", "Decision")).category, "decision");
 });
 
 // --- memory_write ---------------------------------------------------------------------------------------------------
 
-// §7.1: the success path says which id was stored and under which category, and the keys reach the store as slugs.
+// the success path says which id was stored and under which category, and the keys reach the store as slugs.
 test("write: guarda la entrada y devuelve el id, la categoría y el texto guardado", async (t) => {
   const { deps, store } = await fixture(t);
   const result = await executeWrite(deps, {
@@ -207,7 +242,17 @@ test("write: guarda la entrada y devuelve el id, la categoría y el texto guarda
   assert.equal(stored[0].ts, NOW);
 });
 
-// §7.1: duplicate detection normalizes case and internal spacing, so the same fact written twice is one entry and the
+test("write: lista las entradas parecidas tras el guardado", async (t) => {
+  const { deps } = await fixture(t);
+  const first = await writeOk(deps, "Primera nota.", "env", ["router"]);
+  const result = await executeWrite(deps, { text: "Segunda nota.", category: "env", keys: ["router"] });
+  const details = detailsOf(result);
+
+  assert.equal(textOf(result), `Saved #${details.id} (env). Similar: #${first.id}.`);
+  assert.deepEqual(details.similar, [first.id]);
+});
+
+// duplicate detection normalizes case and internal spacing, so the same fact written twice is one entry and the
 // answer names the id that already exists instead of a second one.
 test("write: el mismo texto con otro caso y otro espaciado devuelve el id original como duplicado", async (t) => {
   const { deps, store } = await fixture(t);
@@ -223,7 +268,33 @@ test("write: el mismo texto con otro caso y otro espaciado devuelve el id origin
   assert.equal(details.duplicate, true);
   assert.equal(details.id, first.id);
   assert.equal(textOf(result), `Duplicate of #${first.id} (preference); nothing was written.`);
-  assert.equal(store.totals({}).total, 1);
+  assert.equal(entryCount(store), 1);
+});
+
+test("write: un duplicado con keys nuevas las suma y nunca muestra Similar", async (t) => {
+  const { deps, store } = await fixture(t);
+  await writeOk(deps, "Otra nota.", "env", ["router"]);
+  const first = await writeOk(deps, "Un hecho.", "env", ["uno"]);
+
+  const result = await executeWrite(deps, { text: "un HECHO.", category: "env", keys: ["uno", "Router", "dos"] });
+  const details = detailsOf(result);
+
+  assert.equal(textOf(result), `Duplicate of #${first.id} (env); added keys: router, dos.`);
+  assert.deepEqual(details.similar, []);
+  assert.deepEqual(details.addedKeys, ["router", "dos"]);
+  assert.equal(store.read([first.id]).found[0].terms, "uno router dos");
+});
+
+test("write: un duplicado al límite de keys nombra las que no entraron", async (t) => {
+  const { deps } = await fixture(t);
+  const keys = Array.from({ length: MAX_KEYS - 1 }, (_, i) => `k${i}`);
+  const first = await writeOk(deps, "Un hecho lleno.", "env", keys);
+
+  const result = await executeWrite(deps, { text: "un hecho lleno.", category: "env", keys: ["nueva", "otra"] });
+  assert.equal(
+    textOf(result),
+    `Duplicate of #${first.id} (env); added keys: nueva; not added (limit ${MAX_KEYS}): otra.`,
+  );
 });
 
 // G2 / I16: el duplicado se detecta sobre el texto y no sobre la categoría, así que el mismo texto escrito bajo otra
@@ -247,20 +318,41 @@ test("write: el duplicado en otra categoría nombra la categoría guardada", asy
 
   // La fila que existe sigue en `env`: el duplicado no la movió ni escribió una segunda entrada.
   assert.equal(store.read([first.id]).found[0].category, "env");
-  assert.equal(store.totals({}).total, 1);
+  assert.equal(entryCount(store), 1);
 });
 
-// §7.1: 1801 characters is an error and not a truncation, and the message names both numbers the model has to reconcile.
+test("write: un secreto en el texto o en una key se rechaza sin escribir ni repetir el valor", async (t) => {
+  const { deps, store } = await fixture(t);
+  const token = `ghp_${"a1B2".repeat(9)}`;
+
+  const inText = await writeFail(deps, `El token es ${token}.`);
+  assert.equal(
+    inText,
+    "The text looks like it contains a GitHub token; nothing was written. Save where to find it, not the value.",
+  );
+
+  const inKey = await writeFail(deps, "Una nota inocente.", "general", ["ok", token]);
+  assert.match(inKey, /GitHub token/);
+  assert.equal(inKey.includes(token), false);
+
+  const password = await writeFail(deps, "password: hunter2hunter2");
+  assert.match(password, /contains a password/);
+  assert.equal(password.includes("hunter2"), false);
+
+  assert.equal(entryCount(store), 0);
+});
+
+// 1801 characters is an error and not a truncation, and the message names both numbers the model has to reconcile.
 test("write: un texto de 1801 caracteres es error y no escribe nada", async (t) => {
   const { deps, store } = await fixture(t);
   const message = await writeFail(deps, "a".repeat(1801));
 
   assert.match(message, /1801/);
   assert.match(message, /1800/);
-  assert.equal(store.totals({}).total, 0);
+  assert.equal(entryCount(store), 0);
 });
 
-// §7.1: nine keys is an error, and the message names the ceiling the call broke.
+// nine keys is an error, and the message names the ceiling the call broke.
 test("write: nueve keys es error y no escribe nada", async (t) => {
   const { deps, store } = await fixture(t);
   const keys = Array.from({ length: 9 }, (_, index) => `clave-${index + 1}`);
@@ -268,16 +360,16 @@ test("write: nueve keys es error y no escribe nada", async (t) => {
 
   assert.match(message, /9/);
   assert.match(message, /8/);
-  assert.equal(store.totals({}).total, 0);
+  assert.equal(entryCount(store), 0);
 });
 
-// §7.1: keys that normalize to nothing leave no vocabulary, and an entry without a key is not what the contract stores.
+// keys that normalize to nothing leave no vocabulary, and an entry without a key is not what the contract stores.
 test("write: keys que normalizan a nada es error", async (t) => {
   const { deps, store } = await fixture(t);
   const message = await writeFail(deps, "Una entrada sin vocabulario.", "general", ["!!!", "///"]);
 
   assert.match(message, /slug/);
-  assert.equal(store.totals({}).total, 0);
+  assert.equal(entryCount(store), 0);
 });
 
 // The refusal names the rejected value and the whole vocabulary, in the configured order: the model's next move is to
@@ -288,14 +380,14 @@ test("write: una categoría desconocida se rechaza y el mensaje lista las catego
 
   assert.match(message, /not-configured/);
   assert.deepEqual(listedCategories(message), [...DEFAULT_CATEGORIES]);
-  assert.equal(store.totals({}).total, 0);
+  assert.equal(entryCount(store), 0);
 
   // The empty slug is the other way to name no category, and it is refused with the same list.
   const empty = await writeFail(deps, "Una entrada con categoría vacía.", "!!!", ["nota"]);
   assert.deepEqual(listedCategories(empty), [...DEFAULT_CATEGORIES]);
 });
 
-// §7.6: with `allowUnknownCategory` the slug is created on the spot, and the answer names it as the category written.
+// with `allowUnknownCategory` the slug is created on the spot, and the answer names it as the category written.
 test("write: la misma categoría se acepta con allowUnknownCategory", async (t) => {
   const { deps, store } = await fixture(t, settings({ allowUnknownCategory: true }));
   const details = await writeOk(deps, "Una entrada con categoría nueva.", "OMS", ["nota"]);
@@ -310,7 +402,7 @@ test("write: la misma categoría se acepta con allowUnknownCategory", async (t) 
 
 // --- memory_search: catálogo ----------------------------------------------------------------------------------------
 
-// §7.2: the call with no query is the catalog, and an empty database answers it with no category and no error.
+// the call with no query is the catalog, and an empty database answers it with no category and no error.
 test("search: el catálogo de una base vacía no es un error y declara cero categorías", async (t) => {
   const { deps } = await fixture(t);
   const result = await executeSearch(deps, {});
@@ -324,7 +416,7 @@ test("search: el catálogo de una base vacía no es un error y declara cero cate
   assert.match(textOf(result), /memory_write/);
 });
 
-// §7.2: with entries, the catalog is one line per category with its count and its most used keys, and the ids of those
+// with entries, the catalog is one line per category with its count and its most used keys, and the ids of those
 // keys are what the `details` offer for a follow-up read.
 test("search: el catálogo con entradas muestra categoría, conteo y keys", async (t) => {
   const { deps } = await fixture(t);
@@ -340,13 +432,13 @@ test("search: el catálogo con entradas muestra categoría, conteo y keys", asyn
   assert.equal(details.total, 2);
   assert.equal(details.shown, 2);
   assert.equal(details.omitted, 0);
-  assert.match(text, /#general \(2\): /);
+  assert.match(text, /general \(2\): /);
   assert.match(text, /trinidad:\d+/);
-  assert.match(text, /#decision \(1\): node-sqlite:\d+/);
+  assert.match(text, /decision \(1\): node-sqlite:\d+/);
   assert.deepEqual([...details.ids].sort((left, right) => left - right), [first.id, second.id, third.id].sort((left, right) => left - right));
 });
 
-// §10 criterion 5: more categories than fit one page stay under the cap and declare how many are left and with which
+// more categories than fit one page stay under the cap and declare how many are left and with which
 // offset they come.
 test("search: un catálogo de más de veinte categorías declara cuántas faltan y con qué offset", async (t) => {
   const categories = Array.from({ length: 25 }, (_, index) => `cat${String(index + 1).padStart(2, "0")}`);
@@ -366,7 +458,7 @@ test("search: un catálogo de más de veinte categorías declara cuántas faltan
   assert.match(text, /offset=20/);
 });
 
-// §7.0 and criterion 5: a page whose twenty lines do not fit the cap shrinks until they do, and the tail names the
+// a page whose twenty lines do not fit the cap shrinks until they do, and the tail names the
 // offset that reveals the categories the shrink left out — the cap never trims a page in silence.
 test("search: un catálogo que no entra en el cap se recorta y declara lo que quedó fuera", async (t) => {
   const categories = Array.from({ length: 25 }, (_, index) => `categoria-con-nombre-largo-${String(index + 1).padStart(2, "0")}`);
@@ -383,7 +475,7 @@ test("search: un catálogo que no entra en el cap se recorta y declara lo que qu
   assert.ok(text.length <= 1500, `el catálogo mide ${text.length} caracteres y el cap es 1500`);
   assert.equal(details.mode, "catalog");
   assert.equal(details.total, 25);
-  // The shrink loop of §7.0 did its work: a page of twenty lines of this width cannot fit the cap.
+  // The shrink loop did its work: a page of twenty lines of this width cannot fit the cap.
   assert.ok(details.shown < 20, `la página mostró ${details.shown} categorías, cabían veinte`);
   assert.equal(details.omitted, 25 - details.shown);
   assert.match(text, new RegExp(`${details.omitted} more categories left`));
@@ -392,7 +484,7 @@ test("search: un catálogo que no entra en el cap se recorta y declara lo que qu
 
 // --- memory_search: búsqueda ----------------------------------------------------------------------------------------
 
-// §10 criterion 6: a page of two results stays under the cap and says how many results it left out and which knob
+// a page of two results stays under the cap and says how many results it left out and which knob
 // reveals them.
 test("search: tres coincidencias con limit 2 quedan bajo 800 caracteres y declaran las que faltan", async (t) => {
   const { deps } = await fixture(t);
@@ -414,7 +506,7 @@ test("search: tres coincidencias con limit 2 quedan bajo 800 caracteres y declar
   assert.match(text, /limit=10/);
 });
 
-// §7.2: `offset` pages the ranked order, so the second page starts where the first one stopped.
+// `offset` pages the ranked order, so the second page starts where the first one stopped.
 test("search: offset 1 corre la página de búsqueda", async (t) => {
   const { deps } = await fixture(t);
   for (const index of [1, 2, 3]) {
@@ -435,7 +527,7 @@ test("search: offset 1 corre la página de búsqueda", async (t) => {
   assert.notEqual(second.ids[0], first.ids[0]);
 });
 
-// §7.2: a query with no match is an answer and not a failure, and the answer names the two moves that can still work.
+// a query with no match is an answer and not a failure, and the answer names the two moves that can still work.
 test("search: una query sin coincidencias devuelve el consejo y no es error", async (t) => {
   const { deps } = await fixture(t);
   await writeOk(deps, "Sola scriptura y el canon.", "general", ["sola-scriptura"]);
@@ -445,7 +537,7 @@ test("search: una query sin coincidencias devuelve el consejo y no es error", as
 
   assert.equal(
     textOf(result),
-    'No matches for "hipopotamo". Try fewer words, or memory_search with no query for the catalog.',
+    'No matches for "hipopotamo". Try other words, or memory_search with no query for the catalog.',
   );
   assert.equal(details.mode, "search");
   assert.equal(details.total, 0);
@@ -453,62 +545,54 @@ test("search: una query sin coincidencias devuelve el consejo y no es error", as
   assert.deepEqual(details.ids, []);
 });
 
-// --- memory_search: conteo ------------------------------------------------------------------------------------------
-
-// §7.2: without a query the count mode answers the total and one line per category, which is the cheap look before any
-// text is materialized.
-test("search: count_only sin query cuenta el total y cada categoría", async (t) => {
+test("search: sin entrada con todas las palabras cae a cualquiera y lo declara en la primera línea", async (t) => {
   const { deps } = await fixture(t);
-  await writeOk(deps, "Una entrada general.", "general", ["uno"]);
-  await writeOk(deps, "Otra entrada general.", "general", ["dos"]);
-  await writeOk(deps, "Una decisión.", "decision", ["tres"]);
+  const written = await writeOk(deps, "Deployments run on friday.", "general", ["ci"]);
 
-  const result = await executeSearch(deps, { count_only: true });
-  const text = textOf(result);
+  const result = await executeSearch(deps, { query: "how do we deploy" });
   const details = detailsOf(result);
 
-  assert.equal(details.mode, "count");
-  assert.equal(details.total, 3);
-  assert.match(text, /total: 3/);
-  assert.match(text, /general: 2/);
-  assert.match(text, /decision: 1/);
-});
-
-// §7.2: with a query the count mode answers one number and no category, because a count narrowed to a query says
-// nothing useful per category.
-test("search: count_only con query cuenta solo las coincidencias", async (t) => {
-  const { deps } = await fixture(t);
-  await writeOk(deps, "Una entrada general.", "general", ["uno"]);
-  await writeOk(deps, "Otra entrada general.", "general", ["dos"]);
-  await writeOk(deps, "Una decisión.", "decision", ["tres"]);
-
-  const result = await executeSearch(deps, { query: "entrada", count_only: true });
-  const text = textOf(result);
-  const details = detailsOf(result);
-
-  assert.equal(details.mode, "count");
-  assert.equal(details.total, 2);
-  assert.match(text, /total: 2/);
-  assert.doesNotMatch(text, /general: /);
-});
-
-// §7.2 and §7.6: the category narrows the count, and its slug is what the query layer compares against.
-test("search: count_only con category acota el conteo", async (t) => {
-  const { deps } = await fixture(t);
-  await writeOk(deps, "Una entrada general.", "general", ["uno"]);
-  await writeOk(deps, "Otra entrada general.", "general", ["dos"]);
-  await writeOk(deps, "Una decisión.", "decision", ["tres"]);
-
-  const result = await executeSearch(deps, { count_only: true, category: "Decision" });
-  const text = textOf(result);
-  const details = detailsOf(result);
-
+  assert.ok(textOf(result).startsWith("No entry has every word; showing entries with any of them.\n"));
+  assert.equal(details.mode, "search");
+  assert.equal((details as { match: string }).match, "any");
   assert.equal(details.total, 1);
-  assert.match(text, /total: 1/);
-  assert.doesNotMatch(text, /general: /);
+  assert.deepEqual(details.ids, [written.id]);
 });
 
-// §10 criterion 3 at tool level: the five hostile queries of the criterion reach `MATCH` neutralized as text, so none of
+test("search: offset pagina bajo any sin repetir ni perder entradas", async (t) => {
+  const { deps } = await fixture(t);
+  const first = await writeOk(deps, "Alpha runs on friday.", "general", ["one"]);
+  const second = await writeOk(deps, "Beta runs on monday.", "general", ["two"]);
+
+  const page1 = detailsOf(await executeSearch(deps, { query: "alpha beta zzz", limit: 1, offset: 0 }));
+  const page2 = detailsOf(await executeSearch(deps, { query: "alpha beta zzz", limit: 1, offset: 1 }));
+
+  assert.equal((page1 as { match: string }).match, "any");
+  assert.equal(page1.total, 2);
+  assert.equal(page2.total, 2);
+  assert.deepEqual([...page1.ids, ...page2.ids].sort(), [first.id, second.id].sort());
+});
+
+test("search: una sola palabra sin coincidencias sigue siendo noMatches", async (t) => {
+  const { deps } = await fixture(t);
+  await writeOk(deps, "Deployments run on friday.", "general", ["ci"]);
+
+  const result = await executeSearch(deps, { query: "hipopotamo" });
+
+  assert.ok(textOf(result).startsWith('No matches for "hipopotamo".'));
+});
+
+test("search: con todas las palabras presentes no hay nota y match es all", async (t) => {
+  const { deps } = await fixture(t);
+  await writeOk(deps, "Deployments run on friday.", "general", ["ci"]);
+
+  const result = await executeSearch(deps, { query: "deployments friday" });
+
+  assert.equal((detailsOf(result) as { match: string }).match, "all");
+  assert.ok(!textOf(result).includes("No entry has every word"));
+});
+
+// the five hostile queries of the criterion reach `MATCH` neutralized as text, so none of
 // them throws and none of them comes back as a syntax error.
 test("search: las queries hostiles no lanzan y no devuelven un error de sintaxis", async (t) => {
   const { deps } = await fixture(t);
@@ -526,7 +610,7 @@ test("search: las queries hostiles no lanzan y no devuelven un error de sintaxis
 
 // --- memory_read ----------------------------------------------------------------------------------------------------
 
-// §10 criterion 7: twenty entries fit one page of the read cap, whole, in the order they were asked for.
+// twenty entries fit one page of the read cap, whole, in the order they were asked for.
 test("read: veinte ids quedan bajo 2000 caracteres", async (t) => {
   const { deps } = await fixture(t);
   const ids: number[] = [];
@@ -546,7 +630,7 @@ test("read: veinte ids quedan bajo 2000 caracteres", async (t) => {
   assert.deepEqual(details.missing, []);
 });
 
-// §7.3: an id that is not in the database is an absent entry, reported by the formatter, never an error.
+// an id that is not in the database is an absent entry, reported by the formatter, never an error.
 test("read: los ids inexistentes se nombran y no son error", async (t) => {
   const { deps } = await fixture(t);
   const written = await writeOk(deps, "El canon de Nicea.", "general", ["canon"]);
@@ -563,7 +647,7 @@ test("read: los ids inexistentes se nombran y no son error", async (t) => {
   assert.equal(details.omitted, 0);
 });
 
-// §7.1 and §7.3 together: the write ceiling sits below the read cap so a maximal entry always comes back whole.
+// Write and read together: the write ceiling sits below the read cap so a maximal entry always comes back whole.
 test("read: una entrada de 1800 caracteres vuelve entera", async (t) => {
   const { deps } = await fixture(t);
   const long = "b".repeat(1800);
@@ -579,7 +663,7 @@ test("read: una entrada de 1800 caracteres vuelve entera", async (t) => {
 
 // --- memory_delete --------------------------------------------------------------------------------------------------
 
-// §7.4: one call over ids that exist and ids that do not reports both lists, and the entries that were deleted are gone.
+// one call over ids that exist and ids that do not reports both lists, and the entries that were deleted are gone.
 test("delete: ids mixtos informan los borrados y los ausentes", async (t) => {
   const { deps } = await fixture(t);
   const first = await writeOk(deps, "La primera entrada.", "general", ["uno"]);
@@ -597,7 +681,7 @@ test("delete: ids mixtos informan los borrados y los ausentes", async (t) => {
   assert.deepEqual(after.found, []);
 });
 
-// §7.4: a second delete of the same id is not a failure, it is an absent id, and the line says only that.
+// a second delete of the same id is not a failure, it is an absent id, and the line says only that.
 test("delete: el segundo borrado del mismo id lo informa como ausente", async (t) => {
   const { deps } = await fixture(t);
   const written = await writeOk(deps, "Una entrada que se borra dos veces.", "general", ["borrada"]);
@@ -615,7 +699,7 @@ test("delete: el segundo borrado del mismo id lo informa como ausente", async (t
 
 // --- Node viejo -----------------------------------------------------------------------------------------------------
 
-// §8.2 and criterion 13: with `unsupported` set, every executor answers the message and opens nothing. The getter throws
+// with `unsupported` set, every executor answers the message and opens nothing. The getter throws
 // if it is called, so a path that reached the database would fail the test with that sentence instead of the message.
 test("unsupported: las cuatro devuelven el mensaje y no abren la base", async (t) => {
   const dir = tempDir(t);
@@ -643,4 +727,30 @@ test("unsupported: las cuatro devuelven el mensaje y no abren la base", async (t
     assert.equal(textOf(result), message);
     assert.deepEqual(result.details, { error: message });
   }
+});
+
+// --- SKILL.md frente a la salida real ---------------------------------------------------------------------------------
+
+// la skill describe en prosa lo que las tools devuelven: si la salida cambia y la skill no, el modelo lee una promesa
+// falsa. Las aserciones usan subcadenas estables, no frases enteras.
+test("skill: lo que SKILL.md dice de Similar y de los duplicados aparece en la salida real, y lo retirado no figura", async (t) => {
+  const skill = readFileSync(new URL("../../skills/memory-lite/SKILL.md", import.meta.url), "utf8");
+
+  const marker = /`(Similar:)`/.exec(skill);
+  assert.ok(marker !== null, "SKILL.md ya no cita el marcador `Similar:`");
+  assert.match(skill, /exact duplicate/i, "SKILL.md ya no menciona el duplicado exacto");
+  assert.match(skill, /merges? its new keys/i, "SKILL.md ya no dice que el duplicado suma sus keys");
+
+  const { deps } = await fixture(t);
+  await writeOk(deps, "Primera nota.", "env", ["router"]);
+  const similar = textOf(await executeWrite(deps, { text: "Segunda nota.", category: "env", keys: ["router"] }));
+  assert.ok(similar.includes(marker[1]), `el write no devolvió "${marker[1]}": ${similar}`);
+  assert.match(similar, /Similar: #\d+/);
+
+  const merged = textOf(await executeWrite(deps, { text: "SEGUNDA nota.", category: "env", keys: ["router", "nueva"] }));
+  assert.ok(merged.includes("added keys:"), `el duplicado no devolvió "added keys:": ${merged}`);
+  assert.ok(merged.includes("Duplicate of #"), merged);
+
+  assert.equal(skill.includes("count_only"), false, "SKILL.md menciona count_only, que ya no existe");
+  assert.equal(/before every write/i.test(skill), false, 'SKILL.md vuelve a decir "before every write"');
 });

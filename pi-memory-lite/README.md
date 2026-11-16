@@ -3,7 +3,7 @@
 Global memory for [pi](https://pi.dev) that never enters the system prompt. It holds the durable facts, preferences
 and decisions a later session would otherwise rediscover, in one SQLite database the model reaches through four tools.
 Nothing the memory holds is injected: under the default exposure the declarations of those four tools are the whole of
-what the model is told, 1403 characters of the 1500 the package allows itself.
+what the model is told (1410 characters at 0.3.0, plus 120 for the skill's name and description).
 
 [![npm version](https://badge.fury.io/js/pi-memory-lite.svg)](https://badge.fury.io/js/pi-memory-lite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -37,8 +37,10 @@ Settings live in the `pi-memory-lite` block of `~/.pi/agent/settings.json`:
 ```
 
 The block is optional and so is every field in it. `categories` replaces the default vocabulary, which is the ten
-slugs above, in that order. With `allowUnknownCategory` off, a category outside the vocabulary is refused with an
-error that lists the valid ones; with it on, any category that normalizes to a non-empty slug is accepted and created.
+slugs above, in that order. With `allowUnknownCategory` off, the `category` of `memory_write` is an enum of the
+configured categories in the tool schema, and a value outside it is refused with an error that lists the valid ones;
+with it on, any category that normalizes to a non-empty slug is accepted and created. A direct call to the executor
+still normalizes the category to a slug before it checks it.
 A malformed field falls back to its default and reports a warning in the session instead of stopping the extension.
 A change applies to the next session, or immediately after `/reload`.
 
@@ -46,7 +48,7 @@ A change applies to the next session, or immediately after `/reload`.
 
 `exposure` decides how the four tools reach the model, never what the memory holds.
 
-`direct`, the default, declares them the way built-in tools are declared. That is the 1403 characters above.
+`direct`, the default, declares them the way built-in tools are declared. That is the 1410 characters above.
 
 `codemode` and `deferred` keep those four declarations out of `<tools>`, at the price of the model having to discover
 them. The tools stay registered either way: what changes is what the prompt says about them. With `codemode` active they
@@ -78,7 +80,7 @@ are opt-in.
 
 One SQLite database at `<agentDir>/lite-memories/memory.db`, in WAL mode, where `agentDir` is pi's agent directory:
 `~/.pi/agent` unless `PI_CODING_AGENT_DIR` says otherwise. The directory is created the first time a tool opens the
-database. `PI_MEMORY_LITE_DIR` overrides the directory and so does the `dir` setting; the environment wins over the
+database, with mode 0700; a directory that already exists is left as it is. `PI_MEMORY_LITE_DIR` overrides the directory and so does the `dir` setting; the environment wins over the
 setting, and the setting wins over the default. Since the memory is global, deleting that file deletes the memory.
 
 ## What to save
@@ -87,11 +89,17 @@ Durable facts a later session would otherwise have to rediscover, preferences of
 with the reason behind them, and notes about the environment: paths, versions, the shape of a machine.
 
 Never secrets. Not tokens, not passwords, not keys, not anything that would be a problem in a transcript you might
-share.
+share. `memory_write` rejects a text that looks like an AWS key, a GitHub token, a private key, a Slack token or a
+`password=value` pair, and never echoes the match back. It is a safety net for the obvious cases, not a scanner.
 
 The memory is curated by hand. There is no automatic write at the end of a turn, no summarisation and no
 consolidation: what is in it is what someone chose to put there. Correcting an entry means deleting it and writing it
-again, which gives it a new id, so an id quoted in an older part of a transcript stops pointing at the text it named.
+again, which gives it a new id. Ids are never reused, so an id quoted in an older part of a transcript is either still
+the entry it named or absent; it never points at a different text.
+
+A write whose text is already stored writes nothing new: the keys it brings are merged into the existing entry, and
+the reply names the keys added and any cut by the limit of 8. After a new entry is saved, the reply may end with
+`Similar: #a, #b` (up to three entries that share keys with it), so a redundant one can be read and deleted.
 
 The skill that ships with the package carries the triggers behind that list, for the model rather than for the person
 reading this: see [The skill](#the-skill).
@@ -116,18 +124,33 @@ The memory is global, in the sense that every session of every project on the ma
 and it is also the risk: a fact saved while working on one project is visible while working on another.
 
 The `env` category is the natural place for paths, versions and machine notes, and the wrong place for anything that
-authenticates. `memory_search` with no query shows at a glance what the memory knows, and `memory_delete` removes an
+authenticates. `memory_search` with no query shows at a glance what the memory knows, with the count of each category, and `memory_delete` removes an
 entry for good: there is no trash and no undo.
+
+## Search
+
+`memory_search` with a query matches every word, and a word of three or more characters also matches as a prefix
+(`deploy` finds `deployments`). When no entry matches all the words, it falls back to entries that match any word and
+says so in a note. A result row carries the whole text when it fits and otherwise a clip cut at a word boundary with an
+ellipsis; ranked snippets are 32 tokens and the degraded fragment 240 characters. There is no `count_only`: the catalog
+(no query) already shows the counts. Catalog lines do not start with `#`, which is left to ids. A `memory_read` that
+hits its cap ends with a marker asking to read fewer ids at once.
+
+## Upgrading
+
+0.3.0 moves the database to schema version 2 (`AUTOINCREMENT`, so ids are never reused). The migration copies the
+tables and marks the index for a rebuild on the next open with FTS5. A 0.2.x build refuses a version 2 database, so
+update every install that shares the directory.
 
 ## Requirements
 
-Node 22.14 or newer, which is what `node:sqlite` needs; the 23 line needs 23.4, because 23.0 to 23.3 still hide the
+Node 22.14 or newer, which is what `node:sqlite` needs; the 23 line needs 23.5, because 23.0 to 23.4 still hide the
 module behind a flag a session does not pass. On an older Node the four tools are still registered, and every call
 answers with a message naming the version it found instead of failing while the extension loads.
 
 FTS5 is not required. It is detected at runtime on a throwaway in-memory connection, because some Node builds carry
 the flag in `compile_options` and not the module. When the binary lacks FTS5, search degrades to a scan over the text
-and the keys: results come newest first instead of by relevance, and everything else, including finding an entry by a
+and the keys that folds accents with a deterministic SQL function: results come newest first instead of by relevance, and everything else, including finding an entry by a
 key its text does not contain, keeps working. Writes made in that window are indexed automatically the next time a
 binary with FTS5 opens the database.
 

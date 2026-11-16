@@ -1,6 +1,6 @@
 # pi-memory-lite — deferred work
 
-What 0.1.0 deliberately does not build, in the order the work would be taken up. This file is tracked by git and left
+What the package deliberately does not build yet, in the order the work would be taken up. This file is tracked by git and left
 out of the `files` list of `package.json`, so it never ships to npm.
 
 Two things are parked here: project-scoped databases, and export/import from markdown. They are a single stage, because
@@ -60,8 +60,7 @@ Decisions still open:
    avoids. This is an obligation, not a choice.
 6. **Duplicates at import.** Report how many rows were skipped. A silent import that drops half is indistinguishable
    from one that worked.
-7. **Tools or a CLI command.** Two more tools cost permanent prompt on a budget already 97 characters from its
-   ceiling. A `pi memory export` command costs nothing per turn. Recommend the CLI.
+7. **Tools or a CLI command.** Two more tools cost permanent prompt on top of the always-loaded text of the four tools and the skill. A `pi memory export` command costs nothing per turn. Recommend the CLI.
 
 ## The usage skill and the non-`direct` exposures
 
@@ -100,5 +99,20 @@ What the decision was meant to depend on is measurement, and it moves to the wor
 session really makes, how many of them are noise, and whether the catalog (`memory_search` with no query, which returns
 counts per category and the most used keys) shows one key repeated across entries. That measurement no longer gates the
 skill; it adjusts what the skill says. The cheap remedy stays first on the list: tighten the four tool descriptions,
-which have 97 characters of margin in the 1500-character budget, and change the skill only where the numbers ask for
-it.
+and change the skill only where the numbers ask for it. There is no fixed character ceiling any more: the suite
+measures and reports the always-loaded text (tools 1410 + skill 120 = 1530 characters, measured at 0.3.0).
+
+## Deferred from 0.3.0
+
+Considered while preparing 0.3.0 and left out, each with its reason:
+
+- **L2 — optional `id` on `memory_write`** to replace an entry in place and set an `updated_ts`. Tracking last use was
+  rejected: it would turn reads into writes.
+- **L3 — `outputSchema`** may add to the always-loaded text when `codemode` is on. Measure on pi 1.5.2 before adding it.
+- **M7 — a `project` column.** It conflicts with Stage 2, which is one database per project.
+- **M1 option B — FTS/bm25 similar hints.** The shipped `Similar:` hint uses shared keys; ranking by text is not needed
+  yet.
+- **L6 — `text_norm` column** with a unique index. The O(n) duplicate scan is fine at notebook scale.
+- **`MAX_TEXT` from 1800 to 600.** Needs real data on entry lengths first.
+- **Porter stemming — rejected.** It maps `deploy` to `deploi` but `deployments` to `deploy`, it breaks the prefix match,
+  and it is English-only.

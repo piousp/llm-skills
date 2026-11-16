@@ -1,12 +1,12 @@
 // The entrypoint pi loads: the three events of the lifecycle, the settings read where the host allows it, the four
-// registrations and the one section the prompt may need. Nothing else lives here (§13): no SQL, no budget arithmetic, no
+// registrations and the one section the prompt may need. Nothing else lives here: no SQL, no budget arithmetic, no
 // formatting, no parsing of the settings by hand — `resolveConfig` reads them, `createMemoryTools` decides what a call
 // does, `src/render.ts` decides how a row looks, `src/prompt.ts` decides what the model is told about the tools it cannot
 // see, and this file decides only when each of them is called.
 //
 // The load is the constraint that shapes the whole file. `pi.getSettings()` and `pi.getAllTools()` throw while the
-// extensions load (§7.6, D16), so both are read inside `session_start` and the factory itself touches neither, registers
-// no tool and opens no database. The connection follows the first tool call (§8.3) and is closed on `session_shutdown`;
+// extensions load, so both are read inside `session_start` and the factory itself touches neither, registers
+// no tool and opens no database. The connection follows the first tool call and is closed on `session_shutdown`;
 // the memo of the open lives here, in the instance, because the shutdown handler and the tools of a session have to hold
 // the same handle.
 //
@@ -35,9 +35,9 @@ const UNKNOWN_SOURCE = "an unknown source";
  * no settings file, no real memory and no wait.
  */
 export interface MemoryLiteSeams {
-  /** `process.env`, which decides the directory override of §7.6. */
+  /** `process.env`, which decides the directory override. */
   readonly env?: Record<string, string | undefined>;
-  /** `process.versions.node`, the version the guard of §8.2 reads. */
+  /** `process.versions.node`, the version the guard reads. */
   readonly nodeVersion?: string;
   /** `getAgentDir()`, the base of the default data directory. A function, so calling it stays inside the session. */
   readonly agentDir?: () => string;
@@ -47,7 +47,7 @@ export interface MemoryLiteSeams {
   readonly now?: () => Date;
 }
 
-/** The slice of a tool listing the collision check reads: the name and the file that registered it (§12). */
+/** The slice of a tool listing the collision check reads: the name and the file that registered it. */
 export interface MemoryLiteToolInfo {
   readonly name: string;
   readonly sourceInfo?: { readonly path?: string };
@@ -65,17 +65,17 @@ export interface MemoryLiteNoticeContext {
   readonly ui: { notify(message: string, type?: "info" | "warning" | "error"): void };
 }
 
-/** The `session_start` handler of §7.6: settings, the guard, the registration and the warnings, all inside its try. */
+/** The `session_start` handler: settings, the guard, the registration and the warnings, all inside its try. */
 export type MemoryLiteSessionStartHandler = (
   event: { readonly type: "session_start" },
   ctx: MemoryLiteNoticeContext,
 ) => void | Promise<void>;
 
-/** The `session_shutdown` handler of §8.3: it closes the connection and reads no context. */
+/** The `session_shutdown` handler: it closes the connection and reads no context. */
 export type MemoryLiteSessionShutdownHandler = () => void | Promise<void>;
 
 /**
- * The `before_agent_start` handler of §8.6: it reads the two tool lists of the turn and leaves at most one section in
+ * The `before_agent_start` handler: it reads the two tool lists of the turn and leaves at most one section in
  * the map. Typed with the host's own event, so a field renamed there fails to compile here instead of in a real session.
  */
 export type MemoryLiteBeforeAgentStartHandler = (
@@ -153,7 +153,7 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
 
   api.on("session_start", async (_event, ctx) => {
     try {
-      // §7.6: the settings are read here and never at load, and `resolveConfig` never throws on what a user typed.
+      // the settings are read here and never at load, and `resolveConfig` never throws on what a user typed.
       const raw = api.getSettings() as unknown as Record<string, unknown>;
       const { config, warnings } = resolveConfig({ raw, env, agentDir: agentDir() });
       exposure = config.exposure;
@@ -180,12 +180,12 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
       // silent, which is the state a session without tools is in.
       registered = true;
 
-      // §12: the names are prefixed, and a second extension that registered one of them is worth a line. The listing is
+      // the names are prefixed, and a second extension that registered one of them is worth a line. The listing is
       // read after the registration, so this instance's own four are part of what the paths are compared against.
       const collision = collisionWarning(api.getAllTools());
       if (collision !== undefined) warn(ctx, collision);
 
-      // The settings warnings and the guard of §8.2 reach the user through the UI and the developer through the log.
+      // The settings warnings and the guard reach the user through the UI and the developer through the log.
       for (const warning of [...warnings, ...(support.ok ? [] : [support.message])]) warn(ctx, warning);
     } catch (error) {
       // A session that cannot read its settings is still a session: it runs without memory and says why, once.
@@ -206,7 +206,7 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
   });
 
   /**
-   * §8.6: the section the model needs so a session with `codemode` or `deferred` never leaves the memory silently
+   * the section the model needs so a session with `codemode` or `deferred` never leaves the memory silently
    * unusable. The decision is `src/prompt.ts`'; this handler only writes one string into one map or deletes one key, so
    * the entrypoint keeps its rule — no SQL, no budget arithmetic, no formatting.
    */
@@ -242,7 +242,7 @@ export function registerMemoryLite(api: MemoryLiteExtensionApi, seams: MemoryLit
 }
 
 /**
- * The warning of a name that more than one source owns (§12). The four names of this package are read from the listing,
+ * The warning of a name that more than one source owns. The four names of this package are read from the listing,
  * every source path behind them collected, and a second path means another extension registered memory tools too: the
  * two installations would answer the same call, and only one of them would be the one the user meant. The names go in
  * front of the sources so the sentence reads the same with one name and with several.
@@ -262,7 +262,7 @@ function collisionWarning(tools: readonly MemoryLiteToolInfo[]): string | undefi
   return `The memory tool names registered from more than one source are ${names.join(", ")} (${[...sources].join(", ")}); another extension may register the same tools.`;
 }
 
-/** Whether a tool name is one of the four of this package, which is the set §12 watches for collisions. */
+/** Whether a tool name is one of the four of this package, which is the set watched for collisions. */
 function isMemoryToolName(name: string): boolean {
   return (MEMORY_TOOL_NAMES as readonly string[]).includes(name);
 }

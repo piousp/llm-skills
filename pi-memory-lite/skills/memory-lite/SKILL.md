@@ -1,6 +1,6 @@
 ---
 name: memory-lite
-description: "Use when deciding whether to write to global memory without being asked, when to search it at the start of a task or before a write, what never goes in, and how to reach the four tools when the exposure keeps them out of the prompt. [DO NOT] use for what a call takes or returns, which the tool descriptions carry, or for reading memory content."
+description: "When to write to global memory unprompted, when to search it, what never goes in, and how to reach its tools."
 ---
 
 # Memory lite
@@ -21,7 +21,6 @@ Global memory outlives the session, and every project on the machine reads it. T
 ## Search on your own initiative
 
 - At the start of a task on a project or a technology the memory may have touched before. Search before investigating from zero.
-- Before every write, by key or by category. Only exact duplicates are refused, so a near-duplicate is the failure to avoid.
 - When the user says something was already discussed or already done.
 - Before proposing an environment or a configuration change that may have been decided already.
 - When no query word is obvious, search with no query and read the catalog: the categories, their counts, the most used keys.
@@ -41,7 +40,8 @@ Global memory outlives the session, and every project on the machine reads it. T
 - **One to three keys**, slugs, reusing the keys that already exist.
 - Soft ceiling: **0 to 10 unrequested writes per session**. Past that, either one entry is carrying several facts or the fact is not durable.
 - [ALWAYS] announce each write in one line, with the category and the keys. Permission is not asked.
-- Correcting is delete then write. There is no update, so the entry gets a new id.
+- After a write, if `Similar:` lists ids, read them; if one already holds the fact, delete the redundant one. An exact duplicate only merges its new keys into the existing entry and writes nothing else.
+- Correcting is delete then write. There is no update, and ids are never reused, so the corrected entry gets a new id.
 
 ## Reach the tools
 

@@ -24,6 +24,9 @@ function canonical(raw: string): string {
   return raw.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
 }
 
+/** The canonical form as the degraded search applies it to stored text, so `cafe` finds `Café`. */
+export const foldForSearch = canonical;
+
 /** NFKD, diacritics stripped, lowercased, alphanumeric runs, capped at 16 tokens. Never throws. */
 export function toTokens(raw: string): string[] {
   const tokens = canonical(raw).match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -33,6 +36,11 @@ export function toTokens(raw: string): string[] {
 /** Each token as a quoted FTS5 term, an embedded double quote doubled. The AND between terms is the join. */
 export function quoteToken(token: string): string {
   return `"${token.replace(/"/g, '""')}"`;
+}
+
+/** A token as an FTS5 term: quoted, and a prefix from three characters on, so "deploy" finds "deployments". */
+export function toMatchTerm(token: string): string {
+  return quoteToken(token) + (token.length >= 3 ? "*" : "");
 }
 
 /** Controlled-vocabulary slug: NFKD, diacritics stripped, lowercased, non-alphanumeric runs to a single hyphen, edges trimmed, capped at 32 characters. Empty input returns "". */

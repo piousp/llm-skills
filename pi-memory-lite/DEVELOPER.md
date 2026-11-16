@@ -11,15 +11,16 @@ documentation: that is `README.md`.
 | `src/config.ts` | `resolveConfig()` and `checkNodeVersion()`: from the raw settings, the environment and `agentDir` to the effective configuration. Pure functions; neither throws on what a user typed into a JSON file. |
 | `src/tools.ts` | The four declarations the host sees (description, `promptSnippet`, schema, `exposure`, annotations) and the four executors: they validate the arguments, normalize the keys and the category, and delegate to the store. |
 | `src/db.ts` | Opening, pragmas, the core schema and the FTS schema kept apart, migrations, the FTS5 probe on `:memory:`, the index `rebuild`, and the whole query layer. `openStore` retries the WAL pragma on `SQLITE_BUSY`, and `createStore` picks the FTS5 or the degraded search-and-count pair once, at open (`QueryLayer`), for the life of the store. The only module that imports `node:sqlite`, and it does it dynamically. |
-| `src/query.ts` | The pure surface of the index: `toTokens()` and `quoteToken()` for FTS5, `toSlug()` for the controlled vocabulary, `distinctSlugs()` for the keys of an entry, `normalizeTextForDuplicate()` for duplicate detection and `toTerms()` for the denormalized column. |
-| `src/format.ts` | The text that goes back to the model: caps for the catalog (1500), search (800), read (2000) and count (1500), the per-fragment budget, and the explicit declaration of what was left out. Pure functions over rows. |
+| `src/query.ts` | The pure surface of the index: `toTokens()`, `quoteToken()` and `toMatchTerm()` for FTS5 (a token of three or more characters becomes a quoted prefix term), `foldForSearch()` for the accent folding of the degraded search, `toSlug()` for the controlled vocabulary, `distinctSlugs()` for the keys of an entry, `normalizeTextForDuplicate()` for duplicate detection and `toTerms()` for the denormalized column. |
+| `src/format.ts` | The text that goes back to the model: caps for the catalog (1500), search (800) and read (2000), the per-fragment budget, the word-boundary clip with an ellipsis, and the explicit declaration of what was left out. Pure functions over rows. |
+| `src/secrets.ts` | `secretKindOf()`: the patterns (AWS key, GitHub token, private key, Slack token, `password=value`) `memory_write` rejects, returning the kind and never the match. |
 | `src/render.ts` | The TUI face of the four tools: one line per call and per result while the row is collapsed, and the text the model read when it is expanded. The lines come from `TOOL_LINES`, a private table with one entry per tool name, so a name added to `MEMORY_TOOL_NAMES` without its two lines fails to compile instead of rendering an empty row. |
 | `src/prompt.ts` | `MEMORY_PROMPT_SECTION` and `memoryPromptSectionFor()`: the tag and the text of the conditional `<memory_lite>` section, computed from `selectedTools` minus `hiddenTools`, then checked against `registeredTools` — the names `pi.getAllTools()` reports — because those two lists cannot tell a declaration hidden for this turn apart from a tool the session does not have: a `-t` allowlist that leaves one of the four out removes it from the registry, where neither `tool_search` nor a codemode script can reach it. When the registry holds the four, the resolved `exposure` decides which of the two mechanisms the section may name — `tool_search` indexes only the non-`direct` tools, so it is a remedy only for the modes that took the declarations away. Pure over those inputs — no host, no I/O, no clock — and the three texts are the contract, which is why the suite pins them whole instead of matching fragments. |
-| `test/unit/` | One suite per module of `src/` — the section of `src/prompt.ts` in `prompt.test.ts` — except `src/render.ts`, whose lines are covered by `extensions-index.test.ts` (lifecycle, exposure, budget, prompt section and rendering), plus `concurrency.test.ts` (two real processes). 193 tests through `npm test`. |
+| `test/unit/` | One suite per module of `src/` — the section of `src/prompt.ts` in `prompt.test.ts` — except `src/render.ts`, whose lines are covered by `extensions-index.test.ts` (lifecycle, exposure, budget, prompt section and rendering), plus `concurrency.test.ts` (two real processes). 232 tests through `npm test` (at 0.3.0). |
 
 ## Setup
 
-Node 24.19.0 on this machine; `engines` declares `>=22.14`, which is the floor `node:sqlite` needs. Dependencies
+Node 24.19.0 on this machine; `engines` declares `>=22.14`, which is the floor `node:sqlite` needs (23.5 on the 23 line). Dependencies
 are installed and the three control commands are:
 
 ```bash
@@ -81,33 +82,29 @@ Every setting is read and applied inside `session_start`; a change applies on th
 
 | Condition | Behaviour |
 |---|---|
-| The database has no FTS5 | Search degrades to one `LIKE` per token over `text` and over `terms`, with `%` and `_` escaped; the order becomes `id` descending instead of BM25. Catalog, count, `read`, `write` and `delete` work the same, and so does finding an entry by a key its text does not contain. |
+| The database has no FTS5 | Search degrades to one `LIKE` per token over `text` and over `terms`, with `%` and `_` escaped, on accent-folded text (a deterministic SQL function `fold`, registered only in this mode); the fragment is 240 characters; the order becomes `id` descending instead of BM25. Catalog, count, `read`, `write` and `delete` work the same, and so does finding an entry by a key its text does not contain. |
 | It was written without FTS5 and reopens with FTS5 | `meta.fts_disabled` is set: on open, `rebuild` runs over `entries_fts`, `integrity-check` verifies it and the mark is deleted. Without that, the entries of that window would be invisible to search and would raise no error. |
 | It opens without FTS5 on a database written with FTS5 | The three external-content triggers are dropped before the mark is written: if they stayed, every `INSERT` and every `DELETE` on `entries` would fail with "no such module: fts5". The stale index stays in the file as a shell that connection never reads, and the next open with FTS5 rebuilds it. |
-| Node older than 22.14, or 23.0 to 23.3 | The four tools are registered anyway, but every call returns a readable error naming the version found and the floor it missed instead of failing on the module import. The database is never opened. |
+| Node older than 22.14, or 23.0 to 23.4 | The four tools are registered anyway, but every call returns a readable error naming the version found and the floor it missed instead of failing on the module import. The database is never opened. |
 | `node:sqlite` is missing from the binary | Same as the case above: the import is dynamic and happens inside the first open, not during the load. |
-| The database was written by a newer version of the package | The open fails with an error naming the stored and the supported version and asking for an update. Nothing is degraded and nothing is truncated. |
+| The database was written by a newer version of the package | The open fails with an error naming the stored and the supported version and asking for an update. Nothing is degraded and nothing is truncated. This is also what a 0.2.x build does with a schema v2 database. |
+| A schema v1 database opens with this build | Migration 2 rebuilds `entries` and `keys` with `AUTOINCREMENT` by copying the tables, and sets `meta.fts_disabled` so the next open with FTS5 rebuilds the index. |
 | Invalid settings | The default of that field is used and a warning is reported in the session. |
 | The four tools are not declared in the turn and no mechanism reaches them | The four tools are installed but nothing in the turn declares them, so the model would never learn they exist. The entrypoint writes the `<memory_lite>` section saying they are unreachable and naming the ways out, and warns once per instance with the same string. The case has more than one cause: an exposure that is not `direct` with neither `tool_search` nor `codemode` declared, a `codemode.mode: "only"` that hides the declarations of the callable `direct` tools, and a `-t` allowlist that leaves one of the four out of the session registry. That last cause is why `src/prompt.ts` also reads the registry: an allowlisted-out tool is not hidden but absent from `pi.getAllTools()`, so no search returns it and no script calls it, and the section has to say `unreachable` instead of naming `tool_search` — which it does even with `tool_search` declared and the exposure set to `deferred`, the configuration a live session spent four turns searching in. Nothing self-heals: enabling `tool_search`, enabling `codemode`, setting `exposure` to `direct` and fixing the allowlist are all a person's moves. |
 
 ## Context budget
 
-The permanent cost of the package with `exposure: "direct"` is **1403 of the 1500 characters allowed**. The count
-is `description + promptSnippet + JSON.stringify(parameters)` over the four tools, as they arrive at
-`pi.registerTool` inside the `session_start` handler:
+There is no fixed ceiling on the always-loaded text. The test `criterio 2` in `test/unit/extensions-index.test.ts`
+measures and reports it (`t.diagnostic`) and asserts only that no schema property carries a description. The count is
+`description + promptSnippet + JSON.stringify(parameters)` over the four tools, as they arrive at `pi.registerTool`
+inside the `session_start` handler, plus the XML-escaped name and description of the skill as the `<skills>` block
+carries them. Measured at 0.3.0 with `exposure: "direct"`: tools 1410 characters + skill 120 = 1530.
 
-| Tool | Description | Snippet | Schema | Total |
-|---|---|---|---|---|
-| `memory_write` | 187 | 60 | 259 | 506 |
-| `memory_search` | 184 | 69 | 211 | 464 |
-| `memory_read` | 31 | 30 | 128 | 189 |
-| `memory_delete` | 89 | 27 | 128 | 244 |
-
-It is asserted in `test/unit/extensions-index.test.ts`, in the criterion 2 test, and it is measured on the
-arguments `registerTool` received and never on a copy built for the measurement. Two rules keep the number
-where it is: no schema carries a per-property description, and `promptGuidelines` is not declared at all, since
-it would add bullets to `<rules>` and break the criterion that the prompt differs only in the `<tools>` entries
-and in the tool declarations.
+The measurement is taken on the arguments `registerTool` received and never on a copy built for the measurement. Two
+rules keep the number honest: no schema carries a per-property description, and `promptGuidelines` is not declared at
+all, since it would add bullets to `<rules>` and break the criterion that the prompt differs only in the `<tools>`
+entries and in the tool declarations. A change that grows the number is judged in review against what it buys, not
+against a constant.
 
 The `<memory_lite>` section is not part of that number: it is not paid while the four are declared, and in the two
 non-default modes it is what the prompt pays instead. Its three texts, measured with the four names missing — the longest
@@ -122,7 +119,7 @@ the sentence gets — are:
 The wrapper is `+29` characters, which is `<memory_lite>`, a newline, the text, a newline and the closing tag; the host
 skips a section whose body is empty, which is why the entrypoint deletes the key instead of emptying it. Growth per turn
 is zero: the section is written once and patched only when the set of declared tools changes. `test/unit/prompt.test.ts`
-asserts each text against the ceiling of 360 characters and the absence of newlines.
+asserts each text whole and the absence of newlines.
 
 The alternative was to declare the guidance as `promptGuidelines` on the four tools, which also survives the declarations
 being hidden. It was not used, for two reasons: those bullets are part of the declaration, so they would be there in
@@ -159,7 +156,7 @@ diff, or the allowlist difference is measured instead of the extension; and neve
 tools are not registered yet and the diff is empty for the wrong reason.
 
 What that measurement has to keep showing: `direct` differs from a session without the extension in exactly the four
-`<tools>` lines, 255 bytes; a mode that keeps them out adds exactly one `<memory_lite>` block; and no stored memory text
+`<tools>` lines; a mode that keeps them out adds exactly one `<memory_lite>` block; and no stored memory text
 appears in the prompt in either case. A configuration change is checked the same way, with the block edited in the
 project's `.pi/settings.json` under `--approve`.
 
@@ -180,21 +177,31 @@ project's `.pi/settings.json` under `--approve`.
   `sleep` between the two spawns, or serializing them in any other way, leaves the test green without testing
   anything: when it fails, fix the code and not the calendar.
 
+## Search and write behaviour
+
+- Ranked search quotes each token and adds `*` from three characters on. When nothing matches all the words it retries
+  with any word and returns a note saying so. Rows carry the whole text when it fits, else a word-boundary clip with an
+  ellipsis; the FTS snippet is 32 tokens.
+- `memory_search` has no `count_only`; the catalog already carries the counts. Catalog lines do not start with `#`.
+- `memory_write` rejects a secret before any database access (`src/secrets.ts`). An exact duplicate merges its new keys
+  into the existing entry and the reply names the keys added and those cut by the limit of `MAX_KEYS` (8). The
+  `Similar: #a, #b` hint (up to 3 ids, ranked by shared keys) is computed after the commit, so it cannot fail a write.
+- The `category` schema of `memory_write` is an enum of the configured categories unless `allowUnknownCategory` is true;
+  the executor still normalizes to a slug, because direct calls skip the schema.
+- `openStore` creates the data directory with mode 0700; an existing directory is untouched.
+- The `unreachable` prompt text is a constant, since it no longer names the missing tools.
+
 ## Known limitations
 
-- Duplicate detection is an O(n) scan over the table on every write. A later version adds the `text_norm` column
-  with a unique index, which is what turns it into a lookup.
-- The degraded search path uses SQLite's `lower()`, which folds ASCII only: two memories that differ only in an
-  accent are not found there, though they are found when FTS5 is available. It does not rank either: it returns
-  by `id` descending.
-- There is no `memory_update`. Correcting an entry is `memory_delete` followed by `memory_write`, and the `id`
-  changes, so ids quoted earlier in a transcript go stale. The `UPDATE` triggers already exist, so adding the
-  tool later needs no migration.
+- Duplicate detection is an O(n) scan over the table on every write, which is fine at notebook scale.
+- The degraded search path does not rank: it returns by `id` descending.
+- There is no `memory_update`. Correcting an entry is `memory_delete` followed by `memory_write`, and the new entry gets
+  a new id; ids are never reused (`AUTOINCREMENT`), so an id quoted earlier is either the same entry or absent.
 - The memory is global only: there is no per-project scoping and no `source` field, so an environment note about
   one machine is visible from every project on that machine.
-- `MIGRATIONS` is empty and the schema is at version 1. The first real change adds `{ version: 2, up }`; a
-  migration that touches an existing table uses `ALTER TABLE`, and one that touches the FTS table recreates it
-  and runs `rebuild`.
+- The schema is at version 2. A new change adds `{ version: 3, up }` to `MIGRATIONS`; a migration that touches an
+  existing table uses `ALTER TABLE` or copies it as version 2 does, and one that touches the FTS table sets
+  `fts_disabled` or runs `rebuild`.
 - The test harness needs Node 22.18 or newer to run without flags; on 22.14 to 22.17 the `test` script requires
   `--experimental-strip-types`. The package does not: pi loads it with jiti.
 

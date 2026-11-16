@@ -85,7 +85,7 @@ export function memoryPromptSectionFor(input: MemoryPromptInput): MemoryPromptSe
   // something that never comes back — the defect that four turns of a live session were spent on. The text is unchanged
   // because it is true here: the tools are not declared, and neither mechanism can call them.
   if (MEMORY_TOOL_NAMES.some((name) => !input.registeredTools.includes(name))) {
-    return { kind: "unreachable", text: unreachableText(joinNames(missing)) };
+    return { kind: "unreachable", text: UNREACHABLE_TEXT };
   }
 
   const names = joinNames(missing);
@@ -95,7 +95,7 @@ export function memoryPromptSectionFor(input: MemoryPromptInput): MemoryPromptSe
     return { kind: "tool_search", text: toolSearchText(names) };
   }
   if (declared.includes("codemode")) return { kind: "codemode", text: codemodeText(names) };
-  return { kind: "unreachable", text: unreachableText(names) };
+  return { kind: "unreachable", text: UNREACHABLE_TEXT };
 }
 
 /**
@@ -118,9 +118,7 @@ function codemodeText(names: string): string {
  * enable a mechanism, and the user is the one who can do either. The allowlist is one of them: a `-t` list that leaves
  * one of the four out removes it from the registry, which is the same dead end as an exposure with no mechanism.
  */
-function unreachableText(names: string): string {
-  return `Memory tools are installed but unreachable in this session: they are not declared, and neither tool_search nor codemode can call them. Enable tool_search, enable codemode, set exposure "direct", or check the tools allowlist of the session; otherwise the memory is never read or written.`;
-}
+const UNREACHABLE_TEXT = `Memory tools are installed but unreachable in this session: they are not declared, and neither tool_search nor codemode can call them. Enable tool_search, enable codemode, set exposure "direct", or check the tools allowlist of the session; otherwise the memory is never read or written.`;
 
 /**
  * The names as one paragraph reads them: `a`, `a and b`, `a, b and c`. No serial comma, so four names read the way the

@@ -3,40 +3,43 @@ import assert from "node:assert/strict";
 import {
   CATALOG_CAP,
   CATALOG_PAGE,
-  COUNT_CAP,
   KEYS_PER_CATEGORY,
   MAX_RESULTS,
-  MAX_SNIPPET,
   MIN_SNIPPET,
   READ_CAP,
   SEARCH_CAP,
+  allocate,
+  clipAtWord,
   formatCatalog,
-  formatCount,
   formatIdList,
   formatRead,
   formatSearch,
   rowPrefix,
   shortDate,
-  snippetBudget,
-  truncateText,
 } from "../../src/format.ts";
 import type { CatalogCategory, ReadRow, SearchRow } from "../../src/format.ts";
 
-// I1: the four output shapes of §7, on their own. Every function of src/format.ts is a function of its arguments, so this
+// I1: the four output shapes, on their own. Every function of src/format.ts is a function of its arguments, so this
 // suite is a list of rows and their expected text: a database would prove nothing the module does not do, because the
 // module never sees one. The caps are asserted as caps (`text.length <= CAP`) and not as lengths, so an implementation
 // that fills the budget differently still passes, and one that overflows fails under the name of the cap it broke.
 
 const TS = "2026-03-14T09:26:53.589Z";
 
-/** `count` search hits of one fixed date, each fragment `fragmentLength` characters long and distinct from the next. */
-function searchRows(count: number, fragmentLength: number): SearchRow[] {
-  return Array.from({ length: count }, (_, index) => ({
-    id: index + 1,
-    ts: TS,
-    category: "general",
-    fragment: `${String(index + 1).padStart(3, "0")}${"x".repeat(Math.max(0, fragmentLength - 3))}`,
-  }));
+/** `count` search hits of one fixed date, each text `length` characters long and distinct from the next; the fragment is the text. */
+function searchRows(count: number, length: number): SearchRow[] {
+  return Array.from({ length: count }, (_, index) => {
+    const text = `${String(index + 1).padStart(3, "0")}${"x".repeat(Math.max(0, length - 3))}`;
+    return { id: index + 1, ts: TS, category: "general", text, fragment: text };
+  });
+}
+
+/** The body of each rendered row: the line without its prefix. */
+function bodiesOf(page: { text: string; shown: number }, hits: readonly SearchRow[]): string[] {
+  return page.text
+    .split("\n")
+    .slice(0, page.shown)
+    .map((line, index) => line.slice(rowPrefix(hits[index]).length));
 }
 
 /** One full entry, with the date and the category fixed unless the test says otherwise. */
@@ -53,39 +56,35 @@ function catalogCategories(count: number, keysPerCategory: number): CatalogCateg
   }));
 }
 
-// --- snippetBudget ---------------------------------------------------------------------------------------------------
+// --- allocate y clipAtWord -------------------------------------------------------------------------------------------
 
-// The three numbers of §7.0, verbatim: the formula, the cap of 60, and the case where the fixed part alone eats the cap.
-test("snippetBudget: cinco filas de 28 caracteres dan el máximo de 60 por fragmento", () => {
-  assert.equal(snippetBudget(800, 5, 28), 60);
+test("allocate: si todo cabe cada fila recibe su longitud", () => {
+  assert.deepEqual(allocate([10, 20, 30], 100), [10, 20, 30]);
 });
 
-// The case that makes the second loop necessary: 52 per fragment is what the formula promises for ten rows.
-test("snippetBudget: diez filas de 28 caracteres dejan 52 por fragmento", () => {
-  assert.equal(snippetBudget(800, 10, 28), 52);
+test("allocate: las filas cortas quedan enteras y las largas se reparten lo que sobra", () => {
+  assert.deepEqual(allocate([10, 100, 100], 110), [10, 50, 50]);
+  assert.deepEqual(allocate([100, 10, 100], 110), [50, 10, 50]);
 });
 
-// Twenty rows of 100 characters do not fit 800 at all, and the floor of the formula is zero, never a negative budget.
-test("snippetBudget: veinte filas de 100 caracteres no dejan presupuesto", () => {
-  assert.equal(snippetBudget(800, 20, 100), 0);
+test("allocate: nunca reparte más que el room y un room negativo da ceros", () => {
+  assert.ok(allocate([100, 100, 100], 100).reduce((a, b) => a + b, 0) <= 100);
+  assert.deepEqual(allocate([5, 5], -3), [0, 0]);
+  assert.deepEqual(allocate([], 10), []);
 });
 
-// A cap smaller than the fixed part is the same case one step further: zero, because a negative fragment has no meaning.
-test("snippetBudget: un cap menor que la parte fija da 0 y nunca un número negativo", () => {
-  assert.equal(snippetBudget(100, 5, 30), 0);
-  assert.equal(snippetBudget(10, 1, 500), 0);
+test("clipAtWord: un texto que cabe vuelve entero", () => {
+  assert.equal(clipAtWord("hola mundo", 10), "hola mundo");
 });
 
-// --- truncateText ----------------------------------------------------------------------------------------------------
-
-// The cut and the number of characters dropped travel together, because the caller has to declare the second one.
-test("truncateText: devuelve el texto cortado y los caracteres descartados", () => {
-  assert.deepEqual(truncateText("abcdefghij", 4), { text: "abcd", omitted: 6 });
+test("clipAtWord: corta en la última palabra que cabe y termina con elipsis", () => {
+  assert.equal(clipAtWord("uno dos tres cuatro", 12), "uno dos…");
 });
 
-// A text that fits comes back whole, with nothing declared as dropped.
-test("truncateText: un texto que entra completo vuelve entero sin omisiones", () => {
-  assert.deepEqual(truncateText("corto", 60), { text: "corto", omitted: 0 });
+test("clipAtWord: sin espacio útil corta en seco y la elipsis cabe en max", () => {
+  const clipped = clipAtWord("abcdefghijklmnop", 6);
+  assert.equal(clipped, "abcde…");
+  assert.equal(clipAtWord("abc", 0), "");
 });
 
 // --- shortDate y rowPrefix -------------------------------------------------------------------------------------------
@@ -128,14 +127,17 @@ test("formatIdList: siete ids bajo un máximo de cinco se cortan con la elipsis"
 
 // --- formatSearch ----------------------------------------------------------------------------------------------------
 
-// The second loop of §7.0, asserted where it bites: ten fragments of 300 characters, a cap of 800 and a formula that
-// promises 57 per fragment with the page full. The page has to come back with fewer than MAX_RESULTS rows and a tail
-// that says how many results are left out and which offset reaches them.
-test("formatSearch: diez fragmentos largos caben en SEARCH_CAP y la cola declara el offset", () => {
-  const page = formatSearch({ hits: searchRows(10, 300), total: 40, offset: 0, limit: 10 });
+// Ten texts of 300 characters share the cap evenly: the page keeps every row, each clipped, and the tail declares the
+// results left out and the offset that reaches them.
+test("formatSearch: diez textos largos se reparten SEARCH_CAP y la cola declara el offset", () => {
+  const hits = searchRows(10, 300);
+  const page = formatSearch({ hits, total: 40, offset: 0, limit: 10 });
 
   assert.ok(page.text.length <= SEARCH_CAP);
-  assert.ok(page.shown < MAX_RESULTS);
+  assert.equal(page.shown, MAX_RESULTS);
+  for (const body of bodiesOf(page, hits)) {
+    assert.ok(body.length >= MIN_SNIPPET && body.endsWith("…"));
+  }
 
   const lines = page.text.split("\n");
   assert.equal(lines.length, page.shown + 1);
@@ -143,13 +145,65 @@ test("formatSearch: diez fragmentos largos caben en SEARCH_CAP y la cola declara
   assert.equal(page.omitted, 40 - page.shown);
 });
 
+test("formatSearch: la nota va en la primera línea y cuenta dentro de SEARCH_CAP", () => {
+  const note = "No entry has every word; showing entries with any of them.";
+  const page = formatSearch({ hits: searchRows(10, 300), total: 40, offset: 0, limit: 10, note });
+
+  assert.equal(page.text.split("\n")[0], note);
+  assert.ok(page.text.length <= SEARCH_CAP);
+  assert.equal(page.text.split("\n").length, page.shown + 2);
+});
+
 // The fragment of a row is cut to the budget and the row keeps its prefix, which is what lets the model read the id back.
 test("formatSearch: el fragmento se corta al presupuesto y la fila conserva su prefijo", () => {
-  const page = formatSearch({ hits: searchRows(3, 300), total: 3, offset: 0, limit: 3 });
+  const page = formatSearch({ hits: searchRows(3, 900), total: 3, offset: 0, limit: 3 });
   const [first] = page.text.split("\n");
 
   assert.ok(first.startsWith("#1 2026-03-14 general "));
-  assert.ok(first.length <= rowPrefix({ id: 1, ts: TS, category: "general" }).length + MAX_SNIPPET);
+  assert.ok(first.endsWith("…"));
+  assert.ok(page.text.length <= SEARCH_CAP);
+});
+
+// An entry that fits its share comes back whole, on one line, with its whitespace collapsed.
+test("formatSearch: un texto corto vuelve entero en una línea", () => {
+  const hits = [{ ...searchRows(1, 10)[0], text: "uno\n  dos\ttres", fragment: "...dos..." }];
+  const page = formatSearch({ hits, total: 1, offset: 0, limit: 5 });
+
+  assert.equal(page.text, `${rowPrefix(hits[0])}uno dos tres`);
+});
+
+// The shares come from the whole cap, so short entries stay whole next to long ones that are clipped.
+test("formatSearch: las entradas cortas quedan enteras junto a una larga recortada", () => {
+  const hits = [...searchRows(2, 40), { ...searchRows(1, 1500)[0], id: 3 }];
+  const page = formatSearch({ hits, total: 3, offset: 0, limit: 5 });
+  const bodies = bodiesOf(page, hits);
+
+  assert.equal(bodies[0], hits[0].text);
+  assert.equal(bodies[1], hits[1].text);
+  assert.ok(bodies[2].endsWith("…") && bodies[2].length > 600);
+  assert.ok(page.text.length <= SEARCH_CAP);
+});
+
+// Whatever the sizes, the page fits the cap, keeps its rows consistent with `shown` and returns whole whatever fits.
+test("formatSearch: fixtures aleatorias nunca superan SEARCH_CAP", () => {
+  let seed = 12345;
+  const random = (max: number): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed % max;
+  };
+
+  for (let round = 0; round < 300; round += 1) {
+    const count = 1 + random(12);
+    const hits = Array.from({ length: count }, (): SearchRow => {
+      const text = "palabra ".repeat(random(250)).trim() || "x";
+      return { id: 1 + random(99999), ts: TS, category: "c".repeat(1 + random(60)), text, fragment: text.slice(0, 1 + random(240)) };
+    });
+    const note = random(2) === 0 ? undefined : "n".repeat(random(80));
+    const page = formatSearch({ hits, total: count + random(30), offset: random(20), limit: 1 + random(12), note });
+
+    assert.ok(page.text.length <= SEARCH_CAP, `ronda ${round}: ${page.text.length} caracteres`);
+    assert.ok(page.shown >= 1 && page.shown <= MAX_RESULTS);
+  }
 });
 
 // Nothing left out is nothing declared: no tail line at all, and one line per row.
@@ -183,63 +237,30 @@ test("formatSearch: recortada por el cap y por el límite, la cola declara las d
   assert.ok(page.text.endsWith(`... ${page.omitted} more results left out; use offset=${page.shown} or limit=10`));
 });
 
-// §7.0, primer ajuste (§11): un prefijo fijo de 68 y 69 caracteres deja 11 por fragmento en una página de diez filas, por
-// debajo de MIN_SNIPPET, así que la página baja a nueve filas y el presupuesto sube a 20. El segundo ajuste no interviene:
-// los fragmentos de diez caracteres caben enteros en ese presupuesto y la página no toca el cap, que es lo que deja ver
-// que fue el primer ajuste el que decidió la cantidad de filas.
+// Un prefijo fijo de 68 y 69 caracteres deja 10 por fila en una página de diez filas, por debajo de MIN_SNIPPET, así que la
+// página baja a nueve filas, donde cada cuerpo supera el mínimo.
 test("formatSearch: diez filas de prefijo largo bajan a nueve por MIN_SNIPPET", () => {
   const category = "c".repeat(53);
-  const hits = searchRows(10, 10).map((row) => ({ ...row, category }));
+  const hits = searchRows(10, 300).map((row) => ({ ...row, category }));
   const page = formatSearch({ hits, total: 10, offset: 0, limit: 10 });
-
-  // El prefijo de cada fila, tal como lo mide el presupuesto: el más largo de la página que se va a renderizar.
-  const prefixOf = (count: number): number => Math.max(...hits.slice(0, count).map((row) => rowPrefix(row).length));
-  assert.equal(prefixOf(10), 69);
-  assert.equal(prefixOf(9), 68);
-  assert.ok(snippetBudget(SEARCH_CAP, 10, prefixOf(10)) < MIN_SNIPPET, "diez filas ya no dejan presupuesto suficiente");
 
   assert.equal(page.shown, 9);
   assert.equal(page.omitted, 1);
-  // El presupuesto de la página que sí se renderiza está por encima del mínimo, que es lo que el primer ajuste busca.
-  assert.ok(snippetBudget(SEARCH_CAP, page.shown, prefixOf(page.shown)) >= MIN_SNIPPET);
-
-  // Los nueve fragmentos entran enteros: ninguno queda cortado por debajo de su presupuesto.
-  const lines = page.text.split("\n");
-  assert.equal(lines.length, page.shown + 1);
-  const fragments = lines.slice(0, page.shown).map((line, index) => line.slice(rowPrefix(hits[index]).length));
-  for (const [index, fragment] of fragments.entries()) {
-    assert.equal(fragment, hits[index].fragment);
+  assert.ok(page.text.length <= SEARCH_CAP);
+  for (const body of bodiesOf(page, hits)) {
+    assert.ok(body.length >= MIN_SNIPPET);
   }
 });
 
-// El presupuesto de fragmento se recalcula para cada n que el segundo ajuste prueba, y no se queda con el valor que dejó
-// el lazo de MIN_SNIPPET: esta página dibuja diez filas, no entra en el cap y baja a nueve, y al bajar una fila cada
-// fragmento que queda tiene que ensancharse por encima del presupuesto de diez. Congelar el presupuesto en 57 deja la
-// suite entera verde salvo aquí.
-test("formatSearch: bajar una fila recalcula el presupuesto y ensancha los fragmentos por encima del de n=10", () => {
-  const hits = searchRows(10, 300);
-  const page = formatSearch({ hits, total: 40, offset: 0, limit: 10 });
+// Bajar una fila reparte el room entre menos filas: cada cuerpo de la página recortada es más ancho que el de la página
+// completa de las mismas filas.
+test("formatSearch: bajar una fila ensancha los cuerpos", () => {
+  const category = "c".repeat(53);
+  const hits = searchRows(10, 300).map((row) => ({ ...row, category }));
+  const nine = formatSearch({ hits: hits.slice(0, 9), total: 9, offset: 0, limit: 9 });
+  const eight = formatSearch({ hits: hits.slice(0, 8), total: 8, offset: 0, limit: 8 });
 
-  // El primer candidato es el de la llamada: diez filas, con el prefijo más largo de esas diez, que es el de `#10`.
-  const fixedLen = Math.max(...hits.map((row) => rowPrefix(row).length));
-  const frozen = snippetBudget(SEARCH_CAP, hits.length, fixedLen);
-  assert.equal(fixedLen, 23);
-  assert.equal(frozen, 57);
-
-  assert.ok(page.text.length <= SEARCH_CAP, `la búsqueda mide ${page.text.length} caracteres y el cap es 800`);
-  assert.ok(page.shown < MAX_RESULTS, `la página mostró ${page.shown} filas, cabían diez`);
-
-  const fragments = page.text
-    .split("\n")
-    .slice(0, page.shown)
-    .map((line, index) => line.slice(rowPrefix(hits[index]).length));
-  assert.equal(fragments.length, page.shown);
-  for (const fragment of fragments) {
-    assert.ok(
-      fragment.length > frozen,
-      `el fragmento de ${fragment.length} caracteres no se ensanchó por encima de los ${frozen} de la página de diez`,
-    );
-  }
+  assert.ok(bodiesOf(eight, hits)[0].length > bodiesOf(nine, hits)[0].length);
 });
 
 // Una página que el offset dejó más allá del último resultado existe y tiene que decir algo: con tres coincidencias y
@@ -267,17 +288,17 @@ test("formatCatalog: veinticinco categorías dan veinte líneas y una cola con o
 
   const lines = page.text.split("\n");
   assert.equal(page.shown, CATALOG_PAGE);
-  assert.equal(lines.filter((line) => line.startsWith("#")).length, CATALOG_PAGE);
+  assert.equal(lines.filter((line) => !line.startsWith("...")).length, CATALOG_PAGE);
   assert.equal(lines[lines.length - 1], "... 5 more categories left; use offset=20");
   assert.equal(page.omitted, 5);
 });
 
-// El segundo ajuste de §7.0 puede tener que correr más de una vez. Con categorías de 80 caracteres, la página de veinte
+// El segundo ajuste puede tener que correr más de una vez. Con categorías de 80 caracteres, la página de veinte
 // filas y la de diecinueve se pasan de CATALOG_CAP y la de dieciocho entra: la página baja dos filas y no una, que es lo
 // que distingue un ajuste que itera de uno que resta una sola vez.
 test("formatCatalog: un cap que exige dos reducciones baja la página dos filas", () => {
   const categories: CatalogCategory[] = Array.from({ length: 25 }, () => ({
-    category: "c".repeat(70),
+    category: "c".repeat(71),
     n: 1,
     keys: [{ term: "t", id: 1 }],
   }));
@@ -303,7 +324,7 @@ test("formatCatalog: una categoría con cinco claves muestra solo cuatro", () =>
   ];
   const page = formatCatalog({ categories, totalCategories: 1, offset: 0 });
 
-  assert.equal(page.text, "#religion (12): t1:1, t2:2, t3:3, t4:4");
+  assert.equal(page.text, "religion (12): t1:1, t2:2, t3:3, t4:4");
   assert.equal(page.text.split(", ").length, KEYS_PER_CATEGORY);
 });
 
@@ -311,7 +332,7 @@ test("formatCatalog: una categoría con cinco claves muestra solo cuatro", () =>
 test("formatCatalog: una categoría sin claves termina en dos puntos", () => {
   const page = formatCatalog({ categories: [{ category: "env", n: 2, keys: [] }], totalCategories: 1, offset: 0 });
 
-  assert.equal(page.text, "#env (2):");
+  assert.equal(page.text, "env (2):");
 });
 
 // The last page leaves nothing out, so it carries no tail and its offset does not invite another request.
@@ -350,36 +371,6 @@ test("formatCatalog: un catálogo sin categorías dice que la memoria está vac�
   assert.match(page.text, /memory_write/);
   assert.equal(page.shown, 0);
   assert.equal(page.omitted, 0);
-});
-
-// --- formatCount -----------------------------------------------------------------------------------------------------
-
-// The total first, then one line per category with its count, in the order received.
-test("formatCount: la primera línea es el total y después una línea por categoría", () => {
-  const page = formatCount({
-    total: 17,
-    byCategory: [
-      { category: "general", n: 12 },
-      { category: "env", n: 5 },
-    ],
-  });
-
-  assert.equal(page.text, "total: 17\ngeneral: 12\nenv: 5");
-  assert.equal(page.shown, 2);
-  assert.equal(page.omitted, 0);
-});
-
-// A vocabulary of two hundred categories does not fit 1500 characters, and the categories that fall outside are
-// declared instead of disappearing.
-test("formatCount: una lista larga queda bajo COUNT_CAP y declara las categorías fuera", () => {
-  const byCategory = Array.from({ length: 200 }, (_, index) => ({ category: `categoria-${index + 1}`, n: index }));
-  const page = formatCount({ total: 19900, byCategory });
-
-  assert.ok(page.text.length <= COUNT_CAP);
-  assert.ok(page.shown < 200);
-  assert.equal(page.omitted, 200 - page.shown);
-  assert.ok(page.text.startsWith("total: 19900\n"));
-  assert.ok(page.text.endsWith(`... ${page.omitted} more categories left`));
 });
 
 // --- formatRead ------------------------------------------------------------------------------------------------------
@@ -460,13 +451,13 @@ test("formatRead: el encabezado de una entrada no lleva espacio final", () => {
   assert.equal(page.text, "#3 2026-03-14 decision\ntexto corto");
 });
 
-// An entry that does not fit its remaining budget is rendered truncated, with the §7.0 marker on its own line and the
+// An entry that does not fit its remaining budget is rendered truncated, with the marker on its own line and the
 // number of characters it dropped.
 test("formatRead: una entrada que no cabe se trunca con el marcador exacto", () => {
   const page = formatRead({ rows: [readRow(1, "y".repeat(1800)), readRow(2, "z".repeat(1800))], missing: [] });
 
   assert.ok(page.text.length <= READ_CAP);
-  assert.match(page.text, /\[\.\.\. \d+ characters omitted, use memory_read\(ids\) with a smaller range\]/);
+  assert.match(page.text, /\[\.\.\. \d+ characters omitted; read fewer ids at once\]/);
   assert.equal(page.shown, 2);
   assert.equal(page.omitted, 0);
 });
@@ -511,16 +502,6 @@ test("formatCatalog: el texto nunca supera CATALOG_CAP en los casos extremos", (
   ];
 
   for (const input of cases) assert.ok(formatCatalog(input).text.length <= CATALOG_CAP);
-});
-
-test("formatCount: el texto nunca supera COUNT_CAP en los casos extremos", () => {
-  const cases = [
-    { total: 0, byCategory: [] },
-    { total: 19900, byCategory: Array.from({ length: 100 }, (_, index) => ({ category: `categoria-${index}`, n: index })) },
-    { total: 1, byCategory: [{ category: "c".repeat(200), n: 1 }] },
-  ];
-
-  for (const input of cases) assert.ok(formatCount(input).text.length <= COUNT_CAP);
 });
 
 test("formatRead: el texto nunca supera READ_CAP en los casos extremos", () => {

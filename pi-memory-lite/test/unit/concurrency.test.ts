@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { openStore, type MemoryStore } from "../../src/db.ts";
 import { normalizeTextForDuplicate } from "../../src/query.ts";
 
-// Criterio 8 y §8.7: dos procesos del sistema operativo escribiendo en la misma base al mismo tiempo. Que dos
+// dos procesos del sistema operativo escribiendo en la misma base al mismo tiempo. Que dos
 // conexiones se serialicen sin `SQLITE_BUSY` y sin corromper el archivo es un hecho de dos procesos reales, así que este
 // archivo no simula nada: lanza dos hijos de Node con `openStore`, los deja escribir en paralelo y revisa el archivo
 // desde el padre. Cada regla vive en su propio subtest para que un fallo nombre la regla que se rompió.
@@ -23,13 +23,13 @@ const MODULE_URL = pathToFileURL(join(PACKAGE_ROOT, "src", "db.ts")).href;
 /** Las entradas de cada escritor llevan este token, así que una búsqueda por él tiene que encontrar las 200. */
 const SHARED_TOKEN = "memoria";
 
-/** Las entradas por escritor de cada proceso: cien, que es lo que pide el plan de pruebas de §11. */
+/** Las entradas por escritor de cada proceso: cien, que es lo que pide el plan de pruebas. */
 const ENTRIES_PER_WRITER = 100;
 
 /** El nombre de cada escritor es también el token propio de sus textos y el prefijo de sus claves. */
 const WRITERS = ["escritor1", "escritor2"] as const;
 
-/** Los diez textos que los dos escritores intentan escribir, cada uno con su mayúsculas y sus espacios (§8.7). */
+/** Los diez textos que los dos escritores intentan escribir, cada uno con su mayúsculas y sus espacios. */
 const SHARED_TEXTS = [
   "el router reinicia solo",
   "la nas duerme a las once",
@@ -142,7 +142,7 @@ function count(store: MemoryStore, sql: string): number {
 
 /** Cuántas entradas encuentra un token, en una página más grande que cualquier fixture de este archivo. */
 function hitCount(store: MemoryStore, token: string): number {
-  return store.search({ tokens: [token], category: null, limit: 500, offset: 0 }).length;
+  return store.search({ tokens: [token], match: "all", category: null, limit: 500, offset: 0 }).length;
 }
 
 /** Los textos escritos, normalizados como los compara la deduplicación. */
@@ -198,18 +198,18 @@ test("concurrencia: dos procesos escriben 100 entradas cada uno en la misma base
   });
 });
 
-// §8.7 con criterio 8: los dos procesos escriben además los mismos diez textos. La cuenta final es 100 + 100 textos
+// los dos procesos escriben además los mismos diez textos. La cuenta final es 100 + 100 textos
 // únicos de cada escritor más 10 textos compartidos escritos por los dos, es decir 210 filas, porque el segundo intento
 // de un texto compartido entra en su `BEGIN IMMEDIATE` después del `COMMIT` del primero, encuentra la fila en el escaneo
 // de duplicados y devuelve su id sin insertar nada. Si la transacción no serializara las dos escrituras, cada copia
 // pasaría el escaneo antes de que la otra se confirmara y la base acabaría con 220: el número que se afirma es 210.
-test("concurrencia y §8.7: los diez textos compartidos quedan una sola vez y la base termina en 210", async (t) => {
+test("concurrencia: los diez textos compartidos quedan una sola vez y la base termina en 210", async (t) => {
   const dir = tempDir(t);
   const runs = await runBoth(dir, sharedTextsFor);
   const store = await openStore({ dir });
   t.after(() => store.close());
 
-  await t.test("§8.7: los dos procesos hijos terminan con código 0", () => {
+  await t.test("los dos procesos hijos terminan con código 0", () => {
     for (const run of runs) {
       assert.equal(
         run.code,
@@ -219,7 +219,7 @@ test("concurrencia y §8.7: los diez textos compartidos quedan una sola vez y la
     }
   });
 
-  await t.test('§8.7: la salida de error no tiene "SQLITE_BUSY" ni líneas "Error:"', () => {
+  await t.test('la salida de error no tiene "SQLITE_BUSY" ni líneas "Error:"', () => {
     for (const run of runs) {
       assert.equal(run.stdout, "", `el escritor ${run.writer} imprimió en stdout:\n${run.stdout}`);
       assert.deepEqual(
@@ -230,7 +230,7 @@ test("concurrencia y §8.7: los diez textos compartidos quedan una sola vez y la
     }
   });
 
-  await t.test("§8.7: la base tiene 210 entradas (100 + 100 + 10) y no 220", () => {
+  await t.test("la base tiene 210 entradas (100 + 100 + 10) y no 220", () => {
     assert.equal(
       count(store, "SELECT COUNT(*) AS n FROM entries"),
       ENTRIES_PER_WRITER * WRITERS.length + SHARED_TEXTS.length,

@@ -1,33 +1,30 @@
-// What the model reads back: the four output shapes of §7, each one a pure function of the rows the database returned.
+// What the model reads back: the four output shapes, each one a pure function of the rows the database returned.
 // No import, no clock, no database, so every cap here is provable against a fixture. The caps are hard and the text
 // declares what it left out, because a cap that clips silently is worse than no cap: the model cannot tell a complete
 // answer from a truncated one. The row shapes the database layer has to satisfy are declared here, structurally, so
 // `src/db.ts` can return its own rows without this module importing it.
 
-/** Cap of a catalog page, in characters (§7.2, criterion 5). */
+/** Cap of a catalog page, in characters. */
 export const CATALOG_CAP = 1500;
-/** Cap of a search page, in characters (§7.2, criterion 6). */
+/** Cap of a search page, in characters. */
 export const SEARCH_CAP = 800;
-/** Cap of a read, in characters (§7.3, criterion 7). */
+/** Cap of a read, in characters. */
 export const READ_CAP = 2000;
-/** Cap of a count, in characters. */
-export const COUNT_CAP = 1500;
-/** Most rows a search page returns, whatever `limit` asks for (§7.2). */
+/** Most rows a search page returns, whatever `limit` asks for. */
 export const MAX_RESULTS = 10;
-/** Categories in one catalog page (§7.2). */
+/** Categories in one catalog page. */
 export const CATALOG_PAGE = 20;
-/** Keys listed per category in the catalog (§7.2). */
+/** Keys listed per category in the catalog. */
 export const KEYS_PER_CATEGORY = 4;
-/** Smallest fragment budget worth showing; below it the page drops rows instead of clipping words to nothing (§7.0). */
+/** Smallest fragment budget worth showing; below it the page drops rows instead of clipping words to nothing. */
 export const MIN_SNIPPET = 12;
-/** Largest fragment budget, however much room the cap leaves (§7.0). */
-export const MAX_SNIPPET = 60;
 
-/** A search hit: the row plus the fragment `snippet()` produced, which is what a search line shows. */
+/** A search hit: the row, its whole text and the fragment `snippet()` produced, which a search line shows when the text does not fit. */
 export interface SearchRow {
   readonly id: number;
   readonly ts: string;
   readonly category: string;
+  readonly text: string;
   readonly fragment: string;
 }
 
@@ -52,17 +49,11 @@ export interface CatalogCategory {
   readonly keys: readonly CatalogKey[];
 }
 
-/** What the database hands the catalog formatter: the categories to paginate and the totals the tail counts against. */
+/** What the database hands the catalog formatter: the categories to paginate and the offset the tail counts from. */
 export interface CatalogPage {
   readonly categories: readonly CatalogCategory[];
   readonly totalCategories: number;
   readonly offset: number;
-}
-
-/** What the count mode returns, before formatting. */
-export interface Totals {
-  readonly total: number;
-  readonly byCategory: readonly { readonly category: string; readonly n: number }[];
 }
 
 /** The text a tool returns plus the two counts the tool repeats in `details`, so both agree with the text by construction. */
@@ -103,20 +94,32 @@ export function rowPrefix(row: { id: number; ts: string; category: string }): st
 }
 
 /**
- * Characters a fragment may take on a page of `n` rows, each with `fixedLen` characters of fixed part: the §7.0 formula,
- * capped at `MAX_SNIPPET` and never negative. `n` of zero has no budget, which is why it answers zero and not a division
- * by zero.
+ * Splits `room` characters among rows that want `lengths` each, raising the smallest share first: a row that fits gets
+ * its whole length, and the rest divide what is left evenly. The shares never add up to more than `room`.
  */
-export function snippetBudget(cap: number, n: number, fixedLen: number): number {
-  if (n <= 0) return 0;
-  return Math.max(0, Math.min(MAX_SNIPPET, Math.floor((cap - n * fixedLen) / n)));
+export function allocate(lengths: readonly number[], room: number): number[] {
+  const shares = lengths.map(() => 0);
+  const order = lengths.map((_, index) => index).sort((a, b) => lengths[a] - lengths[b]);
+  let left = Math.max(0, room);
+
+  order.forEach((index, rank) => {
+    const rows = order.length - rank;
+    const even = Math.floor(left / rows);
+    shares[index] = Math.min(lengths[index], even);
+    left -= shares[index];
+  });
+
+  return shares;
 }
 
-/** The first `max` characters of `text` and how many were dropped, so the caller can declare the cut it made. */
-export function truncateText(text: string, max: number): { text: string; omitted: number } {
-  if (max <= 0) return { text: "", omitted: text.length };
-  if (text.length <= max) return { text, omitted: 0 };
-  return { text: text.slice(0, max), omitted: text.length - max };
+/** `text` whole when it fits `max`, else cut at the last word that fits and ended with an ellipsis. */
+export function clipAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  if (max <= 0) return "";
+
+  const cut = text.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space >= max / 2 ? cut.slice(0, space) : cut).trimEnd()}${ELLIPSIS}`;
 }
 
 /** `#1, #2, …`, cut after `max` ids with a trailing ellipsis when there are more. */
@@ -143,35 +146,28 @@ function shrinkToCap(start: number, cap: number, render: (n: number) => Formatte
 }
 
 /**
- * A search page. The two loops of §7.0 are the guarantee and not an optimisation: the first shrinks the page until a
- * fragment has room to say something, the second until the rendered text — rows, newlines and tail — fits the cap.
+ * A search page. The two loops are the guarantee and not an optimisation: the first shrinks the page until every
+ * row has room to say something, the second until the rendered text — rows, newlines and tail — fits the cap.
  */
 export function formatSearch(input: {
   hits: readonly SearchRow[];
   total: number;
   offset: number;
   limit: number;
+  note?: string;
 }): Formatted {
   const offset = Math.max(0, input.offset);
   const fetched = input.hits.length;
+  const room = SEARCH_CAP - (input.note === undefined ? 0 : input.note.length + 1);
   let n = Math.max(0, Math.min(input.limit, MAX_RESULTS, fetched));
-  let budget = searchBudget(input.hits, n);
 
-  while (budget < MIN_SNIPPET && n > 1) {
-    n -= 1;
-    budget = searchBudget(input.hits, n);
-  }
+  while (n > 1 && tooNarrow(input, offset, n, room)) n -= 1;
 
-  // The formula counts neither the newline of each row nor the tail, so a page it accepted can still overflow: with
-  // `cap = 800`, `n = 10` and `fixedLen = 28` it promises 52 per fragment and yields 810 characters. The shrink is the
-  // shared one, and its render derives the fragment budget from the `n` it is asked to draw.
-  return shrinkToCap(n, SEARCH_CAP, (rows) =>
-    renderSearchPage(input, offset, rows, searchBudget(input.hits, rows)),
-  );
+  return shrinkToCap(n, SEARCH_CAP, (rows) => renderSearchPage(input, offset, rows, room));
 }
 
 /**
- * A catalog page. The rows here carry no fragment, so §7.0's formula has nothing to divide: the page shrinks a category
+ * A catalog page. The rows here carry no fragment, so the formula has nothing to divide: the page shrinks a category
  * at a time until the lines, their newlines and the tail fit `CATALOG_CAP`.
  */
 export function formatCatalog(input: CatalogPage): Formatted {
@@ -179,11 +175,6 @@ export function formatCatalog(input: CatalogPage): Formatted {
   const n = Math.max(0, Math.min(CATALOG_PAGE, input.categories.length - offset));
 
   return shrinkToCap(n, CATALOG_CAP, (rows) => renderCatalogPage(input, offset, rows));
-}
-
-/** The count mode: the total on the first line, then one line per category, up to `COUNT_CAP` characters. */
-export function formatCount(input: Totals): Formatted {
-  return shrinkToCap(input.byCategory.length, COUNT_CAP, (rows) => renderCountPage(input, rows));
 }
 
 /**
@@ -207,40 +198,55 @@ export function formatRead(input: { rows: readonly ReadRow[]; missing: readonly 
   return { text, shown: entries.bodies.length, omitted: entries.dropped.length };
 }
 
-/** The budget of the page, recomputed from the rows actually being rendered: the longest prefix of the first `n`. */
-function searchBudget(hits: readonly SearchRow[], n: number): number {
-  let fixedLen = 0;
-  for (let index = 0; index < n; index += 1) {
-    fixedLen = Math.max(fixedLen, rowPrefix(hits[index]).length);
-  }
-  return snippetBudget(SEARCH_CAP, n, fixedLen);
+type SearchInput = { hits: readonly SearchRow[]; total: number; offset: number; limit: number; note?: string };
+
+/** Collapses every run of whitespace to one space: a row is one line whatever the entry held. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
-/** One candidate page: `n` rows clipped to `budget` plus the tail that declares what the page did not show. */
-function renderSearchPage(
-  input: { hits: readonly SearchRow[]; total: number; offset: number; limit: number },
-  offset: number,
-  n: number,
-  budget: number,
-): Formatted {
-  const lines: string[] = [];
+/** The tail of the page of `n` rows, and the characters left for the row bodies once prefixes, newlines and tail are paid. */
+function searchLayout(input: SearchInput, offset: number, n: number, room: number): { tail: string; bodyRoom: number } {
+  const omitted = Math.max(0, input.total - (offset + n));
+  const tail = searchTail(omitted, offset, n, input.hits.length, input.limit);
+  let used = Math.max(0, n - 1) + (tail === "" ? 0 : tail.length + 1);
+  for (let index = 0; index < n; index += 1) used += rowPrefix(input.hits[index]).length;
+  return { tail, bodyRoom: room - used };
+}
+
+/** The body budget of each of the first `n` rows: its whole text when it fits, an even share of the room otherwise. */
+function bodyBudgets(input: SearchInput, offset: number, n: number, room: number): { wanted: number[]; budgets: number[]; tail: string } {
+  const wanted = input.hits.slice(0, n).map((hit) => oneLine(hit.text).length);
+  const { tail, bodyRoom } = searchLayout(input, offset, n, room);
+  return { wanted, budgets: allocate(wanted, bodyRoom), tail };
+}
+
+/** True when some row of an `n`-row page would get less than `MIN_SNIPPET` characters, or less than it needs when shorter. */
+function tooNarrow(input: SearchInput, offset: number, n: number, room: number): boolean {
+  const { wanted, budgets } = bodyBudgets(input, offset, n, room);
+  return budgets.some((budget, index) => budget < Math.min(MIN_SNIPPET, wanted[index]));
+}
+
+/** One candidate page: `n` rows, each whole or its fragment clipped at a word, plus the tail that declares what the page did not show. */
+function renderSearchPage(input: SearchInput, offset: number, n: number, room: number): Formatted {
+  const { wanted, budgets, tail } = bodyBudgets(input, offset, n, room);
+  const lines: string[] = input.note === undefined ? [] : [input.note];
   for (let index = 0; index < n; index += 1) {
     const row = input.hits[index];
-    lines.push(rowPrefix(row) + truncateText(row.fragment, budget).text);
+    const body = wanted[index] <= budgets[index] ? oneLine(row.text) : clipAtWord(oneLine(row.fragment), budgets[index]);
+    lines.push(rowPrefix(row) + body);
   }
 
-  const shown = lines.length;
+  const shown = n;
   // No row over a memory that does hold results is the page of an offset past the end, and it gets its own one line: the
   // loop above rendered nothing, and the counting tail below would clamp to zero and render nothing either.
   if (shown === 0 && input.total > 0) {
     return { text: pastTheEndLine(input.total, "result", "results"), shown, omitted: input.total };
   }
 
-  const omitted = Math.max(0, input.total - (offset + shown));
-  const tail = searchTail(omitted, offset, shown, input.hits.length, input.limit);
   if (tail !== "") lines.push(tail);
 
-  return { text: lines.join("\n"), shown, omitted };
+  return { text: lines.join("\n"), shown, omitted: Math.max(0, input.total - (offset + shown)) };
 }
 
 /**
@@ -294,21 +300,9 @@ function pastTheEndLine(total: number, singular: string, plural: string): string
 
 /** `#<category> (<n>): <term>:<id>, ...` with at most `KEYS_PER_CATEGORY` keys, in the order received. */
 function catalogLine(category: CatalogCategory): string {
-  const head = `#${category.category} (${category.n}):`;
+  const head = `${category.category} (${category.n}):`;
   const keys = category.keys.slice(0, KEYS_PER_CATEGORY).map((key) => `${key.term}:${key.id}`);
   return keys.length === 0 ? head : `${head} ${keys.join(", ")}`;
-}
-
-/** One candidate count page: the total, then `n` categories, plus the tail that declares the categories left out. */
-function renderCountPage(input: Totals, n: number): Formatted {
-  const lines = [`total: ${input.total}`];
-  for (const row of input.byCategory.slice(0, n)) lines.push(`${row.category}: ${row.n}`);
-
-  const shown = Math.min(n, input.byCategory.length);
-  const omitted = input.byCategory.length - shown;
-  if (omitted > 0) lines.push(`... ${omitted} ${MORE_CATEGORIES}`);
-
-  return { text: lines.join("\n"), shown, omitted };
 }
 
 /**
@@ -364,9 +358,9 @@ function truncatedEntry(header: string, text: string, room: number): string | nu
   return `${header}\n${kept}\n${omittedMarker(text.length - kept.length)}`;
 }
 
-/** The §7.0 marker of an entry that a read had to clip. */
+/** The marker of an entry that a read had to clip. */
 function omittedMarker(omitted: number): string {
-  return `[... ${omitted} characters omitted, use memory_read(ids) with a smaller range]`;
+  return `[... ${omitted} characters omitted; read fewer ids at once]`;
 }
 
 /**

@@ -45,10 +45,10 @@ export const EXPOSURES: readonly Exposure[] = ["direct", "codemode", "deferred"]
 export const MIN_NODE: readonly [number, number] = [22, 14];
 
 /**
- * The floor of the 23 line. 23.0 to 23.3 still gate `node:sqlite` behind `--experimental-sqlite`, a flag a pi session
- * does not pass, so a 23.x build above `MIN_NODE` and below this one has no module at all (§5).
+ * The floor of the 23 line. 23.0 to 23.4 still gate `node:sqlite` behind `--experimental-sqlite`, a flag a pi session
+ * does not pass, so a 23.x build above `MIN_NODE` and below this one has no module at all.
  */
-export const MIN_NODE_23: readonly [number, number] = [23, 4];
+export const MIN_NODE_23: readonly [number, number] = [23, 5];
 
 /** The configuration the rest of the package reads; every field is final by the time this is returned. */
 export interface ResolvedConfig {
@@ -113,7 +113,7 @@ export function checkNodeVersion(version: string): { ok: true } | { ok: false; m
 
 /**
  * Whether this pair reaches `node:sqlite`: two floors and not one, because the 23 line has its own (`MIN_NODE_23`) above
- * the 22 one. 23.0 to 23.3 pass a comparison against `MIN_NODE` alone and still cannot import the module (§5).
+ * the 22 one. 23.0 to 23.4 pass a comparison against `MIN_NODE` alone and still cannot import the module.
  */
 function isSupportedNode(major: number, minor: number): boolean {
   const [floorMajor, floorMinor] = nodeFloor(major);
@@ -130,7 +130,7 @@ function requiredNodeVersion(major: number): string {
 
 /**
  * The one floor of a Node line: `MIN_NODE_23` for the 23 line, which carries a floor of its own, and `MIN_NODE` for every
- * other, because the release that added the module did it once and the two lines are only read apart (§5).
+ * other, because the release that added the module did it once and the two lines are only read apart.
  */
 function nodeFloor(major: number): readonly [number, number] {
   return major === MIN_NODE_23[0] ? MIN_NODE_23 : MIN_NODE;

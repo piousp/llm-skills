@@ -82,7 +82,7 @@ const TOOL_LINES: Readonly<Record<MemoryToolName, ToolLines>> = {
 
 /**
  * The collapsed line of a call: the one fact each tool needs to be readable while it runs. `memory_write` names the
- * category it is about to write into, `memory_search` the mode it is about to run — the query, the catalog or the count —
+ * category it is about to write into, `memory_search` the mode it is about to run — the query or the catalog —
  * and the two tools that take ids list them. Nothing throws on the arguments: a call whose arguments have not arrived, or
  * arrived as something other than the object the schema describes, renders as the bare name. The claim is scoped to the
  * arguments because the name is not one: a name outside `MemoryToolName` has no entry in `TOOL_LINES` and throws a
@@ -98,14 +98,13 @@ function writeCallLine(name: MemoryToolName, args: unknown): string {
   return category === undefined ? name : `${name} ${category}`;
 }
 
-/** `memory_search count`, `memory_search catalog` or `memory_search "<query>"`, whichever the executor is about to run. */
+/** `memory_search catalog` or `memory_search "<query>"`, whichever the executor is about to run. */
 function searchCallLine(name: MemoryToolName, args: unknown): string {
-  // The three modes are decided by the executor's own rule, read from `src/tools.ts`: `count_only` wins, then a query
-  // that produces no tokens is the catalog. A call with no query at all has no tokens either, so it lands there too.
+  // The mode is decided by the executor's own rule, read from `src/tools.ts`: a query that produces no tokens is the
+  // catalog. A call with no query at all has no tokens either, so it lands there too.
   const query = stringField(args, "query") ?? "";
-  const mode = searchModeOf(toTokens(query), booleanField(args, "count_only") === true);
+  const mode = searchModeOf(toTokens(query));
 
-  if (mode === "count") return `${name} count`;
   if (mode === "catalog") return `${name} catalog`;
   return queryHead(name, args) ?? name;
 }
@@ -179,13 +178,12 @@ function writeLine(name: MemoryToolName, details: Record<string, unknown>, _args
   return booleanField(details, "duplicate") === true ? `${head} (duplicate)` : head;
 }
 
-/** The three modes of a search: the query and its page, the catalog and its categories, the count and its total. */
+/** The two modes of a search: the query and its page, the catalog and its categories. */
 function searchLine(name: MemoryToolName, details: Record<string, unknown>, args: unknown): string {
   const mode = stringField(details, "mode");
   const total = intField(details, "total") ?? 0;
 
   if (mode === "catalog") return `${name} catalog ${total} categories`;
-  if (mode === "count") return `${name} count ${total}`;
   if (mode !== "search") return pendingLine(name);
 
   const shown = intField(details, "shown") ?? 0;
@@ -205,7 +203,7 @@ function readLine(name: MemoryToolName, details: Record<string, unknown>, _args:
   return `${head} → ${found?.length ?? 0} found, ${missing?.length ?? 0} missing`;
 }
 
-/** `memory_delete 2 deleted, 1 missing`: the two counts of §7.4 and never the ids, which the model can read in the text. */
+/** `memory_delete 2 deleted, 1 missing`: the two counts and never the ids, which the model can read in the text. */
 function deleteLine(name: MemoryToolName, details: Record<string, unknown>, _args: unknown): string {
   const deleted = intListField(details, "deleted");
   const missing = intListField(details, "missing");

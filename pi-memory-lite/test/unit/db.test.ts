@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import {
   CURRENT_SCHEMA_VERSION,
+  MAX_KEYS,
   openStore,
   runMigrations,
   type DatabaseFactory,
@@ -21,7 +22,7 @@ import { KEYS_PER_CATEGORY } from "../../src/format.ts";
 // is the module that decides whether the memory survives a reopen, whether a duplicate is refused, whether a key that
 // the text does not contain still finds its entry, and whether a database written without FTS5 becomes visible again
 // when FTS5 is back: all of those are facts about a file, so a fixture in memory would prove nothing. There is one test
-// per rule of §6, §7 and §8.8, so a rule that is dropped fails here under the name of the rule it dropped.
+// per rule, so a rule that is dropped fails here under the name of the rule it dropped.
 
 /** The real module for the degraded seam: the wrapper has to delegate everything except the FTS5 schema. */
 const SQLITE = (await import("node:sqlite")) as unknown as NodeSqliteModule;
@@ -42,13 +43,19 @@ function entry(text: string, category = "general", keys: string[] = [], ts = TS)
 }
 
 /** A search input; `limit` of 10 is above every fixture, so the page is the whole answer unless a test says otherwise. */
-function searchInput(tokens: string[], category: string | null = null, limit = 10, offset = 0): SearchInput {
-  return { tokens, category, limit, offset };
+function searchInput(
+  tokens: string[],
+  category: string | null = null,
+  limit = 10,
+  offset = 0,
+  match: SearchInput["match"] = "all",
+): SearchInput {
+  return { tokens, match, category, limit, offset };
 }
 
 /**
  * A Node build without FTS5, from the outside: the only thing that fails is the `CREATE VIRTUAL TABLE` of the probe, so
- * the store takes the degraded path of §8.5 and everything else runs against the real database file.
+ * the store takes the degraded path and everything else runs against the real database file.
  */
 function degradedFactory(): DatabaseFactory {
   return (dbPath: string): SqlDatabase => {
@@ -60,6 +67,7 @@ function degradedFactory(): DatabaseFactory {
       },
       prepare: (sql: string) => inner.prepare(sql),
       close: (): void => inner.close(),
+      function: (name, options, fn) => inner.function(name, options, fn),
     };
   };
 }
@@ -86,7 +94,7 @@ function schemaNames(store: MemoryStore, type: string): string[] {
 
 // --- schema ---------------------------------------------------------------------------------------------------------
 
-// §6.1: the five objects the block creates are there after the first open, the index is a real FTS5 table and not a plain
+// the five objects the block creates are there after the first open, the index is a real FTS5 table and not a plain
 // table with the same name, and the three triggers of the external content are attached to `entries`.
 test("esquema: las tablas, los índices y los tres triggers del índice existen tras abrir", async (t) => {
   const dir = tempDir(t);
@@ -110,6 +118,14 @@ test("esquema: las tablas, los índices y los tres triggers del índice existen 
   assert.ok(indexes.includes("keys_term"), "falta el índice keys_term");
 });
 
+test("esquema: el directorio nuevo se crea con modo 0o700", { skip: process.platform === "win32" }, async (t) => {
+  const dir = join(tempDir(t), "nuevo", "lite-memories");
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  assert.equal(statSync(dir).mode & 0o777, 0o700);
+});
+
 // Abrir el mismo directorio otra vez no recrea nada ni pierde nada: es el caso normal, la segunda sesión de pi.
 test("esquema: abrir el mismo directorio dos veces es idempotente", async (t) => {
   const dir = tempDir(t);
@@ -128,48 +144,183 @@ test("esquema: abrir el mismo directorio dos veces es idempotente", async (t) =>
   );
 });
 
-// §6.2: la versión la escribe el esquema inicial, dentro de la misma transacción, y es la que conoce este build.
-test("migraciones: schema_version es 1 tras la primera apertura", async (t) => {
+// la versión la escribe el esquema inicial, dentro de la misma transacción, y es la que conoce este build.
+test("migraciones: schema_version es la actual tras la primera apertura", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir });
   t.after(() => store.close());
 
-  assert.equal(CURRENT_SCHEMA_VERSION, 1);
-  assert.equal(readMetaValue(store, "schema_version"), "1");
+  assert.equal(CURRENT_SCHEMA_VERSION, 2);
+  assert.equal(readMetaValue(store, "schema_version"), "2");
 });
 
-// §6.2: una base escrita por un build más nuevo no se toca ni se degrada en silencio; el error nombra la versión que
+test("migraciones: el id de una entrada borrada no se reutiliza", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const first = store.write(entry("Primera entrada.", "general", ["primera"]));
+  const newest = store.write(entry("Segunda entrada.", "general", ["segunda"]));
+  store.remove([newest.id]);
+  const next = store.write(entry("Tercera entrada.", "general", ["tercera"]));
+
+  assert.ok(next.id > newest.id, `el id ${next.id} reutiliza el de la entrada borrada ${newest.id}`);
+  assert.ok(next.id > first.id);
+});
+
+const V1_SCHEMA_SQL = `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE entries (
+  id       INTEGER PRIMARY KEY,
+  ts       TEXT NOT NULL,
+  category TEXT NOT NULL,
+  text     TEXT NOT NULL,
+  terms    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX entries_category ON entries(category);
+CREATE TABLE keys (
+  entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+  term     TEXT NOT NULL,
+  PRIMARY KEY (entry_id, term)
+);
+CREATE INDEX keys_term ON keys(term);
+CREATE VIRTUAL TABLE entries_fts USING fts5(
+  text,
+  terms,
+  content='entries',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER entries_ai AFTER INSERT ON entries BEGIN
+  INSERT INTO entries_fts(rowid, text, terms) VALUES (new.id, new.text, new.terms);
+END;
+CREATE TRIGGER entries_ad AFTER DELETE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, text, terms)
+    VALUES ('delete', old.id, old.text, old.terms);
+END;
+CREATE TRIGGER entries_au AFTER UPDATE ON entries BEGIN
+  INSERT INTO entries_fts(entries_fts, rowid, text, terms)
+    VALUES ('delete', old.id, old.text, old.terms);
+  INSERT INTO entries_fts(rowid, text, terms) VALUES (new.id, new.text, new.terms);
+END;
+PRAGMA journal_mode = WAL;
+`;
+
+/** A baseline-schema file as the previous build left it: ids 1, 2 and 5 (a gap), the index filled through the triggers. */
+function buildV1File(dir: string, fts = true): void {
+  const db = new SQLITE.DatabaseSync(join(dir, "memory.db"));
+  db.exec(V1_SCHEMA_SQL);
+  db.exec("INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
+  const insert = db.prepare("INSERT INTO entries (id, ts, category, text, terms) VALUES (?1, ?2, ?3, ?4, ?5)");
+  insert.run(1, TS, "env", "El router usa el firmware flint2.", "router flint2");
+  insert.run(2, TS, "env", "Entrada que se borra.", "borrada");
+  insert.run(5, TS, "general", "Despliegue en producción cada viernes.", "despliegue");
+  db.exec("DELETE FROM entries WHERE id = 2");
+  db.exec("INSERT INTO keys (entry_id, term) VALUES (1, 'router'), (1, 'flint2'), (5, 'despliegue')");
+  if (!fts) db.exec("DROP TRIGGER entries_ai; DROP TRIGGER entries_ad; DROP TRIGGER entries_au");
+  db.close();
+}
+
+test("migraciones: una base v1 con hueco de ids pasa a v2 con todo intacto y el índice reconstruido", async (t) => {
+  const dir = tempDir(t);
+  buildV1File(dir);
+
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  assert.equal(readMetaValue(store, "schema_version"), "2");
+  assert.equal(readMetaValue(store, "fts_disabled"), null);
+  assert.equal(store.fts, true);
+
+  const rows = store.read([1, 5]).found;
+  assert.deepEqual(
+    rows.map((row) => [row.id, row.text, row.terms]),
+    [
+      [1, "El router usa el firmware flint2.", "router flint2"],
+      [5, "Despliegue en producción cada viernes.", "despliegue"],
+    ],
+  );
+  assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), 3);
+  assert.deepEqual(
+    store.search(searchInput(["router"])).map((hit) => hit.id),
+    [1],
+  );
+  assert.deepEqual(
+    store.search(searchInput(["despliegue"])).map((hit) => hit.id),
+    [5],
+  );
+  assert.equal(store.db.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+  assert.equal(store.db.prepare("PRAGMA foreign_key_check").all().length, 0);
+
+  const next = store.write(entry("Entrada nueva.", "general", ["nueva"]));
+  assert.equal(next.id, 6);
+  store.remove([next.id]);
+  assert.equal(store.write(entry("Otra entrada nueva.", "general", ["otra"])).id, 7);
+});
+
+test("migraciones: la misma base v1 migra con la fábrica sin FTS5 y conserva la marca fts_disabled", async (t) => {
+  const dir = tempDir(t);
+  buildV1File(dir);
+
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  assert.equal(store.fts, false);
+  assert.equal(readMetaValue(store, "schema_version"), "2");
+  assert.equal(readMetaValue(store, "fts_disabled"), "1");
+  assert.deepEqual(
+    store.search(searchInput(["router"])).map((hit) => hit.id),
+    [1],
+  );
+  assert.equal(store.write(entry("Escrita sin FTS5.", "general", ["sinfts"])).id, 6);
+});
+
+test("migraciones: la migración a v2 corre una sola vez", async (t) => {
+  const dir = tempDir(t);
+  buildV1File(dir);
+
+  const first = await openStore({ dir });
+  first.write(entry("Entrada posterior a la migración.", "general", ["posterior"]));
+  first.close();
+
+  const second = await openStore({ dir });
+  t.after(() => second.close());
+  assert.equal(count(second, "SELECT COUNT(*) AS n FROM entries"), 3);
+  assert.equal(readMetaValue(second, "schema_version"), "2");
+});
+
+// una base escrita por un build más nuevo no se toca ni se degrada en silencio; el error nombra la versión que
 // encontró, porque el usuario tiene que leer qué actualizar.
 test("migraciones: una versión mayor que la actual lanza un error que nombra la versión", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir });
   store.db
     .prepare("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-    .run("schema_version", "2");
+    .run("schema_version", String(CURRENT_SCHEMA_VERSION + 1));
   store.close();
 
   await assert.rejects(openStore({ dir }), (error: unknown) => {
     assert.ok(error instanceof Error);
     assert.match(error.message, /newer version of pi-memory-lite/);
-    assert.match(error.message, /schema version 2/);
+    assert.match(error.message, new RegExp(`schema version ${CURRENT_SCHEMA_VERSION + 1}`));
     return true;
   });
 });
 
-// Criterio 11: `CREATE TABLE IF NOT EXISTS` no muta una tabla existente, así que una migración que agrega una columna
+// `CREATE TABLE IF NOT EXISTS` no muta una tabla existente, así que una migración que agrega una columna
 // usa `ALTER TABLE` y tiene que aplicarse sobre una base que ya tiene datos.
-test("migraciones: una migración con ALTER TABLE aplica sobre una base existente y devuelve 2", async (t) => {
+test("migraciones: una migración con ALTER TABLE aplica sobre una base existente y devuelve la versión destino", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir });
   t.after(() => store.close());
   const written = store.write(entry("Una entrada anterior a la migración.", "general", ["migracion"]));
 
-  const applied = runMigrations(store.db, 2, [
-    { version: 2, up: (db) => db.exec("ALTER TABLE entries ADD COLUMN note TEXT") },
+  const target = CURRENT_SCHEMA_VERSION + 1;
+  const applied = runMigrations(store.db, target, [
+    { version: target, up: (db) => db.exec("ALTER TABLE entries ADD COLUMN note TEXT") },
   ]);
 
-  assert.equal(applied, 2);
-  assert.equal(readMetaValue(store, "schema_version"), "2");
+  assert.equal(applied, target);
+  assert.equal(readMetaValue(store, "schema_version"), String(target));
 
   const columns = store.db
     .prepare("PRAGMA table_info(entries)")
@@ -179,7 +330,7 @@ test("migraciones: una migración con ALTER TABLE aplica sobre una base existent
   assert.equal(store.read([written.id]).found.length, 1);
 });
 
-// §8.7: el timeout se aplica al abrir, antes de cualquier `BEGIN`, y es el que evita `SQLITE_BUSY` entre dos sesiones.
+// el timeout se aplica al abrir, antes de cualquier `BEGIN`, y es el que evita `SQLITE_BUSY` entre dos sesiones.
 test("apertura: busy_timeout es 5000", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir });
@@ -190,7 +341,7 @@ test("apertura: busy_timeout es 5000", async (t) => {
 });
 
 /**
- * El `SQLITE_BUSY` de §8.7 sin depender del tiempo: el único statement que falla es el primer `PRAGMA journal_mode = WAL`
+ * El `SQLITE_BUSY` sin depender del tiempo: el único statement que falla es el primer `PRAGMA journal_mode = WAL`
  * de la conexión, con el `errcode` que SQLite reporta para ese error. El contador es lo que prueba que el reintento
  * ocurrió, porque el segundo intento llega al motor real y sí cambia el modo del archivo.
  */
@@ -207,11 +358,12 @@ function busyOnceFactory(counter: { wal: number }): DatabaseFactory {
       },
       prepare: (sql: string) => inner.prepare(sql),
       close: (): void => inner.close(),
+      function: (name, options, fn) => inner.function(name, options, fn),
     };
   };
 }
 
-// §8.7 y criterio 8: el reintento del PRAGMA de WAL, provocado a propósito y no por una carrera entre dos procesos. Un
+// el reintento del PRAGMA de WAL, provocado a propósito y no por una carrera entre dos procesos. Un
 // solo `SQLITE_BUSY` en el primer intento tiene que costar un reintento y no la apertura, y la conexión tiene que quedar
 // usable y en WAL: sin el reintento este test falla con el error del motor, que es el camino que la suite de concurrencia
 // solo reproduce cada tantas corridas.
@@ -237,7 +389,7 @@ test("apertura: un SQLITE_BUSY en el PRAGMA de WAL se reintenta y la apertura re
 
 // --- write, search, read, remove ------------------------------------------------------------------------------------
 
-// El camino completo de §7.1 a §7.4: lo escrito se busca, se lee entero y se borra, y el borrado se lleva las `keys` por
+// El camino completo, de escribir a borrar: lo escrito se busca, se lee entero y se borra, y el borrado se lleva las `keys` por
 // la cascada de la llave foránea.
 test("escritura, búsqueda, lectura y borrado: ida y vuelta con cascada de keys", async (t) => {
   const dir = tempDir(t);
@@ -275,7 +427,7 @@ test("escritura, búsqueda, lectura y borrado: ida y vuelta con cascada de keys"
   assert.deepEqual(store.read([written.id]), { found: [], missing: [written.id] });
 });
 
-// D17: el duplicado se detecta sobre el texto normalizado, y la segunda escritura no escribe nada ni inventa un id.
+// el duplicado se detecta sobre el texto normalizado, y la segunda escritura no escribe nada ni inventa un id.
 test("duplicados: el mismo texto con otro espaciado y otra caja devuelve el id original", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir });
@@ -291,7 +443,73 @@ test("duplicados: el mismo texto con otro espaciado y otra caja devuelve el id o
   assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), 1);
 });
 
-// Criterio 4: la palabra no está en el texto, así que lo único que puede encontrar la entrada es el vocabulario que
+test("similar: ordena por keys compartidas y luego por id, excluye la nueva, máximo 3, vacío en duplicado", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const a = store.write(entry("Nota a.", "general", ["uno"]));
+  const b = store.write(entry("Nota b.", "general", ["uno", "dos"]));
+  const c = store.write(entry("Nota c.", "general", ["uno"]));
+  store.write(entry("Nota ajena.", "general", ["otro"]));
+  const d = store.write(entry("Nota d.", "general", ["uno"]));
+  assert.equal(a.similar.length, 0);
+  assert.deepEqual(d.similar, [c.id, b.id, a.id]);
+
+  const e = store.write(entry("Nota e.", "general", ["uno", "dos"]));
+  assert.deepEqual(e.similar, [b.id, d.id, c.id]);
+  assert.ok(!e.similar.includes(e.id));
+
+  const again = store.write(entry("nota e.", "general", ["uno", "dos"]));
+  assert.equal(again.duplicate, true);
+  assert.deepEqual(again.similar, []);
+});
+
+test("duplicados: las keys nuevas se suman a la entrada existente sin tocar categoría ni ts", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const first = store.write(entry("Hola mundo.", "env", ["saludo"]));
+  const again = store.write({ text: "hola  MUNDO.", category: "other", keys: ["saludo", "Bienvenida", "hola"], ts: "2030-01-01T00:00:00.000Z" });
+
+  assert.equal(again.duplicate, true);
+  assert.equal(again.id, first.id);
+  assert.deepEqual(again.addedKeys, ["bienvenida", "hola"]);
+  assert.deepEqual(again.droppedKeys, []);
+  assert.deepEqual(again.similar, []);
+
+  const row = store.read([first.id]).found[0];
+  assert.equal(row.terms, "saludo bienvenida hola");
+  assert.equal(row.category, "env");
+  assert.equal(row.ts, TS);
+  assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), 3);
+  assert.deepEqual(
+    store.search(searchInput(["bienvenida"])).map((hit) => hit.id),
+    [first.id],
+  );
+});
+
+test("duplicados: las keys nuevas se cortan en MAX_KEYS y las sobrantes se informan", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const keys = Array.from({ length: MAX_KEYS - 1 }, (_, i) => `k${i}`);
+  const first = store.write(entry("Texto lleno.", "general", keys));
+  const again = store.write(entry("texto lleno.", "general", ["k0", "nueva", "otra"]));
+
+  assert.deepEqual(again.addedKeys, ["nueva"]);
+  assert.deepEqual(again.droppedKeys, ["otra"]);
+  assert.equal(store.read([first.id]).found[0].terms.split(" ").length, MAX_KEYS);
+
+  const full = store.write(entry("TEXTO lleno.", "general", ["otra"]));
+  assert.deepEqual(full.addedKeys, []);
+  assert.deepEqual(full.droppedKeys, ["otra"]);
+  assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), MAX_KEYS);
+});
+
+// la palabra no está en el texto, así que lo único que puede encontrar la entrada es el vocabulario que
 // declara la escritura; el índice de FTS5 lo tiene porque la columna `terms` está indexada.
 test("criterio 4: una key que el texto no contiene encuentra la entrada por FTS5", async (t) => {
   const dir = tempDir(t);
@@ -307,10 +525,10 @@ test("criterio 4: una key que el texto no contiene encuentra la entrada por FTS5
     hits.map((hit) => hit.id),
     [written.id],
   );
-  assert.equal(store.countSearch({ tokens: ["trinidad"], category: null }), 1);
+  assert.equal(store.countSearch({ tokens: ["trinidad"], match: "all", category: null }), 1);
 });
 
-// §7.2 con y sin `category`: la misma consulta tiene que devolver los placeholders numerados ?1..?4 en el orden en que
+// Con y sin `category`: la misma consulta tiene que devolver los placeholders numerados ?1..?4 en el orden en que
 // se vinculan, porque `?2 IS NULL` es la forma de decir "todas las categorías" sin una segunda consulta.
 test("búsqueda: los placeholders numerados funcionan con y sin category", async (t) => {
   const dir = tempDir(t);
@@ -337,8 +555,8 @@ test("búsqueda: los placeholders numerados funcionan con y sin category", async
   );
   assert.deepEqual(store.search(searchInput(["concilio"], "general")), []);
 
-  assert.equal(store.countSearch({ tokens: ["concilio"], category: null }), 2);
-  assert.equal(store.countSearch({ tokens: ["concilio"], category: "env" }), 1);
+  assert.equal(store.countSearch({ tokens: ["concilio"], match: "all", category: null }), 2);
+  assert.equal(store.countSearch({ tokens: ["concilio"], match: "all", category: "env" }), 1);
 
   // `limit` y `offset` son los otros dos placeholders numerados: dos páginas de uno no repiten fila.
   const firstPage = store.search(searchInput(["concilio"], null, 1, 0));
@@ -354,7 +572,7 @@ test("búsqueda: los placeholders numerados funcionan con y sin category", async
   );
 });
 
-// §7.2: el catálogo ordena las categorías por cantidad, los términos por uso, y cada término lleva el id de la entrada
+// el catálogo ordena las categorías por cantidad, los términos por uso, y cada término lleva el id de la entrada
 // más reciente de esa categoría, que es la fecha y no el id más alto.
 test("catálogo: dos categorías, keys ordenadas por uso y el id más reciente por término", async (t) => {
   const dir = tempDir(t);
@@ -388,7 +606,7 @@ test("catálogo: dos categorías, keys ordenadas por uso y el id más reciente p
   assert.deepEqual(page.categories[1].keys, [{ term: "router", id: env.id }]);
 });
 
-// §7.2: el catálogo lista como mucho KEYS_PER_CATEGORY keys por categoría, y la sentencia del catálogo es la que las
+// el catálogo lista como mucho KEYS_PER_CATEGORY keys por categoría, y la sentencia del catálogo es la que las
 // acota. El fixture de arriba declara dos keys en `religion`, así que ensanchar el cap del SQL no movería nada; este
 // reparte cinco keys con usos distintos en una sola categoría y comprueba que vuelvan cuatro.
 test("catálogo: una categoría con cinco keys devuelve solo las cuatro más usadas", async (t) => {
@@ -410,9 +628,71 @@ test("catálogo: una categoría con cinco keys devuelve solo las cuatro más usa
   );
 });
 
+test("búsqueda: un token encuentra por prefijo y 'any' es la unión de las palabras", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const deploy = store.write(entry("Deployments run on friday.", "env", ["ci"], TS));
+  const router = store.write(entry("The router uses firmware flint2.", "env", ["router"], "2026-01-02T00:00:00Z"));
+
+  assert.deepEqual(
+    store.search(searchInput(["deploy"])).map((hit) => hit.id),
+    [deploy.id],
+  );
+  assert.deepEqual(store.search(searchInput(["deploy", "router"])), []);
+  assert.deepEqual(
+    store.search(searchInput(["deploy", "router"], null, 10, 0, "any")).map((hit) => hit.id),
+    [router.id, deploy.id],
+  );
+  assert.equal(store.countSearch({ tokens: ["deploy", "router"], match: "any", category: null }), 2);
+});
+
+test("degradación: 'any' es la unión de las palabras", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  const deploy = store.write(entry("Deployments run on friday.", "env", ["ci"], TS));
+  const router = store.write(entry("The router uses firmware flint2.", "env", ["router"], "2026-01-02T00:00:00Z"));
+
+  assert.deepEqual(store.search(searchInput(["deploy", "router"])), []);
+  assert.deepEqual(
+    store.search(searchInput(["deploy", "router"], "env", 10, 0, "any")).map((hit) => hit.id),
+    [router.id, deploy.id],
+  );
+  assert.equal(store.countSearch({ tokens: ["deploy", "router"], match: "any", category: null }), 2);
+});
+
+test("degradación: el hit trae el texto entero y un fragmento de 40 caracteres de contexto y 240 de largo", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  const text = `${"a".repeat(100)} router ${"b".repeat(400)}`;
+  store.write(entry(text));
+  const [hit] = store.search(searchInput(["router"]));
+
+  assert.equal(hit.text, text);
+  assert.equal(hit.fragment, `...${text.slice(text.indexOf("router") - 40, text.indexOf("router") - 40 + 240)}`);
+});
+
+test("búsqueda FTS: el hit trae el texto entero", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const text = `${"a ".repeat(100)}router ${"b ".repeat(200)}`.trim();
+  store.write(entry(text));
+  const [hit] = store.search(searchInput(["router"]));
+
+  assert.equal(hit.text, text);
+  assert.ok(hit.fragment.includes("[router]"));
+});
+
 // --- degradación sin FTS5 -------------------------------------------------------------------------------------------
 
-// Criterio 9: sin FTS5 las cuatro operaciones responden, la búsqueda sigue distinguiendo categorías y sigue encontrando
+// sin FTS5 las cuatro operaciones responden, la búsqueda sigue distinguiendo categorías y sigue encontrando
 // por vocabulario, porque el `LIKE` mira `text` y `terms`.
 test("degradación: sin FTS5 las cuatro operaciones siguen funcionando", async (t) => {
   const dir = tempDir(t);
@@ -441,7 +721,7 @@ test("degradación: sin FTS5 las cuatro operaciones siguen funcionando", async (
     store.search(searchInput(["router"], "env")).map((hit) => hit.id),
     [env.id],
   );
-  assert.equal(store.countSearch({ tokens: ["concilio"], category: null }), 1);
+  assert.equal(store.countSearch({ tokens: ["concilio"], match: "all", category: null }), 1);
 
   // Catálogo, lectura y borrado.
   assert.equal(store.catalog().categories.length, 2);
@@ -450,7 +730,22 @@ test("degradación: sin FTS5 las cuatro operaciones siguen funcionando", async (
   assert.equal(store.read([env.id]).missing[0], env.id);
 });
 
-// §8.5: el `%` y el `_` de un token son caracteres y no comodines; sin el `ESCAPE` el primero encontraría de más.
+test("degradación: 'cafe' encuentra 'Café' y 'CAFÉ' y el fragmento sale del texto original", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir }, degradedFactory());
+  t.after(() => store.close());
+
+  assert.equal(store.fts, false);
+  const lower = store.write(entry("Tomamos un Café en la plaza.", "general", ["plaza"], TS));
+  const upper = store.write(entry("EL CAFÉ ESTÁ FRÍO", "general", ["frio"], TS));
+
+  const hits = store.search(searchInput(["cafe"]));
+  assert.deepEqual(hits.map((hit) => hit.id).sort(), [lower.id, upper.id].sort());
+  assert.equal(store.countSearch({ tokens: ["cafe"], match: "all", category: null }), 2);
+  assert.ok(hits.find((hit) => hit.id === lower.id)?.fragment.includes("Café"));
+});
+
+// el `%` y el `_` de un token son caracteres y no comodines; sin el `ESCAPE` el primero encontraría de más.
 test("degradación: los comodines del token se escapan en el LIKE", async (t) => {
   const dir = tempDir(t);
   const store = await openStore({ dir }, degradedFactory());
@@ -463,10 +758,10 @@ test("degradación: los comodines del token se escapan en el LIKE", async (t) =>
     store.search(searchInput(["100%"])).map((hit) => hit.id),
     [percent.id],
   );
-  assert.equal(store.countSearch({ tokens: ["100%"], category: null }), 1);
+  assert.equal(store.countSearch({ tokens: ["100%"], match: "all", category: null }), 1);
 });
 
-// §8.5 y §8.8: un archivo que ya abrió un build con FTS5 conserva los tres triggers del external content, y en una
+// un archivo que ya abrió un build con FTS5 conserva los tres triggers del external content, y en una
 // conexión sin el módulo cada `INSERT` y cada `DELETE` sobre `entries` los dispara y falla con "no such module: fts5":
 // perder el ranking no puede costar la escritura y el borrado. Abrir sin FTS5 los retira antes de escribir la marca, y la
 // siguiente apertura con FTS5 los recrea y reconstruye el índice.
@@ -504,7 +799,7 @@ test("degradación: un archivo indexado por FTS5 se escribe y se borra sin FTS5"
   );
 });
 
-// Criterio 10 (§8.8): lo escrito sin FTS5 queda en `entries` y no en el índice; la marca `fts_disabled` es lo que hace
+// lo escrito sin FTS5 queda en `entries` y no en el índice; la marca `fts_disabled` es lo que hace
 // que la siguiente apertura reconstruya el índice en vez de esconder la entrada para siempre.
 test("criterio 10: escribir sin FTS5 y reabrir hace visible la entrada por el rebuild automático", async (t) => {
   const dir = tempDir(t);
@@ -542,11 +837,12 @@ function failingMatchFactory(): DatabaseFactory {
       exec: (sql: string): void => inner.exec(sql),
       prepare: (sql: string) => (/MATCH/i.test(sql) ? { run: fail, get: fail, all: fail } : inner.prepare(sql)),
       close: (): void => inner.close(),
+      function: (name, options, fn) => inner.function(name, options, fn),
     };
   };
 }
 
-// §7.2: un `MATCH` que SQLite rechaza no es una búsqueda vacía. El error sale con la sentencia que el modelo lee y el
+// un `MATCH` que SQLite rechaza no es una búsqueda vacía. El error sale con la sentencia que el modelo lee y el
 // error de SQLite como causa, que es lo que una sesión de depuración necesita y lo que la sentencia misma perdería.
 test("búsqueda: un MATCH que falla sale como Error con la causa de SQLite", async (t) => {
   const dir = tempDir(t);
@@ -557,8 +853,8 @@ test("búsqueda: un MATCH que falla sale como Error con la causa de SQLite", asy
 
   const inner = 'fts5: syntax error near "trinidad"';
   const calls: [string, () => unknown][] = [
-    ["search", () => store.search({ tokens: ["trinidad"], category: null, limit: 5, offset: 0 })],
-    ["countSearch", () => store.countSearch({ tokens: ["trinidad"], category: null })],
+    ["search", () => store.search({ tokens: ["trinidad"], match: "all", category: null, limit: 5, offset: 0 })],
+    ["countSearch", () => store.countSearch({ tokens: ["trinidad"], match: "all", category: null })],
   ];
 
   for (const [label, run] of calls) {
@@ -580,7 +876,7 @@ test("búsqueda: un MATCH que falla sale como Error con la causa de SQLite", asy
  * Un build sin FTS5 que además falla en el camino degradado: la degradación de `degradedFactory` — el `CREATE VIRTUAL
  * TABLE` del probe falla, así que `openStore` deja `fts` en false — y, sobre esa misma conexión, toda sentencia cuyo SQL
  * contenga un `LIKE` falla al ejecutarse. Todo lo demás pasa tal cual, y el `LIKE` aparece solo en las dos sentencias de
- * §8.5, la búsqueda y el conteo degradados.
+ * la búsqueda y el conteo degradados.
  */
 function failingLikeFactory(): DatabaseFactory {
   return (dbPath: string): SqlDatabase => {
@@ -595,11 +891,12 @@ function failingLikeFactory(): DatabaseFactory {
       },
       prepare: (sql: string) => (/LIKE/i.test(sql) ? { run: fail, get: fail, all: fail } : inner.prepare(sql)),
       close: (): void => inner.close(),
+      function: (name, options, fn) => inner.function(name, options, fn),
     };
   };
 }
 
-// §8.5: un fallo del `LIKE` sale como el error crudo de SQLite y no como `The FTS5 query failed: …`, porque ese mensaje
+// un fallo del `LIKE` sale como el error crudo de SQLite y no como `The FTS5 query failed: …`, porque ese mensaje
 // afirmaría que el índice falló en una conexión donde el índice no existe. El test del `MATCH` que falla no puede cubrir
 // esta regla: su factory deja `fts` en true, así que el `try/catch` de `searchFts` y `countFts` — el único que envuelve
 // un error de búsqueda — nunca ve al camino degradado.
@@ -611,8 +908,8 @@ test("búsqueda: un fallo del camino degradado no se disfraza de fallo de FTS5",
   assert.equal(store.fts, false);
 
   const calls: [string, () => unknown][] = [
-    ["search", () => store.search({ tokens: ["trinidad"], category: null, limit: 5, offset: 0 })],
-    ["countSearch", () => store.countSearch({ tokens: ["trinidad"], category: null })],
+    ["search", () => store.search({ tokens: ["trinidad"], match: "all", category: null, limit: 5, offset: 0 })],
+    ["countSearch", () => store.countSearch({ tokens: ["trinidad"], match: "all", category: null })],
   ];
 
   for (const [label, run] of calls) {

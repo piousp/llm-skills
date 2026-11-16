@@ -15,7 +15,7 @@ import { toSlug } from "../../src/query.ts";
 
 // I1: the settings surface, resolved without touching the disk. `resolveConfig` is a function of its three arguments,
 // so this suite is a list of blocks and environments and their expected configuration: a fixture on `settings.json`
-// would prove something the module does not do, because it never reads one. There is one test per rule of §7.6, so a
+// would prove something the module does not do, because it never reads one. There is one test per rule, so a
 // rule that is dropped fails here under the name of the rule it dropped.
 
 const AGENT_DIR = "/home/test/.pi/agent";
@@ -267,11 +267,11 @@ test("checkNodeVersion: una versión ilegible falla sin lanzar", () => {
   }
 });
 
-// §5: la línea 23 tiene su propio suelo. 23.0 a 23.3 están por encima de 22.14 y aun así no tienen `node:sqlite`: el
+// la línea 23 tiene su propio suelo. 23.0 a 23.4 están por encima de 22.14 y aun así no tienen `node:sqlite`: el
 // módulo sigue detrás de `--experimental-sqlite`, que una sesión de pi no pasa. Sin esta rama el modelo lee el error
 // crudo del import en vez de la oración que nombra el requisito.
-test("checkNodeVersion: 23.0.0 y 23.3.9 fallan y 23.4.0 pasa", () => {
-  for (const version of ["23.0.0", "23.3.9"]) {
+test("checkNodeVersion: 23.0.0 y 23.4.9 fallan y 23.5.0 pasa", () => {
+  for (const version of ["23.0.0", "23.4.9"]) {
     const result = checkNodeVersion(version);
 
     if (result.ok) assert.fail(`${version} no debería pasar el chequeo: node:sqlite está detrás de un flag ahí`);
@@ -281,6 +281,6 @@ test("checkNodeVersion: 23.0.0 y 23.3.9 fallan y 23.4.0 pasa", () => {
     assert.match(result.message, /node:sqlite/);
   }
 
-  assert.deepEqual(checkNodeVersion("23.4.0"), { ok: true });
-  assert.deepEqual(checkNodeVersion("v23.4.1"), { ok: true });
+  assert.deepEqual(checkNodeVersion("23.5.0"), { ok: true });
+  assert.deepEqual(checkNodeVersion("v23.5.1"), { ok: true });
 });

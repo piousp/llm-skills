@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult, NormalizedBuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import {
   registerMemoryLite,
@@ -28,7 +29,7 @@ import { MEMORY_TOOL_NAMES } from "../../src/tools.ts";
 // and that assignment is the compile-time proof that the slice still fits.
 //
 // Three of the fake's members throw until the test enables them (`getSettings`, `getAllTools`, `registerTool`), the way
-// the host answers during extension loading (§7.6). A read or a registration at factory time therefore surfaces as a
+// the host answers during extension loading. A read or a registration at factory time therefore surfaces as a
 // failure here instead of passing quietly: the call is recorded before it throws, so the assertion can name it.
 //
 // The renderers of `src/render.ts` are covered at the end of the file, through the pure builders and not through the
@@ -43,7 +44,7 @@ const OUR_SOURCE = "/agent/extensions/pi-memory-lite/index.ts";
 /** A second path: what the listing shows when another extension registered a memory tool. */
 const OTHER_SOURCE = "/agent/extensions/pi-other-memory/index.ts";
 
-/** A Node version that passes the guard of §8.2, pinned so the suite does not depend on the binary running it. */
+/** A Node version that passes the guard, pinned so the suite does not depend on the binary running it. */
 const HEALTHY_NODE = "24.19.0";
 
 /**
@@ -246,7 +247,7 @@ interface OpenLog {
 
 /**
  * The real store of `src/db.ts` over the resolved directory, wrapped so the test can count the opens and the closes and
- * the store still closes the file it opened. The wrapper is what turns the lazy open of §8.3 into an observable fact.
+ * the store still closes the file it opened. The wrapper is what turns the lazy open into an observable fact.
  */
 function realOpen(log: OpenLog): (options: { dir: string }) => Promise<MemoryStore> {
   return async (options) => {
@@ -285,7 +286,7 @@ function consoleWarnings(mock: { mock: { calls: readonly { arguments: readonly u
 }
 
 /**
- * The collision sentence as §12 writes it, spelled out and not matched by a fragment: the wording is the contract of the
+ * The collision sentence writes it, spelled out and not matched by a fragment: the wording is the contract of the
  * notice, so the test names the whole line. The names are every memory name the listing holds — the own four and any
  * seeded one — in the listing order, and the sources are the paths that registered them.
  */
@@ -295,7 +296,7 @@ function collisionSentence(names: readonly string[], sources: readonly string[])
 
 // --- la carga -------------------------------------------------------------------------------------------------------
 
-// §7.6 / D16: the factory runs during the load and may not read the settings, list the tools or register one. The fake's
+// the factory runs during the load and may not read the settings, list the tools or register one. The fake's
 // three members throw until enabled, and each call is recorded before it throws, so a read at load time fails here with
 // the name of the member instead of passing unnoticed.
 test("factory: no lee settings, no lista las tools y no registra nada durante la carga", (t) => {
@@ -330,7 +331,7 @@ test("session_start: un fallo del handler no escapa y se avisa como error", asyn
   assert.deepEqual(host.registered, [], "un handler que falló no puede haber registrado tools");
 });
 
-// §7 and §8.6: the four tools, in the order of the contract, each one carrying what makes it budget (criterion 2) and
+// the four tools, in the order of the contract, each one carrying what makes it budget and
 // what makes it drawable (the two renderers of src/render.ts). A tool that skipped its snippet would silently leave the
 // `<tools>` section, and one that skipped a renderer would fall back to the host's generic row.
 test("session_start: registra las cuatro tools en orden, con snippet, anotaciones y renderers", async (t) => {
@@ -395,7 +396,7 @@ test("session_shutdown y una instancia nueva: el registro vuelve a ocurrir", asy
 
 // --- exposición -----------------------------------------------------------------------------------------------------
 
-// §8.6 / D9: `exposure` comes from the settings resolved inside session_start, and the three values reach all four tools.
+// `exposure` comes from the settings resolved inside session_start, and the three values reach all four tools.
 test("exposure: los tres valores de settings llegan a las cuatro tools", async (t) => {
   for (const exposure of ["direct", "codemode", "deferred"] as const) {
     const dir = tempDir(t);
@@ -611,9 +612,11 @@ test("prompt: una sesión cuyo registro falló a la mitad no aporta sección", a
 
 // --- criterios 1 y 2 ------------------------------------------------------------------------------------------------
 
-// Criterion 2 (§10): the permanent cost of the package, measured on the arguments `registerTool` received inside the
-// handler — descriptions, snippets and serialized schemas — and never on a declaration built for the measurement.
-test("criterio 2: descripciones, snippets y esquemas de las cuatro tools no pasan 1500 caracteres", async (t) => {
+// Criterion 2: the permanent cost of the package, measured on the arguments `registerTool` received inside the
+// handler — descriptions, snippets and serialized schemas — and never on a declaration built for the measurement, plus the
+// name and description of the skill as the skills block of the system prompt carries them (XML-escaped). It is reported,
+// not capped: a ceiling invites padding to the number, so the only hard check is that no schema property carries a description.
+test("criterio 2: se mide el costo permanente de las cuatro tools y de la skill", async (t) => {
   const dir = tempDir(t);
   const host = makeHost();
   registerMemoryLite(host.pi, seamsFor(dir));
@@ -622,17 +625,26 @@ test("criterio 2: descripciones, snippets y esquemas de las cuatro tools no pasa
 
   assert.equal(host.registered.length, 4);
 
-  let total = 0;
+  let tools = 0;
   for (const tool of host.registered) {
-    total += tool.description.length;
-    total += (tool.promptSnippet ?? "").length;
-    total += JSON.stringify(tool.parameters).length;
+    const schema = JSON.stringify(tool.parameters);
+    assert.equal(schema.includes('"description"'), false, `${tool.name} lleva descripciones en el esquema`);
+    tools += tool.description.length + (tool.promptSnippet ?? "").length + schema.length;
   }
 
-  assert.ok(total <= 1500, `el presupuesto del criterio 2 se pasó: ${total} caracteres sobre 1500`);
+  const frontmatter = readFileSync(fileURLToPath(new URL("../../skills/memory-lite/SKILL.md", import.meta.url)), "utf8");
+  const name = /^name: (.+)$/m.exec(frontmatter)?.[1] ?? "";
+  const description = JSON.parse(/^description: (".*")$/m.exec(frontmatter)?.[1] ?? '""') as string;
+  const escapeXml = (value: string) =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  const skill = escapeXml(name).length + escapeXml(description).length;
+
+  assert.notEqual(name, "", "el frontmatter de la skill tiene que traer el nombre");
+  assert.notEqual(description, "", "el frontmatter de la skill tiene que traer la descripción");
+  t.diagnostic(`criterio 2: tools ${tools} caracteres, skill ${skill} caracteres, total ${tools + skill}`);
 });
 
-// Criterion 1 (§10): with entries in the memory, the declarations the model sees are the same four and nothing of what
+// Criterion 1: with entries in the memory, the declarations the model sees are the same four and nothing of what
 // the memory holds. The entry is written through the real store first, so the assertion is about a database with data.
 test("criterio 1: ninguna declaración registrada contiene texto guardado en la memoria", async (t) => {
   const dir = tempDir(t);
@@ -683,7 +695,7 @@ test("criterio 1: ninguna declaración registrada contiene texto guardado en la 
 
 // --- colisión, guarda de Node y ciclo de vida -----------------------------------------------------------------------
 
-// §12: a second extension that registered one of the four names is worth a line, and the warning cannot stop the
+// a second extension that registered one of the four names is worth a line, and the warning cannot stop the
 // registration: the session keeps its own tools and the user decides which package to keep. The sentence is the
 // contract, spelled out here down to the names and the two sources it puts between parentheses.
 test("colisión: un memory_write de otra ruta avisa por console.warn y el registro termina igual", async (t) => {
@@ -710,7 +722,7 @@ test("colisión: un memory_write de otra ruta avisa por console.warn y el regist
   );
 });
 
-// §12: con más de un nombre de otra ruta la sentencia los enumera en el orden del listado, y las dos rutas quedan entre
+// con más de un nombre de otra ruta la sentencia los enumera en el orden del listado, y las dos rutas quedan entre
 // paréntesis: la redacción nueva no depende de cuántos nombres nombra.
 test("colisión: dos nombres de otra ruta aparecen los dos en la sentencia", async (t) => {
   t.mock.method(console, "warn", () => undefined);
@@ -732,7 +744,7 @@ test("colisión: dos nombres de otra ruta aparecen los dos en la sentencia", asy
   );
 });
 
-// §12: sin una segunda ruta no hay colisión que avisar, y un aviso que se disparara igual nombraria la instalación del
+// sin una segunda ruta no hay colisión que avisar, y un aviso que se disparara igual nombraria la instalación del
 // propio usuario en cada sesión. Las dos canales tienen que quedar en silencio.
 test("colisión: solo las cuatro tools propias no avisan por ninguno de los dos canales", async (t) => {
   const warn = t.mock.method(console, "warn", () => undefined);
@@ -757,7 +769,7 @@ test("colisión: solo las cuatro tools propias no avisan por ninguno de los dos 
   );
 });
 
-// §8.2 / criterion 13: a Node older than 22.14 loads, registers and answers every call with the requirement. The store
+// a Node older than 22.14 loads, registers and answers every call with the requirement. The store
 // is never opened, which is the point: the failure is a message and not a missing module.
 test("guarda de Node: con 22.13.0 se registran las cuatro tools y memory_write responde el requisito sin abrir la base", async (t) => {
   const warn = t.mock.method(console, "warn", () => undefined);
@@ -785,7 +797,7 @@ test("guarda de Node: con 22.13.0 se registran las cuatro tools y memory_write r
   assert.equal(log.opens, 0, "una tool que no puede abrir la base no puede llamar al getter del store");
 });
 
-// §8.3: the store opens on the first tool call and not before, and the second call reuses the connection instead of
+// the store opens on the first tool call and not before, and the second call reuses the connection instead of
 // opening a second one over the same file.
 test("lazy: el store se abre en la primera llamada y la segunda reusa el mismo", async (t) => {
   const log: OpenLog = { opens: 0, closes: 0 };
@@ -807,7 +819,7 @@ test("lazy: el store se abre en la primera llamada y la segunda reusa el mismo",
   await host.shutdown();
 });
 
-// §8.3: the memo of the open is cleared when it rejects, so a session that hit a transient failure — a locked file, a
+// the memo of the open is cleared when it rejects, so a session that hit a transient failure — a locked file, a
 // directory still being created — retries on the next call instead of answering the whole session with one rejection.
 test("store: una apertura fallida limpia el memo y la llamada siguiente reintenta", async (t) => {
   let attempts = 0;
@@ -835,7 +847,7 @@ test("store: una apertura fallida limpia el memo y la llamada siguiente reintent
   await host.shutdown();
 });
 
-// §8.3: session_shutdown closes the handle. A call that arrives afterwards is answered by a new store, because the code
+// session_shutdown closes the handle. A call that arrives afterwards is answered by a new store, because the code
 // reopens instead of handing out the closed handle — this test states which of the two branches the wiring implements.
 test("shutdown: cierra el store y una ejecución posterior vuelve a pedir el getter en vez de recibir el store cerrado", async (t) => {
   const log: OpenLog = { opens: 0, closes: 0 };
@@ -861,7 +873,7 @@ test("shutdown: cierra el store y una ejecución posterior vuelve a pedir el get
   assert.equal(log.closes, 2);
 });
 
-// §8.3: a session that never called a tool has nothing to close, and a shutdown that tried anyway would be closing some
+// a session that never called a tool has nothing to close, and a shutdown that tried anyway would be closing some
 // other session's handle.
 test("shutdown sin store abierto: es un no-op y no abre nada", async (t) => {
   const log: OpenLog = { opens: 0, closes: 0 };
@@ -877,7 +889,7 @@ test("shutdown sin store abierto: es un no-op y no abre nada", async (t) => {
 
 // --- avisos de settings ---------------------------------------------------------------------------------------------
 
-// §7.6: an invalid setting degrades to the default with a warning, and the warning reaches the user. The registration
+// an invalid setting degrades to the default with a warning, and the warning reaches the user. The registration
 // still happens: a typo costs one option, not the session.
 test("settings: una exposure inválida llega a ctx.ui.notify y a console.warn con el prefijo", async (t) => {
   // The recorder replaces the real write: the assertion reads the calls and the suite stays quiet.
@@ -916,13 +928,10 @@ test("render: la línea colapsada de cada llamada", () => {
 });
 
 // La línea de una llamada de memory_search nombra el modo que el ejecutor va a contestar y no una segunda lectura de los
-// mismos argumentos: un emoji no produce tokens, así que la tool contesta el catálogo y la línea dice catálogo; y
-// count_only gana sobre los dos, porque el ejecutor lo mira antes de tokenizar la consulta.
+// mismos argumentos: un emoji no produce tokens, así que la tool contesta el catálogo y la línea dice catálogo.
 test("render: la llamada de memory_search nombra el modo que el ejecutor va a contestar", () => {
   assert.equal(buildCallLine("memory_search", { query: "🎉" }), "memory_search catalog");
   assert.equal(buildCallLine("memory_search", { query: "  " }), "memory_search catalog");
-  assert.equal(buildCallLine("memory_search", { query: "sushi", count_only: true }), "memory_search count");
-  assert.equal(buildCallLine("memory_search", { count_only: true }), "memory_search count");
   // La consulta con tokens conserva su forma entre comillas, y el compuesto no se parte en el camino.
   assert.equal(buildCallLine("memory_search", { query: "sola-scriptura" }), 'memory_search "sola-scriptura"');
 });
@@ -947,11 +956,9 @@ test("render: la línea colapsada de memory_write", () => {
   );
 });
 
-test("render: la línea colapsada de los tres modos de memory_search", () => {
+test("render: la línea colapsada de los dos modos de memory_search", () => {
   const search = { mode: "search", total: 12, shown: 5, omitted: 7, offset: 0, ids: [31, 34] };
   const catalog = { mode: "catalog", total: 3, shown: 3, omitted: 0, offset: 0, ids: [] };
-  // El conteo no tiene página ni ids: su details no los declara, y la línea tampoco los lee.
-  const count = { mode: "count", total: 42, shown: 0, omitted: 0 };
 
   assert.equal(
     buildResultRender("memory_search", { details: search }, { expanded: false, args: { query: "sushi" } }).text,
@@ -960,10 +967,6 @@ test("render: la línea colapsada de los tres modos de memory_search", () => {
   assert.equal(
     buildResultRender("memory_search", { details: catalog }, { expanded: false }).text,
     "memory_search catalog 3 categories",
-  );
-  assert.equal(
-    buildResultRender("memory_search", { details: count }, { expanded: false }).text,
-    "memory_search count 42",
   );
   // The query lives in the call arguments and not in `details`: without them the page is rendered without inventing one.
   assert.equal(

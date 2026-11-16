@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { distinctSlugs, normalizeTextForDuplicate, quoteToken, toSlug, toTerms, toTokens } from "../../src/query.ts";
+import { distinctSlugs, normalizeTextForDuplicate, quoteToken, toMatchTerm, toSlug, toTerms, toTokens } from "../../src/query.ts";
 
 // I1: the pure surface of the index, on its own. Every function of src/query.ts is a function of its argument, so this
 // suite is a list of inputs and their expected output and it reads no file: a fixture on disk would prove something the
@@ -153,4 +153,10 @@ test("distinctSlugs: una clave que normaliza a la cadena vacía se descarta", ()
 // The empty list is the empty list and not an exception.
 test("distinctSlugs: la lista vacía produce una lista vacía", () => {
   assert.deepEqual(distinctSlugs([]), []);
+});
+
+test("toMatchTerm: prefijo desde tres caracteres, el token corto queda exacto", () => {
+  assert.equal(toMatchTerm("deploy"), '"deploy"*');
+  assert.equal(toMatchTerm("abc"), '"abc"*');
+  assert.equal(toMatchTerm("ab"), '"ab"');
 });

@@ -1,6 +1,6 @@
 {
   "name": "pi-memory-lite",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Global, zero-dependency memory for pi that never injects memory content into the system prompt",
   "type": "module",
   "license": "MIT",

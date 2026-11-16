@@ -4,6 +4,52 @@ All notable changes to this project are documented in this file. The format is b
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-16
+
+Search that finds more, writes that guard themselves, and ids that are never reused. The database moves to schema
+version 2.
+
+### Added
+
+- Schema version 2: `entries` and `keys` use `AUTOINCREMENT`, so the id of a deleted entry is never handed out again
+  and an id quoted earlier never points at a different text. The migration copies the tables and sets `fts_disabled`,
+  so the index is rebuilt on the next open with FTS5.
+- Prefix matching in ranked search: a token of three or more characters ends in `*` (`deploy` finds `deployments`).
+- Fallback from all words to any word when no entry matches all of them, with a note saying so.
+- `memory_write` may end its reply with `Similar: #a, #b`: up to three entries that share keys with the new one,
+  computed after the commit.
+- An exact duplicate merges its new keys into the existing entry; the reply names the keys added and the keys cut by
+  the limit of 8.
+- Secret detection in `memory_write` (`src/secrets.ts`): an AWS key, a GitHub token, a private key, a Slack token or
+  `password=value` rejects the write, and the reply never echoes the match.
+- The data directory is created with mode 0700; an existing directory is left untouched.
+- The `category` of `memory_write` is an enum of the configured categories unless `allowUnknownCategory` is true.
+  Direct calls to the executor still normalize to a slug.
+- The degraded search folds accents through a deterministic SQL function, so `cafe` finds `Café` without FTS5.
+
+### Changed
+
+- A search row returns the whole text when it fits, and otherwise a clip cut at a word boundary with an ellipsis. The
+  FTS snippet is 32 tokens and the degraded fragment 240 characters.
+- Catalog lines no longer start with `#`, which now only marks ids.
+- The `memory_read` marker says `read fewer ids at once`.
+- The Node floor of the 23 line goes from 23.4 to 23.5; 23.0 to 23.4 are refused.
+- The text of the `unreachable` prompt section is a constant.
+- There is no fixed ceiling on the always-loaded text any more. The suite measures and reports the four tools plus the
+  skill (1410 + 120 = 1530 characters, measured at 0.3.0) instead of asserting 1500.
+- A 0.2.x build refuses a schema version 2 database with its newer-version error: update every install that shares the
+  data directory.
+
+### Removed
+
+- `count_only` from `memory_search`: the catalog already shows the counts.
+- The 1500-character always-loaded budget and its assertion.
+
+### Fixed
+
+- The degraded search no longer misses entries that differ only by an accent: it used ASCII-only `lower()`.
+- Ids of deleted entries could be reused by the next write.
+
 ## [0.2.0] - 2026-11-13
 
 The usage skill that the non-`direct` exposures needed ships with the package.

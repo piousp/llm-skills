@@ -3,10 +3,10 @@
 // inside the first `openStore`, so a Node without the module fails in a tool call and not while the extension loads; and
 // the FTS5 schema is a block of its own, separate from the core schema, so a binary without the module still opens the
 // database and loses the ranking, never the memory. Every statement binds numbered placeholders, because node:sqlite
-// binds by ordinal and an anonymous `?` mixed with `?N` collides in silence (§8.7).
+// binds by ordinal and an anonymous `?` mixed with `?N` collides in silence.
 //
 // Three states of the world this file has to survive, all of them tested: a database that FTS5 can index, a database
-// written while FTS5 was unavailable (the `fts_disabled` mark plus the `rebuild` on the next open, §8.8), and a database
+// written while FTS5 was unavailable (the `fts_disabled` mark plus the `rebuild` on the next open), and a database
 // written by a newer build, which is an error the caller reports and this module never swallows.
 
 import { mkdirSync } from "node:fs";
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DB_FILE } from "./config.ts";
 import { KEYS_PER_CATEGORY } from "./format.ts";
-import { distinctSlugs, normalizeTextForDuplicate, quoteToken, toTerms } from "./query.ts";
+import { distinctSlugs, foldForSearch, normalizeTextForDuplicate, toMatchTerm, toTerms } from "./query.ts";
 
 /** A value a statement accepts, as the rest of the package is allowed to see it. */
 export type SqlValue = string | number | null | Uint8Array;
@@ -35,6 +35,7 @@ export interface SqlExecutor {
 /** A connection that can also be closed, which is what the store does on shutdown. */
 export interface SqlDatabase extends SqlExecutor {
   close(): void;
+  function(name: string, options: { deterministic: boolean }, fn: (value: unknown) => unknown): void;
 }
 
 /** The one member of `node:sqlite` this package uses, so the module never appears in a type outside this file. */
@@ -54,11 +55,12 @@ export interface MemoryRow {
   readonly terms: string;
 }
 
-/** A search hit: the row plus the fragment the search produced, which is what a search line shows. */
+/** A search hit: the row, its whole text and the fragment the search produced, which a search line shows when the text does not fit. */
 export interface SearchHit {
   readonly id: number;
   readonly ts: string;
   readonly category: string;
+  readonly text: string;
   readonly fragment: string;
 }
 
@@ -80,12 +82,6 @@ export interface CatalogPage {
   readonly categories: readonly CatalogEntry[];
 }
 
-/** What the count mode returns: the total, and one row per category when no tokens narrowed it. */
-export interface Totals {
-  readonly total: number;
-  readonly byCategory: readonly { readonly category: string; readonly n: number }[];
-}
-
 /** What a write needs. `ts` is supplied by the caller so the query layer has no clock. */
 export interface WriteInput {
   readonly text: string;
@@ -99,11 +95,18 @@ export interface WriteResult {
   readonly id: number;
   readonly duplicate: boolean;
   readonly category: string;
+  readonly similar: readonly number[];
+  readonly addedKeys: readonly string[];
+  readonly droppedKeys: readonly string[];
 }
+
+/** Most keys one entry may hold. */
+export const MAX_KEYS = 8;
 
 /** What a search needs. The tokens arrive normalized, so this layer never parses a query. */
 export interface SearchInput {
   readonly tokens: readonly string[];
+  readonly match: "all" | "any";
   readonly category: string | null;
   readonly limit: number;
   readonly offset: number;
@@ -118,34 +121,30 @@ export interface MemoryStore {
   search(input: SearchInput): SearchHit[];
   countSearch(input: Omit<SearchInput, "limit" | "offset">): number;
   catalog(): CatalogPage;
-  totals(input: { readonly tokens?: readonly string[]; readonly category?: string | null }): Totals;
   read(ids: readonly number[]): { readonly found: readonly MemoryRow[]; readonly missing: readonly number[] };
   remove(ids: readonly number[]): { readonly deleted: readonly number[]; readonly missing: readonly number[] };
   close(): void;
 }
 
-/** Schema version this build writes and knows how to read (§6.2). */
-export const CURRENT_SCHEMA_VERSION = 1;
-
-/** Version a database with no `meta` row is created at, before any migration runs. */
-const INITIAL_SCHEMA_VERSION = 1;
+/** Schema version this build writes and knows how to read. */
+export const CURRENT_SCHEMA_VERSION = 2;
 
 /** `meta` key that holds the schema version. */
 const SCHEMA_VERSION_KEY = "schema_version";
 
-/** `meta` key that marks a database written while FTS5 was unavailable (§8.8). */
+/** `meta` key that marks a database written while FTS5 was unavailable. */
 const FTS_DISABLED_KEY = "fts_disabled";
 
 /** The mark itself: any value works and `1` is the one the contract names. */
 const FTS_DISABLED_VALUE = "1";
 
 /** Characters of `text` a degraded fragment shows, before the formatter clips it to its own budget. */
-const DEGRADED_FRAGMENT = 80;
+const DEGRADED_FRAGMENT = 240;
 
 /** Characters of context a degraded fragment keeps before the match, so the match is not at the very edge. */
-const DEGRADED_LEAD = 20;
+const DEGRADED_LEAD = 40;
 
-/** Attempts of the WAL switch, and the pause between two of them (§8.7). */
+/** Attempts of the WAL switch, and the pause between two of them. */
 const WAL_ATTEMPTS = 10;
 const WAL_RETRY_DELAY_MS = 25;
 
@@ -153,9 +152,9 @@ const WAL_RETRY_DELAY_MS = 25;
 const SQLITE_BUSY = 5;
 
 /**
- * The PRAGMAs of §6.1 that every connection can run unconditionally, `busy_timeout` first because it has to be in place
+ * The PRAGMAs that every connection can run unconditionally, `busy_timeout` first because it has to be in place
  * before any transaction and before the first `BEGIN`. They live apart from the schema so they can run before it; the
- * trailing blank line is the separator of the §6.1 block. `journal_mode` is not here: it is the one PRAGMA that a
+ * trailing blank line is the separator of the block. `journal_mode` is not here: it is the one PRAGMA that a
  * second opening can refuse, so it runs on its own through the retry of `switchToWal`.
  */
 const PRAGMAS_SQL = `PRAGMA busy_timeout = 5000;
@@ -165,7 +164,7 @@ PRAGMA foreign_keys = ON;
 `;
 
 /**
- * The `journal_mode` line of §6.1, alone because it is the statement `openStore` has to retry: it is the first write a
+ * The `journal_mode` line, alone because it is the statement `openStore` has to retry: it is the first write a
  * fresh file sees, and two processes opening that same fresh file at once make it fail with `SQLITE_BUSY`.
  */
 const WAL_PRAGMA_SQL = "PRAGMA journal_mode = WAL;";
@@ -180,7 +179,7 @@ const CORE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS meta (
 );
 
 CREATE TABLE IF NOT EXISTS entries (
-  id       INTEGER PRIMARY KEY,
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
   ts       TEXT NOT NULL,
   category TEXT NOT NULL,
   text     TEXT NOT NULL,
@@ -200,7 +199,7 @@ CREATE INDEX IF NOT EXISTS keys_term ON keys(term);
 `;
 
 /**
- * `entries_fts` and the three triggers of §6.1. External content (`content='entries'`), never contentless: with
+ * `entries_fts` and the three triggers. External content (`content='entries'`), never contentless: with
  * `content=''` the `SELECT text` inside `snippet()` returns NULL and the fragments come back empty without an error, and
  * without the triggers the index stays empty and `MATCH` answers zero rows without an error either. This block is the
  * only one a binary without FTS5 may skip, and `openStore` skips it on the evidence of the `:memory:` probe.
@@ -246,11 +245,30 @@ export interface Migration {
 }
 
 /**
- * The pending steps of this build. Version 1 is the baseline of §6.1 and not a migration, so the list is empty until a
- * change needs one; the next change adds `{ version: 2, up }` and nothing else has to move. `ALTER TABLE` is the rule,
- * `CREATE TABLE IF NOT EXISTS` never mutates an existing table (§6.2).
+ * Version 2 rebuilds `entries` and `keys` with `AUTOINCREMENT`, so the id of a deleted entry is never handed out again.
+ * SQLite cannot add it in place, and `ALTER TABLE ... RENAME` would rewrite the foreign key of `keys`, so both tables are
+ * copied aside, dropped (`keys` first) and recreated from `CORE_SCHEMA_SQL`. The index was built on the old ids: the
+ * `fts_disabled` mark makes the next FTS5 open rebuild it.
  */
-export const MIGRATIONS: readonly Migration[] = [];
+function migrateToAutoincrement(db: SqlExecutor): void {
+  db.exec(DROP_FTS_TRIGGERS_SQL);
+  db.exec("CREATE TEMP TABLE entries_v1 AS SELECT id, ts, category, text, terms FROM entries");
+  db.exec("CREATE TEMP TABLE keys_v1 AS SELECT entry_id, term FROM keys");
+  db.exec("DROP TABLE keys");
+  db.exec("DROP TABLE entries");
+  db.exec(CORE_SCHEMA_SQL);
+  db.exec("INSERT INTO entries (id, ts, category, text, terms) SELECT id, ts, category, text, terms FROM entries_v1");
+  db.exec("INSERT INTO keys (entry_id, term) SELECT entry_id, term FROM keys_v1");
+  db.exec("DROP TABLE entries_v1");
+  db.exec("DROP TABLE keys_v1");
+  if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+    throw new Error("The schema migration left keys that point to no entry.");
+  }
+  writeMeta(db, FTS_DISABLED_KEY, FTS_DISABLED_VALUE);
+}
+
+/** The pending steps of this build; the baseline schema is not a migration. */
+export const MIGRATIONS: readonly Migration[] = [{ version: 2, up: migrateToAutoincrement }];
 
 /** The `meta` statements, numbered like every other statement of this module. */
 const SELECT_META_SQL = "SELECT value FROM meta WHERE key = ?1";
@@ -259,21 +277,29 @@ const UPSERT_META_SQL =
 const DELETE_META_SQL = "DELETE FROM meta WHERE key = ?1";
 
 /**
- * Duplicate detection is a scan of the normalized texts; §6.1 has no unique index and D17 keeps it that way. `category`
+ * Duplicate detection is a scan of the normalized texts; there is no unique index on purpose. `category`
  * travels with the row because a duplicate answer names the category the entry was stored with.
  */
-const SELECT_ALL_TEXTS_SQL = "SELECT id, text, category FROM entries";
+const SELECT_ALL_TEXTS_SQL = "SELECT id, text, category, terms FROM entries";
+const UPDATE_TERMS_SQL = "UPDATE entries SET terms = ?2 WHERE id = ?1";
 const INSERT_ENTRY_SQL = "INSERT INTO entries (ts, category, text, terms) VALUES (?1, ?2, ?3, ?4)";
 const INSERT_KEY_SQL = "INSERT INTO keys (entry_id, term) VALUES (?1, ?2)";
 
+const SIMILAR_LIMIT = 3;
+
+function similarSql(terms: number): string {
+  const marks = Array.from({ length: terms }, () => "?").join(", ");
+  return `SELECT entry_id, COUNT(*) AS shared FROM keys WHERE term IN (${marks}) AND entry_id <> ? GROUP BY entry_id ORDER BY shared DESC, entry_id DESC LIMIT ${SIMILAR_LIMIT}`;
+}
+
 /**
- * The search of §7.2, verbatim: `snippet()` for both indexed columns, `bm25` weighted 1.0 for the text and 1.5 for the
+ * The search, verbatim: `snippet()` for both indexed columns, `bm25` weighted 1.0 for the text and 1.5 for the
  * vocabulary, ascending because the most negative score is the best. `plain_text` is the last fallback of the fragment,
  * which is why the text travels with the row.
  */
 const SEARCH_FTS_SQL = `SELECT e.id AS id, e.ts AS ts, e.category AS category,
-       snippet(entries_fts, 0, '[', ']', '...', 12) AS frag_text,
-       snippet(entries_fts, 1, '[', ']', '...', 12) AS frag_terms,
+       snippet(entries_fts, 0, '[', ']', '...', 32) AS frag_text,
+       snippet(entries_fts, 1, '[', ']', '...', 32) AS frag_terms,
        e.text AS plain_text,
        bm25(entries_fts, 1.0, 1.5) AS score
 FROM entries_fts
@@ -290,7 +316,7 @@ JOIN entries e ON e.id = entries_fts.rowid
 WHERE entries_fts MATCH ?1
   AND (?2 IS NULL OR e.category = ?2)`;
 
-/** The first catalog statement: every category, most populated first (§7.2). */
+/** The first catalog statement: every category, most populated first. */
 const CATALOG_CATEGORIES_SQL = `SELECT category AS category, COUNT(*) AS n
 FROM entries
 GROUP BY category
@@ -318,25 +344,15 @@ FROM ranked
 WHERE newest = 1 AND term_rank <= ${KEYS_PER_CATEGORY}
 ORDER BY category ASC, term_rank ASC`;
 
-/** The total of the count mode, narrowed by the category when one is given. */
-const TOTAL_SQL = "SELECT COUNT(*) AS n FROM entries WHERE (?1 IS NULL OR category = ?1)";
-
-/** One row per category of the count mode, most populated first, narrowed by the category when one is given. */
-const TOTAL_BY_CATEGORY_SQL = `SELECT category AS category, COUNT(*) AS n
-FROM entries
-WHERE (?1 IS NULL OR category = ?1)
-GROUP BY category
-ORDER BY n DESC, category ASC`;
-
 /** One whole entry, which is what a read asks for once per requested id. */
 const READ_SQL = "SELECT id, ts, category, text, terms FROM entries WHERE id = ?1";
 
-/** A hard delete: the foreign key removes the keys and the triggers clean the index (§7.4). */
+/** A hard delete: the foreign key removes the keys and the triggers clean the index. */
 const DELETE_ENTRY_SQL = "DELETE FROM entries WHERE id = ?1";
 
 /**
- * Runs the migration steps that `meta.schema_version` is still missing, or creates the schema and writes version 1 when
- * the row is absent (§6.2). Both parameters are injectable so a test can prove that a step adding a column applies to an
+ * Runs the migration steps that `meta.schema_version` is still missing, or creates the schema and writes the current version when
+ * the row is absent. Both parameters are injectable so a test can prove that a step adding a column applies to an
  * existing database, and that a database from a newer build is refused instead of truncated.
  *
  * Returns the version the database holds afterwards. A stored version above `target` is an error the caller reports:
@@ -352,22 +368,26 @@ export function runMigrations(
 
   if (from > target) throw new Error(newerVersionMessage(from, target));
 
-  const pending = migrations.filter((migration) => migration.version > from && migration.version <= target);
-  if (pending.length === 0) return from;
+  const isPending = (migration: Migration, version: number): boolean =>
+    migration.version > version && migration.version <= target;
+  if (!migrations.some((migration) => isPending(migration, from))) return from;
 
-  const ordered = [...pending].sort((left, right) => left.version - right.version);
-  transaction(db, () => {
+  const ordered = [...migrations].sort((left, right) => left.version - right.version);
+  return transaction(db, () => {
+    let current = readSchemaVersion(db) ?? from;
+    if (current > target) throw new Error(newerVersionMessage(current, target));
     for (const migration of ordered) {
+      if (!isPending(migration, current)) continue;
       migration.up(db);
       writeSchemaVersion(db, migration.version);
+      current = migration.version;
     }
+    return current;
   });
-
-  return ordered[ordered.length - 1].version;
 }
 
 /**
- * FTS5 detection (§8.1): the FTS schema and its triggers are created on a throwaway `:memory:` connection, never on the
+ * FTS5 detection: the FTS schema and its triggers are created on a throwaway `:memory:` connection, never on the
  * user's file, where the probe table would remain as a real table and would write to the WAL. `PRAGMA compile_options` is
  * not the criterion, because there are builds where the macro is defined and the module is missing.
  */
@@ -386,7 +406,7 @@ function probeFts5(createDatabase: DatabaseFactory): boolean {
   }
 }
 
-/** Rebuilds the index from `entries`, which is what external content makes possible and necessary (§8.8). */
+/** Rebuilds the index from `entries`, which is what external content makes possible and necessary. */
 function rebuildFts(db: SqlExecutor): void {
   db.exec("INSERT INTO entries_fts(entries_fts) VALUES('rebuild')");
 }
@@ -397,7 +417,7 @@ function checkFtsIntegrity(db: SqlExecutor): void {
 }
 
 /**
- * Opens the memory under `dir`, in the order §8 fixes: directory, dynamic import, PRAGMAs, core schema, migrations,
+ * Opens the memory under `dir`, in this order: directory, dynamic import, PRAGMAs, core schema, migrations,
  * probe, FTS schema, index resynchronization, mark. The second parameter is a test seam: production always takes the
  * dynamic import, and a test that needs an FTS5-less build injects a factory whose `CREATE VIRTUAL TABLE` fails.
  */
@@ -405,7 +425,7 @@ export async function openStore(
   options: { readonly dir: string },
   createDatabase?: DatabaseFactory,
 ): Promise<MemoryStore> {
-  mkdirSync(options.dir, { recursive: true });
+  mkdirSync(options.dir, { recursive: true, mode: 0o700 });
   const path = join(options.dir, DB_FILE);
 
   const factory = await databaseFactory(createDatabase);
@@ -463,7 +483,7 @@ export async function openStore(
  * (measured): this error comes from the lock-upgrade deadlock detection of SQLite, a path on which the busy handler is
  * never consulted, so no timeout covers it. Two processes opening a fresh database at nearly the same time reproduce it
  * every few runs — `PRAGMA journal_mode = WAL` is the first statement that needs a lock on a file nobody has written
- * yet —, and that is exactly the scenario of acceptance criterion 8 (§8.7, §10). Without this retry the opening fails
+ * yet —, and that is exactly the scenario of acceptance criterion 8. Without this retry the opening fails
  * intermittently; with it, the second process waits a few milliseconds for the first one to finish the switch.
  */
 async function switchToWal(db: SqlExecutor): Promise<void> {
@@ -503,6 +523,7 @@ type QueryLayer = Pick<MemoryStore, "search" | "countSearch">;
 /** The store over an open connection: every operation of `MemoryStore`, and the statement cache they share. */
 function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
   const statements = new Map<string, SqlStatement>();
+  if (!fts) db.function("fold", { deterministic: true }, (value) => foldForSearch(String(value ?? "")));
 
   /** One prepared statement per SQL text, reused for the life of the store; the degraded search prepares per call. */
   function prepare(sql: string): SqlStatement {
@@ -515,16 +536,29 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
   }
 
   /**
-   * The row whose normalized text is `normalized`, or null. Duplicate detection is the scan §6.1 mandates: no unique
-   * index (D17), so the comparison is the normalization of `query.ts` applied to every stored text. The category travels
+   * The row whose normalized text is `normalized`, or null. Duplicate detection is a scan: no unique
+   * index, so the comparison is the normalization of `query.ts` applied to every stored text. The category travels
    * with the id because the answer to a duplicate describes the row that exists and not the call that repeated it.
    */
-  function findDuplicate(normalized: string): { readonly id: number; readonly category: string } | null {
+  function findDuplicate(
+    normalized: string,
+  ): { readonly id: number; readonly category: string; readonly terms: string } | null {
     for (const row of prepare(SELECT_ALL_TEXTS_SQL).all()) {
       if (normalizeTextForDuplicate(readText(row, "text")) !== normalized) continue;
-      return { id: readInt(row, "id"), category: readText(row, "category") };
+      return { id: readInt(row, "id"), category: readText(row, "category"), terms: readText(row, "terms") };
     }
     return null;
+  }
+
+  function similarTo(id: number, terms: readonly string[]): number[] {
+    try {
+      return db
+        .prepare(similarSql(terms.length))
+        .all(...terms, id)
+        .map((row) => readInt(row, "entry_id"));
+    } catch {
+      return [];
+    }
   }
 
   function write(input: WriteInput): WriteResult {
@@ -535,19 +569,39 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
     try {
       const duplicate = findDuplicate(normalizeTextForDuplicate(input.text));
       if (duplicate !== null) {
-        // Nothing was written and nothing may stay half written: the transaction of the duplicate is rolled back.
-        rollBack(db);
-        return { id: duplicate.id, duplicate: true, category: duplicate.category };
+        const existing = duplicate.terms.split(" ").filter((term) => term !== "");
+        const fresh = distinctSlugs(input.keys).filter((term) => !existing.includes(term));
+        const room = Math.max(0, MAX_KEYS - existing.length);
+        const addedKeys = fresh.slice(0, room);
+        const droppedKeys = fresh.slice(room);
+        const answer = { id: duplicate.id, duplicate: true, category: duplicate.category, similar: [], addedKeys, droppedKeys };
+        if (addedKeys.length === 0) {
+          rollBack(db);
+          return answer;
+        }
+        const insertKey = prepare(INSERT_KEY_SQL);
+        for (const term of addedKeys) insertKey.run(duplicate.id, term);
+        prepare(UPDATE_TERMS_SQL).run(duplicate.id, [...existing, ...addedKeys].join(" "));
+        db.exec("COMMIT");
+        return answer;
       }
 
       const inserted = prepare(INSERT_ENTRY_SQL).run(input.ts, input.category, input.text, toTerms(input.keys));
       const insertKey = prepare(INSERT_KEY_SQL);
       // The slug of a key is the term of the `keys` table, and the rule that produces it is the one of the vocabulary: the
       // primary key of (entry_id, term) would reject a repeat, and an emptied slug is not a term at all.
-      for (const term of distinctSlugs(input.keys)) insertKey.run(inserted.lastInsertRowid, term);
+      const terms = distinctSlugs(input.keys);
+      for (const term of terms) insertKey.run(inserted.lastInsertRowid, term);
 
       db.exec("COMMIT");
-      return { id: inserted.lastInsertRowid, duplicate: false, category: input.category };
+      return {
+        id: inserted.lastInsertRowid,
+        duplicate: false,
+        category: input.category,
+        similar: similarTo(inserted.lastInsertRowid, terms),
+        addedKeys: [],
+        droppedKeys: [],
+      };
     } catch (error) {
       rollBack(db);
       throw error;
@@ -570,11 +624,12 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
   /** The FTS5 path: a failure of `MATCH` leaves as an Error that carries the SQLite message, never as a silent zero. */
   function searchFts(input: SearchInput): SearchHit[] {
     try {
-      const rows = prepare(SEARCH_FTS_SQL).all(matchExpression(input.tokens), input.category, input.limit, input.offset);
+      const rows = prepare(SEARCH_FTS_SQL).all(matchExpression(input.tokens, input.match), input.category, input.limit, input.offset);
       return rows.map((row) => ({
         id: readInt(row, "id"),
         ts: readText(row, "ts"),
         category: readText(row, "category"),
+        text: readText(row, "plain_text"),
         fragment: ftsFragment(row),
       }));
     } catch (error) {
@@ -583,7 +638,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
   }
 
   /**
-   * The degraded search of §8.5: the frame of `degradedStatement` around the columns the fragment is cut from, with the
+   * The degraded search: the frame of `degradedStatement` around the columns the fragment is cut from, with the
    * paging of the page. The statement is prepared per call because its parameter count follows the token count.
    */
   function searchLike(input: SearchInput): SearchHit[] {
@@ -597,6 +652,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
       id: readInt(row, "id"),
       ts: readText(row, "ts"),
       category: readText(row, "category"),
+      text: readText(row, "text"),
       fragment: degradedFragment(readText(row, "text"), readText(row, "terms"), tokens),
     }));
   }
@@ -612,7 +668,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
    */
   function countFts(input: Omit<SearchInput, "limit" | "offset">): number {
     try {
-      const row = prepare(COUNT_FTS_SQL).get(matchExpression(input.tokens), input.category);
+      const row = prepare(COUNT_FTS_SQL).get(matchExpression(input.tokens, input.match), input.category);
       return row === undefined ? 0 : readInt(row, "n");
     } catch (error) {
       throw ftsFailure(error);
@@ -628,7 +684,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
   }
 
   function catalog(): CatalogPage {
-    const totals = prepare(CATALOG_CATEGORIES_SQL).all();
+    const categoryRows = prepare(CATALOG_CATEGORIES_SQL).all();
     const keys = new Map<string, CatalogKey[]>();
     for (const row of prepare(CATALOG_KEYS_SQL).all()) {
       const category = readText(row, "category");
@@ -638,28 +694,12 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
     }
 
     // Every category, in the order the first statement gave: the formatter pages, so no category is dropped here.
-    const categories = totals.map((row) => {
+    const categories = categoryRows.map((row) => {
       const category = readText(row, "category");
       return { category, n: readInt(row, "n"), keys: keys.get(category) ?? [] };
     });
 
     return { categories };
-  }
-
-  function totals(input: { readonly tokens?: readonly string[]; readonly category?: string | null }): Totals {
-    const tokens = input.tokens ?? [];
-    const category = input.category ?? null;
-
-    // With tokens the answer is only the number of matches (§7.2): a count narrowed to one query says nothing useful
-    // per category, and the count mode has no second page to paginate.
-    if (tokens.length > 0) return { total: countSearch({ tokens, category }), byCategory: [] };
-
-    const row = prepare(TOTAL_SQL).get(category);
-    const byCategory = prepare(TOTAL_BY_CATEGORY_SQL)
-      .all(category)
-      .map((categoryRow) => ({ category: readText(categoryRow, "category"), n: readInt(categoryRow, "n") }));
-
-    return { total: row === undefined ? 0 : readInt(row, "n"), byCategory };
   }
 
   /** The requested ids in the requested order: the found ones keep their place among the missing ones. */
@@ -712,7 +752,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
     db.close();
   }
 
-  return { path, fts, db, write, search, countSearch, catalog, totals, read, remove, close };
+  return { path, fts, db, write, search, countSearch, catalog, read, remove, close };
 }
 
 /** `BEGIN IMMEDIATE` around `work`, `COMMIT` on return, `ROLLBACK` on throw, and the error rethrown untouched. */
@@ -737,13 +777,13 @@ function rollBack(db: SqlExecutor): void {
   }
 }
 
-/** Creates the core schema and writes version 1 together, or does neither. */
+/** Creates the core schema and writes the current version together, or does neither. */
 function createSchema(db: SqlExecutor): number {
   transaction(db, () => {
     db.exec(CORE_SCHEMA_SQL);
-    writeSchemaVersion(db, INITIAL_SCHEMA_VERSION);
+    writeSchemaVersion(db, CURRENT_SCHEMA_VERSION);
   });
-  return INITIAL_SCHEMA_VERSION;
+  return CURRENT_SCHEMA_VERSION;
 }
 
 /** The stored version, or null when the `meta` table or the row is absent: both mean a database of this build's own. */
@@ -785,9 +825,9 @@ function newerVersionMessage(stored: number, supported: number): string {
   );
 }
 
-/** The quoted AND of the tokens, the shape FTS5 reads without an operator and without a syntax error (§8.4). */
-function matchExpression(tokens: readonly string[]): string {
-  return tokens.map(quoteToken).join(" ");
+/** The quoted AND of the tokens, the shape FTS5 reads without an operator and without a syntax error. */
+function matchExpression(tokens: readonly string[], match: "all" | "any"): string {
+  return tokens.map(toMatchTerm).join(match === "all" ? " " : " OR ");
 }
 
 /**
@@ -799,19 +839,19 @@ function ftsFailure(error: unknown): Error {
 }
 
 /** One `LIKE` pair per token plus the values to bind: the predicate scrolls outwards from what the caller gave. */
-function likePredicate(tokens: readonly string[]): { where: string; params: SqlValue[] } {
+function likePredicate(tokens: readonly string[], match: "all" | "any"): { where: string; params: SqlValue[] } {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
 
   for (const token of tokens) {
     const index = params.length + 1;
     // `ESCAPE '\'` is a single backslash in the SQL text, which is two in this source: two backslashes in the SQL that
-    // reaches the engine make it answer "ESCAPE expression must be a single character" (§8.5).
-    clauses.push(`(lower(e.text) LIKE ?${index} ESCAPE '\\' OR lower(e.terms) LIKE ?${index} ESCAPE '\\')`);
+    // reaches the engine make it answer "ESCAPE expression must be a single character".
+    clauses.push(`(fold(e.text) LIKE ?${index} ESCAPE '\\' OR fold(e.terms) LIKE ?${index} ESCAPE '\\')`);
     params.push(`%${escapeLike(token)}%`);
   }
 
-  return { where: clauses.join(" AND "), params };
+  return { where: clauses.join(match === "all" ? " AND " : " OR "), params };
 }
 
 /** `%`, `_` and the backslash itself, escaped for a `LIKE` that declares the backslash as its escape character. */
@@ -826,25 +866,25 @@ const DEGRADED_SEARCH_COLUMNS = "e.id AS id, e.ts AS ts, e.category AS category,
 const DEGRADED_COUNT_COLUMNS = "COUNT(*) AS n";
 
 /**
- * The degraded statement of §8.5 that the search and the count share, differing only in projection and paging: one `LIKE`
+ * The degraded statement that the search and the count share, differing only in projection and paging: one `LIKE`
  * pair per lowercased token, joined by AND, over the text and the denormalized vocabulary — both, so a key that is not in
- * the text still finds its entry (criterion 4) —, with `%` and `_` escaped because the model writes them without meaning
+ * the text still finds its entry —, with `%` and `_` escaped because the model writes them without meaning
  * to, then the category filter and, when a page is asked for, the order and the two paging placeholders. The parameter
  * count follows the token count, so these statements are prepared per call and never cached.
  */
 function degradedStatement(
-  input: { readonly tokens: readonly string[]; readonly category: string | null },
+  input: { readonly tokens: readonly string[]; readonly match: "all" | "any"; readonly category: string | null },
   projection: string,
   paging?: { readonly limit: number; readonly offset: number },
 ): { sql: string; params: SqlValue[]; tokens: readonly string[] } {
   const tokens = input.tokens.map((token) => token.toLowerCase());
-  const { where, params } = likePredicate(tokens);
+  const { where, params } = likePredicate(tokens, input.match);
   const categoryIndex = tokens.length + 1;
 
   const lines = [
     `SELECT ${projection}`,
     "FROM entries e",
-    `WHERE ${where}`,
+    `WHERE (${where})`,
     `  AND (?${categoryIndex} IS NULL OR e.category = ?${categoryIndex})`,
   ];
 
@@ -857,7 +897,7 @@ function degradedStatement(
   return { sql: lines.join("\n"), params: bound, tokens };
 }
 
-/** The fragment of an FTS hit: the text around the match, then the vocabulary, then the text itself (§7.2). */
+/** The fragment of an FTS hit: the text around the match, then the vocabulary, then the text itself. */
 function ftsFragment(row: Record<string, unknown>): string {
   const snippet = readText(row, "frag_text");
   if (snippet !== "") return snippet;
@@ -873,14 +913,14 @@ function ftsFragment(row: Record<string, unknown>): string {
  * matched through a key that its text does not contain. Whatever comes out is clipped to the page budget afterwards.
  */
 function degradedFragment(text: string, terms: string, tokens: readonly string[]): string {
-  const at = firstMatch(text.toLowerCase(), tokens);
+  const at = firstMatch(foldForSearch(text), tokens);
   if (at !== -1) {
-    const start = Math.max(0, at - DEGRADED_LEAD);
+    const start = Math.max(0, Math.min(at, text.length) - DEGRADED_LEAD);
     const head = start === 0 ? "" : "...";
     return `${head}${text.slice(start, start + DEGRADED_FRAGMENT)}`;
   }
 
-  if (firstMatch(terms.toLowerCase(), tokens) !== -1) return terms;
+  if (firstMatch(foldForSearch(terms), tokens) !== -1) return terms;
   return text.slice(0, DEGRADED_FRAGMENT);
 }
 
