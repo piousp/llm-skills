@@ -437,22 +437,23 @@ test("buildSubagentSessionReport: byAgent grouped by agent, cost desc; errored c
   assert.equal(report.byAgent[3].runs, 1);
 });
 
-test("buildSubagentSessionReport: an orphan whose raw runId is in activeRunIds (normalized) is running", () => {
-  const report = buildSubagentSessionReport("/fx/parent.jsonl", memFs(mainFixtureFiles()), new Set(["orphan-dir"]));
+test("buildSubagentSessionReport: an orphan whose raw runId is an activeAgents key (normalized) is running", () => {
+  const report = buildSubagentSessionReport("/fx/parent.jsonl", memFs(mainFixtureFiles()), new Map([["orphan-dir", "scout"]]));
   assert.equal(report.runs.find((run) => run.runId === "orphan-dir")!.status, "running");
   assert.equal(report.counts.running, 1);
   assert.equal(report.counts.unknown, 0);
 });
 
-test("buildSubagentSessionReport: activeRunIds are normalized through runIdDirName before comparison", () => {
+test("buildSubagentSessionReport: activeAgents keys are normalized through runIdDirName before comparison", () => {
   // Raw registry id "call broken" maps to the on-disk segment "call_broken".
   const files = {
     "/n/p.jsonl": jsonl(HEADER),
     "/n/p/call_broken/run-0/session.jsonl": jsonl(HEADER, userMessage("mid-flight task")),
   };
-  const report = buildSubagentSessionReport("/n/p.jsonl", memFs(files), new Set(["call broken"]));
+  const report = buildSubagentSessionReport("/n/p.jsonl", memFs(files), new Map([["call broken", "scout"]]));
   assert.equal(report.runs.length, 1);
   assert.equal(report.runs[0].status, "running");
+  assert.equal(report.runs[0].agent, "scout");
   assert.equal(report.runs[0].task, "mid-flight task");
 });
 
@@ -793,7 +794,7 @@ test("buildRelaunchCandidates: the running orphan of an active job is excluded",
       [RELAUNCH_ROOT]: jsonl(HEADER),
       [childFileFor("call-live")]: jsonl(HEADER, messageUserMessage),
     }),
-    new Set(["call-live"]),
+    new Map([["call-live", "scout"]]),
   );
   assert.deepEqual(candidates, []);
 });
@@ -1116,19 +1117,10 @@ test("buildRelaunchCandidates: reads the root once and never reads grandchildren
   assert.deepEqual(reads.filter((p) => p.includes("/grand-")), []);
 });
 
-test("buildRelaunchCandidates: rootEntries given means the root is not read from disk", () => {
-  const files = twoLevelOrphanFixture();
-  const rootEntries = parseSessionEntries(files[RELAUNCH_ROOT]);
-  const { fs, reads } = countingFs(files);
-  const candidates = buildRelaunchCandidates(RELAUNCH_ROOT, fs, undefined, rootEntries);
-  assert.equal(reads.filter((p) => p === RELAUNCH_ROOT).length, 0);
-  assert.deepEqual(candidates, buildRelaunchCandidates(RELAUNCH_ROOT, memFs(files)));
-});
-
-test("buildSubagentSessionReport: maxDepth 1 plus withStats false match the full walk on depth-1 identity fields", () => {
+test("buildSubagentSessionReport: maxDepth 1 plus usage skip match the full walk on depth-1 identity fields", () => {
   const files = twoLevelOrphanFixture();
   const full = buildSubagentSessionReport(RELAUNCH_ROOT, memFs(files));
-  const light = buildSubagentSessionReport(RELAUNCH_ROOT, memFs(files), undefined, undefined, { maxDepth: 1, withStats: false });
+  const light = buildSubagentSessionReport(RELAUNCH_ROOT, memFs(files), undefined, undefined, { maxDepth: 1, usage: "skip" });
   assert.ok(full.runs.some((r) => r.depth === 2));
   assert.ok(light.runs.every((r) => r.depth === 1));
   assert.ok(light.runs.every((r) => r.stats === undefined));
@@ -1145,41 +1137,26 @@ test("buildSubagentSessionReport: every file is read exactly once, grandchildren
   assert.deepEqual(report, buildSubagentSessionReport("/fx/parent.jsonl", memFs(files)));
 });
 
-test("buildSubagentSessionReport: an orphan dir listed in activeRunIds is not orphaned", () => {
-  const report = buildSubagentSessionReport("/fx/parent.jsonl", memFs(mainFixtureFiles()), new Set(["orphan-dir"]));
+test("buildSubagentSessionReport: an orphan dir listed in activeAgents is not orphaned", () => {
+  const report = buildSubagentSessionReport("/fx/parent.jsonl", memFs(mainFixtureFiles()), new Map([["orphan-dir", "scout"]]));
   const run = report.runs.find((r) => r.runId === "orphan-dir")!;
   assert.equal(run.status, "running");
   assert.equal(run.orphaned, false);
-  assert.equal(run.agent, "unknown");
-  assert.equal(report.byAgent.find((row) => row.agent === "unknown")!.orphaned, false);
+  assert.equal(run.agent, "scout");
+  assert.equal(report.byAgent.find((row) => row.agent === "scout")!.orphaned, false);
 });
 
 test("buildSubagentSessionReport: activeAgents names a running run and merges it into that agent's row", () => {
   const report = buildSubagentSessionReport(
     "/fx/parent.jsonl",
     memFs(mainFixtureFiles()),
-    new Set(["orphan-dir"]),
-    undefined,
-    { activeAgents: new Map([["orphan-dir", "scout"]]) },
+    new Map([["orphan-dir", "scout"]]),
   );
   assert.equal(report.runs.find((r) => r.runId === "orphan-dir")!.agent, "scout");
   assert.equal(report.byAgent.some((row) => row.agent === "unknown"), false);
   const scoutRow = report.byAgent.find((row) => row.agent === "scout")!;
   assert.equal(scoutRow.runs, 2);
   assert.equal(scoutRow.orphaned, false);
-});
-
-test("buildSubagentSessionReport: a running run missing from activeAgents is labelled unknown", () => {
-  const report = buildSubagentSessionReport(
-    "/fx/parent.jsonl",
-    memFs(mainFixtureFiles()),
-    new Set(["orphan-dir"]),
-    undefined,
-    { activeAgents: new Map([["other-run", "scout"]]) },
-  );
-  const run = report.runs.find((r) => r.runId === "orphan-dir")!;
-  assert.equal(run.agent, "unknown");
-  assert.equal(run.orphaned, false);
 });
 
 test("buildSubagentSessionReport: a dead orphan next to a named running run keeps the unknown row orphaned", () => {
@@ -1190,9 +1167,7 @@ test("buildSubagentSessionReport: a dead orphan next to a named running run keep
   const report = buildSubagentSessionReport(
     "/fx/parent.jsonl",
     memFs(files),
-    new Set(["orphan-dir"]),
-    undefined,
-    { activeAgents: new Map([["orphan-dir", "scout"]]) },
+    new Map([["orphan-dir", "scout"]]),
   );
   assert.equal(report.runs.find((r) => r.runId === "dead-dir")!.orphaned, true);
   assert.equal(report.runs.find((r) => r.runId === "orphan-dir")!.orphaned, false);

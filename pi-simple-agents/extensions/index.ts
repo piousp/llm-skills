@@ -400,6 +400,8 @@ export default async function (
     },
     onChange: (list) => widget.refresh(list),
   });
+  const activeRunAgents = () =>
+    new Map(jobs.list().filter((j) => isActive(j.state)).map((j) => [j.runId, j.task.agent] as const));
 
   // In-memory per-session bookkeeping for /subagents retry|continue:
   // - consumedOrphanSegments: dir segments of orphaned children already
@@ -509,8 +511,7 @@ export default async function (
     // goes through the SAME registry-load path the tool call itself
     // does, so the agent config resolves identically.
     const { agents: availableAgents } = await registry.load(ctx.cwd);
-    const activeRunIds = new Set(jobs.list().filter((j) => isActive(j.state)).map((j) => j.runId));
-    const candidates = buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunIds);
+    const candidates = buildRelaunchCandidates(sessionFile, nodeReconcileFs(), activeRunAgents());
     // Consumed orphans vanish from the auto/bare pools (they are done
     // — each interrupted child can be branch-continued or re-dispatched
     // once per session); an explicit id still resolves against the
@@ -823,15 +824,11 @@ export default async function (
         // parent .jsonl would duplicate the same work with no gain. The
         // persisted-session guard above stays first: a session that never
         // hit disk gets no report at all, and its MAIN is never computed.
-        const activeJobs = jobs.list().filter((j) => isActive(j.state));
-        const activeRunIds = new Set(activeJobs.map((j) => j.runId));
-        const activeAgents = new Map(activeJobs.map((j) => [j.runId, j.task.agent]));
         const report = buildSubagentSessionReport(
           sessionFile,
           nodeReconcileFs(),
-          activeRunIds,
+          activeRunAgents(),
           toReconcileEntries(ctx.sessionManager.getEntries()),
-          { activeAgents },
         );
         ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
         return;
