@@ -2,862 +2,371 @@
 
 ## 1.5.11
 
-- **Fix: an errored or retried message no longer pastes its partial text onto the retry, nor drops the next block.** `message_end` now closes any open text or thinking run and stores its partial text, and the `textSplit`/`thinkingSplit` flags hold only until the next `*_end` of the same block or the `message_end`. Providers emit no `*_end` when a message fails mid-block, so before this the stale accumulator and flag leaked into the next message.
-- **Fix: the live context percentage catches up at the next tool start.** The 1 s throttle on `getContextUsage()` skipped reads, so the figure could stay stale until the next usage change. A `tool_execution_start` that follows a skipped read now forces a fresh one and emits a `usage` event. Cost: one extra event per skipped read. The throttle interval is exported as `CONTEXT_USAGE_THROTTLE_MS`, and `RunAgentViaSdkOptions.now` is a test seam for its clock.
-- **Packaging: `docs/REFERENCE.md` ships with the package.** The README links to it, and the `files` allowlist now includes it (+46.7 KB).
-- **Internal:** `buildSubagentSessionReport` takes a single `ReadonlyMap` (runId to agent) as its third parameter, replacing the `Set` of active run ids plus `opts.activeAgents`. `withStats` becomes `usage: "skip"`, `buildRelaunchCandidates` loses its `rootEntries` parameter and parses the root itself, `createEntryWrapCache().lines` returns `readonly string[]`, `peekScrollCap` is removed, `isSettled` is exported from `background-jobs.ts`, and the transcript's text and thinking handlers share code. No behavior change beyond the fixes above. An external caller that passed a `Set` must pass a `Map`.
-- Tests: 1009, up from 1003, no assertion loosened. Eight are new (four for the transcript's `message_end`, three for the throttle and its clock, one for the widget) and two were deleted because their subject no longer exists.
-- Docs: `DEVELOPER.md` (the new `buildSubagentSessionReport`, `SubagentSessionReportOptions` and `buildRelaunchCandidates` signatures and the single `activeRunAgents()` accessor, the wrap cache's return type and `buildFullBody`'s `wrap` parameter, `scrollCapOf` replacing `peekScrollCap`, `isSettled` in the peek window, the transcript's `message_end` rule and flag lifetime, the throttle constant, the `now` seam and the tool-start refresh, and the `files` allowlist).
+- Fix: an errored or retried message no longer pastes its partial text onto the retry or drops the next block.
+- Fix: the live context percentage catches up at the next tool start.
+- Packaging: `docs/REFERENCE.md` ships with the package.
+- Internal: `buildSubagentSessionReport` takes a `Map` (runId to agent) instead of a `Set`. Callers passing a `Set` must switch.
 
 ## 1.5.10
 
-- **Fix: the package no longer installs `glob`.** It was listed under `dependencies` but nothing in `src/`, `extensions/` or the skills imports it, so every install pulled `glob` and its tree (including `minimatch`) for nothing, and both showed up in `npm audit` as moderate vulnerabilities. Only `yaml` remains as a runtime dependency. `peerDependencies` are unchanged.
-- Dev toolchain: the `@earendil-works/pi-coding-agent` and `pi-tui` dev dependencies move from `^1.2.0` to `^1.5.1` (resolved to 1.5.2), which also brings `undici` to 8.12.3. `npm audit` now reports no vulnerabilities, with or without dev dependencies. Type-check and the 1003 unit tests pass unchanged against the newer SDK types. This does not change what is published.
+- Fix: the package no longer installs the unused `glob` dependency, which cleared the `npm audit` warnings.
+- Dev dependencies on `@earendil-works/pi-coding-agent` and `pi-tui` move to `^1.5.1`. The published package is unchanged.
 
 ## 1.5.9
 
-- **Performance: the peek window renders in a fraction of the time.** Wrapping is cached per transcript entry (keyed by entry seq and width) and the finished frame is cached by a composite key (transcript state identity, job state, usage, prefs, scroll offset, elapsed second, theme, width). The body is built once per frame instead of twice, and the 250 ms pulse only asks for a repaint when that key changed, so an idle job repaints once per elapsed second instead of four times. `thinkingKeptLines` stops wrapping once it has the last five lines, and `pushEntry` evicts with a single slice. `TranscriptSink.snapshot()` now returns the immutable state itself (its identity is the transcript's version), and `TranscriptState`/`TranscriptEntry` are `readonly` all the way down. Measured on a full transcript (2000 entries, ~128k chars, live tail), median per render: same state 5.72 ms → ~0 ms, one new entry 5.83 ms → 0.58 ms, first render 5.91 → 3.47 ms, width change 5.24 → 3.25 ms. 40 pulse ticks (10 s) went from 224 ms and 40 repaints to 6 ms and 10 repaints; `pushEntry` at the eviction ceiling from 2.09 to 1.93 µs/event. Also fixed a latent mutation: the unscrolled branch of the frame assembly appended the elision and result lines to the shared body array.
-- **Performance: smaller wins.** The subagent result message no longer rebuilds its Box/Text on every frame, only when expansion changes. The running-jobs widget skips `setWidget` when its lines did not change (105 → 6 calls over 100 progress events in 5 s). Requested-tool wildcard patterns are compiled once per check instead of once per (pattern, tool): 127 → 11.7 µs per `missingRequestedTools` call with 200 tools and 5 patterns, via the new `toolPattern`. The live context-usage read in a run is throttled to once per second; the final value at settle is still read fresh, so the figure can lag by at most 1 s while running. Startup awaits `createModelRuntime()` and the first agent discovery concurrently instead of in series (not benchmarked: the saving is bounded by the shorter of the two).
-- **Performance: `retry`/`continue` read the session tree less.** `buildRelaunchCandidates` parses the root session once instead of twice and walks only depth 1, without computing usage stats it never used. This adds the optional `SubagentSessionReportOptions` (`maxDepth`, `withStats`, `rootEntries`), passed as a fifth optional argument of `buildSubagentSessionReport`. On a 5 MB root with 50 children × 2 levels: 38.4 → 18.7 ms, root reads 2 → 1, child reads 100 → 50, grandchild reads 100 → 0. Side effect: grandchildren no longer consume the `MAX_CHILDREN_VISITED` budget on this path, so a tree with more than 1000 directories can surface more depth-1 candidates than before.
-- **Packaging: the npm package ships only what runs.** `package.json` gains a `files` allowlist (`extensions`, `src`, `skills`, `agents-examples`, `README.md`, `CHANGELOG.md`, `DEVELOPER.md`, `LICENSE`), and the repo gains the MIT `LICENSE` file its manifest already declared. `test/`, `docs/` and `assets/` are no longer published (83 → 42 files; 367 → ~190 KB packed).
-- **Fix: live transcript segments no longer split words.** A text or thinking segment that grows past 2000 characters used to close wherever the last delta ended, so a word could land in two entries and render as two lines (`subag` / `ent_job`) in the peek window. `segmentCut` now cuts after the last newline in the window `[1000, length)`, else after the last space or tab, else at the end as before (URLs, JSON and base64 keep the old behavior). The closed segment is an exact prefix of the accumulator, and `chars` counts only the cut part. Two related changes: an entry whose text ends in a newline no longer renders a trailing blank line (`wrapLines`), so a cut at a newline looks the same as the uncut text; and `text_end`/`thinking_end` no longer append the full block a second time when a split left the accumulator empty (new `textSplit`/`thinkingSplit` flags on `TranscriptState`). Behavior change: a closed entry that really ends in a newline also loses its trailing blank line.
-- **Fix: `/subagents session` labels a running job with its agent.** A child directory with no result message yet was reported as `unknown … (orphaned)` even when its job was alive, while the `Runs:` line already said `running 1`. The report now takes an optional `activeAgents` map (runId to agent name, from the in-memory registry; a label only, never a consumption source): a running run shows its real agent (`scout: 1 run`) and is not orphaned, while a dead orphan still shows `unknown … (orphaned)`. `buildRelaunchCandidates` is unchanged.
-- **Performance: the session report reads each child once.** `buildSubagentSessionReport` parsed every child twice, once to build its run and once to recurse into it. It now parses once and passes the entries down: 100 → 50 child reads and 100 → 50 grandchild reads on the 50 × 2-level fixture, with identical results.
-- Tests: 1003, up from 967, no assertion loosened. The new pins cover the transcript's reference identity and oversize eviction, the thinking tail, the wrap cache across width changes, head eviction, expansion toggles and the unscrolled-mutation regression, the frame cache and each field of its key, the pulse repainting only on change, the widget's deduplicated pushes, the result message's single build, the wildcard-metacharacter match, the context-usage throttle, concurrent startup (it fails against the sequential code), and the single root read in relaunch. Benchmarks live in `test/bench/` (`peek`, `session`, `widget`, `binding`) and are not part of `npm test`; run them with `node --experimental-strip-types test/bench/<name>.bench.ts`.
-- Docs: `DEVELOPER.md` (the peek window's caches and frame key, the transcript's identity contract, `SubagentSessionReportOptions`, `toolPattern`, the throttled context read, the widget's dedup, concurrent startup, the benchmark location, `segmentCut` and the `textSplit`/`thinkingSplit` flags, the trailing-newline trim in `wrapLines`, `SubagentSessionReportOptions.activeAgents` with the `orphaned` rule, and the single parse per child).
+- Performance: the peek window renders much faster (same state 5.72 ms → ~0 ms, one new entry 5.83 → 0.58 ms).
+- Performance: an idle peek window repaints once per second instead of four times.
+- Performance: the running-jobs widget skips redundant updates (105 → 6 calls over 100 progress events).
+- Performance: tool wildcard matching is faster (127 → 11.7 µs per `missingRequestedTools` call).
+- Performance: the live context-usage read runs at most once per second while a job runs.
+- Performance: startup loads the model runtime and agent discovery concurrently.
+- Performance: `retry` and `continue` read the session tree less (38.4 → 18.7 ms on a 5 MB root).
+- Performance: the session report reads each child once (100 → 50 reads).
+- Packaging: the npm package ships only what runs, via a `files` allowlist (83 → 42 files). Adds the MIT `LICENSE` file.
+- Fix: live transcript segments no longer split words across entries in the peek window.
+- Behavior change: a closed transcript entry that ends in a newline no longer renders a trailing blank line.
+- Fix: `/subagents session` labels a running job with its agent instead of `unknown … (orphaned)`.
 
 ## 1.5.8
 
-- **New: every job view shows the model the run is using.** `/subagents list`, `/subagents status`, the running-jobs widget and the peek window now carry the effective `provider/modelId`: the call's own `model` override, else the agent's configured `model`, else the parent session's model (the child really does inherit it). It is recorded once, as the new optional `JobTask.model`, at the single launch chokepoint, so a `retry`/`continue` relaunch fills it exactly like a first launch (the action context now carries `ctx.model` through the `modelRefOf` helper). Optional end to end: contexts without a model (SDK callers, test fakes) and persisted acks/messages from earlier versions simply omit it — the views render no model segment rather than a placeholder. Placement is per view, because the two line shapes are not the same shape: the widget is one space-separated line, so its model goes right after the agent name, dim and capped at 32 cells so the elapsed column at the tail survives; the multi-line views (`list`, `status`, the peek frame) put it on a dedicated two-space-indented line directly below the header, so a long ref never pushes the status/elapsed/usage columns out of a narrow window. The peek frame's title line is unchanged, and an evicted job's frame has no model line to show.
-- **Behavior change: the tool call's parameter line states provenance, and says `none` instead of `inherited`.** Each of the six segments is now the call's own value (no suffix: the call is its own provenance), `<value> (settings.json)`, `<value> (frontmatter)`, or `none` when no layer sets it. Provenance is captured where it is still known — `applyOverrides` stamps the new additive `AgentConfig.settingsFields` with the keys a settings entry carried, `applyInvocationOverride`'s spread carries it, `formatAgentParams` consumes it — because a merge that loses the source can never reconstruct it afterwards. A settings-supplied value and a frontmatter value are now distinguishable, which the single word `inherited` never was; the user and project settings files both read `settings.json`; and a settings `model: "inherit"` (a present key with an undefined value) renders plain `model: none`, never `none (settings.json)`. An explicitly empty list keeps a suffix (`tools: none (frontmatter)` says "explicitly nothing", plain `none` says "no value"), and `formatList` still shows the first `MAX_ITEMS_SHOWN` items plus `+N more`.
-- **Behavior change: the peek window is always fullscreen, and the `w` key is gone.** Removed with it: the footer's window-size hint, `PeekDone`'s `"toggle"`, the manager's reopen-in-the-other-mode branch, `FLOATING_OVERLAY`, and the now-redundant `fullscreen` parameter (`buildPeekLines`) and field (`PeekOverlayDeps`). Kept: Esc/`q` close, Ctrl+O tool-expansion routing, `↑`/`↓` and page scrolling, the wheel, the 250 ms pulse, the frozen settled frame. Each open starts following the tail again: the scroll offset used to be owned by the manager only to survive a mode switch, and it now lives in the window itself.
-- Tests: 967, up from 946, no assertion loosened. The new pins: the four provenance outcomes on the parameter line (frontmatter, settings.json, bare override, plain `none`), the settings-`inherit` non-suffix, an empty list keeping its suffix, `applyOverrides`' stamping (including the present-key/undefined-value case) and `applyInvocationOverride`'s survival of it on both paths, the end-to-end settings → rendered-line wiring, the model on all four job views (the widget's dim inline segment and its 32-cell truncation, the dedicated line in `list`/`status` for both the running and the settled/errored arms, the peek frame's line, the omission when no model is known — asserted as absent, with no blank line left in its place), the parent model travelling through `execute` (and losing to a per-call override), the parent model travelling through a `subagent_job retry` relaunch into the list view, and the peek's removed `w` / no-reopen / fullscreen-overlay pins.
-- Docs: `DEVELOPER.md` (module map, `AgentConfig.settingsFields`, `applyOverrides`' stamping rule, `src/background-jobs.ts`'s `JobTask.model`, `src/job-view.ts`'s widget segment and dedicated model line, the wiring's `launchSubagentJob`/`JobActionContext`/`modelRefOf`, `src/render-call.ts`'s provenance and `none`), `README.md` (the peek bullet, the `list`/`status` paragraph), `docs/REFERENCE.md` (the `/subagents` command and the running-jobs widget sample).
-- `package.json` and `package-lock.json` both read `1.5.8`.
+- New: every job view (`/subagents list`, `status`, the widget, the peek window) shows the model the run uses.
+- Behavior change: the tool call's parameter line shows where each value came from (`settings.json`, `frontmatter`), and `none` replaces `inherited`.
+- Behavior change: the peek window is always fullscreen and the `w` key is gone. Each open starts at the tail.
 
 ## 1.5.7
 
-- **Fix: a subagent whose `model` names a provider registered by another extension now starts.** Such a ref (frontmatter, `agentOverrides`, or a per-call `model` override) failed with `model "<provider>/<modelId>" (configured for agent "<agent>") was not found in the model registry` until some other job had started a child session in the same process. Resolution went exclusively through the extension's own `ModelRuntime`, built once at extension load, and a provider registered by another extension only becomes visible to that runtime once a child session re-runs the extension factory; the invoking `ctx.modelRegistry` already knows it. Resolution now has two sources, tried in order: `getModel` (the package's own runtime) first, `findModel` (`ctx.modelRegistry.find`) second, the second consulted only when the first returns `undefined` — the fast path and its precedence are unchanged. A ref both sources miss still fails with the existing error text, byte for byte, and still with no fallback to the session default model (Q1). The provider's catalogue was never the problem: `find` reads the same map the frozen runtime does, without credential or `enabledModels` gating, neither of which ever gated explicit refs.
-- The host's registry travels as a parameter, `hostModelRegistry`, from the invoking `ctx` through `launchSubagentJob` → `runSingleTask` → `runAgentViaSdk`, captured synchronously at each launch because the run itself starts on a later microtask. All three launch points fill it: the `subagent` tool, the `subagent_job` tool and the `/subagents` command — the last two reach it through `handleRelaunch`, so a `retry`/`continue` relaunch resolves an extension-provider model exactly like a first launch instead of failing on the frozen snapshot. It stays optional end to end: absent (SDK consumers, the test fakes) means single-source resolution, the pre-existing behavior, never a crash.
-- Tests: 946, up from 941, no assertion loosened. The new unit cases pin the deterministic false negative (a ref the package runtime misses resolves through the host registry), the order of the two sources (the package's own wins and the host is not consulted when it resolves), the double miss (the same fail-loud error, no session created), the `createSession` contract (`modelRuntime` forwarded by identity, no `modelRegistry` key, with the host's model object as the resolved `model`), the tool wiring (the action `ctx`'s registry reaching `resolveModel`), the degradation without a registry (single source, same error text, no session), the relaunch path (`subagent_job retry` propagating the action `ctx`'s registry through `launchSubagentJob`), and the opt-in e2e case: `pi -ne -e extensions/ -e <provider package>` driving a first child whose model belongs to that provider, written and gated by `PI_LIVE_E2E`.
+- Fix: a subagent whose `model` names a provider registered by another extension now starts.
+- Fix: `retry` and `continue` resolve such models the same way as a first launch.
 
 ## 1.5.6
 
-- **Internal simplification pass.** 22 deduplications across `src/`, each one landed only after the mechanical-change gate in `docs/SIMPLIFICATION-PLAN.md` cleared it: a change qualified only when it provably preserved behavior (no exported-contract change, no reordered effect, no changed exception semantics), and each one went in with its own commit, `npm run typecheck` and the full unit suite green. The ones worth naming: `readPerTokenFallback`/`ReadPerTokenResolver` are gone — the seam crossed five functions and no caller ever provided it, so `computeCacheWaste` priced the read side at 0 on every path it already took; `SubagentRelaunchCandidate.usage` and `displayUsageOf` are gone (no reader, and the function was a second copy of `effectiveTotals`' disk-first precedence); five write-only cache-waste fields (`PreviousRequest.modelKey`/`.timestamp`, `MissCandidate.provider`/`.model`/`.timestamp`) are gone with their writers; `normalizeClaudeModel` returns `string | undefined` instead of a `{ model? }` box; `resolveTimeoutMs` is flattened over a single `isPositiveFiniteNumber`. New single homes: `isNotBlank` and `isPlainObject` in `src/overrides.ts`, `isValidTimeoutMs` next to `resolveTimeoutMs`, `perToken` next to `num`. Extraction absorbed the duplicated bodies of the session-manager build path (`buildOrFallback`), the job-id pipeline (`finishedIds`), the report renderers (`themeHelpers`), the two `stat` call sites (`statFile`) and the reconciled-run literal (`completedRun`).
-- **Behavior change: `agent` and `task` must be non-blank, not merely non-empty.** A `task` of `"   "` used to pass validation and launch a real job, and a whitespace-only `runId` used to collapse to the shared `run` directory segment inside `runIdDirName` (`"   "` sanitizes to `"___"`, which the degenerate-runId guard rewrites to `"run"`), so two degenerate ids could land on the same segment. The shared guard is now `isNotBlank` (`typeof value === "string" && value.trim().length > 0`), the two messages read `"agent"`/`"task" must be a non-blank string.`, and a whitespace-only id in a session file is treated as absent instead of naming a run. The guard is a check, not a normalizer: values pass through untrimmed, so an id with internal spaces (`tool call/1`) is still accepted. Two accepted trade-offs: a whitespace-only `toolCallId` is no longer repaired by `danglingToolCalls` (provider-generated ids never look like that, and the fork would carry the call open instead of closing it), and zero-width characters such as U+200B still pass, because `trim()` does not consider them whitespace. The `subagent_job` `message` check is unchanged and still only rejects `""`.
-- **Behavior change: a non-object tool argument gets the shape error.** `validateSubagentParams` now uses the shared `isPlainObject` instead of its own `isRecord`, which accepted arrays. `[]` and `["x"]` are rejected with `Provide an object with "agent" and "task".` instead of `"agent" must be a non-empty string.` — the old message sent the caller to fix the wrong field.
-- Tests: 941, up from 938, no assertion loosened. The two new tests pin the blank rejection (`validateSubagentParams` with `agent: "   "`/`task: "\t \n"`, and a `buildRelaunchCandidates` fixture whose ack and completion both carry `runId: "   "`), and a third pins the ack trust boundary: an ack with a non-string `details.runId` is discarded at extraction (verified by mutation — dropping that guard makes the fixture fail with `TypeError: rawRunId.replace is not a function`). The one test rewritten was the one whose subject was deleted (the injected read-price fallback): it now pins the surviving rule — a turn with no cache-read price on the message is priced at 0, so `missedCost` is the upper bound of the extra cost.
-- Docs: `DEVELOPER.md` was updated in the same commits that changed its subject (`normalizeClaudeModel`'s signature, the two timeout chokepoints and the new `isValidTimeoutMs` section, the removed seam and the `SubagentRelaunchCandidate` shape, the fourth-optional-parameter wording, the `agent`/`task` validation rule, and a new note that the cache-waste port does not consult the model catalog); the bundled `invoking-subagents` skill's error list now says blank instead of empty. `docs/SIMPLIFICATION-PLAN.md` records the plan, every executed step with its commit, the candidates that were rejected with the rule that rejected them, and why the ack `runId` guard needed no hardening.
-- `package-lock.json` had drifted to `1.5.3` while `package.json` said `1.5.5`; both now read `1.5.6`.
+- Internal: 22 deduplications across `src/`, with no change to behavior beyond the two items below.
+- Behavior change: `agent` and `task` must be non-blank, not just non-empty. Whitespace-only values are rejected.
+- Behavior change: a non-object tool argument (such as `[]`) gets the shape error `Provide an object with "agent" and "task".`
 
 ## 1.5.5
 
-- **Behavior change: the one-intervention-per-job limit is gone, so the model may act on a job as often as it needs to.** `cancel`, `steer`, `followUp`, `retry` and `continue` through the `subagent_job` tool are no longer capped at one per job: the `toolInterventions` set, its checks in `handleJobAction` and `handleRelaunch`, the optional `budget` parameter both carried, and the `budgetExhaustedText` refusal are all removed, so a second intervention on the same job behaves like the first. A repeated cancel reaches the registry again (`Cancelling job <id>…`, or `Job <id> is already cancelled — nothing to cancel.` once the abort settled), a steer after a cancel lands on the registry's own guards, and a repeated retry of the same source run relaunches with the next attempt number (`retry-<run>-2`). The stop-and-report advice for a recovery loop that fails the same way twice stays in the tool descriptions and in the bundled skill, as guidance rather than an enforced limit. The tool also drops its `executionMode: "sequential"` registration, which existed only so two sibling interventions in one batch could not both pass the budget pre-check. The `/subagents` command path is unchanged: it never consulted the budget, so every user-facing string is byte-identical.
-- Tests: the three `budgetExhaustedText` unit tests are deleted with the function, and the three tool-path budget tests are rewritten in place to pin the new behavior (a repeated cancel acts, a steer after a cancel hits the registry's own `not-running` guard, a successful steer repeats, a repeated retry relaunches); 941 → 938 tests. `test/unit/tool-description.test.ts` pins the new description wording and asserts the old cap wording is gone, and the wiring test now asserts no `executionMode` is registered.
-- Docs: `docs/REFERENCE.md` rewrites the tool paragraph around the missing cap and drops the stale pre-1.5.2 sentence claiming the model may only steer at the user's explicit request, `DEVELOPER.md` documents the budget-free dispatcher, the bundled `invoking-subagents` skill renames its section to `### Interventions on your own initiative` (with the frontmatter and the errors list updated), and its eval README describes `settled_job_needs_nothing` as the negative control for interventions instead of for a budget.
+- Behavior change: the one-intervention-per-job limit is gone. The model can `cancel`, `steer`, `followUp`, `retry` or `continue` a job as often as needed.
+- The `subagent_job` tool no longer registers `executionMode: "sequential"`.
 
 ## 1.5.4
 
-- **Package gallery metadata: the pi.dev page now carries a real description, a license and a preview image.** pi.dev builds the page description from the first README paragraph, and the README opened with the badge block, so the gallery showed three badge links where the prose belongs; the tagline is now that first paragraph ("Subagents for pi with no fuss: one Markdown file per agent, one tool call to run it, and overrides to fit your workflow.") and the badges sit under it. `package.json` gains `description` (npm derives one from the README when the field is missing), `license: "MIT"` (without it the gallery reported `License unknown` while the README and the badge claimed MIT) and `pi.image` pointing at `assets/icon.png`; `keywords` grows from `pi-package` alone to also cover `pi-extension`, `pi`, `subagents`, `agents`, `delegation` and `background-jobs`.
-- New `assets/icon.svg` (source) and `assets/icon.png` (1200x750, the same size `pi-better-harness` uses). The gallery card frame is `aspect-ratio: 16/10` and the detail thumbnail is `16/9` with `object-fit: cover`, so a square logo loses its top and bottom edges there; this canvas crops 5% of the height in the thumbnail and keeps the glyph inside the central area. `pi.image` is an absolute raw.githubusercontent.com URL, the form both existing gallery previews use, so the commit has to land on `main` before `npm publish` or the gallery shows a broken image.
+- Package gallery: the pi.dev page gets a real description, the MIT license and a preview image.
+- `package.json` gains `description`, `license` and `pi.image`, and more `keywords`.
 - No code changes.
 
 ## 1.5.3
 
-- **Fix: drop the unused `zod` dependency.** `package.json` declared `zod: ^3.24.0`, but nothing in `src/`, `extensions/` or `test/` imported it: frontmatter is parsed with `yaml` and the validation is hand-written. Every installed copy therefore resolved `zod@3.25.76`, which `npm audit` reports as high severity (GHSA-mrhx-c7xc-m3w5, memory exhaustion while validating oversized constrained collections) and which has no backport to the 3.x line, so the only non-breaking fix is to stop declaring it. `package-lock.json` regenerated and the leftover `node_modules/zod` pruned; `npm audit --omit=dev` inside `pi-simple-agents/` reports zero vulnerabilities. `npm audit` including dev dependencies still flags `undici` under `@earendil-works/pi-coding-agent`, a pre-existing dev-only advisory untouched by this change. No code changes.
+- Fix: drop the unused `zod` dependency, which `npm audit` reported as high severity.
+- No code changes.
 
 ## 1.5.2
 
-- **New: the `subagent_job` tool, so a model can act on a job it started.** Until now the only way to inspect, redirect, stop or relaunch a job was the `/subagents` command, which the user types: a model could launch work and then watch it fail with nothing to do about it. The tool takes `action` (`status`, `list`, `cancel`, `steer`, `followUp`, `retry`, `continue`), an optional `id` (job id from the launch acknowledgment, or a run id for the two relaunch verbs) and a `message` for the inject verbs. `status` and `list` are read-only; bare `status` auto-targets the single active job or the newest settled one; bare `cancel`/`steer`/`followUp` auto-target the single active job and report the ids to pick from when several are active; `retry`/`continue` resolve their target from settled runs on disk. Results are plain text with no theme markup, since the model reads them: a malformed call (unknown action, missing or empty message on steer/followUp) is a tool error, and every guard outcome is a normal result carrying the action's text. Registered with `executionMode: "sequential"`, so sibling calls in one batch cannot both pass the budget check. `peek`, `clear` and `session` stay command-only (one opens a TUI overlay, the other two are user-facing bookkeeping).
-- **New: one intervention per job, enforced by the tool.** `cancel`, `steer`, `followUp`, `retry` and `continue` are allowed once per job on the model's own initiative; the second attempt on the same run id is refused with a text naming the `/subagents` command the user can run by hand (`budgetExhaustedText`). The command path never consults the budget, so a user-typed action is never refused. A failed guard (unknown id, settled job, no live session yet, ambiguous target) does not spend the intervention, and a relaunch mints a fresh run id, so the relaunched job starts with its own. The set lives in memory with the job registry and clears on restart.
-- **Behavior change: the model-facing description no longer forbids acting on jobs.** `SUBAGENT_BASE_DESCRIPTION` drops both "only when the user explicitly asks" clauses and both "never on your own initiative" clauses (steer/followUp and retry/continue), and points at `subagent_job` with the once-per-job rule instead. New `SUBAGENT_JOB_DESCRIPTION` covers the second tool. `test/unit/tool-description.test.ts` pins the new wording.
-- Internals: the command handler's `list|status|cancel|steer|followUp|retry|continue` branches moved into one closure, `handleJobAction(action, id, message, ctx, budget?)`, returning `{ text, level }`; the command notifies it and the tool returns it, so the two paths cannot drift apart. Every command string stayed byte-identical, and all 926 pre-existing unit tests passed unmodified through the refactor before the tool landed. `handleRelaunch` returns its text instead of notifying, and takes the optional budget. New exports: `budgetExhaustedText` (`src/job-view.ts`), `PLAIN_THEME` (`src/progress.ts`), `SUBAGENT_JOB_TOOL_NAME` (`src/extension-binding.ts`), `SUBAGENT_JOB_DESCRIPTION` (`src/tool-description.ts`), `SubagentJobParams` (`extensions/index.ts`). The fakes in `test/unit/extensions-index.test.ts` now capture registered tools by name; before, the last registration silently won, so a second tool would have hijacked about 19 call sites. 13 new unit tests, 939 total.
-- **Fix: `subagent_job` no longer pays for extension binding.** `needsExtensionBinding` excluded only the `subagent` tool by name, so a second package-sourced tool (ours) counted as a binding dependency: every run whose toolset showed it, which includes any agent without a `tools:` list, emitted `session_start` and connected MCP servers for nothing. The exclusion is now the `PACKAGE_TOOL_NAMES` set, used by both `needsExtensionBinding` and `missingRequestedTools`.
-- Docs: the README loses its `Background jobs` section (two lines in `Use it` replace it, and `docs/REFERENCE.md` keeps the lifecycle detail), REFERENCE gains `### The subagent_job tool` plus rewritten action-ownership paragraphs, and `DEVELOPER.md` documents the second registration and the shared dispatcher. The bundled `invoking-subagents` skill is rewritten to teach the tool with one JSON example per action, the once-per-job rule, and `retry` versus `continue`; it is self-contained now, with no links to repo files (135 lines, down from 178).
+- New: the `subagent_job` tool lets a model act on jobs it started: `status`, `list`, `cancel`, `steer`, `followUp`, `retry`, `continue`.
+- New: the tool allows one intervention per job on the model's own initiative. The `/subagents` command is never limited.
+- Behavior change: the model-facing description no longer forbids acting on jobs.
+- Fix: `subagent_job` no longer triggers extension binding and MCP connections for nothing.
+- The bundled `invoking-subagents` skill is rewritten to teach the tool.
 
 ## 1.5.1
 
-- **Behavior change: bare `/subagents` now prints a help text instead of the job listing; the listing moved to `/subagents list`.** The bare view is a man page: one line per subcommand with its argument shape (`list`, `status [id]`, `peek [id]`, `cancel [id]`, `steer <id> <message>`, `followUp <id> <message>`, `retry [id]`, `continue [id]`, `clear`, `session`), then the auto-resolution rules (no id: the single active job wins, several actives ask for one; retry/continue resolve from settled runs on disk and only relaunch runs that failed, errored, or were interrupted; cancelled runs need an explicit id). `/subagents help` is an explicit alias of the bare view. `list` takes no arguments (same rule as `session`: anything extra is a usage error, `Usage: /subagents list`). New pure surface in `src/job-view.ts` (`buildHelpText`, the `help` command kind) and the handler branch that notifies it; `docs/REFERENCE.md` and the README updated accordingly.
-- The command's `description` (what pi shows) is one compact line now, grouped by argument shape: `/subagents peek|status|cancel|retry|continue [id]`, `/subagents steer|followUp <id> <message>`, `/subagents list|clear|session`, bare for help.
+- Behavior change: bare `/subagents` prints a help text. The job listing moved to `/subagents list`.
+- `/subagents help` is an alias of the bare view, and `list` takes no arguments.
+- The command `description` is now one compact line.
 
 ## 1.5.0
 
-- **New: `/subagents retry [id]` re-dispatches a settled run as a NEW job.** Retryable candidates read disk under the current session file: depth-1 runs settled as `failed`, `errored`, or `cancelled` (from their persisted completion messages), plus runs whose process died mid-run, displayed as `interrupted` (an orphaned child dir with no completion message; crash, kill, and disconnect are indistinguishable and share one status). Resolution precedence: an explicit token matches a candidate's runId or jobId against every candidate; bare picks the single candidate on its own and reports several as a pick-list (`runId (jobId) · agent · status · task preview`). `cancelled` is excluded from the bare/auto set (user intent, not a failure to recover from) but remains targetable by explicit id, with the output noting the run is being re-dispatched at the explicit request. The relaunch uses the SAME resolution path a tool call does (`Unknown agent: X. Available agents: …` verbatim when the agent name is gone, warning, no launch) and is faithful: the launch acknowledgment recorded the original call's requested per-call overrides (`details.params`), and retry reconstructs and re-validates them through the same validation path the `subagent` tool runs (a malformed recorded value is a warning and nothing is launched); acks without recorded parameters (older sessions, a crash before the ack flush, retried-then-failed-again runs) fall back to the agent's own resolved defaults, and the output says which happened. A recorded value that validates structurally but falls outside its allowed range (`maxTurns` outside 1–100, `timeoutMs` non-positive or above the 2 h ceiling) is neither clamped nor failed at relaunch: that key is dropped — the agent's own value applies — and the output names the drop. Success output: `Retrying <agent> as job <S####> (runId retry-<old>-<attempt>) …`.
-- **New: `/subagents continue [id]` re-launches an interrupted run from its persisted child session.** The bare/auto candidate set is pre-filtered to candidates with a persisted child `session.jsonl` that did not settle as cancelled (a cancelled run is user intent, the same rule bare `retry` applies: it is not auto-picked, while an explicit id continues it with the same at-your-explicit-request note; an explicit id on one without a child reports `nothing to continue from; /subagents retry re-dispatches it instead`; an orphan with no launch acknowledgment reports that no agent name is on disk, where recovery falls back to `unknown`). The new job's session forks the child file into a fresh session file next to it (never a modification of the old file), the task is the fixed `CONTINUATION_PROMPT` (re-verify half-done work first, then complete the task), and dangling tool calls the seed carries (an interrupted execution that never returned) are closed with synthetic tool results in the forked copy only. The continuation runs the original call's recorded parameters when the ack persisted them (the fork restarts the turn counter at zero, so a recorded `maxTurns` budget is fresh, not a remainder; the timeout window is fresh too); a legacy ack runs the agent's own defaults, stated in the output. An orphaned child is consumed once per session (in-memory, per session like the job registry): a second retry/continue attempt on the same orphan reports it as already consumed; two pi processes racing on the same orphan are safe (each fork lands in its own timestamped file; a collision degrades to an in-memory session with a warning).
-- Internals: the launch ack (`buildSubagentAckResult`) now records the original call's requested per-call overrides in `details.params` (key omitted when the call overrode nothing) and `buildRelaunchCandidates` copies them onto each candidate, so retry/continue relaunch faithfully; new pure surface in `src/session-reconcile.ts` (`buildRelaunchCandidates` over the same report walk, orphan enrichment through the new `subagentAckEntryOf`, `danglingToolCalls` returning `{toolCallId, toolName}` pairs the seeded-fork repair consumes in one pass); `createSubagentSessionManager` (`src/subagent-session.ts`) takes an optional 6th `seedFile` parameter (seed wins over `defaultContext`, same fork/catch/in-memory shape); `runSingleTask` (`src/task-runner.ts`) gains `seedSessionFile` and repairs the seeded fork's dangling pairs via `SessionManager.appendMessage`; `extensions/index.ts` extracts the launch wiring into one closure (`launchSubagentJob`, shared by the tool's `execute()` and both commands) and adds module-scope `relaunchRunId`/`CONTINUATION_PROMPT`; `src/job-view.ts` parses `retry`/`continue` and provides `resolveRelaunchTarget`, `buildRelaunchCandidatesText`, the precondition texts, `buildRelaunchResultText` (both verbs' success texts, cancelled note, and the out-of-range degrade note), `outOfRangeRelaunchFields`, and the shared pool predicates (`isContinuable`, `isConsumedOrphan`). The review-fix pass also collapsed the override type-guard duplication (`OVERRIDE_TYPE_SPEC` + `overrideValueMatches` in `src/overrides.ts`, the exhaustive table both `validate.ts` and the disk reader consume, so a future 7th override key is a compile error) and the `UsageTotals` fold (`addUsageToTotals` exported once; `SubagentStatusAccumulator = { runs } & UsageTotals`), and split the relaunch wiring into `RelaunchSpec`/`handleRelaunch` (one body, per-verb deltas as data). Jobs stay in-memory and per session: after a restart, jobs list and consumed-orphan bookkeeping clear, and candidates are re-derived from disk (which is what happens anyway).
-- **New: `/subagents session` now reports Main and Total alongside Subagents.** The report renders in three blocks: **Main Session** (the parent session's own tokens/cost — exactly pi's `getSessionStats` over the session's in-memory entries, via `sessionManager.getEntries()`; no re-read of the parent `.jsonl`), **Subagents** (the reconciled child runs; its header renamed from "Subagent Totals"), and **Total (Main + Subagents)** at the end. The combined totals are a plain field-by-field sum with no dedupe guard, by construction: nothing injects subagent usage into the parent's countable entries (the settled run's completion message is a `custom_message` the stats ignore, and the launch ack's toolResult carries no usage), so main and sub never double-count. TOTAL's cache waste is summed at render time from both blocks. A session that launched zero subagents still shows Main and Total while the all-zero Subagents block is omitted; reports built without the parent's entries keep exactly the previous shape. New module exports in `src/session-reconcile.ts` (`main`/`combined`/`combinedBreakdown` on `SubagentSessionReport`, optional fifth `mainEntries` parameter) and the shared tokens/cost renderer in `src/job-view.ts`.
-- **New: a footer status line with the session's running subagent spend (`ctx.ui.setStatus`, always on).** After each job settles, the line reads `sub: 3 runs, 1.2M tok, $0.980` — one run counted per settle (errored ones count a run at zero tokens; a run with a result adds its `result.usage`, previously spent, and the registry fires the settle hook exactly once per settle, so accumulation is idempotent). The cost segment drops at zero (e.g. subscription-accounted sessions) and the line appears only after the first settle. `setStatus` is a no-op outside the TUI, so no mode guard is needed. `/subagents clear` does not reset the accumulator — it is effective session spend, the same scope `/subagents session` reports — only session shutdown clears the line (`setStatus(key, undefined)` before the job registry shuts down).
-- Docs: the README's `/subagents session` bullet describes the three blocks and their sources (in-memory session entries for Main, reconciled child files from disk for Subagents), and a new section lists the persistence limits (persisted sessions survive everything; `--no-session` keeps child runs in memory only; a crash leaves an orphaned partial child that still reconciles; a fork fallback loses per-model attribution into the `unattributed` bucket; a provider that never reports usage shows zero irrecoverably) and makes explicit that pi's native `/session` and footer count only Main — `/subagents session` is the only place the combined total is visible. DEVELOPER.md's job-view/session-reconcile/wiring sections updated accordingly.
+- New: `/subagents retry [id]` re-dispatches a failed, errored, cancelled or interrupted run as a new job.
+- New: `/subagents continue [id]` re-launches an interrupted run from its saved child session.
+- Both reuse the original call's per-call overrides when recorded, and fall back to the agent's defaults otherwise.
+- Cancelled runs are never auto-picked and need an explicit id.
+- New: `/subagents session` shows Main, Subagents and Total blocks.
+- New: a footer status line shows running subagent spend, such as `sub: 3 runs, 1.2M tok, $0.980`.
 
 ## 1.4.1
 
-Documentation-only patch for the 1.4.0 steer/followUp feature: the README's `Use it` section gains an override example (`model`, `thinking`, `maxTurns`) and the omit-by-default rule; the `/subagents` command section splits steer and followUp into dedicated bullets explaining what each does and costs; the Background jobs prose (README and REFERENCE) mentions mid-run redirection; the model-facing skill gains a `Steering a running job` section with the explicit-user-request-only constraint and a `model` rule (respect the inherited frontmatter/settings model, never pick one unprompted); prose re-edited without em dashes. No code changes.
+- Docs only: new override example in the README, separate `steer` and `followUp` bullets, and a steering section in the skill.
+- No code changes.
 
 ## 1.4.0
 
-- **New: `/subagents steer <id> <message>` and `/subagents followUp <id> <message>` — inject a message into a RUNNING job's live session.** `steer` (the pi SDK's `session.steer(msg)`) delivers the message after the job's current assistant turn and its tool calls complete, before the next model call — a way to redirect the agent mid-task. `followUp` (`session.followUp(msg)`) queues the message to be processed once the run finishes its pending work, and extends the run: the job settles only after the follow-up is processed (no new settling code — the existing await chain delays settle). Both surface the SDK's per-input disposition verbatim: `queued` (the model will receive it) or `handled` (an extension in the job's own session consumed it), reported as `Steering message queued for job <id>.` / `Follow-up queued for job <id> — the job settles only after it is processed.` (or the `… handled … (an extension consumed it).` variants). With an explicit id a guard chain runs before the injection, each case landing as a warning on the command: unknown id (`No job with id "<id>" in this session.`), a settled job (`Job <id> is already <status> — nothing to steer.` / `nothing to follow up on.`), a cancelling job, and a running job with no live session yet — the pre-prompt startup window, or the teardown window after the prompt resolved but before dispose (`Job <id> is running but has no live session yet (still starting up, or already wrapping up) — …`).
-- **New: bare `/subagents steer <message>` / `/subagents followUp <message>` auto-select their target, like bare `cancel`.** Parsing is deterministic, no id-guessing: two or more tokens after the subcommand are id-then-message (whitespace runs collapse via the split on `/\s+/`); a single token is the message itself and the target auto-resolves — only active jobs are candidates, exactly one active job wins, several actives report `Several jobs running — specify an id: <ids>`, and none warn `No running jobs to steer.` / `No running jobs to follow up on.` A one-token message with an explicit id is therefore not expressible; zero tokens is a usage error (`Usage: /subagents steer <id>? <message>`). Known semantics, intentional: a follow-up that extends the run can push it past the agent's `timeoutMs` (the run then settles as timed out after N ms), and follow-up turns count toward the agent's `maxTurns` — the run includes its follow-ups.
-- Internals: the job registry holds a per-job live-session handle wired from the run's `onSessionReady` (fired immediately before the task prompt, after every fail-loud check) / `onSessionGone` (fired at the top of teardown, before shutdown/dispose) callbacks; a message racing the teardown window lands on the not-live guard, never on a disposing session, the handle's `set` is guarded on the job still being active, and `finalizeSettle` nulls the handle too. Jobs stay in-memory, per pi session; nested subagents are not steerable from the parent (out of scope). The `subagent` tool description gains one sentence: the coordinator MAY redirect a running subagent via these commands ONLY when the user explicitly asks — never on its own initiative — and a settled job can no longer be messaged. The running-jobs widget's hint footer now reads `/subagents · /subagents peek|status|cancel <id> · /subagents steer|followUp <id> <msg> · clear`.
+- New: `/subagents steer <id> <message>` redirects a running job after its current turn.
+- New: `/subagents followUp <id> <message>` queues a message and extends the run until it is processed.
+- Bare `steer` and `followUp` auto-select the single active job, like bare `cancel`.
+- A follow-up can push a run past `timeoutMs`, and follow-up turns count toward `maxTurns`.
+- The widget footer hint lists the new commands.
 
 ## 1.3.3
 
-- **Behavior change: an externally aborted child run is now labeled as an abort, not a
-  completion.** pi >= 1.1.0 emits `agent_settled` with an explicit `aborted` flag before
-  `prompt()` resolves; the run now records it and settles with the `run was aborted` error
-  instead of falling through to the final-text checks. Previously an external abort (host-side
-  shutdown, an abort outside the extension's own signal) of a run that had already streamed
-  some assistant text settled as `completed` carrying that partial text as its result; a
-  defensive case — the extension's own cancel path already settles correctly via its
-  AbortController. Affects `/subagents session` reconcile counts: such runs now count as failed
-  runs instead of completed ones. On hosts < 1.1.0 the flag is absent and the previous
-  heuristics keep applying unchanged.
-- **New: per-tool durations in the peek window.** `tool_execution_end` events carry
-  `durationMs` on pi >= 1.1.0; the transcript's tool-end entries now record it and the peek
-  window appends it to each tool result line (`▪ read a.ts: ok · 420ms`), formatted by the new
-  `formatToolDuration` (whole milliseconds under a second, one decimal above it, negatives
-  clamped to 0ms). Hosts without the field render the same lines as before.
-- **New: Ctrl+O toggles tool output while the peek window is open** — parity with the host's
-  own toggle, resolved through the host keybindings (`app.tools.expand`, so user rebindings
-  are respected) and routed to the main view's expansion state, which the window follows on
-  its next frame. The window stays open and its scroll position is untouched. Ctrl+T
-  (thinking visibility) is not supported while the peek window is open: there is no
-  extension-visible setter for it — close the window (Esc/q) and press Ctrl+T in the main UI.
-- Passive host improvements (pi >= 1.2.0, no local code involved): delivery of a settled run's
-  result via `pi.sendMessage({triggerTurn: true})` no longer competes with a starting run —
-  the host queues the follow-up turn instead of failing it with "Agent is already processing" —
-  and child-session compaction serializes without thinking blocks.
+- Behavior change: an externally aborted child run now settles as aborted instead of completed. `/subagents session` counts it as failed.
+- New: the peek window shows per-tool durations, such as `▪ read a.ts: ok · 420ms` (pi 1.1.0 or newer).
+- New: Ctrl+O toggles tool output while the peek window is open.
+- Ctrl+T is not supported inside the peek window. Close it and press Ctrl+T in the main UI.
 
 ## 1.3.2
 
-- **Fix: an agent requesting MCP tools failed before the server connected, or ran on without
-  them.** pi connects MCP servers in the background when session_start fires; the requested-tools
-  fail-loud check ran immediately after bind, before any server had registered a tool. With an
-  exact name the run failed with a false "requested tool(s) never registered"; with a
-  wildcard-only list the pattern was exempt from both the bind gate and the check, so the run
-  skipped bind entirely and prompted into a session without the MCP tools (the
-  `tool_search`-in-the-list workaround only worked by accident). Two changes, one shared
-  predicate (`missingRequestedTools`, now pattern-aware): a requested `*` pattern that matches no
-  registered tool counts in the bind decision, and after the bind the run waits up to 10 s — the
-  host's own first-prompt order (`REQUESTED_TOOL_GRACE_MS`, overridable via the
-  `RunAgentViaSdkOptions.toolGraceMs` test seam) — polling `getAllTools()` for the requested
-  names and patterns to register before the fail-loud check; the job's abort signal cancels the
-  wait. A pattern that still matches nothing after the grace fails the run naming the pattern.
-  Codemode-exposure servers are covered (their tools are registered and match the pattern;
-  verified against the real extension). Tools already registered (or a synchronous host) end the
-  wait on its first check.
+- Fix: an agent requesting MCP tools no longer fails or runs without them before the server connects.
+- Runs wait up to 10 s for requested tools and `*` patterns to register. A pattern that matches nothing fails the run.
 
 ## 1.3.1 — 2026-10-12
 
-- Docs only. README trimmed from 865 to 654 words with the section structure intact: "Background jobs" now states the full model in three plain sentences (ack with job id, result delivered as its own message with a follow-up turn, in-memory only) and absorbs the running-jobs widget paragraph; the `/subagents` bullets lost every detail that was already documented in
-  [docs/REFERENCE.md](docs/REFERENCE.md#background-jobs), keeping one essential sentence per command.
-- Two stale README claims fixed: the install note now says pi 1.0.4 (the real `peerDependencies` floor) instead of 0.99.0, and the MCP tools section no longer says wildcards are unsupported — `tools`/`disallowedTools` entries accept `*` patterns (`mcp__<server>__*`), a capability the SDK added at that floor.
-- No code changes; the test suite and behavior are unchanged.
+- Docs only: README trimmed from 865 to 654 words.
+- Fix: the README now states pi 1.0.4 as the minimum, and says MCP `tools` entries accept `*` patterns.
+- No code changes.
 
 ## 1.3.0 — 2026-10-12
 
-- **New: `/subagents peek [id]` — a live window over a background job's activity.** A floating overlay renders the job's transcript as it streams: assistant text, the last few lines of the agent's thinking, and tool calls with their results, tailed and elided to fit. With no id it opens on the single active job (several actives report the ids to pick from) or the newest settled one; an unknown id warns exactly like `cancel`. While the job runs, a 250 ms pulse repaints the window — it stops itself the moment the job settles, and the frame freezes to the final result line (success/`FAILED`/error text, with the usage footer). `w` toggles between the floating window (80% × 50%) and a fullscreen takeover; Esc or `q` closes. Requires an interactive TUI session; other modes get a warning. The body scrolls with `↑/↓`, PgUp/PgDn, or the mouse wheel and auto re-follows once you return to the bottom; the scroll position survives a `w` toggle, and the window follows the session's thinking-visibility and tools-expanded preferences. Read-only this iteration — peeking never steers the peeked subagent (no input/steering channel; future work).
-- **New: bare `/subagents status` and `/subagents cancel` auto-select their target, like `peek`.** The single active job wins; several actives report the ids to pick from. `status` falls back to the newest settled job when nothing is active; `cancel` looks only at active jobs and warns `No running jobs to cancel.` when there are none. Explicit ids behave exactly as before.
-- **New: `/subagents session` — a per-subagent usage and cost report for the current session, reconstructed from disk.** pi's `/session` only counts the parent session's own entries; background subagent runs are separate SDK sessions whose spend it never sees. The new subcommand reconciles them from what is already persisted: it reads the `subagent-result` completion messages in this session's `.jsonl`, walks the child-session directories under the path convention (`<parent>/<runId>/run-N/`, nested subagents included, each child counted exactly once), and mirrors `/session`'s layout — token totals with a cached/uncached split and hit rate, a per-model cost breakdown (tool results and compaction summaries under `Tools/summaries`), and the cache re-billed cost — plus a per-agent breakdown like `scout: 3 runs, 1.2M tokens, $0.980`. Disk-first: when a child's `session.jsonl` exists, the fine-grained numbers come from it (per-model attribution; turns derived from assistant messages, durations from entry timestamps); otherwise the completion message's aggregate usage feeds an `unattributed` breakdown bucket. Runs whose process died mid-run still count: a child dir with no matching completion message shows as `unknown (orphaned)` with the run's first user message as the task (or `running` while its job is still active in this process), and an errored completion counts as a run at zero usage. Nothing new is persisted; `contextUsage` is the one `/session` field not replicated (it needs the live model registry). Requires a persisted session — it warns and exits before the session has ever been written to disk. New pure module `src/session-reconcile.ts` (injected `ReconcileFs` test seam); `childSessionDir`'s runId sanitization is now exported as `runIdDirName` and shared with the reconciliation. No per-run detail mode yet (`--runs` deferred — runIds aren't surfaced anywhere a user can read them).
-- The capture side is unchanged in cost: session events fold into the bounded transcript (`src/transcript.ts`) regardless of whether anyone is watching, and nothing re-renders unless a peek window is actually open — the perf guarantee of the widget's dedupe path is preserved.
+- New: `/subagents peek [id]` opens a live window over a background job's transcript, read-only.
+- The window scrolls with `↑/↓`, PgUp/PgDn or the mouse wheel. `w` toggles fullscreen, Esc or `q` closes. It needs a TUI session.
+- New: bare `/subagents status` and `cancel` auto-select the single active job, like `peek`.
+- New: `/subagents session` reports usage and cost per subagent for the current session, rebuilt from disk.
+- The report needs a persisted session. It includes token totals, a per-model cost breakdown and a per-agent summary.
+- Runs that died mid-run still count, shown as `unknown (orphaned)`.
 
 ## 1.2.1
 
-- **Fix: subagent child sessions silently lost every user package tool.** The 1.2.0 entry's `homeDir` derivation from `agentsDir` was one `dirname` short: the nested loader got `<home>/.pi/.pi/agent`, a nonexistent path whose empty settings loaded zero user packages — agents asking for package tools (`web_search`, `web_read`, …) ran tool-less and the model faked its tool calls as plain text, which settled as a `completed` job carrying that garbage as its result. The derivation now recovers the real home root (agents → agent → .pi → home), so the nested loader reads `<home>/.pi/agent` like 1.1.0 did.
-- **Behavior change: fail loud on requested tools that never registered.** After the extension bind, if a tool the agent (or the per-invocation `tools` whitelist) explicitly requested is still not registered, the run settles as an error naming the missing tools instead of prompting into a tool-less session. Wildcard entries and inert Claude Code tool names are exempt (shared `missingRequestedTools` predicate with the bind decision in `src/extension-binding.ts`).
-- **Behavior change: a run ending with no assistant text settles as an error.** A session whose last turn produced no text (e.g. a thinking-only degenerate ending mid-task) no longer marks the job `completed` with an empty "(agent produced no final answer)" result; it fails with an actionable message and the run's session file for the transcript.
-- Tests: nested-loader `agentDir` wiring test (captures the loader through the `createSessionOverride` seam), requested-tool-missing and empty-final-text cases at the `runAgentViaSdk` seam, wildcard exemption.
+- Fix: subagent sessions no longer lose user package tools (`web_search`, `web_read`, ...). Broken in 1.2.0.
+- Behavior change: a run fails with an error naming the tools when an explicitly requested tool never registered.
+- Behavior change: a run that ends with no assistant text fails with an error instead of `completed` with an empty result.
 
 ## 1.2.0
 
-- Internal: the entry point's default export gains an optional `pathsOverride` test-seam parameter (mirroring `createSessionOverride`), the agent registry moved from a module-level singleton into the factory, and `RunTaskOptions` gains a `homeDir` test seam. Wiring unit tests are now hermetic (per-test fixture home; no real `~/.pi/agent` reads, the nested resource loader included); production behavior is unchanged.
-
-- **Behavior change: strict model validation, no silent fallback.** An agent's `model` (frontmatter, settings `agentOverrides`, or the per-invocation `model` param) must be a well-formed `provider/modelId` reference that resolves in the model registry, or `"inherit"`/absent. Anything else — a malformed value (`"x/"`, `"/x"`, no `/`), a bare word, or a well-formed but unresolvable reference — makes the run settle as an error naming the agent, the value, and the fix, before the session is created (no tokens spent). Previously a well-formed-unknown model logged a warning and silently ran on the session default.
-- **Behavior change: Claude Code model aliases removed.** `sonnet`/`opus`/`haiku`/`fable` are no longer special-cased anywhere: a bare word is now just an invalid model value (the run fails). `"inherit"` still maps to the session default. The aggregated inert-usage warning no longer includes a `model aliases:` group.
-- **New: settings-level `agentOverrides` are validated per field.** Ill-typed values (e.g. `model: 123`) are warned and dropped at load instead of crashing the run with a downstream `TypeError`; excluded identity/lifecycle fields (`name`, `description`, `source`, `filePath`, `systemPrompt`) are rejected with a warning instead of silently overriding agent identity; unknown keys warn. Override semantics consolidated in a new `src/overrides.ts`. Per-invocation override validation is unchanged.
-- **Behavior change: settled-job states renamed by what actually happened.** A run that settles with an error result (timeout, maxTurns, unresolvable model, …) now marks the job `failed` (previously the job read `completed` with the error hidden inside the result, and the delivered message's title confusingly said "completed" over an error body; the error text now lives in the message body after a `\u2014 failed` header, and the run result — with its usage — is retained so the consumption footer keeps working). An unexpected promise rejection (infrastructure crash) now marks the job `errored` (previously `failed`). Delivery behavior is unchanged: cancelled stays quiet; completed/failed/errored wake the model as a follow-up. `/subagents` list/status label both new states; previously-saved session messages still render without migration.
-- **Behavior change: loader warnings unified.** The `skillsOverride` unknown-skills warning now flows through the same collected-warnings channel as every other loader warning; all loader warnings are emitted right after the resource loader's `reload()` completes, before the run starts. Previously this one warning fired mid-reload via a direct `console.warn`. Warning texts unchanged; only the channel and ordering changed.
-- Internal: `extensions/index.ts` (456 lines) split into `src/render-extensions.ts` (renderers, with the agent registry injected as `GetAgents`) and `src/task-runner.ts` (task orchestration); the entry point is thin wiring and its public surface is unchanged (`src/*` is not a public API, 1.1.0 precedent). Behavior-preserving surgical cleanup of `runAgentViaSdk` (the full characterization suite passes unedited). `SubagentJobMessageDetails` is now a `status`-keyed discriminated union (type-only; persisted message JSON byte-identical). Progress types are readonly where they don't cross the SDK boundary; the job status partition has a single source; the override-drop validator is de-genericized. New golden characterization test for `normalizeFrontmatterFields`.
+- Behavior change: `model` must be `provider/modelId` that resolves in the registry, or `inherit`. Otherwise the run errors.
+- Behavior change: the `sonnet`/`opus`/`haiku`/`fable` aliases are removed. A bare word is now an invalid model.
+- Behavior change: a run that settles with an error marks the job `failed`. A crashed run marks it `errored`.
+- Behavior change: all loader warnings, including unknown skills, are emitted together right after the loader reloads.
+- New: settings `agentOverrides` are validated per field. Bad types and identity fields are dropped with a warning.
+- Internal: entry point split into `src/render-extensions.ts` and `src/task-runner.ts`; tests no longer read the real home.
 
 ## 1.1.0
 
-- **New: `/subagents status <id>`** shows what one job is doing with more detail than the list. A running job reports status, elapsed time, the current activity word, the most recent tool call summary, the last 10 tool calls of the run with older ones elided, and the live usage footer (the list view only carries usage once a job settles). Finished jobs render the same entry the list shows, and an unknown id reports the same warning as `cancel`.
-- **New: one-word activity in the running-jobs widget.** Each running job now shows what the agent is doing right now: the tool currently executing (MCP tools collapse to their server name, `mcp__playwright__navigate` → `playwright`), or the model's stream phase (`thinking`/`output`) when no tool is executing, or `waiting` before the run's first signal. The word is derived at render time from stream and tool session events, never stored, and the per-token delta stream is deduplicated so the widget only repaints when the word changes.
-- Internal: the run options' `onToolEvent` is now `onProgressEvent` and delivers `SubagentProgressEvent`: tool lifecycle plus new stream-phase and live-usage events, all folded by one tracker `onEvent` behind the unchanged post-`done` guard. `src/*` is not a public API of the package (the entry point is `extensions/index.ts`), so integrating callers see no change.
+- New: `/subagents status <id>` shows one job in detail: current activity, last 10 tool calls and live usage.
+- New: the running-jobs widget shows a one-word activity per job (tool name, `thinking`, `output` or `waiting`).
+- Internal: run option `onToolEvent` is now `onProgressEvent`. No change for integrating callers.
 
 ## 1.0.0
 
-- **Raised the `pi` dependency floor to `>=1.0.4`.** `peerDependencies` and `devDependencies` for
-  `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` now require `>=1.0.4`/`^1.0.4`
-  (was `>=0.99.0`/`0.99.1`). Verified clean against 1.0.4: typecheck and all 554 unit tests pass
-  unchanged; no breaking API changes in 0.99.2–1.0.4 affect this package.
-- **`tools`/`disallowedTools` entries can now be `*` patterns**, not just exact names (e.g.
-  `mcp__mde-build__*` matches every tool of that server). This was already passed straight
-  through to the SDK's `tools`/`excludeTools` without validation on our side; the capability
-  comes from the new floor, not a code change here. Updated the `subagent` tool's schema
-  description and `docs/REFERENCE.md`, which previously said wildcards were unsupported.
-- **Fix: deeply nested subagents (a subagent dispatching another subagent) could make session
-  persistence fail with `ENAMETOOLONG`.** Each nesting level added one more
-  `<runId>/run-N/session` segment to the persisted session path; confirmed in the wild, real
-  session paths with ~20 nesting levels reached 1005-1016 bytes, right at macOS's `PATH_MAX`
-  (1024). Past that, the directory create failed and the run silently fell back to an in-memory
-  (unpersisted) session, with only a console warning. Nesting is now capped at 4 literal levels;
-  anything deeper collapses into one short hashed segment anchored at the ancestor directory
-  that existed at the cap, so the path no longer grows with nesting depth. Also hardened: an
-  individual run id segment longer than 64 characters (not the cause found here, but possible on
-  a non-Anthropic host) is now truncated with a stable hash suffix instead of risking
-  `NAME_MAX` (255 bytes per path component) on its own.
-  Tradeoff: a run past the nesting cap no longer has its ancestor chain readable from its session
-  path (it was never being persisted at all before this fix, so nothing is lost in practice).
-- **Breaking: `subagent` no longer waits for a run to finish.** Calling it launches one background
-  job for that one `{agent, task}` call and returns almost immediately with an acknowledgment —
-  a job id (`S1001`, `S1002`, …), the agent, and the task — instead of the agent's final output.
-  The model is told explicitly not to call `subagent` again to poll. When the job settles, its
-  result is delivered automatically as a new message in the conversation, which also wakes the
-  model up with a follow-up turn to act on it (unless the job was cancelled, in which case it's
-  delivered quietly, without a new turn). This is the only mode now: there is no opt-in flag to
-  keep the old synchronous behavior.
-- **Breaking: the `tasks:[...]` parallel-launch mode is removed.** It existed only to get
-  concurrency out of a blocking call; now every call is non-blocking, so running several agents at
-  once just means calling `subagent` once per task, in the same turn — each call gets its own
-  independent job, with no overall cap on how many run at once. `agent`/`task` are now required,
-  top-level fields; the `concurrency` setting (`MAX_PARALLEL_TASKS`, `resolveConcurrency`,
-  `DEFAULT_CONCURRENCY`) is gone and silently ignored if still present in `settings.json`.
-- **Breaking: `buildSubagentToolResult` and related result types are now single-result shaped.**
-  `buildSubagentToolResult(result, runId)` takes one `AgentRunResult`, not an array; its `details`
-  is `{runId, run}` (the array-shaped `results`/`ChildResult` are gone). `formatRunResults` →
-  `formatRunResult(result)`; `aggregateRunUsage` → `toAggregatedUsage(usage)`. The completion
-  message's `details` is now `{jobId, runId, status, task, run?, usage?, isError}`, replacing the
-  old `tasks`/`runs`/`results` arrays.
-- **New `/subagents` command.** Lists every running and recently-finished job in the current
-  session (newest first, with per-task detail and a usage footer once finished).
-  `/subagents cancel <id>` cancels a running job; `/subagents clear` drops finished jobs from the
-  list (the 50 most recent are also kept automatically without it). Esc no longer cancels a
-  subagent run — only `/subagents cancel`, a session shutdown, or the headless safety nets
-  (the settle barrier's abort path, `agent_settled`) do; a job's abort signal is now
-  independent of the launching tool call's, so it survives past the end of the turn that launched
-  it.
-- **New running-jobs widget.** A persistent panel below the editor lists every still-running task
-  (agent, truncated task preview, elapsed time, ticking once a second) while at least one job is
-  running, and disappears once nothing is. This is how a job that outlives the rest of the
-  conversation stays visible without asking.
-- **A job's result renders like a native tool result**, in its own transcript entry: same themed
-  background (`toolSuccessBg`/`toolErrorBg`), same header convention, individually clickable to
-  toggle expand (independent of the global Ctrl+O toggle, same mechanism a real tool result uses).
-- **Headless and nested sessions still wait for their own jobs before settling.** `pi -p`,
-  `--mode json`, and a nested subagent session (one `subagent` call dispatching another) have
-  nowhere to show the widget/`/subagents`, so a new settle barrier (`agent_before_settle`) delays
-  that session's own settlement until every background job it launched finishes — the headless
-  process still exits with the real result, not an empty/truncated one.
-- **`AgentToolResult.usage` moved off the launch tool call's own result.** There's nothing to
-  report at launch time; the usage (and the run itself, at `details.run`) is now on the
-  completion message's own `details.usage` instead, once the job settles.
-- Background jobs are **in-memory only, per pi session**: no persistence across a restart, and a
-  nested subagent gets its own independent job set, invisible to its parent's.
-- `src/background-jobs.ts`, `src/job-messages.ts`, `src/job-view.ts`, and `src/job-widget.ts` are
-  new internal modules backing all of the above; see [DEVELOPER.md](DEVELOPER.md#background-jobs).
+- Raise the `pi` dependency floor to `>=1.0.4`.
+- Breaking: `subagent` no longer waits. It starts a background job and returns a job id (`S1001`, ...) right away.
+- Breaking: a finished job's result arrives as a new message that wakes the model. Cancelled jobs are delivered quietly.
+- Breaking: the `tasks:[...]` parallel mode and the `concurrency` setting are removed. Call `subagent` once per task.
+- Breaking: `agent` and `task` are required top-level fields.
+- Breaking: `buildSubagentToolResult` and the result types take a single result. `details` is now `{runId, run}`.
+- Breaking: `formatRunResults` is now `formatRunResult`, and `aggregateRunUsage` is now `toAggregatedUsage`.
+- New: `/subagents` lists jobs. `/subagents cancel <id>` cancels one and `/subagents clear` drops finished ones.
+- Esc no longer cancels a subagent run. Use `/subagents cancel`.
+- New: a widget below the editor lists running jobs with a ticking elapsed time.
+- New: a job's result renders like a native tool result, and each one expands on click.
+- Headless and nested sessions wait for their own background jobs before settling.
+- Usage moved from the launch result to the completion message's `details.usage`.
+- Background jobs live in memory only, per pi session.
+- `tools`/`disallowedTools` accept `*` patterns, e.g. `mcp__mde-build__*`.
+- Fix: deeply nested subagents no longer fail session persistence with `ENAMETOOLONG`. Long paths are shortened.
 
 ## 0.20.1
 
-- **Expandable task in the call title.** pi 0.99 passes `expanded` to call renderers, so Ctrl+O
-  (or a click) now also shows the full task under each agent. The collapsed title is unchanged.
-- **Progress summaries for the new tools.** `mcp__<server>__<tool>` calls render as
-  `server/tool key=value ...`, `tool_search` as its query and `codemode` as the first line of its
-  code, instead of the raw name plus JSON.
+- New: Ctrl+O or a click shows the full task under each agent in the call title.
+- Progress lines for `mcp__<server>__<tool>`, `tool_search` and `codemode` calls are readable instead of raw JSON.
 
 ## 0.20.0
 
-- **Breaking: requires pi >= 0.99.0** (`peerDependencies` floor raised from 0.84.1; dev
-  dependencies moved to 0.99.1).
-- **Subagents can use pi 0.99's built-in MCP, `tool_search` and `codemode`.** Previously these
-  never reached a subagent, for two reasons:
-  - pi's CLI injects its built-in extensions into its own resource loader, but SDK loaders get
-    none. `buildLoaderOptions` now passes `codemode`, `tool-search` and `mcp` as
-    `extensionFactories`, marked `builtin`/`replaceable` like the CLI, so `-builtin:<name>`
-    settings and `inheritExtensions: false` behave as in the host. `llama.cpp` is not included (its factory isn't exported; it registers
-    a provider, not tools).
-  - The `session_start` gate only counted `origin: "package"` tools, while every built-in tool is
-    `origin: "top-level"`, and built-in MCP tools are only registered after `session_start`.
-    `needsExtensionBinding(tools, requestedToolNames)` now also fires for tools whose
-    `sourceInfo.path` is `builtin:mcp`, `builtin:tool-search` or `builtin:codemode`, and for
-    `agent.tools` entries not registered yet (e.g. `mcp__<server>__<tool>`), ignoring inert
-    Claude Code tool names (`Task`, `TodoWrite`, ...).
-- **`pi-mcp-adapter` is no longer supported**: use pi's built-in MCP (`~/.pi/agent/mcp.json`).
-- `inheritExtensions: false` now also disables the built-in `mcp`, `tool-search` and `codemode`
-  extensions in that agent, matching `pi --no-extensions` in 0.99.
-- The `tools` param description, the bundled skill and `docs/REFERENCE.md` (new section "MCP tools
-  in subagents") explain exact `mcp__<server>__<tool>` names and how `exposure` interacts with a
-  subagent's `tools` list. README shortened.
-- Live tests (`PI_LIVE_E2E=1`) rewritten for pi's built-in MCP: the integration test drives the
-  real subagent loader, and the `pi -p` e2e calls `mcp__mde-build__mvn` through a `worker`.
+- Breaking: requires pi `>=0.99.0`.
+- Subagents can use pi's built-in MCP, `tool_search` and `codemode`.
+- Breaking: `pi-mcp-adapter` is no longer supported. Use pi's built-in MCP (`~/.pi/agent/mcp.json`).
+- `inheritExtensions: false` also turns off the built-in `mcp`, `tool-search` and `codemode` extensions.
 
 ## 0.15.0
 
-- **Subagent runs now persist their own session to disk by default, instead of running purely
-  in-memory.** Previously, every subagent run's tokens and cost were computed correctly but
-  never written anywhere durable, so any usage-tracking tool that attributes cost by reading
-  session files on disk (local `/usage`-style dashboards, not the model provider's own billing)
-  had no record of them — subagent spend, including on a different model than the caller's, was
-  invisible locally even though it was real spend.
-  - Each run's session is now persisted at `<parent-session-file-without-ext>/<runId>/
-    run-<taskIndex>/session.jsonl`, where `runId` is the subagent tool call's own `toolCallId`.
-    This is the convention several usage-tracking tools already know how to reconcile: when a
-    child session at that path exists, they attribute cost/tokens to the child's real model
-    instead of lumping it into a generic bucket.
-  - `defaultContext: "forked"` agents now persist at this same conventional path too, replacing
-    the previous fixed `~/.pi/agent/sessions/subagents/` directory.
-  - A subagent whose caller session isn't itself persisted (e.g. an in-memory host session)
-    still falls back to running fully in-memory, as before — there is no parent path to nest
-    under.
-  - New `childSessionDir` export in `src/subagent-session.ts`; `SessionManagerFactory` gains an
-    `atPath` method.
-- **The subagent tool's result now reports its own usage on the canonical `AgentToolResult.usage`
-  field**, not just inside `details`, so Pi's own usage accounting sees it directly. `details`
-  gains `runId` (the tool call's id) and `results` (a per-task array of `{ sessionFile, usage }`,
-  aligned by index to the existing `runs` array) alongside the unchanged `runs` field.
+- New: each subagent run saves its own session to disk, under the parent session path (`<runId>/run-<n>/session.jsonl`).
+- `defaultContext: "forked"` agents save at the same path instead of `~/.pi/agent/sessions/subagents/`.
+- The tool result reports usage on `AgentToolResult.usage`. `details` gains `runId` and `results`.
 
 ## 0.14.1
 
-- Rewrite README: short introduction aimed at new users, advanced usage moved to
-  `docs/REFERENCE.md`.
-- Add `docs/REFERENCE.md` with the full frontmatter reference, Claude Code compatibility notes,
-  settings overrides, limits, and known limitations.
+- Rewrite the README for new users and move advanced usage to `docs/REFERENCE.md`.
 
 ## 0.14.0
 
-- **Subagents can now use MCP tools (and any other extension that depends on the `session_start`
-  hook to initialize).** Previously, a subagent's nested session never called
-  `agentSession.bindExtensions(...)`, so extensions like `pi-mcp-adapter` never initialized and
-  MCP-backed tools always returned `"MCP not initialized"` inside a subagent, even though the
-  tool existed in the registry.
-  - Binding is conditional: only subagents with at least one active tool from an installed
-    extension package (other than this package's own `subagent` tool) trigger it, so subagents
-    restricted to built-in tools pay no extra cost.
-  - The bind is paired with a symmetric shutdown (`session_shutdown`, emitted right before the
-    session disposes) so MCP server child processes spawned as a side effect don't outlive the
-    subagent — this is what makes it safe in every host run mode (`tui`, `rpc`, `print`/`pi -p`,
-    `json`), not just interactive sessions.
-  - The bind is bounded (`EXTENSION_BIND_TIMEOUT_MS`, 60s default) and abortable via the
-    subagent's own signal, so a hung MCP handshake can't block a run indefinitely.
-  - New `RunAgentViaSdkOptions` fields: `mode` (propagates the host's run mode into the nested
-    session) and `extensionBindTimeoutMs` (test seam). Both optional; existing programmatic
-    callers of `runAgentViaSdk` are unaffected if they don't set them.
-  - New `src/extension-binding.ts` module.
+- New: subagents can use MCP tools and other extensions that need `session_start`.
+- Extensions bind only when the agent has an active package tool, and shut down with the session.
+- The bind times out after 60s by default.
 
 ## 0.13.1
 
-- **Each subagent run now shows a one-line consumption footer** (tokens, cache, cost, context %),
-  in the same format as pi's own status-bar footer: `↑<input> ↓<output> R<cache-read>
-  W<cache-write> CH<hit%>% $<cost>[ (sub)] <ctx%>/<window>`. Fields at zero are omitted. Cache-hit
-  % is cumulative over the whole run, not just the last turn (unlike pi's own footer).
-  - Appears on the live progress line once a task settles (`<agent> · tools: N · done · <footer>`),
-    and on the final result, **both collapsed and expanded** — the Ctrl+O toggle only gates the
-    full output/tool-call stream, not this one-line summary.
-  - In a parallel `tasks[]` batch, each task gets its own footer line; there is no aggregated
-    total across tasks.
-  - Shown on every outcome — success, error, timeout, maxTurns, and abort — since the tokens were
-    spent regardless.
-  - New `src/usage.ts` module (pure accumulation + formatting); usage is accumulated from the
-    session's own message events during the run, not from `AgentSession.getSessionStats()`, so a
-    `defaultContext: "forked"` agent's inherited history never contaminates its own run's numbers.
+- New: each subagent run shows a one-line usage footer (tokens, cache, cost, context %), including on errors and aborts.
+- The footer shows collapsed and expanded, one per task, with no total.
 
 ## 0.13.0
 
-- **The `subagent` tool's call display now respects the host's `expanded` flag (Ctrl+O /
-  `app.tools.expand`), with different rules while a task is still running vs. once it has
-  settled.**
-  - **In progress, collapsed** (unchanged): one status line per agent — `<agent> · tools: <N> ·
-    <status>`.
-  - **In progress, expanded:** the same status line, followed by an indented stream with one
-    line per tool call the subagent fired, in order, formatted as a short `toolName + args`
-    summary (e.g. `read foo.ts:10-40`, `$ ls -la`, `grep /pattern/ in src`). The stream **never**
-    shows a tool call's raw result/output — only the action (name + args) — so an expanded,
-    long-running subagent doesn't accumulate large payloads (e.g. a full `read`'s file contents)
-    in memory.
-  - **Final result, collapsed:** shows nothing (empty body) — previously the subagent's full
-    output was always shown.
-  - **Final result, expanded:** shows the subagent's/subagents' full output, same as the
-    historical always-on behavior.
-  - A muted divider line (`───`) separates the header (agent/task/params, unchanged) from the
-    body whenever the body has content; no divider is rendered when the body is empty (collapsed
-    final result).
-  - In parallel mode (`tasks[]`), there is still a single tool box per invocation, not one per
-    subagent; the expanded in-progress stream renders one block per agent, each with its own
-    status line followed by its own tool-call history.
-- Docs updated: README.md (new "Expanding the live stream (Ctrl+O)" section under "Using the
-  `subagent` tool"), DEVELOPER.md (`onToolEvent`/`SubagentToolEvent.tool_start.summary` note, new
-  `src/format-tool-call.ts` and `src/render-result.ts` sections).
+- The `subagent` call display follows the `expanded` flag (Ctrl+O).
+- Running and expanded: shows one line per tool call (name and args, never the output).
+- A finished result is empty when collapsed and shows the full output when expanded.
+- A muted divider separates header and body when the body has content.
 
 ## 0.12.0
 
-- **New optional `thinking` param on the `subagent` tool invocation.** Same placement rule as
-  `model`/`tools`/`skills`/`maxTurns`: a top-level field in single mode, per-entry inside each
-  `tasks[]` item in parallel mode (top-level `thinking` alongside `tasks` is rejected). A free
-  string, not validated at the tool boundary — an unrecognized level is warned and ignored at run
-  time by the existing `clampThinkingLevel` (`src/run.ts`), falling back to the agent's
-  otherwise-resolved level, not a validation error. Precedence: invocation `thinking` > settings
-  `agentOverrides[agent].thinking` > agent frontmatter `thinking` > session default.
-- **New optional `timeoutMs` param on the `subagent` tool invocation**, same placement rule as the
-  other five override fields. Precedence: invocation `timeoutMs` > settings
-  `agentOverrides[agent].timeoutMs` > agent frontmatter `timeoutMs` > the existing 10-minute
-  default (`DEFAULT_TIMEOUT_MS`).
-- **`timeoutMs` is no longer settings-only — it's now also a real agent frontmatter field.**
-  Parsed and normalized by `src/frontmatter.ts`, populated onto `AgentConfig.timeoutMs` the same
-  way `maxTurns` was connected in 0.10.0.
-- **New 2-hour ceiling on `timeoutMs`: `MAX_TIMEOUT_MS = 7_200_000` ms, enforced once at the
-  `resolveTimeoutMs` chokepoint (`src/run.ts`) for every layer** (frontmatter, settings,
-  invocation). A finite value above the ceiling is **clamped** to it with a `console.warn`, not
-  dropped to the default — the caller's intent to run long is honored up to the ceiling. The
-  existing fallback for non-number/`<= 0`/`NaN`/`Infinity` values (warn, fall back to the
-  10-minute default) is unchanged.
-- **Fix: the `subagent` tool's call display (`src/render-call.ts`) now renders the effective
-  (post-invocation-override) `thinking` value, and gains a new `timeoutMs: ...` segment.**
-  Previously `thinking` had no `InvocationOverride` field and was always read directly off the
-  agent's raw configured value, so a call overriding `thinking` rendered the *pre-override*
-  level — the same class of bug already fixed for `model`/`tools`/`skills` in 0.9.0 and for
-  `maxTurns` in 0.10.0. `thinking` now merges through `applyInvocationOverride` like every other
-  field; `timeoutMs` was not rendered at all before this release.
-- **Fix: `SubagentParams`' tasks-mode branch (`src/validate.ts`) was silently missing `maxTurns`
-  since 0.10.0.** The hand-written union that forbids top-level override fields alongside a
-  top-level `tasks` array listed only `model`/`tools`/`skills` as `?: undefined`, so `maxTurns`
-  never actually appeared in that type even though the runtime check in `validateTasksMode`
-  always rejected it correctly — a type-only drift, not a runtime bug. Replaced with a
-  self-maintaining `Partial<Record<keyof InvocationOverride, undefined>>` mapped type, so this
-  class of drift can't recur as new override fields (like this release's `thinking`/`timeoutMs`)
-  are added to `InvocationOverride`.
-- Docs updated: README.md (new "Overriding thinking per invocation" / "Overriding timeoutMs per
-  invocation" sections, `timeoutMs` added to the frontmatter field table, corrected
-  precedence-rules paragraph, corrected `agentOverrides.timeoutMs` note), `skills/
-  invoking-subagents/SKILL.md` (restructured per-param sections into one "Per-invocation
-  parameters" section covering all six fields), DEVELOPER.md (`AgentConfig.timeoutMs`,
-  `InvocationOverride.thinking`/`timeoutMs`, new `resolveTimeoutMs` section, corrected
-  `render-call.ts`/`SubagentParams` descriptions).
+- New: `thinking` param on `subagent` calls. It overrides settings and frontmatter.
+- New: `timeoutMs` param on `subagent` calls, and a `timeoutMs` agent frontmatter field.
+- New: `timeoutMs` is capped at 2 hours. Larger values are clamped with a warning.
+- Fix: the call display shows the effective `thinking` after overrides, and a new `timeoutMs` segment.
+- Fix: the `SubagentParams` type was missing `maxTurns` in the tasks-mode branch. Type only.
 
 ## 0.11.0 — 2026-08-07
 
-- **Requires pi `>= 0.83`.** The SDK renamed `CreateAgentSessionOptions.modelRegistry` to
-  `modelRuntime`; this plugin now requires the new shape. This is a hard cut — no dual-version
-  support for older pi releases.
-- **`peerDependencies` floor raised to `>=0.84.1`** for `@earendil-works/pi-coding-agent` and
-  `@earendil-works/pi-tui` (previously `*`). Breaking for consumers pinned below that version.
-- **Behavior change: subagents now share one `ModelRuntime`, constructed once when the
-  extension loads,** instead of a registry object that was silently ignored by the SDK on pi
-  >=0.83 (i.e. this fixes a real bug, not just a type error — subagents were already
-  unknowingly building their own runtime from disk on affected pi versions; now that's explicit
-  and shared instead of ignored). If `ModelRuntime.create()` fails at load, the `subagent` tool
-  still registers but every invocation returns a clear "failed to initialize model runtime: ..."
-  error until `/reload`.
-- **User-facing caveat: a `/login` performed after this extension loads is not picked up by
-  subagents until `/reload`** (the extension's `ModelRuntime` snapshot is frozen at load time).
-  This same frozen snapshot is also used for model-name resolution (`getModel`, the
-  `provider/modelId` lookup path), so a provider or model that only became available after load
-  won't resolve until `/reload` either.
+- Breaking: requires pi `>=0.83`. No support for older releases.
+- Breaking: `peerDependencies` floor for `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` is now `>=0.84.1`.
+- Behavior change: subagents share one `ModelRuntime`, created when the extension loads. Fixes a bug where the registry was ignored.
+- If `ModelRuntime.create()` fails at load, every `subagent` call returns an error until `/reload`.
+- A `/login` or new provider after load is not seen by subagents until `/reload`.
 
 ## 0.10.0 — 2026-08-06
 
-- **`maxTurns` is no longer inert — it is a real per-agent turn limit, configurable at every
-  layer the agent's config flows through.** Valid range is integer 1..100; any other value
-  (non-integer, `<= 0`, `> 100`, `NaN`, `Infinity`, non-numeric) resolves to "no limit" with a
-  `console.warn` (same warn-and-drop pattern as `resolveTimeoutMs`/`resolveConcurrency`).
-  Canonical constant `MAX_TURNS_LIMIT = 100` exported from `src/run.ts`. Precedence now covers
-  `maxTurns` alongside `model`/`tools`/`skills`: invocation > project settings
-  (`agentOverrides`) > user settings (`agentOverrides`) > frontmatter > no limit.
-  - **Frontmatter:** `maxTurns: 5` in an agent's `.md` is a hard per-run cap. Previously
-    (since 0.4.0) it was accepted but listed among the Claude-compat inert fields. Parsed
-    and normalized in `src/frontmatter.ts`; populated onto `AgentConfig.maxTurns` in
-    `src/agents.ts`.
-  - **Settings:** `agentOverrides[agent].maxTurns` in `settings.json` overrides the
-    frontmatter value through the existing `applyOverrides` merge (same channel as
-    `model`/`thinking`/`timeoutMs`).
-  - **Subagent tool invocation:** new optional `maxTurns` parameter on `subagent`, in single
-    mode as a top-level param, in parallel mode per-entry inside each `tasks[]` item
-    (top-level `maxTurns` alongside `tasks` is rejected, same placement rule as
-    `model`/`tools`/`skills`). Per-invocation `maxTurns` takes precedence over the agent's
-    configured value. `validate.ts` propagates the value through with a minimal
-    `typeof === "number"` type guard (non-numbers warn + drop); range checks live at the
-    use site.
-  - **On exceed:** when the resolved limit is reached, the run settles as
-    `status: "error"` with `error: "reached maxTurns limit of N"`, then
-    `agentSession.abort()`. Composes with timeout and `signal.abort()` through the existing
-    `settleOnce` dedupe (whichever fires first wins).
-  - **Turn counting is by model turn.** One `turn_start` event = one model response + its
-    tool batch = 1 turn (matches Claude Code's `maxTurns` semantics; counting tool starts
-    would be off by N on parallel-tool-batching runs). New `subscribeTurnCounter` helper in
-    `src/run.ts` (parallel to the existing `subscribeToolEvents`) subscribes only when the
-    limit resolves to a number, so agents with no `maxTurns` pay no extra overhead.
-- **`formatAgentParams` (the `subagent` tool's call display) gains a `maxTurns: <N>` segment**
-  (or `maxTurns: inherited` when unset), in the same shape as `model`/`thinking`/`tools`/
-  `skills`.
-- **`maxTurns` removed from `CLAUDE_INERT_FIELDS`** (`src/claude-compat.ts`); an agent that
-  sets it no longer triggers the aggregated inert-usage warning.
-- Docs updated: README.md (removed from the inert-fields list, added to the frontmatter field
-  table, new "Overriding maxTurns per invocation" section parallel to `model`/`tools`/`skills`,
-  precedence-rules paragraph updated, complete example extended), `skills/invoking-subagents/
-  SKILL.md` (new "Limiting subagent turns" section with precedence and error/edge-case
-  bullets), DEVELOPER.md (`AgentConfig.maxTurns` / `InvocationOverride.maxTurns` fields,
-  `applyInvocationOverride` presence-gated description, new `resolveMaxTurns` section, new
-  `runAgentViaSdk` turn-counting section, precedence section updated).
+- New: `maxTurns` is now a real per-agent turn limit (integer 1..100). Invalid values warn and mean no limit.
+- Set `maxTurns` in agent frontmatter, in `agentOverrides` in `settings.json`, or per call on the `subagent` tool.
+- Per-call `maxTurns` goes top-level in single mode, or inside each `tasks[]` item in parallel mode.
+- Precedence: invocation > project settings > user settings > frontmatter > no limit.
+- When the limit is reached, the run ends with `error: "reached maxTurns limit of N"`.
+- One model response plus its tool calls counts as one turn.
+- The `subagent` call display shows `maxTurns: <N>` (or `inherited`).
+- `maxTurns` is no longer listed as an inert Claude field, so it no longer triggers the inert-usage warning.
 
 ## 0.9.4 — 2026-08-06
 
-Follow-up fixes to 0.9.3's directory-style agent discovery.
-
-- **Fix: deterministic collision order.** `discoverAgents` (`src/agents.ts`) now sorts `readdir`
-  entries by name before resolving sources, so which of two colliding same-named agents wins
-  first-in-order is deterministic across filesystems. **Closes 0.9.3's "Known, documented gap"**
-  (collision winner depended on OS-dependent `readdir` ordering) — that gap is resolved as of
-  this release.
-- **Closed a 0.9.3 QA gap:** added a flat-vs-flat dedup test (two flat `.md` files sharing the
-  same frontmatter `name`), previously only the flat-vs-directory collision case was covered.
-- **The duplicate-agent warning is now throttled.** `dedupeByResolvedName`'s `console.warn` now
-  goes through the existing `warnRegistry`/`claimUnwarned` mechanism, same as other inert-usage
-  warnings, instead of firing unconditionally on every cache miss.
-- Docs: README.md/DEVELOPER.md updated to describe the deterministic ordering, the throttled
-  warning, and that `AGENT.md` matching is case-sensitive by design (not an oversight) — a
-  typo'd filename fails silently on Linux even if it happened to match on macOS/Windows.
+- Fix: discovery order of same-named agents is now deterministic (entries sorted by name).
+- The duplicate-agent warning is now throttled like other inert-usage warnings.
 
 ## 0.9.3 — 2026-08-06
 
-- **New: directory-style agent discovery.** `discoverAgents` (`src/agents.ts`) now also
-  discovers agents laid out as `<agentsDir>/<name>/AGENT.md` (a directory containing a manifest
-  file), alongside the existing flat `<agentsDir>/<name>.md` files. `name` resolves from the
-  manifest's frontmatter `name:`, falling back to the directory's basename when absent —
-  `description` still has no fallback, so a manifest without `description` is skipped exactly as
-  a flat file would be. Symlinking a directory into `agentsDir` also works, since the underlying
-  `fs/promises` `stat` follows symlinks.
-- **New: first-wins dedup by resolved agent name, with a warning.** When two sources (flat file
-  and/or directory manifest) resolve to the same agent `name`, `discoverAgents` now keeps only
-  the first one encountered (in `readdir` order) and logs a `console.warn` naming both file paths
-  of the duplicate. Previously, two same-named flat files would both be returned and the *last*
-  one silently won downstream (via `validate.ts`'s name-keyed `Map`) — this is a small, disclosed
-  behavior change on the pre-existing flat-file path. Not covered by a dedicated flat-vs-flat unit
-  test: only the flat-vs-directory collision case is tested (`test/unit/agents.test.ts`'s dedup
-  test), plus a direct unit test of the extracted `dedupeByResolvedName` helper.
-- **New (module-private, noted for maintainers):** `MANIFEST_FILENAME` constant, `AgentSource`
-  interface, and `resolveAgentSource` function in `src/agents.ts`, plus an exported
-  `dedupeByResolvedName` helper.
-- Docs: README.md gained a "Directory-style agents" subsection.
-- Public API unchanged: `discoverAgents`'s signature and `AgentConfig`'s shape are identical to
-  0.9.2.
-- **Known, documented gap:** the collision winner between two same-named sources depends on
-  OS-dependent `readdir` ordering — disclosed via the warning and in README, not made
-  deterministic.
+- New: directory-style agents, `<agentsDir>/<name>/AGENT.md`, alongside flat `<name>.md` files.
+- The agent name comes from the manifest `name:`, or the directory name if absent. `description` is still required.
+- New: when two agents resolve to the same name, the first wins and a warning names both paths.
+- Behavior change: two same-named flat files used to resolve to the last one. Now the first one wins.
+- Public API unchanged.
 
 ## 0.9.2 — 2026-08-05
 
-- **An unknown `provider/modelId` model no longer fails silently.** `resolveModel`
-  (`src/run.ts`) now emits a `console.warn` (with the `pi-simple-agents: ` prefix) when
-  `getModel` returns `undefined` for a well-formed `provider/modelId` value, then falls back to
-  the session default model as before — the fallback previously happened without any
-  indication. Bare Claude Code aliases without a `/` (`sonnet`, `inherit`, ...) are unaffected:
-  they short-circuit before the registry lookup and never warn. Two new unit tests cover the
-  warn-and-fallback path and the no-warning path when the model resolves
-  (`test/unit/run.test.ts`).
+- Fix: an unknown `provider/modelId` now warns before falling back to the session default model.
 
 ## 0.9.1 — 2026-07-30
 
-- README restructure: inline agent definitions replaced with links to the `examples/`
-  directory; new natural-language usage examples for the `subagent` tool. Version bump only —
-  no package code changes.
+- README restructure: agent examples now link to `examples/`, plus new usage examples for the `subagent` tool.
 
 ## 0.9.0 — 2026-07-30
 
-- **New optional `tools`/`skills` params on the `subagent` tool invocation**, extending the
-  0.8.0 `model` override to the same two fields. Same placement rule as `model`: single mode
-  top-level, or per-entry inside each `tasks[]` item (top-level `tools`/`skills` alongside `tasks`
-  is rejected, same as `model`). Both are arrays of strings, **total replacement** (not merge) of
-  whatever the agent would otherwise resolve. `tools` accepts native pi tool names only — no
-  Claude Code tool-name aliasing in this invocation path (frontmatter `tools` still maps Claude
-  Code names, unchanged). `skills` is a whitelist by exact case-sensitive name against the
-  inherited set, same semantics as frontmatter `skills`. `[]` is a valid explicit value meaning
-  "none" for that call, distinct from omitting the field ("inherit whatever settings.json/
-  frontmatter already resolved"). Precedence now covers `model`, `tools`, and `skills`:
-  invocation > project settings > user settings > frontmatter > session default. `disallowedTools`
-  remains settings/frontmatter-only, out of scope for invocation-level override.
-- **`applyModelOverride` generalized into `applyInvocationOverride(agent, {model?, tools?,
-  skills?})`** (`src/agents.ts`) — one pure, presence-gated merge function now shared by both the
-  runtime path (`extensions/index.ts::runSingleTask`, which computes a single `effectiveAgent` and
-  reuses it for resource-loader creation, session-manager creation, and the SDK run — a fix in
-  itself, see below) and the render path (`src/render-call.ts::formatAgentParams`).
-- **Fix: the `subagent` tool's call display now renders effective (post-invocation-override)
-  `tools`/`skills`, not the agent's configured values.** Previously (and still true for `model`
-  as of 0.8.0) the render showed the agent's *configured* values regardless of any invocation
-  override — e.g. a call with `tools: []` would render the agent's full configured tool list.
-  `formatAgentParams` now merges via `applyInvocationOverride` internally before rendering. The
-  call display also gained a new `skills: ...` segment (previously not rendered at all).
-- **Fix: an invocation-level `skills` override no longer reaches only `runAgentViaSdk`.** An
-  earlier draft of this change applied the override just before the SDK call, leaving
-  `createMinimalResourceLoader`'s resource loading (the only real consumer of `agent.skills`, via
-  `buildSkillsOverride`) working off the pre-override agent — silently inert. Fixed by hoisting the
-  merge to the top of `runSingleTask` and reusing one `effectiveAgent` everywhere.
-- **Known, documented gap:** no unit test directly exercises `runSingleTask`'s wiring of the
-  effective agent into `createMinimalResourceLoader`/`createSubagentSessionManager`/
-  `runAgentViaSdk` (ESM named imports aren't mockable without `--experimental-test-module-mocks`,
-  not enabled in this repo — same limitation already accepted for the `model` override). Covered
-  by composition (`agents.test.ts`, `run.test.ts`, `loader-config.test.ts`) plus manual live
-  validation.
-- **Known, documented gap:** an agent with `inheritSkills: false` combined with an invocation
-  `skills` override renders the requested skills as if effective, but the loader discards them
-  all at runtime per the existing contradictory-config rule — surfaced only via `console.warn`,
-  not in the render. Latent: no shipped agent currently sets `inheritSkills: false`.
-- Docs updated: README.md (`Overriding tools per invocation` / `Overriding skills per invocation`
-  sections, corrected precedence-rules paragraph), `skills/invoking-subagents/SKILL.md`
-  (`Forcing tools or skills for one invocation` section, extended description, new error cases),
-  DEVELOPER.md (new `InvocationOverride`/`applyInvocationOverride` section, corrected
-  `SubagentParams`/`TaskEntry` reference — this closes a doc gap left over from 0.8.0's `model`
-  override too — and a new `src/render-call.ts` module section).
+- New: optional `tools` and `skills` params on the `subagent` tool, in single mode or per `tasks[]` item.
+- Both replace the agent's resolved values. `[]` means none, and omitting the field inherits.
+- `tools` takes native pi tool names only. `disallowedTools` stays settings and frontmatter only.
+- Precedence for `model`, `tools` and `skills`: invocation > project settings > user settings > frontmatter > session default.
+- Fix: the `subagent` call display now shows the effective `tools`/`skills` after overrides, and a new `skills` segment.
+- Fix: an invocation `skills` override now reaches resource loading instead of being silently ignored.
+- Known gap: with `inheritSkills: false`, a `skills` override shows in the display but is dropped at runtime with a warning.
 
 ## 0.8.1 — 2026-07-30
 
-Internal tech-debt paydown from a strict `pablo-code-philosophy` review. No changes to the
-`subagent` tool's public contract (schema, invocation shape, or output format) — everything below
-is an implementation-detail refactor plus added test coverage.
-
-- **Removed a hidden shared-state footgun in Claude-compat warning dedupe.** `claimUnwarned` and
-  `reportInertUsage` (`src/claude-compat.ts`) no longer default their `registry` param to a
-  module-level singleton `Map` — it's now a required argument, same as `discoverAgents`'s
-  `warnRegistry` (`src/agents.ts`). The only production call site (`agent-registry.ts`) already
-  passed its own registry explicitly, so there's no behavior change; this only removes an
-  implicit fallback that could have silently shared TTL-dedupe state across unrelated callers that
-  omitted the argument.
-- **New `toErrorMessage(error: unknown): string` in `src/warn.ts`**, replacing 4 duplicated
-  `error instanceof Error ? error.message : String(error)` ternaries across `agents.ts`,
-  `frontmatter.ts`, `subagent-session.ts`, and `run.ts`. No behavior change.
-- **Reduced complexity in two hot-path functions**, both extractions with no behavior change:
-  - `runAgentViaSdk` (`src/run.ts`) now delegates its abort-listener/timeout wiring to a new
-    `runWithTimeoutAndAbort` helper.
-  - `parseFrontmatter` (`src/frontmatter.ts`) now delegates its four field-group normalization
-    passes (list/scalar/enum/boolean fields, plus model-alias resolution) to a new
-    `normalizeFrontmatterFields` helper.
-- **New unit test coverage for `extensions/index.ts`** (`test/unit/extensions-index.test.ts`,
-  previously untested at the unit level): the tool's `execute` validation-error branches,
-  `renderSubagentCall`'s incomplete-args short-circuit, `renderSubagentResult`'s partial-render
-  path, and `runSingleTask`'s progress-tracking `finally` guarantee. `runSingleTask` is now
-  exported from `extensions/index.ts` (was module-private) to make this last case testable
-  directly — visibility-only change, no behavior change.
+- Internal cleanup and extra tests. No change to the `subagent` tool contract.
 
 ## 0.8.0 — 2026-07-29
 
-- **New optional `model` param on the `subagent` tool invocation.** In single mode it's a
-  top-level param; in parallel mode it's per-entry, inside each `tasks[]` item (a top-level
-  `model` alongside `tasks` is rejected). Format is `provider/modelId`, same as frontmatter
-  `model`. Precedence: invocation `model` > project settings (`agentOverrides`) > user settings
-  (`agentOverrides`) > frontmatter `model` > session default. As with the existing settings-level
-  `model`, registry existence isn't checked — a well-formed but unknown model silently falls back
-  to the session default. A bare alias without a `/` (e.g. `"sonnet"`) is rejected outright as a
-  validation error, not silently ignored.
-- **New bundled Agent Skill `invoking-subagents`** (`skills/invoking-subagents/SKILL.md`),
-  declared via `package.json`'s `pi.skills` manifest entry. Teaches single/parallel `subagent`
-  invocation and the new `model` override; loads automatically once the package is installed, and
-  is also invocable explicitly as `/skill:invoking-subagents`.
+- New: optional `model` param on the `subagent` tool, as `provider/modelId`, in single mode or per `tasks[]` item.
+- Precedence: invocation `model` > project settings > user settings > frontmatter > session default.
+- A bare alias without `/` (e.g. `sonnet`) is rejected as a validation error.
+- New: bundled `invoking-subagents` skill, also available as `/skill:invoking-subagents`.
 
 ## 0.7.0 — 2026-07-29
 
-- **`discoverAgents` is now async.** Returns `Promise<AgentConfig[]>` instead of `AgentConfig[]`,
-  backed by `fs/promises` (parallel `stat`/`readFile` fan-out, deterministic warning order).
-  Never rejects: an unreadable directory or an unexpected pipeline error resolves to `[]` (logged
-  via `console.warn`) rather than rejecting, so a rejected promise can't sit poisoned in the cache
-  for the 5s TTL.
-  - **Behavior change:** every call site must now `await discoverAgents(...)`.
-- **`loadOverrides` is deleted, replaced by `loadSettings`.** New shape,
-  `SubagentSettings { agentOverrides: AgentOverrides; concurrency?: unknown }`, adding the new
-  `concurrency` field alongside the existing `agentOverrides`.
-  - **Behavior change:** `loadOverrides` no longer exists; update call sites to `loadSettings`.
-  - **Fix:** `agentOverrides` and `concurrency` now fall back between the `pi-simple-agents` and
-    legacy `subagents` settings keys **independently, per field**, instead of all-or-nothing —
-    previously a file mixing both keys across different fields could silently lose one field's
-    value.
-  - **Fix:** a malformed (non-plain-object) `agentOverrides` value is now ignored with a warning
-    instead of silently flowing through and producing garbage per-agent merges.
-  - Using the `subagents` key at all (regardless of which fields it supplies) now emits one
-    deprecation `console.warn` per file recommending `pi-simple-agents` instead; `subagents`
-    still works fully, this is a warning only.
-- **New configurable `concurrency` setting**, default `4` (`DEFAULT_CONCURRENCY`, `src/run.ts`),
-  validated by the new `resolveConcurrency(value: unknown): number` (invalid values warn and fall
-  back to the default). Effective cap of 8, since the `subagent` tool's own `MAX_PARALLEL_TASKS`
-  bounds how many tasks one call can have. Replaces the previously hardcoded `4` passed to
-  `mapWithConcurrencyLimit` for the subagent batch.
-- **New `createAgentRegistry`/`AgentRegistry` module** (`src/agent-registry.ts`), composing
-  `discoverAgents` + `loadSettings` + `applyOverrides` + `resolveConcurrency` behind one
-  `load(cwd): Promise<LoadedAgents>` / `peek(cwd): LoadedAgents | undefined` API. `load` runs
-  discovery and settings loading in parallel and never rejects; `peek` is synchronous/zero-I/O for
-  use in the SDK's synchronous `renderCall` contract. Now used internally by
-  `extensions/index.ts`, replacing the old module-level `agentCache`/`overridesCache`/
-  `loadAvailableAgents` helpers.
-- **`noThemes: true` added to the loader config** (`buildLoaderOptions`, `src/loader-config.ts`).
-  Perf: skips theme loading/resolution on every subagent's `resourceLoader.reload()`, since themes
-  are only consumed by interactive mode and subagent sessions are headless.
-- Primarily an internal/perf-focused release. End-user-facing behavior is meant to be equivalent
-  except for the new `concurrency` knob and the `subagents` deprecation warning.
+- Behavior change: `discoverAgents` is now async and returns a `Promise`. Call sites must `await` it.
+- Behavior change: `loadOverrides` is replaced by `loadSettings`, which also returns `concurrency`.
+- Fix: `agentOverrides` and `concurrency` now fall back between `pi-simple-agents` and `subagents` keys per field.
+- Fix: a malformed `agentOverrides` value is ignored with a warning.
+- Using the legacy `subagents` settings key now logs a deprecation warning. It still works.
+- New: `concurrency` setting, default `4`, capped at 8 by the parallel task limit. Invalid values warn and use the default.
+- New: `createAgentRegistry` module that loads agents, settings and overrides in one call.
+- Performance: skip theme loading in subagent sessions (`noThemes: true`).
 
 ## 0.6.0 — 2026-07-29
 
-- **Subagent runs are now bounded by a timeout.** New `AgentConfig.timeoutMs?: number`
-  (settings-only, override via the existing `agentOverrides` channel, same as `model`/`thinking`).
-  Default when unset: `DEFAULT_TIMEOUT_MS = 600_000` (10 minutes), exported from `src/run.ts`.
-  Invalid values (`0`, negative, `NaN`, `Infinity`, non-numeric values from raw JSON) fall back to
-  the default with a `console.warn`. On expiry, the run settles as `status: "error"` with message
-  `"timed out after <N>ms"`; any partial output is discarded rather than returned as a truncated
-  success.
-  - **Behavior change:** previously a subagent run had no timeout at all and could hang forever;
-    every run is now bounded, 10 minutes by default unless overridden via `timeoutMs`.
-- **Live progress feed in the `subagent` tool_box.** While a subagent runs, the call body now
-  shows a per-task status line: `<agent> · tools: <N> · <status>`, where `<status>` is
-  `working…` (no tool started yet), `running: <tool1, tool2, ...>` (tools currently executing, in
-  start order — parallel tool calls are possible), or `done` (task settled). Replaces the
-  previously-static "Running..." placeholder. New module `src/progress.ts`.
+- Behavior change: subagent runs now time out after 10 minutes by default. Before, they could hang forever.
+- New: `timeoutMs` per agent, set through `agentOverrides`. Invalid values warn and use the default.
+- A timed-out run ends with `status: "error"` and `"timed out after <N>ms"`. Partial output is discarded.
+- New: live progress line per task in the `subagent` tool box: `<agent> · tools: <N> · <status>`.
 
 ## 0.5.0 — 2026-07-29
 
-- **`defaultReads`, `defaultContext`, `skills`, and `description` are now connected to the
-  runtime.** All four fields were already parsed onto `AgentConfig` but had no effect; they now
-  drive real behavior, via 6 new internal modules: `src/default-reads.ts`, `src/loader-config.ts`,
-  `src/skills-filter.ts`, `src/subagent-session.ts`, `src/tool-description.ts`, `src/warn.ts`.
-  - **`defaultReads`** pre-loads files into the agent's context on startup via the SDK's
-    `agentsFilesOverride`. Relative paths resolve against the invocation's cwd (not the agent's
-    `.md` file); `~`/`~/...` expands to the home directory. A missing/unreadable/non-regular-file
-    entry produces a warning and is skipped, the rest of the list still loads; duplicate entries
-    (same resolved path) are deduped, first occurrence wins.
-  - **`defaultContext`'s documented default is corrected from `forked` to `fresh`.** The runtime
-    always ran `fresh` regardless of what the README said; the README now matches reality instead
-    of the behavior silently changing for every existing agent. An explicit `defaultContext:
-    forked` is now honored for real: it forks the caller's session into a dedicated
-    `~/.pi/agent/sessions/subagents/` directory (kept out of `pi --continue`'s recent-session
-    lookup); if the caller session isn't persisted, or the fork fails, it falls back to `fresh`
-    with a warning — a subagent run never fails because of this.
-  - **`skills`** now filters the inherited skill set down to the named subset (exact,
-    case-sensitive match), via the SDK's `skillsOverride`. Requested names with no match produce a
-    warning per run. `skills` combined with `inheritSkills: false` is contradictory config: it
-    warns and the filter is ignored. Still doesn't preload the named skills' content into context
-    — not the same as Claude Code's skill-preload semantics.
-  - **`description`** now builds the `subagent` tool's description shown to the model (a
-    `name: description` line per discovered agent), computed once at extension registration time;
-    agents added or renamed while pi is running aren't reflected until restart.
-  - **Fix:** the fresh session path now uses `SessionManager.inMemory(cwd)` instead of
-    `SessionManager.inMemory()`, so a subagent's session header records the actual invocation cwd
-    instead of the SDK's `process.cwd()` default.
+- `defaultReads`, `defaultContext`, `skills` and `description` now have real effect. They were parsed before but ignored.
+- `defaultReads` preloads files into the agent context. Bad or missing entries warn and are skipped.
+- `defaultContext` default is documented as `fresh`, which is what it always did. `forked` now works, with fallback to `fresh`.
+- `skills` filters the inherited skills by exact name. Unmatched names warn. It does not preload skill content.
+- `description` now builds the `subagent` tool description. New agents show up after a pi restart.
+- Fix: fresh sessions record the real invocation cwd.
 
 ## 0.4.1 — 2026-07-28
 
-- **Subagent toolbox now shows agent parameters.** The `subagent` tool's call title displays a
-  second line with `model`/`thinking`/`tools` for the resolved agent, in addition to the existing
-  agent name + task preview. New `src/render-call.ts` module (`formatAgentParams`,
-  `buildSubagentCallText`). Resolved at render time only once tool args are complete
-  (`context.argsComplete`), so no extra I/O happens while args are still streaming.
-  - Unset fields render as `inherited`; an empty `tools: []` renders as `none`; more than 5 tools
-    show the first 5 plus a `+k more` suffix.
-  - Parallel mode (`tasks: [...]`) shows one parameter line per resolving task entry, in order;
-    unresolved/unknown agent names are silently omitted (no placeholder).
-  - Fixes a pre-existing crash hazard: a partial/streaming `tasks` entry missing `agent` or `task`
-    previously could throw inside the renderer; it now falls back to `"?"`/empty text.
+- New: the `subagent` call title shows a second line with the agent's `model`, `thinking` and `tools`.
+- Unset fields show `inherited`, empty tools show `none`, and more than 5 tools are cut with `+k more`.
+- Parallel mode shows one line per task entry. Unknown agents are omitted.
+- Fix: a partial `tasks` entry while streaming no longer crashes the renderer.
 
 ## 0.4.0 — 2026-07-28
 
-- **Real YAML frontmatter parsing.** `src/frontmatter.ts` now parses frontmatter with the `yaml`
-  package instead of a hand-rolled line-by-line parser. New runtime dependency: `yaml` (`^2.9.0`).
-- **New `disallowedTools` field.** Denylist counterpart to `tools`, applied after it. Comma string
-  or YAML list, same Claude Code tool-name compatibility as `tools`. Forwarded to the SDK's
-  `createSession` as `excludeTools`.
-- **Claude Code frontmatter compatibility.** `.claude/agents/*.md` files now load and run unchanged
-  as pi-simple-agents agents (Claude → pi only):
-  - `tools`/`disallowedTools` accept Claude Code's capitalized tool names (`Read`, `Grep`, `Glob`,
-    `Bash`, `Write`, `Edit`, `MultiEdit`, `LS`, `WebSearch`, `WebFetch`) and map them to pi's tool
-    names (`src/claude-compat.ts`, `CLAUDE_TOOL_MAP`); unrecognized/already-lowercase names pass
-    through unchanged; duplicates after mapping are deduped.
-  - Claude-only tool names with no pi equivalent (`Task`, `TodoWrite`, `NotebookEdit`,
-    `SlashCommand`, `KillShell`, `BashOutput`, `ExitPlanMode`, `AskUserQuestion`) pass through
-    harmlessly and are reported once per 60 seconds via an aggregated `console.warn`.
-  - `model` accepts Claude Code's model aliases (`sonnet`, `opus`, `haiku`, `fable`) and `inherit`.
-    Aliases are not resolved to a real model ID; they pass through as literal strings, which
-    degrade gracefully to the session's default model since model resolution only acts on values
-    containing a `/`. Documented limitation: use pi's `provider/modelId` form to force a specific
-    model.
-  - Claude fields with no functional effect in pi (`permissionMode`, `maxTurns`, `mcpServers`,
-    `hooks`, `memory`, `background`, `isolation`, `color`, `effort`, `initialPrompt`) are accepted
-    without error, values preserved but inert, and reported once per 60 seconds via one aggregated
-    `console.warn` grouped with inert tool names and model aliases.
-- **Newly wired pi-native fields.** `thinking`, `inheritSkills`, `inheritExtensions`,
-  `defaultContext`, and `skills` were previously declared on `AgentConfig` but silently dropped
-  during frontmatter parsing; they are now actually parsed and populated. `skills` is parsed and
-  stored but still not wired to preload skill content into the subagent's context — a known
-  limitation for both pi-native and Claude-imported agent files.
-- **Fix: invalid `systemPromptMode`/`defaultContext` normalize to the default instead of breaking
-  silently.** An invalid `systemPromptMode` previously dropped the entire system prompt silently;
-  it and an invalid `defaultContext` now fall back to their default value with a per-file warning.
-- **Backward compatible.** Existing pi-native agent files, including `agents-examples/scout.md` and
-  `web-scout.md`, parse and behave identically to before (covered by a golden-file regression test).
-- **Fix: an unquoted `": "` in a scalar frontmatter value (e.g. `description: Use when: X`) used to
-  fail strict YAML parsing, silently emptying the frontmatter and dropping the agent from discovery
-  entirely — no `name`/`description` means the file is skipped.** This regression was introduced (and
-  caught) by this same real-YAML-parsing change above, during its own QA pass, not a pre-existing
-  issue. `parseFrontmatter` now retries once with a failure-scoped lenient recovery pass: unindented
-  plain-scalar lines containing `": "` are auto-quoted and reparsed; on success the agent loads
-  normally with one warning naming the recovered field(s) (quote the value in the source file to
-  silence it). If recovery also fails, prior behavior (empty frontmatter, warning, file skipped)
-  applies unchanged. Never triggered for frontmatter that already parses on the first try.
-- **Warn-only: unquoted `#` in a scalar value.** A `#` following whitespace inside a scalar value is
-  valid YAML for "start of comment," silently truncating the value. This is now detected (not
-  auto-repaired — a `#` may be intentional) and reported with a per-file warning.
+- Frontmatter is now parsed with the `yaml` package (new dependency).
+- New: `disallowedTools` field, a denylist applied after `tools`.
+- New: Claude Code agent files in `.claude/agents/*.md` load and run unchanged.
+- `tools` and `disallowedTools` accept Claude Code tool names (`Read`, `Bash`, `Edit`, ...) and map them to pi names.
+- Claude-only tools with no pi equivalent pass through and are reported in one aggregated warning per 60 seconds.
+- `model` accepts Claude aliases (`sonnet`, `opus`, `haiku`, `fable`, `inherit`), which fall back to the session default model.
+- Claude fields with no effect in pi (e.g. `permissionMode`, `maxTurns`, `hooks`) are accepted and ignored, with one aggregated warning.
+- `thinking`, `inheritSkills`, `inheritExtensions`, `defaultContext` and `skills` are now actually parsed.
+- Fix: an invalid `systemPromptMode` or `defaultContext` now falls back to the default with a warning.
+- Fix: values like `description: Use when: X` no longer drop the agent. They are recovered with a warning.
+- New: warning when an unquoted `#` truncates a scalar value.
+- Existing pi-native agent files behave as before.
 
 ## 0.3.3 — 2026-07-28
 
-- **`modelRuntime` → `modelRegistry` migration.** The extension now passes `ctx.modelRegistry`
-  straight through to `runAgentViaSdk` instead of reaching into `(ctx.modelRegistry as any).runtime`.
-  Model resolution uses `modelRegistry.find(provider, modelId)` in place of `modelRuntime.getModel`.
-- **Typed SDK option surfaces.** `RunAgentViaSdkOptions` now derives its `modelRegistry`,
-  `resourceLoader`, `sessionManager`, and `getModel` return type from the SDK's
-  `CreateAgentSessionOptions`/`CreateAgentSessionResult`, replacing the previous `unknown` and
-  hand-rolled inline session-shape types. `clampThinkingLevel` returns a typed
-  `ThinkingLevel | undefined` instead of `string | undefined`.
-- **Live e2e smoke test.** `test/e2e/subagent.e2e.test.ts` spawns real `pi` with the extension
-  loaded from this repo and drives the `subagent` tool end-to-end against a real model. Opt-in
-  only: `PI_LIVE_E2E=1 npm run test:e2e` (skipped otherwise; not part of `npm test`).
-- **New scripts.** `test:types` (`tsc --noEmit`) and `test:e2e`.
-- **Dependency changes.** Restored `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
-  and `typebox` as `peerDependencies`, with matching `devDependencies` pinned for local
-  development/type-checking.
-- **tsconfig.** `noEmit: true`; `include` now covers `extensions/**/*` and `test/**/*` in addition
-  to `src/**/*`; added `allowImportingTsExtensions`; dropped `rootDir`.
+- Internal: the extension now uses `modelRegistry` directly, with typed SDK options.
+- New: live e2e smoke test, run with `PI_LIVE_E2E=1 npm run test:e2e`.
+- New scripts: `test:types` and `test:e2e`.
+- Packaging: `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui` and `typebox` are peer dependencies again.
 
 ## 0.3.2 — 2025-07-27
 
-- **New `inheritExtensions` field.** `AgentConfig` now supports `inheritExtensions` (boolean, default `true`). When `false`, the agent starts without loading pi extensions. The extension previously hardcoded `noExtensions: true`; it now respects the agent's field.
-- **Documentation overhaul.** Split README into user-facing (`README.md`) and developer-facing (`DEVELOPER.md`) documents. Both are now in English. The user guide covers agent definitions, frontmatter fields, the `subagent` tool, and configuration overrides with full precedence examples. The developer guide covers the programmatic API: `discoverAgents`, `loadOverrides`, `applyOverrides`, `runAgentViaSdk`, `mapWithConcurrencyLimit`, `validateSubagentParams`, `resolveAgents`, `formatRunResults`, and extension internals.
+- New: `inheritExtensions` field (default `true`). When `false`, the agent starts without pi extensions.
+- README split into user guide (`README.md`) and developer guide (`DEVELOPER.md`), both in English.
 
 ## 0.3.1 — 2025-07-27
 
-- New `inheritExtensions` field on `AgentConfig` to control extension loading per agent.
-- Extension uses `DefaultResourceLoader` with full field-to-behavior mapping.
-- Full test coverage for all public APIs.
+- New: `inheritExtensions` field on `AgentConfig`.
+- The extension uses `DefaultResourceLoader` for field-to-behavior mapping.
 
 ## 0.3.0 — 2025-07-31
 
-- **SDK-based execution.** Replaced child-process spawning (`runAgent`) with SDK-based runner (`runAgentViaSdk`). Agent sessions now run through the pi SDK with proper resource loading, skill inheritance, and context management.
-- **Caching.** `discoverAgents` and `loadOverrides` now accept an optional cache (TTL: 5s) to avoid redundant filesystem reads on repeated calls.
-- **New agent fields.** Added `thinking`, `inheritSkills`, `defaultContext`, and `skills` to `AgentConfig`.
-- **`subagents` config key.** `settings.json` now accepts a `subagents` key as an alias for `pi-simple-agents` for agent overrides.
-- **Concurrency control.** Parallel task execution is now capped at 4 concurrent agents via `mapWithConcurrencyLimit`.
-- **Removed `parse-output.ts`.** Incremental stdout parsing is no longer needed with the SDK runner.
-- **Dependency changes.** Dropped `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` peer dependencies. Now a standalone library with `glob` and `zod` as runtime dependencies.
+- Subagents now run through the pi SDK (`runAgentViaSdk`) instead of child processes.
+- `discoverAgents` and `loadOverrides` accept an optional 5s cache.
+- New agent fields: `thinking`, `inheritSkills`, `defaultContext` and `skills`.
+- `settings.json` accepts a `subagents` key as an alias for `pi-simple-agents`.
+- Parallel tasks are capped at 4 at a time.
+- Removed `parse-output.ts`.
+- Packaging: the pi peer dependencies are dropped. `glob` and `zod` are now runtime dependencies.
 
 ## 0.2.2 — 2025-07-27
 
-- **Perf: eliminate TUI re-renders during subagent execution.** Removed all `onUpdate` calls during progress. The TUI shows a lightweight "Running..." indicator by default.
-- **Perf: skip incremental JSON parsing when no progress listener.** `wireOutputHandlers` now skips `parseAgentOutputIncremental` entirely when `onProgress` is undefined.
-- **Simplify `renderSubagentResult`.** Returns empty `Text` for partial updates; only renders content on the final result.
+- Performance: no TUI re-renders during subagent runs. A light "Running..." indicator shows instead.
+- Performance: no incremental JSON parsing when nothing listens for progress.
+- Partial results render empty. Content shows only on the final result.
 
 ## 0.2.1 — 2025-07-27
 
-- **Fix: TUI freeze on large tool output.** Two-layer fix: `lastProgress` truncated to 500 characters at the parser level, and `renderSubagentResult` also truncates when `isPartial === true`.
+- Fix: TUI freeze on large tool output. Progress text is cut to 500 characters.
 
 ## 0.2.0 — 2025-07-25
 
-- **Performance: incremental stdout parsing.** `parseAgentOutputIncremental()` only processes new lines since the last complete `\n`.
-- **100ms throttle on `onUpdate`.** Progress updates are batched with a 100ms throttle.
-- **Custom `renderResult` that reuses `Text`.** Avoids render tree rebuilds on every progress update.
+- Performance: stdout is parsed incrementally, only new lines.
+- Progress updates are throttled to 100ms.
+- Custom `renderResult` reuses `Text` to avoid render tree rebuilds.
 
 ## 0.1.2 — 2025-07-23
 
-- Fix: add `pi` manifest to `package.json` and move extension to `extensions/`.
+- Fix: add the `pi` manifest to `package.json` and move the extension to `extensions/`.
 
 ## 0.1.1 — 2025-07-23
 
@@ -868,7 +377,6 @@ is an implementation-detail refactor plus added test coverage.
 - Initial npm release as `pi-simple-agents`.
 - `subagent` tool with single and parallel modes.
 - YAML frontmatter parsing and validation.
-- Claude Code compatible agent format + pi-simple-agents extensions.
+- Claude Code compatible agent format, plus pi-simple-agents extensions.
 - Agent overrides from `settings.json`.
 - Streaming progress for parallel execution.
-- Unit tests.
