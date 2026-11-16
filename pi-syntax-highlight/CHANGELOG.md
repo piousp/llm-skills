@@ -5,6 +5,17 @@ follows Keep a Changelog, and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `package.json` gains a `files` allowlist (`extensions`, `src`, `README.md`,
+  `CHANGELOG.md`, `DEVELOPER.md`, `LICENSE`), and the repo gains the MIT
+  `LICENSE` file its manifest already declared.
+
+### Changed
+
+- `test/` and `assets/` are no longer published (43 → 22 files; 104 → 39 KB
+  packed).
+
 ## [0.2.0] - 2026-11-16
 
 ### Removed

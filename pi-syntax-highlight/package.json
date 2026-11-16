@@ -31,6 +31,7 @@
     ]
   },
   "type": "module",
+  "files": ["extensions", "src", "README.md", "CHANGELOG.md", "DEVELOPER.md", "LICENSE"],
   "scripts": {
     "test": "node --experimental-strip-types --test test/unit/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
