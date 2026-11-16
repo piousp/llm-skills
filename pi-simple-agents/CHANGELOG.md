@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.5.10
+
+- **Fix: the package no longer installs `glob`.** It was listed under `dependencies` but nothing in `src/`, `extensions/` or the skills imports it, so every install pulled `glob` and its tree (including `minimatch`) for nothing, and both showed up in `npm audit` as moderate vulnerabilities. Only `yaml` remains as a runtime dependency. `peerDependencies` are unchanged.
+- Dev toolchain: the `@earendil-works/pi-coding-agent` and `pi-tui` dev dependencies move from `^1.2.0` to `^1.5.1` (resolved to 1.5.2), which also brings `undici` to 8.12.3. `npm audit` now reports no vulnerabilities, with or without dev dependencies. Type-check and the 1003 unit tests pass unchanged against the newer SDK types. This does not change what is published.
+
 ## 1.5.9
 
 - **Performance: the peek window renders in a fraction of the time.** Wrapping is cached per transcript entry (keyed by entry seq and width) and the finished frame is cached by a composite key (transcript state identity, job state, usage, prefs, scroll offset, elapsed second, theme, width). The body is built once per frame instead of twice, and the 250 ms pulse only asks for a repaint when that key changed, so an idle job repaints once per elapsed second instead of four times. `thinkingKeptLines` stops wrapping once it has the last five lines, and `pushEntry` evicts with a single slice. `TranscriptSink.snapshot()` now returns the immutable state itself (its identity is the transcript's version), and `TranscriptState`/`TranscriptEntry` are `readonly` all the way down. Measured on a full transcript (2000 entries, ~128k chars, live tail), median per render: same state 5.72 ms → ~0 ms, one new entry 5.83 ms → 0.58 ms, first render 5.91 → 3.47 ms, width change 5.24 → 3.25 ms. 40 pulse ticks (10 s) went from 224 ms and 40 repaints to 6 ms and 10 repaints; `pushEntry` at the eviction ceiling from 2.09 to 1.93 µs/event. Also fixed a latent mutation: the unscrolled branch of the frame assembly appended the elision and result lines to the shared body array.
