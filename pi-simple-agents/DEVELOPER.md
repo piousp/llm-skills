@@ -56,6 +56,14 @@ import { createAgentRegistry } from "../src/agent-registry.ts";
   a copy: the reducer never mutates, so the reference's identity is the transcript's version (it changes
   exactly when a fold changes the state, and `tool_execution_update` leaves it alone). `pushEntry`
   computes how many head entries to evict and builds the new array with a single `slice`.
+  A text or thinking accumulator that grows past `SEGMENT_SPLIT_CHARS` (2000) is closed as one entry
+  at the position `segmentCut(acc)` returns, and the rest stays in `currentText`/`currentThinking`.
+  The cut is after the last `\n` at or beyond `MIN_SEGMENT_CHARS` (half the split size), else after
+  the last space or tab there, else at the end of the accumulator (URLs, JSON and base64 have no
+  safe boundary). The entry is an exact prefix of the accumulator, `chars` grows by the cut length
+  only, and there is one push per event. `TranscriptState.textSplit`/`thinkingSplit` record that a
+  split already stored part of the block, so `text_end`/`thinking_end` with an empty accumulator do
+  not append their `content` a second time; both flags reset when the block ends.
 - `src/peek-window.ts` — the `/subagents peek` overlay: pure `buildPeekLines` (transcript tail —
   text, 5-line thinking cap, tool starts/ends, elision, frozen settled result), the
   `PeekOverlayComponent` (owns the 250 ms pulse that stops itself once the job settles), and
@@ -1306,6 +1314,7 @@ export interface SubagentSessionReportOptions {
   readonly maxDepth?: number;   // deepest level walked (root's children are depth 1); unbounded when absent
   readonly withStats?: boolean; // false skips per-child usage stats (left undefined)
   readonly rootEntries?: readonly SessionEntry[]; // pre-parsed root; it is not read from disk when present
+  readonly activeAgents?: ReadonlyMap<string, string>; // raw runId -> agent name of live jobs; labels a running child with no completion message
 }
 
 export interface ReconcileFs {
@@ -1337,15 +1346,19 @@ closes that gap entirely from already-persisted data — nothing new is written:
   path visited once (dedupe also neutralizes the `deep-<hash16>` collision case). A child dir is
   attributed via `runIdDirName` (`src/subagent-session.ts`) to the matching `subagent-result`
   completion message in its immediate parent `.jsonl`; nested runs resolve themselves because
-  level-N+1 completion messages live in the level-N child's own file. Grandchildren count toward
+  level-N+1 completion messages live in the level-N child's own file. Each child file is read and
+  parsed once; the entries are passed down to the recursion and to `makeRun`. Grandchildren count toward
   the session total exactly once.
 - **Disk-first effective usage**: when the child's `session.jsonl` exists, its parsed stats are
   canonical (per-model breakdown, turns from assistant messages, cache waste); otherwise the
   completion message's aggregate `details.usage` feeds an `unattributed` breakdown bucket. A
   completion whose status is `errored` (no `run`, no usage) counts as a run at zero usage; a
-  child dir with no matching completion message is an orphan — agent `unknown`, task recovered
-  from the child's first user message, `running` when its runId is in `activeRunIds` (the only
-  use of the in-memory job registry, for labeling — never a usage source), else `unknown (orphaned)`.
+  child dir with no matching completion message has its task recovered from the child's first user
+  message. When its runId is in `activeRunIds` it is `running` and not orphaned, and its agent comes
+  from `opts.activeAgents` (raw runId to agent name, normalized with `runIdDirName`), or `unknown` when
+  the map has no entry. Otherwise it is an orphan: agent `unknown`, status `unknown (orphaned)`. The
+  registry feeds only state and agent labels, never a usage source. `ReconciledRun.orphaned` means
+  no completion message and no live job.
 - **Branches**: the whole parent file is read, no branch filtering — the same scope as pi's
   `/session` (`getSessionStats` iterates every entry), and a run billed in an abandoned branch
   still happened.
@@ -1479,6 +1492,9 @@ value, emitted on every change. Three decisions keep it cheap and honest:
   (a width change clears it) and checked against the entry's content. Tool entries are one line and
   depend on prefs and theme, so they never go through it; the live `currentText`/`currentThinking`
   tails are wrapped on every frame. Returned arrays are shared and must not be mutated.
+  `wrapLines` drops the empty last line that wrapping produces when the content ends in `\n`, so an
+  entry cut right after a newline renders like the uncut text. A closed entry that really ends in a
+  newline loses that blank line too.
   `buildFullBody(..., cache?)` takes it as an optional last parameter; without it the body is built
   exactly as before, so `buildPeekLines` and `peekScrollCap` keep their signatures. The component
   prunes the cache to `entries[0].seq` after each build (and clears it when there is no transcript),
