@@ -12,6 +12,8 @@ const MAX_TRANSCRIPT_CHARS = 128_000;
 /** Accumulated deltas above this length push a segment entry and reset the
  * run, so one open-ended stream cannot pin state.currentText forever. */
 const SEGMENT_SPLIT_CHARS = 2000;
+/** A split never cuts before this offset, so segments stay reasonably sized. */
+const MIN_SEGMENT_CHARS = SEGMENT_SPLIT_CHARS / 2;
 /** First-line preview cap for tool results. */
 const TOOL_RESULT_MAX_CHARS = 200;
 
@@ -41,10 +43,25 @@ export interface TranscriptState {
   readonly dropped: number;
   /** Running total of stored entry characters; keeps eviction O(evicted). */
   readonly chars: number;
+  /** A text run was split mid-stream: its text_end content is already stored. */
+  readonly textSplit: boolean;
+  /** Same as textSplit, for the thinking run. */
+  readonly thinkingSplit: boolean;
 }
 
 export function initialTranscriptState(): TranscriptState {
-  return { entries: [], currentText: "", currentThinking: "", dropped: 0, chars: 0 };
+  return { entries: [], currentText: "", currentThinking: "", dropped: 0, chars: 0, textSplit: false, thinkingSplit: false };
+}
+
+// Where to cut an over-long accumulator: after the last newline of the window
+// [MIN_SEGMENT_CHARS, length), else after the last space/tab, else at the end
+// (URLs, JSON, base64 have no safe boundary).
+function segmentCut(acc: string): number {
+  const nl = acc.lastIndexOf("\n");
+  if (nl >= MIN_SEGMENT_CHARS) return nl + 1;
+  const ws = Math.max(acc.lastIndexOf(" "), acc.lastIndexOf("\t"));
+  if (ws >= MIN_SEGMENT_CHARS) return ws + 1;
+  return acc.length;
 }
 
 /** First-line preview of a tool result: string results use their first line;
@@ -120,18 +137,20 @@ function finalizeRun(
   accumulator: string,
   endContent: string | undefined,
 ): TranscriptState {
+  const flag = kind === "text" ? "textSplit" : "thinkingSplit";
+  const cleared =
+    kind === "text"
+      ? { ...state, currentText: "", textSplit: false }
+      : { ...state, currentThinking: "", thinkingSplit: false };
   if (accumulator === "") {
+    // A mid-stream split already stored the whole block: end content is a duplicate.
+    if (state[flag]) return cleared;
     // No deltas and no content: nothing to finalize -> identity.
     if (!endContent) return state;
     // Redacted thinking (or a complete-at-start block): no deltas to
     // preserve — this single entry IS the content.
-    return pushEntry(
-      kind === "text" ? { ...state, currentText: "" } : { ...state, currentThinking: "" },
-      { kind, content: endContent },
-      endContent.length,
-    );
+    return pushEntry(cleared, { kind, content: endContent }, endContent.length);
   }
-  const cleared = kind === "text" ? { ...state, currentText: "" } : { ...state, currentThinking: "" };
   return pushEntry(cleared, { kind, content: accumulator }, accumulator.length);
 }
 
@@ -146,7 +165,12 @@ export function applySessionEvent(state: TranscriptState, event: AgentSessionEve
       if (!a.delta) return state;
       const currentText = state.currentText + a.delta;
       if (currentText.length > SEGMENT_SPLIT_CHARS) {
-        return pushEntry({ ...state, currentText: "" }, { kind: "text", content: currentText }, currentText.length);
+        const cut = segmentCut(currentText);
+        return pushEntry(
+          { ...state, currentText: currentText.slice(cut), textSplit: true },
+          { kind: "text", content: currentText.slice(0, cut) },
+          cut,
+        );
       }
       return { ...state, currentText };
     }
@@ -154,10 +178,11 @@ export function applySessionEvent(state: TranscriptState, event: AgentSessionEve
       if (!a.delta) return state;
       const currentThinking = state.currentThinking + a.delta;
       if (currentThinking.length > SEGMENT_SPLIT_CHARS) {
+        const cut = segmentCut(currentThinking);
         return pushEntry(
-          { ...state, currentThinking: "" },
-          { kind: "thinking", content: currentThinking },
-          currentThinking.length,
+          { ...state, currentThinking: currentThinking.slice(cut), thinkingSplit: true },
+          { kind: "thinking", content: currentThinking.slice(0, cut) },
+          cut,
         );
       }
       return { ...state, currentThinking };

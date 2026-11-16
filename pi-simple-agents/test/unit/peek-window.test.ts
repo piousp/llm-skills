@@ -14,7 +14,7 @@ import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui"
 import { formatRunUsage } from "../../src/usage.ts";
 import { WARN_PREFIX } from "../../src/warn.ts";
 import type { JobSnapshot } from "../../src/background-jobs.ts";
-import { type EntryDraft, type TranscriptEntry, type TranscriptState } from "../../src/transcript.ts";
+import { applySessionEvent, initialTranscriptState, type EntryDraft, type TranscriptEntry, type TranscriptState } from "../../src/transcript.ts";
 
 const theme: PeekTheme = { fg: (c, t) => `<${c}>${t}</${c}>` };
 
@@ -55,6 +55,8 @@ function state(
     currentThinking: opts.currentThinking ?? "",
     dropped: opts.dropped ?? 0,
     chars: 0,
+    textSplit: false,
+    thinkingSplit: false,
   };
 }
 
@@ -156,6 +158,22 @@ test("buildPeekLines: live currentText renders after the entries", () => {
   assert.match(body, /settled paragraph/);
   assert.match(body, /streaming right now/);
   assert.ok(body.indexOf("settled paragraph") < body.indexOf("streaming right now"));
+});
+
+test("buildPeekLines: a word straddling the split limit renders whole after a real stream", () => {
+  const msg = (delta: string) =>
+    ({ type: "message_update", message: {}, assistantMessageEvent: { type: "text_delta", delta } }) as never;
+  let t = initialTranscriptState();
+  t = applySessionEvent(t, msg("word ".repeat(398) + " subag"));
+  t = applySessionEvent(t, msg("ent_job tail"));
+  const body = buildPeekLines(runningJob(), t, 1_000, theme, 40).map(visible).join("\n");
+  assert.match(body, /subagent_job/);
+});
+
+test("buildPeekLines: an entry ending in a newline renders no trailing blank line", () => {
+  const withNl = buildPeekLines(runningJob(), state([entry({ kind: "text", content: "alpha\n" })]), 1_000, theme, 80);
+  const without = buildPeekLines(runningJob(), state([entry({ kind: "text", content: "alpha" })]), 1_000, theme, 80);
+  assert.deepEqual(withNl, without);
 });
 
 test("buildPeekLines: body beyond 24 lines is tail-sliced with an elision line", () => {

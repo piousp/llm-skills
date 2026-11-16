@@ -86,7 +86,11 @@ function buildFooter(theme: PeekTheme, scrollable = false): string {
 // (wrapTextWithAnsi("") is [""], a blank line nothing needs).
 function wrapLines(text: string, width: number): string[] {
   if (!text) return [];
-  return wrapTextWithAnsi(text, width);
+  const lines = wrapTextWithAnsi(text, width);
+  // A trailing newline would yield a phantom blank line; dropping it makes a
+  // segment cut after "\n" wrap exactly like the uncut text.
+  if (text.endsWith("\n") && lines[lines.length - 1] === "") lines.pop();
+  return lines;
 }
 
 export interface EntryWrapCache {

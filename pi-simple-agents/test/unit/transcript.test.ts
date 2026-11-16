@@ -52,6 +52,8 @@ test("initialTranscriptState: zeroed, empty, unbounded counters", () => {
     currentThinking: "",
     dropped: 0,
     chars: 0,
+    textSplit: false,
+    thinkingSplit: false,
   });
 });
 
@@ -118,6 +120,60 @@ test("text_end finalizes the remainder accumulated after a split", () => {
   const last = state.entries[1];
   assert.equal(last && last.kind === "text" ? last.content : undefined, "tail");
   assert.equal(state.currentText, "");
+});
+
+// --- word-aware splitting ---
+
+const wordsTo = (n: number) => "word ".repeat(Math.ceil(n / 5)).slice(0, n);
+
+test("a split cuts at whitespace so a word straddling deltas stays whole", () => {
+  let state = initialTranscriptState();
+  state = applySessionEvent(state, textDelta(wordsTo(SEGMENT_SPLIT_CHARS - 6) + " subag"));
+  state = applySessionEvent(state, textDelta("ent_job"));
+  const entry = state.entries[0];
+  assert.ok(entry && entry.kind === "text" && entry.content.endsWith(" "));
+  assert.ok(state.currentText.startsWith("subagent_job"));
+});
+
+test("a newline inside the window wins over later spaces", () => {
+  const head = wordsTo(1500) + "\n";
+  let state = initialTranscriptState();
+  state = applySessionEvent(state, textDelta(head + wordsTo(600)));
+  const entry = state.entries[0];
+  assert.equal(entry && entry.kind === "text" ? entry.content : undefined, head);
+  assert.equal(state.currentText, wordsTo(600));
+});
+
+test("chars equals the stored entry lengths after a cut with a remainder", () => {
+  let state = initialTranscriptState();
+  state = applySessionEvent(state, textDelta(wordsTo(SEGMENT_SPLIT_CHARS + 50) + "zz"));
+  assert.ok(state.currentText.length > 0);
+  const sum = state.entries.reduce((n, e) => n + (e.kind === "text" ? e.content.length : 0), 0);
+  assert.equal(state.chars, sum);
+});
+
+test("entries plus the live remainder reproduce the emitted text exactly", () => {
+  const emitted = wordsTo(SEGMENT_SPLIT_CHARS * 3 + 17);
+  let state = initialTranscriptState();
+  for (let i = 0; i < emitted.length; i += 7) state = applySessionEvent(state, textDelta(emitted.slice(i, i + 7)));
+  const stored = state.entries.map((e) => (e.kind === "text" ? e.content : "")).join("");
+  assert.equal(stored + state.currentText, emitted);
+});
+
+test("text_end after a split that left no remainder does not duplicate the block", () => {
+  let state = initialTranscriptState();
+  state = applySessionEvent(state, textDelta("x".repeat(SEGMENT_SPLIT_CHARS + 1)));
+  state = applySessionEvent(state, textEnd("x".repeat(SEGMENT_SPLIT_CHARS + 1)));
+  assert.equal(state.entries.length, 1);
+  assert.equal(state.textSplit, false);
+});
+
+test("thinking_end after a split that left no remainder does not duplicate the block", () => {
+  let state = initialTranscriptState();
+  state = applySessionEvent(state, thinkingDelta("x".repeat(SEGMENT_SPLIT_CHARS + 1)));
+  state = applySessionEvent(state, thinkingEnd("x".repeat(SEGMENT_SPLIT_CHARS + 1)));
+  assert.equal(state.entries.length, 1);
+  assert.equal(state.thinkingSplit, false);
 });
 
 // --- thinking deltas ---
