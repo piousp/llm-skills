@@ -816,19 +816,22 @@ export default async function (
           ctx.ui.notify("No session file on disk yet - /subagents session needs a persisted session.", "warning");
           return;
         }
-        // Registry used ONLY to label in-flight orphans as "running", never
-        // as a usage source (usage is always read from disk). MAIN (the
+        // Registry used ONLY for the state and agent name of in-flight runs,
+        // never as a usage source (usage is always read from disk). MAIN (the
         // parent's own spend) comes from the in-memory session — getEntries()
         // is enough, the session lives fully in memory and re-parsing the
         // parent .jsonl would duplicate the same work with no gain. The
         // persisted-session guard above stays first: a session that never
         // hit disk gets no report at all, and its MAIN is never computed.
-        const activeRunIds = new Set(jobs.list().filter((j) => isActive(j.state)).map((j) => j.runId));
+        const activeJobs = jobs.list().filter((j) => isActive(j.state));
+        const activeRunIds = new Set(activeJobs.map((j) => j.runId));
+        const activeAgents = new Map(activeJobs.map((j) => [j.runId, j.task.agent]));
         const report = buildSubagentSessionReport(
           sessionFile,
           nodeReconcileFs(),
           activeRunIds,
           toReconcileEntries(ctx.sessionManager.getEntries()),
+          { activeAgents },
         );
         ctx.ui.notify(buildSubagentSessionText(report, ctx.ui.theme), "info");
         return;

@@ -590,7 +590,7 @@ export interface ReconciledRun {
   messageUsage?: AggregatedUsage;
   /** The child's session.jsonl path, when it exists on disk. */
   sessionFile?: string;
-  /** True when no completion message matched this child directory. */
+  /** True when there is no completion message and no live job for this child directory. */
   orphaned: boolean;
 }
 
@@ -671,6 +671,8 @@ export interface SubagentSessionReportOptions {
   readonly withStats?: boolean;
   /** Pre-parsed entries of the root file; the root is not read from disk when present. */
   readonly rootEntries?: readonly SessionEntry[];
+  /** Raw runId -> agent name of live jobs; names a running child that has no completion message yet. */
+  readonly activeAgents?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -687,10 +689,11 @@ export interface SubagentSessionReportOptions {
  * Attribution per child directory: the dir segment matches
  * runIdDirName(details.runId) of a completion message in the IMMEDIATE
  * parent file → agent/status/task/timestamp come from that message. No
- * match → orphan: agent "unknown", task recovered from the child's first
- * user message, status "running" when the dir's runId is in activeRunIds
- * (the in-memory registry is used ONLY to label state, never as a usage
- * source), else "unknown".
+ * match → task recovered from the child's first user message; when the
+ * dir's runId is in activeRunIds the run is live (status "running", not
+ * orphaned, agent from opts.activeAgents or "unknown"), else an orphan with
+ * agent "unknown" and status "unknown" (the in-memory registry is used ONLY
+ * to label state and agent, never as a usage source).
  *
  * Effective usage per run is disk-first: the child session.jsonl's own
  * stats when readable, else the completion message's details.usage
@@ -709,6 +712,9 @@ export function buildSubagentSessionReport(
   // segments, so normalize both sides through the same transformation
   // childSessionDir applies.
   const activeSegments = new Set(Array.from(activeRunIds ?? [], (id) => runIdDirName(id)));
+  const activeAgentBySegment = new Map(
+    Array.from(opts?.activeAgents ?? [], ([id, agent]) => [runIdDirName(id), agent] as const),
+  );
   const visited = new Set<string>([resolve(rootSessionFile)]);
   const budget = { remaining: MAX_CHILDREN_VISITED };
   const runs: ReconciledRun[] = [];
@@ -750,10 +756,11 @@ export function buildSubagentSessionReport(
           if (visited.has(resolvedChild)) continue;
           visited.add(resolvedChild);
           matchedSegments.add(childName);
+          const childEntries = parseOrEmpty(fs.readTextFile(childFile));
           runs.push(
-            makeRun(childFile, childName, depth, resultBySegment.get(childName), activeSegments, fs, withStats),
+            makeRun(childFile, childEntries, childName, depth, resultBySegment.get(childName), activeSegments, activeAgentBySegment, withStats),
           );
-          if (depth < maxDepth) reconcile(childFile, depth + 1);
+          if (depth < maxDepth) reconcile(childFile, depth + 1, childEntries);
         }
       }
     }
@@ -833,14 +840,14 @@ function dirlessRun(entry: SubagentResultEntry, segment: string, depth: number):
 
 function makeRun(
   childFile: string,
+  childEntries: readonly SessionEntry[],
   segment: string,
   depth: number,
   matched: SubagentResultEntry | undefined,
   activeSegments: ReadonlySet<string>,
-  fs: ReconcileFs,
+  activeAgentBySegment: ReadonlyMap<string, string>,
   withStats: boolean,
 ): ReconciledRun {
-  const childEntries = parseOrEmpty(fs.readTextFile(childFile));
   const stats = withStats && childEntries.length > 0 ? buildSessionUsageStats(childEntries) : undefined;
   const sessionFile = childEntries.length > 0 ? childFile : undefined;
 
@@ -848,17 +855,18 @@ function makeRun(
     const details = matched.details ?? {};
     return completedRun(details, segment, depth, matched.timestamp, stats, sessionFile);
   }
-  // Orphan: the child dir is on disk but its completion message never made
-  // it into the parent (the process died mid-run).
+  // No completion message yet: either the run is still live, or it is an
+  // orphan whose process died mid-run.
+  const running = activeSegments.has(segment);
   return {
     runId: segment,
     depth,
-    agent: "unknown",
-    status: activeSegments.has(segment) ? "running" : "unknown",
+    agent: running ? (activeAgentBySegment.get(segment) ?? "unknown") : "unknown",
+    status: running ? "running" : "unknown",
     task: childEntries.length > 0 ? firstUserMessage(childEntries) : undefined,
     stats,
     sessionFile,
-    orphaned: true,
+    orphaned: !running,
   };
 }
 

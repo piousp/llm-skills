@@ -2039,7 +2039,8 @@ test("wiring: an active registry job labels its orphaned child directory as runn
   assert.equal(ctx.notifications[0].type, "info");
   assert.match(ctx.notifications[0].message, /Subagent Session Report/);
   assert.match(ctx.notifications[0].message, /running 1/);
-  assert.match(ctx.notifications[0].message, /unknown: 1 run/);
+  assert.match(ctx.notifications[0].message, /scout: 1 run/);
+  assert.doesNotMatch(ctx.notifications[0].message, /\(orphaned\)/);
 
   await settleRunningJob(pi, jobId);
 });

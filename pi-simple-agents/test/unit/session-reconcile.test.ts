@@ -1135,3 +1135,68 @@ test("buildSubagentSessionReport: maxDepth 1 plus withStats false match the full
   const identity = (r: (typeof full.runs)[number]) => ({ runId: r.runId, status: r.status, agent: r.agent, task: r.task, orphaned: r.orphaned, sessionFile: r.sessionFile });
   assert.deepEqual(light.runs.map(identity), full.runs.filter((r) => r.depth === 1).map(identity));
 });
+
+test("buildSubagentSessionReport: every file is read exactly once, grandchildren included", () => {
+  const files = mainFixtureFiles();
+  const { fs, reads } = countingFs(files);
+  const report = buildSubagentSessionReport("/fx/parent.jsonl", fs);
+  assert.ok(report.runs.some((r) => r.depth === 2));
+  assert.equal(new Set(reads).size, reads.length);
+  assert.deepEqual(report, buildSubagentSessionReport("/fx/parent.jsonl", memFs(files)));
+});
+
+test("buildSubagentSessionReport: an orphan dir listed in activeRunIds is not orphaned", () => {
+  const report = buildSubagentSessionReport("/fx/parent.jsonl", memFs(mainFixtureFiles()), new Set(["orphan-dir"]));
+  const run = report.runs.find((r) => r.runId === "orphan-dir")!;
+  assert.equal(run.status, "running");
+  assert.equal(run.orphaned, false);
+  assert.equal(run.agent, "unknown");
+  assert.equal(report.byAgent.find((row) => row.agent === "unknown")!.orphaned, false);
+});
+
+test("buildSubagentSessionReport: activeAgents names a running run and merges it into that agent's row", () => {
+  const report = buildSubagentSessionReport(
+    "/fx/parent.jsonl",
+    memFs(mainFixtureFiles()),
+    new Set(["orphan-dir"]),
+    undefined,
+    { activeAgents: new Map([["orphan-dir", "scout"]]) },
+  );
+  assert.equal(report.runs.find((r) => r.runId === "orphan-dir")!.agent, "scout");
+  assert.equal(report.byAgent.some((row) => row.agent === "unknown"), false);
+  const scoutRow = report.byAgent.find((row) => row.agent === "scout")!;
+  assert.equal(scoutRow.runs, 2);
+  assert.equal(scoutRow.orphaned, false);
+});
+
+test("buildSubagentSessionReport: a running run missing from activeAgents is labelled unknown", () => {
+  const report = buildSubagentSessionReport(
+    "/fx/parent.jsonl",
+    memFs(mainFixtureFiles()),
+    new Set(["orphan-dir"]),
+    undefined,
+    { activeAgents: new Map([["other-run", "scout"]]) },
+  );
+  const run = report.runs.find((r) => r.runId === "orphan-dir")!;
+  assert.equal(run.agent, "unknown");
+  assert.equal(run.orphaned, false);
+});
+
+test("buildSubagentSessionReport: a dead orphan next to a named running run keeps the unknown row orphaned", () => {
+  const files = {
+    ...mainFixtureFiles(),
+    [`${BASE}/dead-dir/run-0/session.jsonl`]: jsonl(HEADER, userMessage("died mid-run")),
+  };
+  const report = buildSubagentSessionReport(
+    "/fx/parent.jsonl",
+    memFs(files),
+    new Set(["orphan-dir"]),
+    undefined,
+    { activeAgents: new Map([["orphan-dir", "scout"]]) },
+  );
+  assert.equal(report.runs.find((r) => r.runId === "dead-dir")!.orphaned, true);
+  assert.equal(report.runs.find((r) => r.runId === "orphan-dir")!.orphaned, false);
+  const unknownRow = report.byAgent.find((row) => row.agent === "unknown")!;
+  assert.equal(unknownRow.runs, 1);
+  assert.equal(unknownRow.orphaned, true);
+});
