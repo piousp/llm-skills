@@ -5,6 +5,7 @@
 
 const MAX_FTS_TOKENS = 16;
 const MAX_SLUG_LENGTH = 32;
+const MIN_PREFIX_LENGTH = 3;
 
 /**
  * Appends `value` when the list does not hold it yet, which is what keeps the first appearance of every element. It lives
@@ -40,7 +41,7 @@ export function quoteToken(token: string): string {
 
 /** A token as an FTS5 term: quoted, and a prefix from three characters on, so "deploy" finds "deployments". */
 export function toMatchTerm(token: string): string {
-  return quoteToken(token) + (token.length >= 3 ? "*" : "");
+  return quoteToken(token) + (token.length >= MIN_PREFIX_LENGTH ? "*" : "");
 }
 
 /** Controlled-vocabulary slug: NFKD, diacritics stripped, lowercased, non-alphanumeric runs to a single hyphen, edges trimmed, capped at 32 characters. Empty input returns "". */
@@ -72,4 +73,25 @@ export function distinctSlugs(keys: readonly string[]): string[] {
 /** Slugs of the keys, in the order of `distinctSlugs`, joined by a single space. */
 export function toTerms(keys: readonly string[]): string {
   return distinctSlugs(keys).join(" ");
+}
+
+/** The terms of a stored `terms` column: split on a single space, empty pieces dropped. */
+export function fromTerms(terms: string): string[] {
+  return terms.split(" ").filter((term) => term !== "");
+}
+
+/**
+ * The keys that fit beside the `existing` terms without passing `max`: the fresh slugs (those `existing` does not hold)
+ * split into the ones added, in order, and the ones dropped for lack of room. `terms` is the resulting column.
+ */
+export function mergeKeys(
+  existing: readonly string[],
+  keys: readonly string[],
+  max: number,
+): { addedKeys: string[]; droppedKeys: string[]; terms: string } {
+  const fresh = distinctSlugs(keys).filter((slug) => !existing.includes(slug));
+  const room = Math.max(0, max - existing.length);
+  const addedKeys = fresh.slice(0, room);
+  const droppedKeys = fresh.slice(room);
+  return { addedKeys, droppedKeys, terms: [...existing, ...addedKeys].join(" ") };
 }

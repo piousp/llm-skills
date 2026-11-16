@@ -42,7 +42,7 @@ export function writeParamsFor(config: ResolvedConfig): typeof WriteParams {
   if (config.allowUnknownCategory) return WriteParams;
   return Type.Object({
     ...WriteParams.properties,
-    category: Type.Unsafe<string>({ enum: [...config.categories] }),
+    category: Type.Unsafe<string>({ type: "string", enum: [...config.categories] }),
   }) as unknown as typeof WriteParams;
 }
 
@@ -110,9 +110,9 @@ function duplicateMessage(
   addedKeys: readonly string[],
   droppedKeys: readonly string[],
 ): string {
-  if (addedKeys.length === 0) return `Duplicate of #${id} (${category}); nothing was written.`;
+  const added = addedKeys.length === 0 ? "; nothing was written" : `; added keys: ${addedKeys.join(", ")}`;
   const dropped = droppedKeys.length === 0 ? "" : `; not added (limit ${MAX_KEYS}): ${droppedKeys.join(", ")}`;
-  return `Duplicate of #${id} (${category}); added keys: ${addedKeys.join(", ")}${dropped}.`;
+  return `Duplicate of #${id} (${category})${added}${dropped}.`;
 }
 
 /** What `memory_search` answers when the query matched nothing, in the two moves that can still find it. */
@@ -134,7 +134,8 @@ export interface MemoryToolDeps {
 
 /** The details of a write: the id plus what happened to it, or the message of the failure. */
 export type WriteDetails =
-  | { id: number; duplicate: boolean; category: string; similar: number[]; addedKeys: string[]; droppedKeys: string[] }
+  | { id: number; duplicate: false; category: string; similar: number[] }
+  | { id: number; duplicate: true; category: string; addedKeys: string[]; droppedKeys: string[] }
   | { error: string };
 
 /**
@@ -265,7 +266,6 @@ export function executeWrite(
           id: written.id,
           duplicate: true,
           category: written.category,
-          similar: [],
           addedKeys: [...written.addedKeys],
           droppedKeys: [...written.droppedKeys],
         })
@@ -274,8 +274,6 @@ export function executeWrite(
           duplicate: false,
           category: written.category,
           similar: [...written.similar],
-          addedKeys: [],
-          droppedKeys: [],
         });
   });
 }
@@ -318,10 +316,11 @@ interface SearchCall extends Omit<SearchInput, "match"> {
 
 const ANY_WORD_NOTE = "No entry has every word; showing entries with any of them.";
 
-/** Every word first; when no entry has them all and the query has several, any word. */
-function resolveMatch(store: MemoryStore, call: SearchCall): SearchInput["match"] {
-  if (call.tokens.length < 2) return "all";
-  return store.countSearch({ ...call, match: "all" }) === 0 ? "any" : "all";
+/** Every word first; when no entry has them all and the query has several, any word. Returns the total of the mode chosen. */
+function resolveMatch(store: MemoryStore, call: SearchCall): { match: SearchInput["match"]; total: number } {
+  const all = store.countSearch({ ...call, match: "all" });
+  if (call.tokens.length < 2 || all > 0) return { match: "all", total: all };
+  return { match: "any", total: store.countSearch({ ...call, match: "any" }) };
 }
 
 /**
@@ -346,10 +345,8 @@ function executeCatalog(store: MemoryStore, offset: number): AgentToolResult<Cat
 
 /** The ranked search: the page of hits, the total it counts against, and the advice for a query of no matches. */
 function executeRankedSearch(store: MemoryStore, call: SearchCall): AgentToolResult<RankedSearchDetails> {
-  const match = resolveMatch(store, call);
-  const input = { ...call, match };
-  const hits = store.search(input);
-  const total = store.countSearch(input);
+  const { match, total } = resolveMatch(store, call);
+  const hits = store.search({ ...call, match });
   const note = match === "any" && total > 0 ? ANY_WORD_NOTE : undefined;
   const page = formatSearch({ hits, total, offset: call.offset, limit: call.limit, note });
   // A page that came back empty over a total of zero is the case the advice exists for; an empty page over a total that

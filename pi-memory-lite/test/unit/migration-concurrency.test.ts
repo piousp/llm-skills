@@ -6,7 +6,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { openStore, type NodeSqliteModule } from "../../src/db.ts";
+import { openStore, runMigrations, type NodeSqliteModule, type SqlExecutor } from "../../src/db.ts";
 
 // dos procesos reales abren a la vez el mismo archivo v1: la migración a v2 tiene que serializarse (una corre, la otra
 // ve v2) sin SQLITE_BUSY y sin duplicar ni perder filas. Se repite en directorios nuevos para que el solape ocurra.
@@ -139,4 +139,45 @@ test("migración concurrente: dos procesos abren a la vez la misma base v1 y que
       store.close();
     }
   }
+});
+
+test("migraciones: una carrera ganada por otra conexión no vuelve a correr el paso", (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "race.db");
+  const main = new SQLITE.DatabaseSync(file);
+  const other = new SQLITE.DatabaseSync(file);
+  t.after(() => {
+    main.close();
+    other.close();
+  });
+  main.exec("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+  main.exec("INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
+
+  // La otra conexión gana la carrera justo antes de que `main` tome el lock: hay que migrar ANTES de reenviar el BEGIN.
+  let raced = false;
+  const racing: SqlExecutor = {
+    exec(sql) {
+      if (sql === "BEGIN IMMEDIATE" && !raced) {
+        raced = true;
+        other.exec("UPDATE meta SET value = '2' WHERE key = 'schema_version'");
+      }
+      main.exec(sql);
+    },
+    prepare: (sql) => main.prepare(sql),
+  };
+
+  let ran = 0;
+  const result = runMigrations(racing, 2, [
+    {
+      version: 2,
+      up: () => {
+        ran += 1;
+      },
+    },
+  ]);
+
+  assert.equal(raced, true, "la carrera no ocurrió: el test no prueba nada");
+  assert.equal(result, 2);
+  assert.equal(ran, 0, "el paso corrió aunque otra conexión ya había migrado");
+  assert.equal(main.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value, "2");
 });

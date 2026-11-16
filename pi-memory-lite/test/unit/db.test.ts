@@ -15,6 +15,7 @@ import {
   type SearchInput,
   type SqlDatabase,
   type WriteInput,
+  type WriteResult,
 } from "../../src/db.ts";
 import { KEYS_PER_CATEGORY } from "../../src/format.ts";
 
@@ -70,6 +71,18 @@ function degradedFactory(): DatabaseFactory {
       function: (name, options, fn) => inner.function(name, options, fn),
     };
   };
+}
+
+/** The duplicate variant of a write, or a failed assertion that narrows the type for the reads that follow. */
+function asDuplicate(result: WriteResult): Extract<WriteResult, { duplicate: true }> {
+  assert.equal(result.duplicate, true);
+  return result as Extract<WriteResult, { duplicate: true }>;
+}
+
+/** The inserted variant of a write, or a failed assertion that narrows the type for the reads that follow. */
+function asInserted(result: WriteResult): Extract<WriteResult, { duplicate: false }> {
+  assert.equal(result.duplicate, false);
+  return result as Extract<WriteResult, { duplicate: false }>;
 }
 
 /** A `meta` value through the store's own connection, which is the seam the store exposes for exactly this. */
@@ -448,21 +461,21 @@ test("similar: ordena por keys compartidas y luego por id, excluye la nueva, má
   const store = await openStore({ dir });
   t.after(() => store.close());
 
-  const a = store.write(entry("Nota a.", "general", ["uno"]));
-  const b = store.write(entry("Nota b.", "general", ["uno", "dos"]));
-  const c = store.write(entry("Nota c.", "general", ["uno"]));
+  const a = asInserted(store.write(entry("Nota a.", "general", ["uno"])));
+  const b = asInserted(store.write(entry("Nota b.", "general", ["uno", "dos"])));
+  const c = asInserted(store.write(entry("Nota c.", "general", ["uno"])));
   store.write(entry("Nota ajena.", "general", ["otro"]));
-  const d = store.write(entry("Nota d.", "general", ["uno"]));
+  const d = asInserted(store.write(entry("Nota d.", "general", ["uno"])));
   assert.equal(a.similar.length, 0);
   assert.deepEqual(d.similar, [c.id, b.id, a.id]);
 
-  const e = store.write(entry("Nota e.", "general", ["uno", "dos"]));
+  const e = asInserted(store.write(entry("Nota e.", "general", ["uno", "dos"])));
   assert.deepEqual(e.similar, [b.id, d.id, c.id]);
   assert.ok(!e.similar.includes(e.id));
 
   const again = store.write(entry("nota e.", "general", ["uno", "dos"]));
   assert.equal(again.duplicate, true);
-  assert.deepEqual(again.similar, []);
+  assert.ok(!("similar" in again));
 });
 
 test("duplicados: las keys nuevas se suman a la entrada existente sin tocar categoría ni ts", async (t) => {
@@ -470,14 +483,17 @@ test("duplicados: las keys nuevas se suman a la entrada existente sin tocar cate
   const store = await openStore({ dir });
   t.after(() => store.close());
 
-  const first = store.write(entry("Hola mundo.", "env", ["saludo"]));
-  const again = store.write({ text: "hola  MUNDO.", category: "other", keys: ["saludo", "Bienvenida", "hola"], ts: "2030-01-01T00:00:00.000Z" });
+  const saved = store.write(entry("Hola mundo.", "env", ["saludo"]));
+  const first = asInserted(saved);
+  assert.ok(!("addedKeys" in saved));
+  const again = asDuplicate(
+    store.write({ text: "hola  MUNDO.", category: "other", keys: ["saludo", "Bienvenida", "hola"], ts: "2030-01-01T00:00:00.000Z" }),
+  );
 
-  assert.equal(again.duplicate, true);
   assert.equal(again.id, first.id);
   assert.deepEqual(again.addedKeys, ["bienvenida", "hola"]);
   assert.deepEqual(again.droppedKeys, []);
-  assert.deepEqual(again.similar, []);
+  assert.ok(!("similar" in again));
 
   const row = store.read([first.id]).found[0];
   assert.equal(row.terms, "saludo bienvenida hola");
@@ -496,17 +512,52 @@ test("duplicados: las keys nuevas se cortan en MAX_KEYS y las sobrantes se infor
   t.after(() => store.close());
 
   const keys = Array.from({ length: MAX_KEYS - 1 }, (_, i) => `k${i}`);
-  const first = store.write(entry("Texto lleno.", "general", keys));
-  const again = store.write(entry("texto lleno.", "general", ["k0", "nueva", "otra"]));
+  const first = asInserted(store.write(entry("Texto lleno.", "general", keys)));
+  const again = asDuplicate(store.write(entry("texto lleno.", "general", ["k0", "nueva", "otra"])));
 
   assert.deepEqual(again.addedKeys, ["nueva"]);
   assert.deepEqual(again.droppedKeys, ["otra"]);
   assert.equal(store.read([first.id]).found[0].terms.split(" ").length, MAX_KEYS);
 
-  const full = store.write(entry("TEXTO lleno.", "general", ["otra"]));
+  const full = asDuplicate(store.write(entry("TEXTO lleno.", "general", ["otra"])));
   assert.deepEqual(full.addedKeys, []);
   assert.deepEqual(full.droppedKeys, ["otra"]);
   assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), MAX_KEYS);
+});
+
+test("inserción: las keys se cortan en MAX_KEYS igual que en un duplicado", async (t) => {
+  const dir = tempDir(t);
+  const store = await openStore({ dir });
+  t.after(() => store.close());
+
+  const keys = Array.from({ length: 10 }, (_, i) => `k${i}`);
+  const saved = asInserted(store.write(entry("Texto con demasiadas keys.", "general", keys)));
+
+  assert.equal(store.read([saved.id]).found[0].terms, "k0 k1 k2 k3 k4 k5 k6 k7");
+  assert.equal(count(store, "SELECT COUNT(*) AS n FROM keys"), MAX_KEYS);
+});
+
+test("similar: un fallo de la consulta de parecidas no falla la escritura", async (t) => {
+  const dir = tempDir(t);
+  const failingSimilar: DatabaseFactory = (dbPath: string): SqlDatabase => {
+    const inner = new SQLITE.DatabaseSync(dbPath);
+    return {
+      exec: (sql: string): void => inner.exec(sql),
+      prepare: (sql: string) => {
+        if (sql.includes("AS shared")) throw new Error("similar query failed");
+        return inner.prepare(sql);
+      },
+      close: (): void => inner.close(),
+      function: (name, options, fn) => inner.function(name, options, fn),
+    };
+  };
+  const store = await openStore({ dir }, failingSimilar);
+  t.after(() => store.close());
+
+  const saved = asInserted(store.write(entry("Texto que se guarda.", "general", ["uno"])));
+
+  assert.deepEqual(saved.similar, []);
+  assert.equal(store.read([saved.id]).found.length, 1);
 });
 
 // la palabra no está en el texto, así que lo único que puede encontrar la entrada es el vocabulario que
@@ -661,6 +712,7 @@ test("degradación: 'any' es la unión de las palabras", async (t) => {
     store.search(searchInput(["deploy", "router"], "env", 10, 0, "any")).map((hit) => hit.id),
     [router.id, deploy.id],
   );
+  assert.deepEqual(store.search(searchInput(["deploy", "router"], "general", 10, 0, "any")), []);
   assert.equal(store.countSearch({ tokens: ["deploy", "router"], match: "any", category: null }), 2);
 });
 

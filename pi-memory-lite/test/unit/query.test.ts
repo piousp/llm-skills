@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { distinctSlugs, normalizeTextForDuplicate, quoteToken, toMatchTerm, toSlug, toTerms, toTokens } from "../../src/query.ts";
+import { distinctSlugs, fromTerms, mergeKeys, normalizeTextForDuplicate, quoteToken, toMatchTerm, toSlug, toTerms, toTokens } from "../../src/query.ts";
 
 // I1: the pure surface of the index, on its own. Every function of src/query.ts is a function of its argument, so this
 // suite is a list of inputs and their expected output and it reads no file: a fixture on disk would prove something the
@@ -159,4 +159,44 @@ test("toMatchTerm: prefijo desde tres caracteres, el token corto queda exacto", 
   assert.equal(toMatchTerm("deploy"), '"deploy"*');
   assert.equal(toMatchTerm("abc"), '"abc"*');
   assert.equal(toMatchTerm("ab"), '"ab"');
+});
+
+// --- fromTerms ------------------------------------------------------------------------------------------------------
+
+test("fromTerms: la cadena vacía no tiene términos", () => {
+  assert.deepEqual(fromTerms(""), []);
+});
+
+test("fromTerms: separa por espacios", () => {
+  assert.deepEqual(fromTerms("a b"), ["a", "b"]);
+});
+
+// --- mergeKeys ------------------------------------------------------------------------------------------------------
+
+test("mergeKeys: con espacio para todas, las nuevas se añaden tras las existentes", () => {
+  assert.deepEqual(mergeKeys(["a"], ["B", "c"], 8), { addedKeys: ["b", "c"], droppedKeys: [], terms: "a b c" });
+});
+
+test("mergeKeys: con espacio parcial corta en max y informa las sobrantes", () => {
+  assert.deepEqual(mergeKeys(["a"], ["b", "c", "d"], 2), { addedKeys: ["b"], droppedKeys: ["c", "d"], terms: "a b" });
+});
+
+test("mergeKeys: con la entrada llena no añade nada", () => {
+  assert.deepEqual(mergeKeys(["a", "b"], ["c"], 2), { addedKeys: [], droppedKeys: ["c"], terms: "a b" });
+});
+
+test("mergeKeys: con más existentes que max el espacio es 0 y todas se descartan", () => {
+  assert.deepEqual(mergeKeys(["a", "b", "c"], ["d", "e"], 2), { addedKeys: [], droppedKeys: ["d", "e"], terms: "a b c" });
+});
+
+test("mergeKeys: sin existentes (inserción) también aplica el tope", () => {
+  assert.deepEqual(mergeKeys([], ["a", "b", "c"], 2), { addedKeys: ["a", "b"], droppedKeys: ["c"], terms: "a b" });
+});
+
+test("mergeKeys: descarta slugs vacíos y repeticiones, y las que ya existen, en orden de primera aparición", () => {
+  assert.deepEqual(mergeKeys(["x"], ["!!", "Fe", "fe", "X", "Gracia"], 8), {
+    addedKeys: ["fe", "gracia"],
+    droppedKeys: [],
+    terms: "x fe gracia",
+  });
 });

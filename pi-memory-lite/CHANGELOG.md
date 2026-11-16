@@ -6,14 +6,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [0.3.0] - 2026-11-16
 
-Search that finds more, writes that guard themselves, and ids that are never reused. The database moves to schema
+Search that finds more, writes that guard themselves, and ids that are not handed out twice. The database moves to schema
 version 2.
 
 ### Added
 
 - Schema version 2: `entries` and `keys` use `AUTOINCREMENT`, so the id of a deleted entry is never handed out again
-  and an id quoted earlier never points at a different text. The migration copies the tables and sets `fts_disabled`,
-  so the index is rebuilt on the next open with FTS5.
+  and an id quoted earlier never points at a different text. On a database migrated from v1, numbering continues after
+  the highest id still present, because v1 keeps no record of deleted ids: an entry deleted before the upgrade whose id
+  was above every remaining one can get that id again, once, as it could under v1. The migration copies the tables and
+  sets `fts_disabled`, so the index is rebuilt on the next open with FTS5.
 - Prefix matching in ranked search: a token of three or more characters ends in `*` (`deploy` finds `deployments`).
 - Fallback from all words to any word when no entry matches all of them, with a note saying so.
 - `memory_write` may end its reply with `Similar: #a, #b`: up to three entries that share keys with the new one,
@@ -21,7 +23,9 @@ version 2.
 - An exact duplicate merges its new keys into the existing entry; the reply names the keys added and the keys cut by
   the limit of 8.
 - Secret detection in `memory_write` (`src/secrets.ts`): an AWS key, a GitHub token, a private key, a Slack token or
-  `password=value` rejects the write, and the reply never echoes the match.
+  `password=value` rejects the write, and the reply never echoes the match. The password value must be 6+ characters
+  and include a digit or a symbol, so "password: stored in Vault" is still saved; a letters-only password is not caught
+  (a known tradeoff).
 - The data directory is created with mode 0700; an existing directory is left untouched.
 - The `category` of `memory_write` is an enum of the configured categories unless `allowUnknownCategory` is true.
   Direct calls to the executor still normalize to a slug.

@@ -100,14 +100,13 @@ export function rowPrefix(row: { id: number; ts: string; category: string }): st
 export function allocate(lengths: readonly number[], room: number): number[] {
   const shares = lengths.map(() => 0);
   const order = lengths.map((_, index) => index).sort((a, b) => lengths[a] - lengths[b]);
-  let left = Math.max(0, room);
 
-  order.forEach((index, rank) => {
+  order.reduce((left, index, rank) => {
     const rows = order.length - rank;
-    const even = Math.floor(left / rows);
-    shares[index] = Math.min(lengths[index], even);
-    left -= shares[index];
-  });
+    const share = Math.min(lengths[index], Math.floor(left / rows));
+    shares[index] = share;
+    return left - share;
+  }, Math.max(0, room));
 
   return shares;
 }
@@ -145,17 +144,13 @@ function shrinkToCap(start: number, cap: number, render: (n: number) => Formatte
   return page;
 }
 
+type SearchPageInput = { hits: readonly SearchRow[]; total: number; offset: number; limit: number; note?: string };
+
 /**
  * A search page. The two loops are the guarantee and not an optimisation: the first shrinks the page until every
  * row has room to say something, the second until the rendered text — rows, newlines and tail — fits the cap.
  */
-export function formatSearch(input: {
-  hits: readonly SearchRow[];
-  total: number;
-  offset: number;
-  limit: number;
-  note?: string;
-}): Formatted {
+export function formatSearch(input: SearchPageInput): Formatted {
   const offset = Math.max(0, input.offset);
   const fetched = input.hits.length;
   const room = SEARCH_CAP - (input.note === undefined ? 0 : input.note.length + 1);
@@ -198,38 +193,41 @@ export function formatRead(input: { rows: readonly ReadRow[]; missing: readonly 
   return { text, shown: entries.bodies.length, omitted: entries.dropped.length };
 }
 
-type SearchInput = { hits: readonly SearchRow[]; total: number; offset: number; limit: number; note?: string };
-
 /** Collapses every run of whitespace to one space: a row is one line whatever the entry held. */
 function oneLine(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
 /** The tail of the page of `n` rows, and the characters left for the row bodies once prefixes, newlines and tail are paid. */
-function searchLayout(input: SearchInput, offset: number, n: number, room: number): { tail: string; bodyRoom: number } {
+function searchLayout(input: SearchPageInput, offset: number, n: number, room: number): { tail: string; bodyRoom: number; omitted: number } {
   const omitted = Math.max(0, input.total - (offset + n));
   const tail = searchTail(omitted, offset, n, input.hits.length, input.limit);
   let used = Math.max(0, n - 1) + (tail === "" ? 0 : tail.length + 1);
   for (let index = 0; index < n; index += 1) used += rowPrefix(input.hits[index]).length;
-  return { tail, bodyRoom: room - used };
+  return { tail, bodyRoom: room - used, omitted };
 }
 
 /** The body budget of each of the first `n` rows: its whole text when it fits, an even share of the room otherwise. */
-function bodyBudgets(input: SearchInput, offset: number, n: number, room: number): { wanted: number[]; budgets: number[]; tail: string } {
+function bodyBudgets(
+  input: SearchPageInput,
+  offset: number,
+  n: number,
+  room: number,
+): { wanted: number[]; budgets: number[]; tail: string; omitted: number } {
   const wanted = input.hits.slice(0, n).map((hit) => oneLine(hit.text).length);
-  const { tail, bodyRoom } = searchLayout(input, offset, n, room);
-  return { wanted, budgets: allocate(wanted, bodyRoom), tail };
+  const { tail, bodyRoom, omitted } = searchLayout(input, offset, n, room);
+  return { wanted, budgets: allocate(wanted, bodyRoom), tail, omitted };
 }
 
 /** True when some row of an `n`-row page would get less than `MIN_SNIPPET` characters, or less than it needs when shorter. */
-function tooNarrow(input: SearchInput, offset: number, n: number, room: number): boolean {
+function tooNarrow(input: SearchPageInput, offset: number, n: number, room: number): boolean {
   const { wanted, budgets } = bodyBudgets(input, offset, n, room);
   return budgets.some((budget, index) => budget < Math.min(MIN_SNIPPET, wanted[index]));
 }
 
 /** One candidate page: `n` rows, each whole or its fragment clipped at a word, plus the tail that declares what the page did not show. */
-function renderSearchPage(input: SearchInput, offset: number, n: number, room: number): Formatted {
-  const { wanted, budgets, tail } = bodyBudgets(input, offset, n, room);
+function renderSearchPage(input: SearchPageInput, offset: number, n: number, room: number): Formatted {
+  const { wanted, budgets, tail, omitted } = bodyBudgets(input, offset, n, room);
   const lines: string[] = input.note === undefined ? [] : [input.note];
   for (let index = 0; index < n; index += 1) {
     const row = input.hits[index];
@@ -246,7 +244,7 @@ function renderSearchPage(input: SearchInput, offset: number, n: number, room: n
 
   if (tail !== "") lines.push(tail);
 
-  return { text: lines.join("\n"), shown, omitted: Math.max(0, input.total - (offset + shown)) };
+  return { text: lines.join("\n"), shown, omitted };
 }
 
 /**
@@ -298,7 +296,7 @@ function pastTheEndLine(total: number, singular: string, plural: string): string
   return `${PAST_THE_END}: the memory holds ${total} ${total === 1 ? singular : plural}; ${FIRST_PAGE}`;
 }
 
-/** `#<category> (<n>): <term>:<id>, ...` with at most `KEYS_PER_CATEGORY` keys, in the order received. */
+/** `<category> (<n>): <term>:<id>, ...` with at most `KEYS_PER_CATEGORY` keys, in the order received. */
 function catalogLine(category: CatalogCategory): string {
   const head = `${category.category} (${category.n}):`;
   const keys = category.keys.slice(0, KEYS_PER_CATEGORY).map((key) => `${key.term}:${key.id}`);

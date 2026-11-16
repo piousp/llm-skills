@@ -90,12 +90,15 @@ with the reason behind them, and notes about the environment: paths, versions, t
 
 Never secrets. Not tokens, not passwords, not keys, not anything that would be a problem in a transcript you might
 share. `memory_write` rejects a text that looks like an AWS key, a GitHub token, a private key, a Slack token or a
-`password=value` pair, and never echoes the match back. It is a safety net for the obvious cases, not a scanner.
+`password=value` pair, and never echoes the match back. The password value must be 6 or more characters and include a
+digit or a symbol, so a note saying where a password lives ("password: stored in Vault") is still saved; a password
+made only of letters is not caught. It is a safety net for the obvious cases, not a scanner.
 
 The memory is curated by hand. There is no automatic write at the end of a turn, no summarisation and no
 consolidation: what is in it is what someone chose to put there. Correcting an entry means deleting it and writing it
-again, which gives it a new id. Ids are never reused, so an id quoted in an older part of a transcript is either still
-the entry it named or absent; it never points at a different text.
+again, which gives it a new id. From schema version 2 on, an id is never handed out twice, so an id quoted in an older part of a transcript is either
+still the entry it named or absent; it never points at a different text. The one exception is a database migrated from
+version 1 (see Upgrading).
 
 A write whose text is already stored writes nothing new: the keys it brings are merged into the existing entry, and
 the reply names the keys added and any cut by the limit of 8. After a new entry is saved, the reply may end with
@@ -138,8 +141,10 @@ hits its cap ends with a marker asking to read fewer ids at once.
 
 ## Upgrading
 
-0.3.0 moves the database to schema version 2 (`AUTOINCREMENT`, so ids are never reused). The migration copies the
-tables and marks the index for a rebuild on the next open with FTS5. A 0.2.x build refuses a version 2 database, so
+0.3.0 moves the database to schema version 2 (`AUTOINCREMENT`, so an id is never handed out twice from then on). The migration copies the
+tables and marks the index for a rebuild on the next open with FTS5. A version 1 file keeps no record of deleted ids, so
+numbering continues after the highest id still present: an entry deleted before the upgrade whose id was above every
+remaining one can get that id again, once, exactly as it could under version 1. A 0.2.x build refuses a version 2 database, so
 update every install that shares the directory.
 
 ## Requirements

@@ -12,6 +12,8 @@ const positives: readonly (readonly [string, string])[] = [
   ["Slack token", "xoxb-1234567890-abcdef"],
   ["password", "password: hunter2xyz"],
   ["password", 'passwd = "s3cretvalue"'],
+  ["password", "Password=Tr0ub4dor&3"],
+  ["password", "password: hunter!!x"],
 ];
 
 for (const [kind, text] of positives) {
@@ -27,6 +29,12 @@ for (const text of [
   "tokens start with ghp_",
   "password: ${DB_PASSWORD}",
   "AKIA is the AWS key prefix",
+  "DB password: stored in Vault at secret/db",
+  "password: guardada en 1Password",
+  "Password=rotated weekly",
+  "password: ab1",
+  // Documented tradeoff: letters-only values are indistinguishable from prose.
+  "password: correcthorsebattery",
 ]) {
   test(`secretKindOf ignores "${text}"`, () => {
     assert.equal(secretKindOf(text), null);

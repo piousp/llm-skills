@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DB_FILE } from "./config.ts";
 import { KEYS_PER_CATEGORY } from "./format.ts";
-import { distinctSlugs, foldForSearch, normalizeTextForDuplicate, toMatchTerm, toTerms } from "./query.ts";
+import { foldForSearch, fromTerms, mergeKeys, normalizeTextForDuplicate, toMatchTerm } from "./query.ts";
 
 /** A value a statement accepts, as the rest of the package is allowed to see it. */
 export type SqlValue = string | number | null | Uint8Array;
@@ -91,14 +91,23 @@ export interface WriteInput {
 }
 
 /** The id of the row that holds the text, the category that row was stored with, and whether the row was already there. */
-export interface WriteResult {
-  readonly id: number;
-  readonly duplicate: boolean;
-  readonly category: string;
-  readonly similar: readonly number[];
-  readonly addedKeys: readonly string[];
-  readonly droppedKeys: readonly string[];
-}
+export type WriteResult =
+  | {
+      readonly duplicate: false;
+      readonly id: number;
+      readonly category: string;
+      readonly similar: readonly number[];
+    }
+  | {
+      readonly duplicate: true;
+      readonly id: number;
+      readonly category: string;
+      readonly addedKeys: readonly string[];
+      readonly droppedKeys: readonly string[];
+    };
+
+/** Whether a search needs every token or any of them. */
+export type MatchMode = "all" | "any";
 
 /** Most keys one entry may hold. */
 export const MAX_KEYS = 8;
@@ -106,7 +115,7 @@ export const MAX_KEYS = 8;
 /** What a search needs. The tokens arrive normalized, so this layer never parses a query. */
 export interface SearchInput {
   readonly tokens: readonly string[];
-  readonly match: "all" | "any";
+  readonly match: MatchMode;
   readonly category: string | null;
   readonly limit: number;
   readonly offset: number;
@@ -288,8 +297,8 @@ const INSERT_KEY_SQL = "INSERT INTO keys (entry_id, term) VALUES (?1, ?2)";
 const SIMILAR_LIMIT = 3;
 
 function similarSql(terms: number): string {
-  const marks = Array.from({ length: terms }, () => "?").join(", ");
-  return `SELECT entry_id, COUNT(*) AS shared FROM keys WHERE term IN (${marks}) AND entry_id <> ? GROUP BY entry_id ORDER BY shared DESC, entry_id DESC LIMIT ${SIMILAR_LIMIT}`;
+  const marks = Array.from({ length: terms }, (_, i) => `?${i + 1}`).join(", ");
+  return `SELECT entry_id, COUNT(*) AS shared FROM keys WHERE term IN (${marks}) AND entry_id <> ?${terms + 1} GROUP BY entry_id ORDER BY shared DESC, entry_id DESC LIMIT ${SIMILAR_LIMIT}`;
 }
 
 /**
@@ -374,6 +383,8 @@ export function runMigrations(
 
   const ordered = [...migrations].sort((left, right) => left.version - right.version);
   return transaction(db, () => {
+    // Re-read under the write lock: another process may have migrated between the first read and BEGIN IMMEDIATE, and
+    // migrateToAutoincrement is not idempotent.
     let current = readSchemaVersion(db) ?? from;
     if (current > target) throw new Error(newerVersionMessage(current, target));
     for (const migration of ordered) {
@@ -557,6 +568,7 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
         .all(...terms, id)
         .map((row) => readInt(row, "entry_id"));
     } catch {
+      // Advisory only: the entry is already committed, so a failure here must not turn a saved write into an error.
       return [];
     }
   }
@@ -568,39 +580,31 @@ function createStore(db: SqlDatabase, path: string, fts: boolean): MemoryStore {
     db.exec("BEGIN IMMEDIATE");
     try {
       const duplicate = findDuplicate(normalizeTextForDuplicate(input.text));
+      const existing = duplicate ? fromTerms(duplicate.terms) : [];
+      const merged = mergeKeys(existing, input.keys, MAX_KEYS);
+      const insertKey = prepare(INSERT_KEY_SQL);
       if (duplicate !== null) {
-        const existing = duplicate.terms.split(" ").filter((term) => term !== "");
-        const fresh = distinctSlugs(input.keys).filter((term) => !existing.includes(term));
-        const room = Math.max(0, MAX_KEYS - existing.length);
-        const addedKeys = fresh.slice(0, room);
-        const droppedKeys = fresh.slice(room);
-        const answer = { id: duplicate.id, duplicate: true, category: duplicate.category, similar: [], addedKeys, droppedKeys };
+        const { addedKeys, droppedKeys } = merged;
+        const answer = { duplicate: true, id: duplicate.id, category: duplicate.category, addedKeys, droppedKeys } as const;
         if (addedKeys.length === 0) {
           rollBack(db);
           return answer;
         }
-        const insertKey = prepare(INSERT_KEY_SQL);
         for (const term of addedKeys) insertKey.run(duplicate.id, term);
-        prepare(UPDATE_TERMS_SQL).run(duplicate.id, [...existing, ...addedKeys].join(" "));
+        prepare(UPDATE_TERMS_SQL).run(duplicate.id, merged.terms);
         db.exec("COMMIT");
         return answer;
       }
 
-      const inserted = prepare(INSERT_ENTRY_SQL).run(input.ts, input.category, input.text, toTerms(input.keys));
-      const insertKey = prepare(INSERT_KEY_SQL);
-      // The slug of a key is the term of the `keys` table, and the rule that produces it is the one of the vocabulary: the
-      // primary key of (entry_id, term) would reject a repeat, and an emptied slug is not a term at all.
-      const terms = distinctSlugs(input.keys);
-      for (const term of terms) insertKey.run(inserted.lastInsertRowid, term);
+      const inserted = prepare(INSERT_ENTRY_SQL).run(input.ts, input.category, input.text, merged.terms);
+      for (const term of merged.addedKeys) insertKey.run(inserted.lastInsertRowid, term);
 
       db.exec("COMMIT");
       return {
-        id: inserted.lastInsertRowid,
         duplicate: false,
+        id: inserted.lastInsertRowid,
         category: input.category,
-        similar: similarTo(inserted.lastInsertRowid, terms),
-        addedKeys: [],
-        droppedKeys: [],
+        similar: similarTo(inserted.lastInsertRowid, merged.addedKeys),
       };
     } catch (error) {
       rollBack(db);
@@ -826,7 +830,7 @@ function newerVersionMessage(stored: number, supported: number): string {
 }
 
 /** The quoted AND of the tokens, the shape FTS5 reads without an operator and without a syntax error. */
-function matchExpression(tokens: readonly string[], match: "all" | "any"): string {
+function matchExpression(tokens: readonly string[], match: MatchMode): string {
   return tokens.map(toMatchTerm).join(match === "all" ? " " : " OR ");
 }
 
@@ -839,7 +843,7 @@ function ftsFailure(error: unknown): Error {
 }
 
 /** One `LIKE` pair per token plus the values to bind: the predicate scrolls outwards from what the caller gave. */
-function likePredicate(tokens: readonly string[], match: "all" | "any"): { where: string; params: SqlValue[] } {
+function likePredicate(tokens: readonly string[], match: MatchMode): { where: string; params: SqlValue[] } {
   const clauses: string[] = [];
   const params: SqlValue[] = [];
 
@@ -873,7 +877,7 @@ const DEGRADED_COUNT_COLUMNS = "COUNT(*) AS n";
  * count follows the token count, so these statements are prepared per call and never cached.
  */
 function degradedStatement(
-  input: { readonly tokens: readonly string[]; readonly match: "all" | "any"; readonly category: string | null },
+  input: { readonly tokens: readonly string[]; readonly match: MatchMode; readonly category: string | null },
   projection: string,
   paging?: { readonly limit: number; readonly offset: number },
 ): { sql: string; params: SqlValue[]; tokens: readonly string[] } {

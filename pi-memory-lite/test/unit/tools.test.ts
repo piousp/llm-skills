@@ -192,7 +192,7 @@ test("tools: el esquema de memory_write lleva la categoría como enum del vocabu
   const { deps } = await fixture(t);
   const schema = JSON.parse(JSON.stringify(createMemoryTools(deps)[0].parameters));
 
-  assert.deepEqual(schema.properties.category, { enum: [...DEFAULT_CATEGORIES] });
+  assert.deepEqual(schema.properties.category, { type: "string", enum: [...DEFAULT_CATEGORIES] });
   assert.deepEqual(schema.properties.keys.minItems, 1);
   assert.equal(JSON.stringify(schema).includes('"description"'), false);
 });
@@ -202,6 +202,22 @@ test("tools: con allowUnknownCategory el esquema de memory_write deja la categor
   const schema = JSON.parse(JSON.stringify(createMemoryTools(deps)[0].parameters));
 
   assert.deepEqual(schema.properties.category, { type: "string", minLength: 1 });
+});
+
+test("search: una consulta de varias palabras que todas aciertan cuenta una sola vez", async (t) => {
+  const { deps, store } = await fixture(t);
+  await writeOk(deps, "El router usa wireguard.", "env", ["router"]);
+  let calls = 0;
+  const countSearch: MemoryStore["countSearch"] = (input) => {
+    calls += 1;
+    return store.countSearch(input);
+  };
+  const spied = { ...deps, store: async () => ({ ...store, countSearch }) };
+
+  const result = await executeSearch(spied, { query: "router wireguard" });
+
+  assert.match(textOf(result), /#\d+/);
+  assert.equal(calls, 1);
 });
 
 test("tools: la categoría de memory_search sigue siendo un string libre", async (t) => {
@@ -231,6 +247,7 @@ test("write: guarda la entrada y devuelve el id, la categoría y el texto guarda
   const details = detailsOf(result);
 
   assert.equal(details.duplicate, false);
+  assert.equal("addedKeys" in details, false);
   assert.equal(details.category, "decision");
   assert.equal(textOf(result), `Saved #${details.id} (decision).`);
 
@@ -249,6 +266,7 @@ test("write: lista las entradas parecidas tras el guardado", async (t) => {
   const details = detailsOf(result);
 
   assert.equal(textOf(result), `Saved #${details.id} (env). Similar: #${first.id}.`);
+  assert.ok("similar" in details);
   assert.deepEqual(details.similar, [first.id]);
 });
 
@@ -280,7 +298,8 @@ test("write: un duplicado con keys nuevas las suma y nunca muestra Similar", asy
   const details = detailsOf(result);
 
   assert.equal(textOf(result), `Duplicate of #${first.id} (env); added keys: router, dos.`);
-  assert.deepEqual(details.similar, []);
+  assert.equal("similar" in details, false);
+  assert.ok("addedKeys" in details);
   assert.deepEqual(details.addedKeys, ["router", "dos"]);
   assert.equal(store.read([first.id]).found[0].terms, "uno router dos");
 });
@@ -295,6 +314,23 @@ test("write: un duplicado al límite de keys nombra las que no entraron", async 
     textOf(result),
     `Duplicate of #${first.id} (env); added keys: nueva; not added (limit ${MAX_KEYS}): otra.`,
   );
+});
+
+test("write: un duplicado sin sitio para keys dice que no se escribió nada y nombra las descartadas", async (t) => {
+  const { deps } = await fixture(t);
+  const keys = Array.from({ length: MAX_KEYS }, (_, i) => `k${i}`);
+  const first = await writeOk(deps, "Un hecho completo.", "env", keys);
+
+  const result = await executeWrite(deps, { text: "un hecho completo.", category: "env", keys: ["otra"] });
+  const details = detailsOf(result);
+
+  assert.equal(
+    textOf(result),
+    `Duplicate of #${first.id} (env); nothing was written; not added (limit ${MAX_KEYS}): otra.`,
+  );
+  assert.ok("addedKeys" in details);
+  assert.deepEqual(details.addedKeys, []);
+  assert.deepEqual(details.droppedKeys, ["otra"]);
 });
 
 // G2 / I16: el duplicado se detecta sobre el texto y no sobre la categoría, así que el mismo texto escrito bajo otra
