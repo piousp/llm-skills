@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.11
 
 - **Fix: an errored or retried message no longer pastes its partial text onto the retry, nor drops the next block.** `message_end` now closes any open text or thinking run and stores its partial text, and the `textSplit`/`thinkingSplit` flags hold only until the next `*_end` of the same block or the `message_end`. Providers emit no `*_end` when a message fails mid-block, so before this the stale accumulator and flag leaked into the next message.
 - **Fix: the live context percentage catches up at the next tool start.** The 1 s throttle on `getContextUsage()` skipped reads, so the figure could stay stale until the next usage change. A `tool_execution_start` that follows a skipped read now forces a fresh one and emits a `usage` event. Cost: one extra event per skipped read. The throttle interval is exported as `CONTEXT_USAGE_THROTTLE_MS`, and `RunAgentViaSdkOptions.now` is a test seam for its clock.
