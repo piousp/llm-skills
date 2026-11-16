@@ -1047,8 +1047,11 @@ test("wiring: the subagent-result message renderer does not rebuild on repeated 
   assert.notDeepEqual(clicked, first);
   assert.ok(clicked.join("\n").includes("Hello from scout"));
 
+  const beforeInvalidate = themeCalls;
   component.invalidate();
-  assert.deepEqual(component.render(80), clicked);
+  const rebuilt = component.render(80);
+  assert.ok(themeCalls > beforeInvalidate);
+  assert.deepEqual(rebuilt, clicked);
 });
 
 // (wiring) A failed job's completion message carries the failed-shape details
