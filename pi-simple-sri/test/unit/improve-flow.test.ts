@@ -8,7 +8,7 @@ import path from "node:path";
 import type { Api, AssistantMessage, Context, Model, ToolCall, Usage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CASE_BANK_FORMAT } from "../../src/case-bank.ts";
-import { ProposerError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
+import { ProposerError, SriFailClosedError, SriPerimeterError, SriWriterError } from "../../src/errors.ts";
 import { planDesign, planGate } from "../../src/gate/scorer.ts";
 import {
   buildDecision,
@@ -16,14 +16,15 @@ import {
   type DecisionInput,
   type ImproveFlowContext,
   type ImproveFlowDeps,
+  type ImproveRequest,
   type ProposeFlowResult,
   type ProposeFn,
 } from "../../src/improve-flow.ts";
-import { createProposer, type CompleteFn } from "../../src/proposer.ts";
+import { createProposer, type CompleteFn, type ProposeInput } from "../../src/proposer.ts";
 import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { ATTEMPTS_FILE, DECISION_FILE, LESSONS_DIR, PUBLISHED_SKILL_NAME } from "../../src/names.ts";
 import { stagingDir, stateDir } from "../../src/write-base.ts";
-import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
+import { LESSON_GATE_ACCEPTED, LESSON_GATE_PROBATION } from "../../src/types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -1536,3 +1537,212 @@ test("proposeSkill: the reason of a not-eligible reaches the line of the index",
   assert.equal(line.reason, "published-by-this-package");
   assert.equal(result.entry.reason, line.reason);
 });
+
+// WP10b: a proposal from a pattern of observations. The ask is the pattern, so the run proposes from it and never from the
+// branch of the session that happens to be open when the observer fires.
+const PATTERN_ASK = "rewrite drafts that merge cells by hand";
+const PATTERN_ID = "pt-0123456789ab";
+
+function lessonTextOf(fixture: Fixture, result: Extract<ProposeFlowResult, { kind: "proposed" }>): string {
+  return fs.readFileSync(
+    path.join(fixture.pkg, result.staged.stagingPath, LESSONS_DIR, `${result.staged.slug}.md`),
+    "utf8",
+  );
+}
+
+test("proposeSkill: an observed bank run proposes from the ask, records the observer and keeps the accepted label", async (t) => {
+  const fixture = createFixture(t);
+  const model = fakeModel();
+
+  const result = await proposeSkill(
+    {
+      surface: "observer",
+      skillName: SKILL.name,
+      focus: PATTERN_ASK,
+      bankPath: "/work/cases.json",
+      observed: { patternId: PATTERN_ID, gate: "bank" },
+    },
+    // A session with a failure in it: an observed run does not read it.
+    flowContext(failingBranch()),
+    { ...flowDeps(fixture), propose: realProposer(model) },
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  assert.equal(model.calls.length, 1);
+  assert.equal(promptOf(model.calls[0]).includes(PATTERN_ASK), true);
+  assert.deepEqual(result.evidence, []);
+  assert.deepEqual(result.diagnosis.replayItems, []);
+  assert.equal(result.entry.surface, "observer");
+  assert.equal(result.draft.gate, LESSON_GATE_ACCEPTED);
+  assert.equal(lessonTextOf(fixture, result).includes(`gate: "${LESSON_GATE_ACCEPTED}"`), true);
+
+  const record: DecisionRecord = JSON.parse(
+    fs.readFileSync(path.join(fixture.pkg, result.staged.decisionPath), "utf8"),
+  );
+  assert.equal(record.trigger.surface, "observer");
+  assert.equal(record.trigger.focus, PATTERN_ASK);
+  assert.equal(record.gate.basis, "case-bank");
+  assert.equal(record.gate.status, "not-run");
+  assert.equal(record.outcome.status, "proposed");
+});
+
+test("proposeSkill: an observed probation run writes the lesson with the probation label and no evidence", async (t) => {
+  const fixture = createFixture(t);
+  const model = fakeModel();
+
+  const result = await proposeSkill(
+    {
+      surface: "observer",
+      skillName: SKILL.name,
+      focus: PATTERN_ASK,
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+    // An empty session: without a bank and without a transcript the run still has something to write from, the ask.
+    flowContext([]),
+    { ...flowDeps(fixture), propose: realProposer(model) },
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+
+  assert.equal(model.calls.length, 1);
+  assert.deepEqual(result.evidence, []);
+  assert.equal(result.draft.gate, LESSON_GATE_PROBATION);
+  assert.equal(lessonTextOf(fixture, result).includes(`gate: "${LESSON_GATE_PROBATION}"`), true);
+  assert.equal(lessonTextOf(fixture, result).includes(`gate: "${LESSON_GATE_ACCEPTED}"`), false);
+});
+
+test("proposeSkill: an observed probation run does not read the transcript either", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await proposeSkill(
+    {
+      surface: "observer",
+      skillName: SKILL.name,
+      focus: PATTERN_ASK,
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+    flowContext(failingBranch()),
+    { ...flowDeps(fixture), propose: realProposer(fakeModel()) },
+  );
+
+  if (result.kind !== "proposed") assert.fail(`expected a candidate, got ${result.kind}`);
+  assert.deepEqual(result.evidence, []);
+  assert.equal(result.entry.evidenceCount, 0);
+});
+
+test("proposeSkill: the label of the lesson reaches the proposer only for an observed run", async (t) => {
+  const fixture = createFixture(t);
+  const seen: ProposeInput[] = [];
+  const capturing: ProposeFn = async (input) => {
+    seen.push(input);
+    return successfulProposer()(input);
+  };
+
+  await proposeSkill(
+    { surface: "command", skillName: SKILL.name, focus: "merged cells" },
+    flowContext(failingBranch()),
+    { ...flowDeps(fixture), propose: capturing },
+  );
+  await proposeSkill(
+    {
+      surface: "observer",
+      skillName: SKILL.name,
+      focus: PATTERN_ASK,
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+    flowContext([]),
+    { ...flowDeps(createFixture(t)), propose: capturing },
+  );
+  await proposeSkill(
+    {
+      surface: "observer",
+      skillName: SKILL.name,
+      focus: PATTERN_ASK,
+      bankPath: "/work/cases.json",
+      observed: { patternId: PATTERN_ID, gate: "bank" },
+    },
+    flowContext([]),
+    { ...flowDeps(createFixture(t)), propose: capturing },
+  );
+
+  assert.equal(seen.length, 3);
+  assert.equal("lessonGate" in seen[0], false);
+  assert.equal(seen[1].lessonGate, LESSON_GATE_PROBATION);
+  assert.equal(seen[2].lessonGate, LESSON_GATE_ACCEPTED);
+});
+
+// Every shape the contract refuses is refused before the generation and before any write: the request is malformed, and
+// nothing about the skill or the session can fix it.
+const MALFORMED_OBSERVED: ReadonlyArray<readonly [string, ImproveRequest]> = [
+  [
+    "a surface that is not the observer",
+    {
+      surface: "command",
+      skillName: "pdf-tools",
+      focus: PATTERN_ASK,
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+  ],
+  [
+    "no focus",
+    { surface: "observer", skillName: "pdf-tools", observed: { patternId: PATTERN_ID, gate: "probation" } },
+  ],
+  [
+    "a blank focus",
+    {
+      surface: "observer",
+      skillName: "pdf-tools",
+      focus: "   ",
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+  ],
+  [
+    "the bank gate without a bank path",
+    {
+      surface: "observer",
+      skillName: "pdf-tools",
+      focus: PATTERN_ASK,
+      observed: { patternId: PATTERN_ID, gate: "bank" },
+    },
+  ],
+  [
+    "the probation gate with a bank path",
+    {
+      surface: "observer",
+      skillName: "pdf-tools",
+      focus: PATTERN_ASK,
+      bankPath: "/work/cases.json",
+      observed: { patternId: PATTERN_ID, gate: "probation" },
+    },
+  ],
+  [
+    "a defect",
+    {
+      surface: "observer",
+      skillName: "pdf-tools",
+      focus: PATTERN_ASK,
+      bankPath: "/work/cases.json",
+      defect: true,
+      observed: { patternId: PATTERN_ID, gate: "bank" },
+    },
+  ],
+];
+
+for (const [label, request] of MALFORMED_OBSERVED) {
+  test(`proposeSkill: an observed request with ${label} is refused before the generation and any write`, async (t) => {
+    const fixture = createFixture(t);
+
+    await assert.rejects(
+      () =>
+        proposeSkill(request, flowContext(failingBranch()), {
+          ...flowDeps(fixture),
+          propose: neverCalledProposer(),
+        }),
+      (error: unknown) => error instanceof SriFailClosedError && /observed/.test(error.message),
+    );
+
+    assert.equal(fs.existsSync(stagingDir(fixture.pkg)), false);
+    assert.equal(fs.existsSync(path.join(stateDir(fixture.pkg), ATTEMPTS_FILE)), false);
+  });
+}

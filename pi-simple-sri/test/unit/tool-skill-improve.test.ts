@@ -43,6 +43,7 @@ import {
   type SkillImproveToolDeps,
   type ToolDetails,
 } from "../../src/tool-skill-improve.ts";
+import { observeId, OBSERVE_FORMAT, type ObservationEvent, type ObserveEvent } from "../../src/observe/types.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import { SriWriterError, type StagingWriteInput, type StagingWriteResult } from "../../src/writer.ts";
@@ -237,10 +238,16 @@ interface HarnessOptions {
   // The reply the fake registry answers with, for a test that drives the judge the surface wires. The default is the JSON
   // object a propose expects, so a test that never asks for a verdict reads the same message it always did.
   reply?: string;
+  // Whether the user turned observation on, and the events the log already holds. Observation is opt-in, so the default of a
+  // harness is on: the tests of the other actions never read it, and the ones of record say when it is off.
+  observeEnabled?: boolean;
+  observed?: readonly ObserveEvent[];
 }
 
 interface Harness {
   deps: SkillImproveToolDeps;
+  // The events the run appended to the observer log, in order.
+  appended: ObserveEvent[];
   entries: EntryCall[];
   attempts: AttemptLine[];
   attemptBases: string[];
@@ -285,6 +292,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const completed: CompletedCall[] = [];
   const gateRequests: GateRequest[] = [];
   const directionalRequests: DirectionalGateRequest[] = [];
+  const stored: ObserveEvent[] = [...(options.observed ?? [])];
+  const appended: ObserveEvent[] = [];
 
   const modelRegistry: ImproveFlowModelRegistry = {
     complete: async (model, context, request) => {
@@ -339,6 +348,19 @@ function createHarness(options: HarnessOptions = {}): Harness {
       attempts.push(line);
     },
     base: BASE,
+    readObserveConfig: () => ({
+      enabled: options.observeEnabled ?? true,
+      judgeModel: null,
+      judgeCallsPerDay: 20,
+      replayAllow: [],
+    }),
+    observeLog: {
+      read: async () => [...stored],
+      append: async (_base, events) => {
+        stored.push(...events);
+        appended.push(...events);
+      },
+    },
     // The gate of the run: the one a test names, or the real one when the test is about the candidate
     // resolution. The default concludes nothing, so a test that does not say which verdict it wants gets the
     // one that writes nothing.
@@ -371,6 +393,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
   return {
     deps,
+    appended,
     entries,
     attempts,
     attemptBases,
@@ -1672,4 +1695,169 @@ test("gate: a relative bankPath reaches the flow resolved against the cwd of the
   assert.equal(harness.directionalRequests.length, 1);
   assert.equal(harness.directionalRequests[0].bankPath, file);
   assert.equal(result.details.bankPath, file);
+});
+
+// WP14b: the fifth action. record appends a self-report to the observer log and does nothing else.
+function observationOf(event: ObserveEvent | undefined): ObservationEvent {
+  assert.ok(event !== undefined && event.type === "observation", "the run must append an observation");
+  return event;
+}
+
+test("skillImproveParams: record is an action, and the note travels in the optional focus", () => {
+  assert.equal(Value.Check(skillImproveParams, { action: "record", skill: "pdf-tools", focus: "use lattice" }), true);
+  assert.equal(Value.Check(skillImproveParams, { action: "record", skill: "pdf-tools" }), true);
+});
+
+// The description made two promises the tool did not keep -- it "records a correction or a rejection" -- and the one it
+// keeps is a self-report line that proposes nothing alone.
+test("createSkillImproveTool: the description says what record does and does not claim a rejection is recorded", () => {
+  const tool = createSkillImproveTool({ base: BASE });
+
+  assert.equal(tool.description.includes("record appends a self-report"), true);
+  assert.equal(tool.description.includes("one report proposes nothing"), true);
+  assert.equal(tool.description.includes("never edits the skill"), true);
+  assert.equal(tool.description.includes("never accepts a candidate"), true);
+  assert.equal(tool.description.includes("a correction or a rejection"), false);
+  assert.equal(tool.description.includes("rejected"), false);
+});
+
+test("record: one self-report line, weight 0.4, anchored on the last user message of the branch", async () => {
+  const harness = createHarness({
+    branch: [userEntry(0, "first ask"), toolCallEntry(1), toolErrorEntry(2), userEntry(3, "no, use lattice")],
+  });
+
+  const result = await harness.run({ action: "record", skill: "pdf-tools", focus: "  merged cells lose their span  " });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(result.details, { action: "record", skill: "pdf-tools", outcome: "recorded" });
+  assert.equal(harness.appended.length, 1);
+
+  const observation = observationOf(harness.appended[0]);
+  assert.equal(observation.format, OBSERVE_FORMAT);
+  assert.equal(observation.at, NOW_ISO);
+  assert.equal(observation.source, "self-report");
+  assert.equal(observation.weight, 0.4);
+  assert.equal(observation.confidence, null);
+  assert.equal(observation.episodeId, null);
+  assert.equal(observation.sessionId, "session-test");
+  assert.equal(observation.skill, "pdf-tools");
+  assert.equal(observation.anchorEntryId, "entry-3");
+  assert.equal(observation.summary, "merged cells lose their span");
+  assert.match(observation.id, /^ob-[0-9a-f]{12}$/);
+  assert.equal(observation.patternId, observeId("pt", ["pdf-tools", observation.id]));
+
+  // The text of the answer says what it did not do; nothing but the log was written.
+  assert.equal(textOf(result).includes("the skill was not edited and nothing was accepted"), true);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.deepEqual(harness.entries, []);
+  assert.deepEqual(harness.completed, []);
+  assert.deepEqual(harness.gateRequests, []);
+});
+
+test("record: a secret in the note is redacted before it is stored", async () => {
+  const harness = createHarness();
+
+  await harness.run({ action: "record", skill: "pdf-tools", focus: "it used sk-ant-abcdefghijklmnopqrstuvwxyz0123 again" });
+
+  const summary = observationOf(harness.appended[0]).summary;
+  assert.equal(summary.includes("sk-ant-"), false);
+  assert.equal(summary.includes("[REDACTED]"), true);
+});
+
+test("record: observation off records nothing and says how to turn it on", async () => {
+  const harness = createHarness({ observeEnabled: false });
+
+  const result = await harness.run({ action: "record", skill: "pdf-tools", focus: "use lattice" });
+
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    action: "record",
+    skill: "pdf-tools",
+    outcome: "observe-disabled",
+    reason: "observe-disabled",
+  });
+  assert.equal(textOf(result).includes("pi-simple-sri.observe.enabled"), true);
+  assert.deepEqual(harness.appended, []);
+});
+
+test("record: a missing, blank or oversized note is refused and nothing is written", async () => {
+  const harness = createHarness();
+
+  const missing = await harness.run({ action: "record", skill: "pdf-tools" });
+  const blank = await harness.run({ action: "record", skill: "pdf-tools", focus: "   " });
+  const long = await harness.run({ action: "record", skill: "pdf-tools", focus: "x".repeat(301) });
+  const limit = await harness.run({ action: "record", skill: "pdf-tools", focus: "y".repeat(300) });
+
+  assert.equal(missing.details.reason, "missing-note");
+  assert.equal(blank.details.reason, "missing-note");
+  assert.equal(long.details.reason, "note-too-long");
+  assert.equal(limit.isError, undefined);
+  assert.equal(harness.appended.length, 1);
+});
+
+test("record: a session without a user message has nothing to anchor on", async () => {
+  const harness = createHarness({ branch: [toolCallEntry(1), toolErrorEntry(2)] });
+
+  const result = await harness.run({ action: "record", skill: "pdf-tools", focus: "use lattice" });
+
+  assert.equal(result.isError, true);
+  assert.equal(result.details.reason, "no-user-message");
+  assert.deepEqual(harness.appended, []);
+});
+
+test("record: an unknown skill and an ineligible one are refused as every other action refuses them", async () => {
+  const unknown = createHarness();
+  const unknownResult = await unknown.run({ action: "record", skill: "no-such-skill", focus: "x" });
+  assert.equal(unknownResult.details.outcome, "unknown-skill");
+  assert.deepEqual(unknown.appended, []);
+
+  const denied = createHarness({ config: { allow: [], deny: ["pdf-tools"] } });
+  const deniedResult = await denied.run({ action: "record", skill: "pdf-tools", focus: "x" });
+  assert.equal(deniedResult.details.outcome, "not-eligible");
+  assert.deepEqual(denied.appended, []);
+
+  const reserved = createHarness({ skills: [{ ...SKILL, name: PUBLISHED_SKILL_NAME, dir: `/skills/${PUBLISHED_SKILL_NAME}`, realDir: `/skills/${PUBLISHED_SKILL_NAME}` }] });
+  const reservedResult = await reserved.run({ action: "record", skill: PUBLISHED_SKILL_NAME, focus: "x" });
+  assert.equal(reservedResult.details.reason, "published-by-this-package");
+  assert.deepEqual(reserved.appended, []);
+});
+
+// The same note on the same message is one observation; another note on it is a second one, and both belong to the pattern the
+// first opened, which is how reports of several sessions add up.
+test("record: the same note is recorded once and a second note joins the pattern of the first", async () => {
+  const harness = createHarness();
+
+  await harness.run({ action: "record", skill: "pdf-tools", focus: "use lattice" });
+  await harness.run({ action: "record", skill: "pdf-tools", focus: "use lattice" });
+  await harness.run({ action: "record", skill: "pdf-tools", focus: "keep the header row" });
+
+  assert.equal(harness.appended.length, 2);
+  const [first, second] = harness.appended.map(observationOf);
+  assert.notEqual(first.id, second.id);
+  assert.equal(second.patternId, first.patternId);
+});
+
+test("record: a pattern of another skill or another source is not joined", async () => {
+  const other: ObserveEvent = {
+    format: OBSERVE_FORMAT,
+    type: "observation",
+    at: NOW_ISO,
+    id: "ob-000000000001",
+    episodeId: null,
+    sessionId: "session-other",
+    skill: "pdf-tools",
+    source: "user-note",
+    kind: "user-note:x",
+    summary: "a note",
+    confidence: null,
+    weight: 1,
+    anchorEntryId: "entry-0",
+    patternId: "pt-000000000001",
+  };
+  const harness = createHarness({ observed: [other] });
+
+  await harness.run({ action: "record", skill: "pdf-tools", focus: "use lattice" });
+
+  assert.notEqual(observationOf(harness.appended[0]).patternId, "pt-000000000001");
 });

@@ -155,6 +155,10 @@ export interface Diagnosis {
   replayItems: ReplayItem[];
 }
 
+// The diagnosis as a record keeps it: a forget sets the summary to null because it quotes the pattern the forget erases
+// (src/writer.ts, clearDecisionFocus). A diagnosis that is built always has a summary, so Diagnosis stays a string.
+export type RecordedDiagnosis = Omit<Diagnosis, "summary"> & { summary: string | null };
+
 // The closed set of lesson states, declared once (M2, I4). The type is derived from the array
 // and src/lesson-frontmatter.ts derives its validator from the same array, so a state cannot be
 // added to the type without reaching the validator that accepts it.
@@ -167,6 +171,10 @@ export type LessonStatus = (typeof LESSON_STATUSES)[number];
 // literal lives here and the prologue and the tests read it, instead of spelling it twice in a way nothing
 // would refuse when the two drifted apart.
 export const LESSON_GATE_ACCEPTED = "accepted";
+
+// The gate value of a lesson accepted on probation: no gate measured it (src/gate/probation.ts), so the frontmatter says
+// so instead of claiming the `accepted` of a measured one.
+export const LESSON_GATE_PROBATION = "probation";
 
 // Frontmatter of a lessons/<slug>.md file.
 export interface LessonDraft {
@@ -195,7 +203,9 @@ export type DecisionSchema = "pi-simple-sri/decision@1";
 // tripwire would lose its only witness.
 export const DECISION_SCHEMA: DecisionSchema = "pi-simple-sri/decision@1";
 
-export type DecisionSurface = "command" | "tool";
+// "observer" is the surface of a proposal the deferred detection raises from a pattern (src/observe/): it is not the
+// command and not the tool, and a record never claims to come from a surface that did not make it.
+export type DecisionSurface = "command" | "tool" | "observer";
 
 // The closed set of gate statuses, declared once and derived to a type the way LESSON_STATUSES is: the
 // schema declares the same list as an enum, so a status added here without reaching the schema is a
@@ -206,6 +216,7 @@ export const GATE_STATUSES = [
   "gate-accepted",
   "gate-rejected",
   "gate-abstained",
+  "probation",
 ] as const;
 export type GateStatus = (typeof GATE_STATUSES)[number];
 
@@ -213,12 +224,16 @@ export type GateStatus = (typeof GATE_STATUSES)[number];
 // carries that moment in outcome.decidedAt. A failed acceptance is not a status of the record: it writes
 // nothing, the staged record keeps the "gate-accepted" the gate decided, and the reason it refused is
 // reported to the caller and left out of decision.json -- which is why no member names it.
+//
+// "probation" is a candidate that no gate measured and that waits for the user to accept it as it is (src/gate/probation.ts):
+// it is not a verdict of a gate, so no metric counts it as one.
 export type DecisionOutcomeStatus =
   | "proposed"
   | "not-eligible"
   | "gate-accepted"
   | "gate-rejected"
   | "gate-abstained"
+  | "probation"
   | "accepted";
 
 // The one mapping from what the gate decided to what the record's outcome says. The record is built
@@ -235,6 +250,7 @@ const OUTCOME_STATUS_OF_GATE: Record<GateStatus, DecisionOutcomeStatus> = {
   "gate-accepted": "gate-accepted",
   "gate-rejected": "gate-rejected",
   "gate-abstained": "gate-abstained",
+  probation: "probation",
 };
 
 export function outcomeStatusFor(gateStatus: GateStatus): DecisionOutcomeStatus {
@@ -585,6 +601,22 @@ export interface GateConcluded {
   replay: GateReplayResult;
 }
 
+// A candidate that no gate measured and that was put on probation instead: the skill has no bank and cannot be replayed
+// safely, so nothing ran and there is no rule, design or result to record. The block is of the replay base because that is
+// the one a proposal without a bank is born in, and `probation` is the one key it carries -- the digest of the SKILL.md at
+// the moment of staging, which is what the acceptance compares against the skill when it writes (src/gate/acceptance.ts), so
+// skill drift is refused exactly as it is after a gate. It is absent from every other block, the way `caseBank` is absent
+// from the replay ones. A case-bank gate that found no improvement and was accepted as it is keeps its own basis: GateCaseBankProbation.
+export interface GateProbation {
+  basis: "replay";
+  status: "probation";
+  budget: GateBudget;
+  tokens: GateTokenTally;
+  preregistration: null;
+  replay: null;
+  probation: { recordedAt: string; skillContentHash: string };
+}
+
 // The three states of the base M1c adds, with the materials and the result under the key of its basis. A candidate
 // that was proposed with a bank and not gated yet is `not-run` with `caseBank: null` and keeps the record saying it was
 // proposed; `preregistered` is the bank copied and pinned before the first run; `concluded` carries the result the
@@ -619,10 +651,27 @@ export interface GateCaseBankConcluded {
   caseBank: GateCaseBankResult;
 }
 
+// A case-bank gate that concluded it could not tell the lesson from its absence (`gate-abstained`, reason `no-improvement`)
+// and that the user then accepted as it is: the block keeps its basis, its preregistration and the result that said so --
+// nothing a reader acted on is erased -- and adds the one key a probation carries, the digest of the SKILL.md at the moment
+// of staging that the acceptance compares against the skill.
+export interface GateCaseBankProbation {
+  basis: "case-bank";
+  status: "probation";
+  budget: GateBudget;
+  tokens: GateTokenTally;
+  preregistration: GatePreregistration;
+  replay: null;
+  caseBank: GateCaseBankResult;
+  probation: { recordedAt: string; skillContentHash: string };
+}
+
 export type GateBlock =
   | GateNotRun
   | GatePreregistered
   | GateConcluded
+  | GateProbation
+  | GateCaseBankProbation
   | GateCaseBankNotRun
   | GateCaseBankPreregistered
   | GateCaseBankConcluded;
@@ -643,7 +692,7 @@ export interface DecisionRecord {
   skill: DecisionSkill;
   eligibility: SriConfig;
   evidence: EvidenceItem[];
-  diagnosis: Diagnosis;
+  diagnosis: RecordedDiagnosis;
   candidate: DecisionCandidate;
   gate: GateBlock;
   outcome: DecisionOutcome;

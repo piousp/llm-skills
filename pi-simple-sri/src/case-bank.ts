@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { validateCheck, type CaseCheck } from "./checks.ts";
 import { MAX_EXCERPT_CODE_POINTS } from "./evidence.ts";
 import { sha256Digest } from "./hash.ts";
+import { PROVENANCES, type Provenance } from "./observe/types.ts";
 import type { Result } from "./types.ts";
 import {
   closedObjectProblemOf,
@@ -94,6 +95,8 @@ export interface CaseBankCase {
 // compared against CASE_BANK_FORMAT, and typing it as the constant would say the reader never refuses one.
 export interface CaseBank {
   format: string;
+  // Who wrote the bank. Absent reads as a bank of the user (src/observe/banks.ts decides, not the reader).
+  provenance?: Provenance;
   description?: string;
   rubric?: string;
   origin?: CaseBankOrigin;
@@ -125,7 +128,7 @@ export interface CaseBankFailure {
 // the bank hold a finding the record then has to cut.
 const MAX_DESCRIPTION_CODE_POINTS = 500;
 const MAX_RUBRIC_CODE_POINTS = 8000;
-const MAX_PROMPT_CODE_POINTS = 4000;
+export const MAX_PROMPT_CODE_POINTS = 4000;
 
 // The id of a case is a slug, the same shape a lesson slug has (schemas/decision.schema.json declares both), because
 // it is the coordinate a failure names.
@@ -135,7 +138,7 @@ const CASE_ID_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 // The fields each level declares. Every level of the format is closed (additionalProperties: false), so a key that
 // is not here is refused by name instead of dropped: a bank with a misspelled field is a mistake its author has to
 // see, and the schema would refuse the record that carried it anyway.
-const ROOT_FIELDS: readonly string[] = ["format", "description", "rubric", "origin", "cases"];
+const ROOT_FIELDS: readonly string[] = ["format", "provenance", "description", "rubric", "origin", "cases"];
 const ORIGIN_FIELDS: readonly string[] = ["kind", "path", "excerpt"];
 const CASE_FIELDS: readonly string[] = ["id", "prompt", "checks"];
 
@@ -166,20 +169,27 @@ export async function readCaseBank(
   // limit holds whichever of the two readings saw the file last.
   if (bytes.value.length > MAX_CASE_BANK_BYTES) return tooLarge(bytes.value.length);
 
-  let raw: unknown;
-  try {
-    raw = JSON.parse(bytes.value.toString("utf8"));
-  } catch (error) {
-    return refuse("not-json", toErrorMessage(error));
-  }
-
-  const parsed = parseCaseBank(raw, profile);
-  if (!parsed.ok) return refuse("invalid", parsed.error);
+  const parsed = parseCaseBankText(bytes.value.toString("utf8"), profile);
+  if (!parsed.ok) return parsed;
 
   return {
     ok: true,
     value: { bank: parsed.value, bytes: bytes.value, contentHash: caseBankDigest(bytes.value) },
   };
+}
+
+// The parse half of the reader, for a caller that holds the text and not a path: the same refusals as the file reader,
+// with no file system behind them.
+export function parseCaseBankText(text: string, profile: CaseBankProfile): Result<CaseBank, CaseBankFailure> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    return refuse("not-json", toErrorMessage(error));
+  }
+
+  const parsed = parseCaseBank(raw, profile);
+  return parsed.ok ? parsed : refuse("invalid", parsed.error);
 }
 
 // The digest of a bank as it is on disk, which is what a preregistration pins (OA4): the bytes and not the data, so
@@ -242,6 +252,14 @@ function parseCaseBank(raw: unknown, profile: CaseBankProfile): Result<CaseBank,
   const closed = closedObjectProblemOf(raw, ROOT_FIELDS, "the bank");
   if (closed !== undefined) return problem(closed);
 
+  let provenance: Provenance | undefined;
+  if (Object.hasOwn(raw, "provenance")) {
+    if (!isProvenance(raw.provenance)) {
+      return problem(`"provenance" must be one of ${PROVENANCES.map(quote).join(", ")}, got ${describe(raw.provenance)}`);
+    }
+    provenance = raw.provenance;
+  }
+
   let description: string | undefined;
   if (Object.hasOwn(raw, "description")) {
     const accepted = textField("description", raw.description, MAX_DESCRIPTION_CODE_POINTS, 0);
@@ -280,6 +298,7 @@ function parseCaseBank(raw: unknown, profile: CaseBankProfile): Result<CaseBank,
     ok: true,
     value: {
       format: CASE_BANK_FORMAT,
+      ...(provenance === undefined ? {} : { provenance }),
       ...(description === undefined ? {} : { description }),
       ...(rubric === undefined ? {} : { rubric }),
       ...(origin === undefined ? {} : { origin }),
@@ -408,6 +427,10 @@ function caseId(field: string, value: unknown): Result<string, string> {
 // Derived from the array, never from a second literal, in the same way src/checks.ts derives its kind validator.
 function isCaseBankOriginKind(value: unknown): value is CaseBankOriginKind {
   return typeof value === "string" && CASE_BANK_ORIGIN_KINDS.some((kind) => kind === value);
+}
+
+function isProvenance(value: unknown): value is Provenance {
+  return typeof value === "string" && PROVENANCES.some((provenance) => provenance === value);
 }
 
 // The shape of every rejection of this module that is a message and not a kind: the caller of the reader wraps it in

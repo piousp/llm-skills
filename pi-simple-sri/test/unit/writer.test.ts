@@ -10,21 +10,34 @@ import { stagingDir, stateDir } from "../../src/write-base.ts";
 import { SriPerimeterError } from "../../src/perimeter.ts";
 import {
   appendAttemptLine,
+  appendObserveLine,
   appendSignalLine,
+  clearDecisionFocus,
+  clearHistoryDecisionFocus,
   copySkillTree,
+  createExclusiveFile,
   discardStagingCandidate,
+  ensurePrivateDir,
+  eraseStagingBank,
+  eraseStagingContent,
+  removeFileIn,
   removeLessonFile,
+  removeStagingDir,
   rewriteStagingDecision,
   snapshotForHistory,
   SriWriterError,
   upsertReferenceLine,
   writeHistoryDecision,
   writeLessonFile,
+  writePrivateFile,
   writeStagingCandidate,
   writeTextAtomically,
   type StagingWriteInput,
 } from "../../src/writer.ts";
 import type { RaisedSignalLine } from "../../src/signals.ts";
+import { CASE_BANK_FILE, DECISION_FILE, OBSERVE_FILE } from "../../src/names.ts";
+import { OBSERVE_FORMAT } from "../../src/observe/types.ts";
+import type { ObserveEvent } from "../../src/observe/types.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, DecisionRecord, LessonDraft, SkillRef } from "../../src/types.ts";
 
@@ -1424,4 +1437,717 @@ test("writeHistoryDecision: a timestamp that leaves .history/ is refused", async
   );
 
   assert.deepEqual(fs.readdirSync(path.join(skill.realDir, "lessons")), []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// WP2: the observer's writes. Files the observer creates are private: 0600 for files, 0700 for the directories it creates.
+// ---------------------------------------------------------------------------------------------
+
+function modeOf(target: string): number {
+  return fs.statSync(target).mode & 0o777;
+}
+
+function forgetEvent(skill = "pdf-tools"): ObserveEvent {
+  return { format: OBSERVE_FORMAT, type: "forget", at: FIXED_NOW.toISOString(), skill };
+}
+
+test("appendObserveLine: writes one line under state/observe.jsonl, private, and keeps the first line intact", async (t) => {
+  const fixture = createFixture(t);
+  const observePath = path.join(stateDir(fixture.pkg), OBSERVE_FILE);
+  const first = forgetEvent("pdf-tools");
+  const second = forgetEvent("code-review");
+
+  await appendObserveLine(fixture.pkg, first);
+  const afterFirst = fs.readFileSync(observePath, "utf8");
+  await appendObserveLine(fixture.pkg, second);
+
+  const content = fs.readFileSync(observePath, "utf8");
+  assert.equal(content.startsWith(afterFirst), true);
+  const lines = content.split("\n").filter((line) => line !== "");
+  assert.equal(lines.length, 2);
+  assert.deepEqual(JSON.parse(lines[0]) as unknown, first);
+  assert.deepEqual(JSON.parse(lines[1]) as unknown, second);
+  assert.equal(modeOf(observePath), 0o600);
+  assert.equal(modeOf(stateDir(fixture.pkg)), 0o700);
+});
+
+test("appendObserveLine: refuses a relative base", async () => {
+  await assert.rejects(
+    () => appendObserveLine("state", forgetEvent()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("is not absolute"),
+  );
+});
+
+test("appendObserveLine: refuses to append after a line that was truncated", async (t) => {
+  const fixture = createFixture(t);
+  const observePath = path.join(stateDir(fixture.pkg), OBSERVE_FILE);
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.writeFileSync(observePath, '{"type":"forg', "utf8");
+
+  await assert.rejects(
+    () => appendObserveLine(fixture.pkg, forgetEvent()),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("does not end with a newline"),
+  );
+  assert.equal(fs.readFileSync(observePath, "utf8"), '{"type":"forg');
+});
+
+test("appendObserveLine: refuses an observe.jsonl that is a symlink out of the state directory", async (t) => {
+  const fixture = createFixture(t);
+  const outside = path.join(fixture.base, "outside.jsonl");
+  fs.writeFileSync(outside, "", "utf8");
+  fs.mkdirSync(stateDir(fixture.pkg), { recursive: true });
+  fs.symlinkSync(outside, path.join(stateDir(fixture.pkg), OBSERVE_FILE));
+
+  await assert.rejects(
+    () => appendObserveLine(fixture.pkg, forgetEvent()),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.equal(fs.readFileSync(outside, "utf8"), "");
+});
+
+function privateRoot(fixture: Fixture): string {
+  const root = path.join(fixture.base, "sri");
+  fs.mkdirSync(root, { recursive: true });
+  return root;
+}
+
+test("writePrivateFile: writes the text, 0600, creates the missing directories 0700 and leaves no temporary file", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const target = path.join(root, "banks", "deep", "pdf-tools.json");
+
+  await writePrivateFile(target, '{"cases":[]}\n', root);
+
+  assert.equal(fs.readFileSync(target, "utf8"), '{"cases":[]}\n');
+  assert.equal(modeOf(target), 0o600);
+  assert.equal(modeOf(path.join(root, "banks")), 0o700);
+  assert.equal(modeOf(path.join(root, "banks", "deep")), 0o700);
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ["pdf-tools.json"]);
+});
+
+test("writePrivateFile: the temporary file is created private, not chmodded afterwards", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const original = fs.promises.writeFile.bind(fs.promises);
+  const seen: unknown[] = [];
+  const stub = (file: unknown, data: unknown, options?: unknown): Promise<void> => {
+    seen.push(options);
+    return original(file as string, data as Buffer, options as fs.WriteFileOptions);
+  };
+  const descriptor = Object.getOwnPropertyDescriptor(fs.promises, "writeFile");
+  t.after(() => {
+    if (descriptor) Object.defineProperty(fs.promises, "writeFile", descriptor);
+  });
+  Object.defineProperty(fs.promises, "writeFile", { configurable: true, writable: true, value: stub });
+
+  await writePrivateFile(path.join(root, "x.json"), "x\n", root);
+
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0], { flag: "wx", mode: 0o600 });
+});
+
+test("writePrivateFile: replaces an existing file and the result is private", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const target = path.join(root, "state", "signals.jsonl");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "old\n", { encoding: "utf8", mode: 0o644 });
+
+  await writePrivateFile(target, "new\n", root);
+
+  assert.equal(fs.readFileSync(target, "utf8"), "new\n");
+  assert.equal(modeOf(target), 0o600);
+});
+
+test("writePrivateFile: a target outside the root is refused, nothing is created", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+
+  for (const target of [path.join(root, "..", "escape", "x.json"), path.join(fixture.base, "elsewhere", "x.json")]) {
+    await assert.rejects(
+      () => writePrivateFile(target, "x\n", root),
+      (error: unknown) => error instanceof SriPerimeterError,
+    );
+  }
+
+  assert.equal(fs.existsSync(path.join(fixture.base, "escape")), false);
+  assert.equal(fs.existsSync(path.join(fixture.base, "elsewhere")), false);
+});
+
+test("writePrivateFile: a directory that is a symlink out of the root is refused", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const outside = path.join(fixture.base, "outside");
+  fs.mkdirSync(outside, { recursive: true });
+  fs.symlinkSync(outside, path.join(root, "banks"));
+
+  await assert.rejects(
+    () => writePrivateFile(path.join(root, "banks", "x.json"), "x\n", root),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+test("createExclusiveFile: creates the file once, private, and answers false without touching an existing one", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const target = path.join(root, "state", "observe.lock");
+
+  assert.equal(await createExclusiveFile(target, "first\n", root), true);
+  assert.equal(await createExclusiveFile(target, "second\n", root), false);
+
+  assert.equal(fs.readFileSync(target, "utf8"), "first\n");
+  assert.equal(modeOf(target), 0o600);
+  assert.equal(modeOf(path.dirname(target)), 0o700);
+});
+
+test("createExclusiveFile: a target outside the root is refused", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+
+  await assert.rejects(
+    () => createExclusiveFile(path.join(root, "..", "lock"), "x\n", root),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.equal(fs.existsSync(path.join(fixture.base, "lock")), false);
+});
+
+test("removeFileIn: removes the file and answers that it is gone, also when it was already absent", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const target = path.join(root, "observe.lock");
+  fs.writeFileSync(target, "x\n", "utf8");
+
+  assert.equal(await removeFileIn(target, root), true);
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(await removeFileIn(target, root), true);
+});
+
+test("removeFileIn: a directory is not removed", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const directory = path.join(root, "banks");
+  fs.mkdirSync(directory, { recursive: true });
+
+  assert.equal(await removeFileIn(directory, root), false);
+  assert.equal(fs.existsSync(directory), true);
+});
+
+test("removeFileIn: a target outside the root is refused and survives", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const outside = path.join(fixture.base, "outside.txt");
+  fs.writeFileSync(outside, "keep\n", "utf8");
+
+  await assert.rejects(
+    () => removeFileIn(outside, root),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.equal(fs.existsSync(outside), true);
+});
+
+// eraseStagingContent: the content of a candidate (the lesson and the copy of the bank) goes, the record of what the
+// gate decided stays.
+function stagedCandidate(fixture: Fixture): { relative: string; absolute: string } {
+  const relative = path.join("staging", BASE_TIMESTAMP, "pdf-tools");
+  const absolute = path.join(fixture.pkg, relative);
+  fs.mkdirSync(path.join(absolute, "lessons"), { recursive: true });
+  fs.writeFileSync(path.join(absolute, "lessons", "first.md"), "lesson one\n", "utf8");
+  fs.writeFileSync(path.join(absolute, "lessons", "second.md"), "lesson two\n", "utf8");
+  fs.writeFileSync(path.join(absolute, CASE_BANK_FILE), "{}\n", "utf8");
+  fs.writeFileSync(path.join(absolute, DECISION_FILE), '{"kept":true}\n', "utf8");
+  return { relative, absolute };
+}
+
+test("eraseStagingContent: removes the lessons and the bank copy, keeps decision.json, and lists what it removed", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+
+  const removed = await eraseStagingContent(fixture.pkg, staged.relative);
+
+  assert.deepEqual(removed, [
+    path.join(staged.relative, CASE_BANK_FILE),
+    path.join(staged.relative, "lessons", "first.md"),
+    path.join(staged.relative, "lessons", "second.md"),
+  ]);
+  assert.deepEqual(relativeTree(staged.absolute), [DECISION_FILE]);
+  assert.equal(fs.readFileSync(path.join(staged.absolute, DECISION_FILE), "utf8"), '{"kept":true}\n');
+});
+
+test("eraseStagingContent: an absolute stagingPath names the same candidate, and a second call removes nothing", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+
+  assert.equal((await eraseStagingContent(fixture.pkg, staged.absolute)).length, 3);
+  assert.deepEqual(await eraseStagingContent(fixture.pkg, staged.absolute), []);
+  assert.deepEqual(relativeTree(staged.absolute), [DECISION_FILE]);
+});
+
+test("eraseStagingContent: a path outside staging is refused and removes nothing", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const inState = path.join(stateDir(fixture.pkg), "x");
+  fs.mkdirSync(path.join(inState, "lessons"), { recursive: true });
+  fs.writeFileSync(path.join(inState, "lessons", "keep.md"), "keep\n", "utf8");
+
+  for (const target of [path.join("state", "x"), path.join("staging", "..", "state", "x"), fixture.base]) {
+    await assert.rejects(
+      () => eraseStagingContent(fixture.pkg, target),
+      (error: unknown) => error instanceof SriPerimeterError,
+    );
+  }
+
+  assert.equal(fs.existsSync(path.join(inState, "lessons", "keep.md")), true);
+  assert.equal(relativeTree(staged.absolute).length, 4);
+});
+
+test("eraseStagingBank: removes only the bank copy, keeps lessons and decision.json, and a second call removes nothing", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+
+  assert.deepEqual(await eraseStagingBank(fixture.pkg, staged.relative), [path.join(staged.relative, CASE_BANK_FILE)]);
+  assert.deepEqual(relativeTree(staged.absolute), [DECISION_FILE, path.join("lessons", "first.md"), path.join("lessons", "second.md")].sort());
+  assert.deepEqual(await eraseStagingBank(fixture.pkg, staged.absolute), []);
+});
+
+test("eraseStagingBank: a path outside staging is refused and a relative base is refused", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+
+  await assert.rejects(
+    () => eraseStagingBank(fixture.pkg, path.join("staging", "..", "state", "x")),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  await assert.rejects(
+    () => eraseStagingBank("pkg", "staging/x"),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("is not absolute"),
+  );
+  assert.equal(relativeTree(staged.absolute).length, 4);
+});
+
+test("eraseStagingContent: a relative base is refused", async () => {
+  await assert.rejects(
+    () => eraseStagingContent("pkg", "staging/x"),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("is not absolute"),
+  );
+});
+
+// B4 (exclude bank from overlay): a bank shipped inside the skill is not part of what the replay arms run, so the copy of the
+// skill tree leaves it out, at any depth, and the manifest does not carry it.
+test("copySkillTree: a case-bank.json inside the skill is left out of the copy and of the manifest", async (t) => {
+  const fixture = createFixture(t);
+  const skill = populatedSkill(fixture);
+  const stagingRoot = stagingDir(fixture.pkg);
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  const plain = await copySkillTree(skill.realDir, path.join(stagingRoot, "plain"), stagingRoot);
+  fs.writeFileSync(path.join(skill.realDir, CASE_BANK_FILE), '{"cases":[]}\n', "utf8");
+  fs.writeFileSync(path.join(skill.realDir, "scripts", CASE_BANK_FILE), '{"cases":[]}\n', "utf8");
+
+  const withBank = await copySkillTree(skill.realDir, path.join(stagingRoot, "with-bank"), stagingRoot);
+
+  assert.deepEqual(relativeTree(path.join(stagingRoot, "with-bank")), ["SKILL.md", "lessons/first.md", "scripts/run.sh"]);
+  assert.equal(withBank.files, plain.files);
+  assert.equal(withBank.manifestHash, plain.manifestHash);
+  assert.equal(fs.existsSync(path.join(skill.realDir, CASE_BANK_FILE)), true);
+});
+
+// What B4 must not touch: the copy of the bank the gate writes next to the staged candidate goes through the write
+// primitive, not through copySkillTree.
+test("writeTextAtomically: a case-bank.json next to a staged candidate is still written", async (t) => {
+  const fixture = createFixture(t);
+  const candidateDir = path.join(stagingDir(fixture.pkg), BASE_TIMESTAMP, "pdf-tools");
+  fs.mkdirSync(candidateDir, { recursive: true });
+
+  await writeTextAtomically(path.join(candidateDir, CASE_BANK_FILE), '{"cases":[]}\n', candidateDir);
+
+  assert.equal(fs.readFileSync(path.join(candidateDir, CASE_BANK_FILE), "utf8"), '{"cases":[]}\n');
+});
+
+// ensurePrivateDir: the perimeter first, then the directory, 0700.
+test("ensurePrivateDir: creates the missing directories 0700, the base included when it does not exist yet", (t) => {
+  const fixture = createFixture(t);
+  const base = path.join(fixture.base, "fresh-base");
+
+  ensurePrivateDir(path.join(base, "state", "deep"), base);
+
+  assert.equal(modeOf(base), 0o700);
+  assert.equal(modeOf(path.join(base, "state")), 0o700);
+  assert.equal(modeOf(path.join(base, "state", "deep")), 0o700);
+});
+
+test("ensurePrivateDir: a directory outside the base is refused and nothing is created", (t) => {
+  const fixture = createFixture(t);
+  const base = path.join(fixture.base, "sri");
+  fs.mkdirSync(base, { recursive: true });
+  const escaping = [path.join(base, "..", "escape"), path.join(fixture.base, "sibling"), path.join(fixture.base, "sri-other")];
+
+  for (const dir of escaping) {
+    assert.throws(() => ensurePrivateDir(dir, base), (error: unknown) => error instanceof SriPerimeterError);
+  }
+
+  assert.equal(fs.existsSync(path.join(fixture.base, "escape")), false);
+  assert.equal(fs.existsSync(path.join(fixture.base, "sibling")), false);
+  assert.equal(fs.existsSync(path.join(fixture.base, "sri-other")), false);
+});
+
+test("ensurePrivateDir: a link inside the base that leads out of it is refused before anything is created", (t) => {
+  const fixture = createFixture(t);
+  const base = path.join(fixture.base, "sri");
+  const outside = path.join(fixture.base, "outside");
+  fs.mkdirSync(base, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.symlinkSync(outside, path.join(base, "state"));
+
+  assert.throws(() => ensurePrivateDir(path.join(base, "state", "deep"), base), (error: unknown) => error instanceof SriPerimeterError);
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+test("ensurePrivateDir: a relative directory or base is refused", () => {
+  assert.throws(() => ensurePrivateDir("state", "/tmp/x"), (error: unknown) => error instanceof SriWriterError);
+  assert.throws(() => ensurePrivateDir("/tmp/x/state", "x"), (error: unknown) => error instanceof SriWriterError);
+});
+
+test("ensurePrivateDir: an existing directory keeps its mode", (t) => {
+  const fixture = createFixture(t);
+  const base = path.join(fixture.base, "sri");
+  fs.mkdirSync(base, { recursive: true, mode: 0o755 });
+  fs.chmodSync(base, 0o755);
+
+  ensurePrivateDir(base, base);
+
+  assert.equal(modeOf(base), 0o755);
+});
+
+test("appendObserveLine: refuses a state directory that is a link out of the base before creating anything", async (t) => {
+  const fixture = createFixture(t);
+  const outside = path.join(fixture.base, "outside-state");
+  fs.mkdirSync(outside, { recursive: true });
+  fs.mkdirSync(fixture.pkg, { recursive: true });
+  fs.symlinkSync(outside, stateDir(fixture.pkg));
+
+  await assert.rejects(
+    () => appendObserveLine(fixture.pkg, forgetEvent()),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+// removeStagingDir: a directory of the staging tree goes with what it holds.
+test("removeStagingDir: removes a directory and answers how many files it held", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const runs = path.join(staged.absolute, "gate", "runs");
+  fs.mkdirSync(runs, { recursive: true });
+  fs.writeFileSync(path.join(runs, "a.jsonl"), "{}\n");
+  fs.writeFileSync(path.join(runs, "b.jsonl"), "{}\n");
+
+  assert.equal(await removeStagingDir(fixture.pkg, path.join(staged.relative, "gate", "runs")), 2);
+
+  assert.equal(fs.existsSync(runs), false);
+  assert.equal(fs.existsSync(path.join(staged.absolute, DECISION_FILE)), true);
+});
+
+test("removeStagingDir: a directory that is not there answers 0", async (t) => {
+  const fixture = createFixture(t);
+  stagedCandidate(fixture);
+
+  assert.equal(await removeStagingDir(fixture.pkg, path.join("staging", "nothing", "here")), 0);
+});
+
+test("removeStagingDir: staging itself, a path outside it, a file and a link are refused and nothing is removed", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const inState = path.join(stateDir(fixture.pkg), "x");
+  fs.mkdirSync(inState, { recursive: true });
+  const outside = path.join(fixture.base, "outside");
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, "keep.txt"), "keep\n");
+  fs.symlinkSync(outside, path.join(staged.absolute, "link"));
+
+  await assert.rejects(() => removeStagingDir(fixture.pkg, "staging"), (error: unknown) => error instanceof SriWriterError);
+  await assert.rejects(() => removeStagingDir(fixture.pkg, path.join("state", "x")), (error: unknown) => error instanceof SriPerimeterError);
+  await assert.rejects(() => removeStagingDir(fixture.pkg, path.join(staged.relative, DECISION_FILE)), (error: unknown) => error instanceof SriWriterError);
+  await assert.rejects(() => removeStagingDir(fixture.pkg, path.join(staged.relative, "link")), (error: unknown) => error instanceof Error);
+
+  assert.equal(fs.existsSync(inState), true);
+  assert.equal(fs.existsSync(path.join(outside, "keep.txt")), true);
+  assert.equal(fs.existsSync(path.join(staged.absolute, DECISION_FILE)), true);
+});
+
+test("removeStagingDir: a relative base is refused", async () => {
+  await assert.rejects(
+    () => removeStagingDir("pkg", "staging/x"),
+    (error: unknown) => error instanceof SriWriterError && error.message.includes("is not absolute"),
+  );
+});
+
+// clearDecisionFocus: the focus of a staged decision is nulled, the rest of the record is not touched.
+function writeDecision(staged: { absolute: string }, record: unknown): string {
+  const file = path.join(staged.absolute, DECISION_FILE);
+  fs.writeFileSync(file, typeof record === "string" ? record : `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  return file;
+}
+
+test("clearDecisionFocus: sets trigger.focus to null and keeps every other field and the key order", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const file = writeDecision(staged, { format: "f", trigger: { surface: "observer", focus: "headers get dropped" }, outcome: { status: "gate-rejected" } });
+
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), true);
+
+  assert.equal(
+    fs.readFileSync(file, "utf8"),
+    `${JSON.stringify({ format: "f", trigger: { surface: "observer", focus: null }, outcome: { status: "gate-rejected" } }, null, 2)}\n`,
+  );
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+});
+
+test("clearDecisionFocus: an absent record, a record that is not JSON and one with no focus are left alone", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  fs.rmSync(path.join(staged.absolute, DECISION_FILE));
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+
+  const file = writeDecision(staged, "{ not json");
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+  assert.equal(fs.readFileSync(file, "utf8"), "{ not json");
+
+  writeDecision(staged, { trigger: { surface: "observer", focus: null } });
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+  writeDecision(staged, { outcome: 1 });
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+});
+
+test("clearDecisionFocus: a path outside staging is refused", async (t) => {
+  const fixture = createFixture(t);
+  stagedCandidate(fixture);
+
+  await assert.rejects(
+    () => clearDecisionFocus(fixture.pkg, path.join("state", "x")),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+});
+
+// The summary of the diagnosis quotes the focus, so a forget clears it too, in the staged record and in the one of the history.
+test("clearDecisionFocus: sets diagnosis.summary to null with the focus, keeps every other field and the key order", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const file = writeDecision(staged, {
+    format: "f",
+    trigger: { surface: "observer", focus: "headers get dropped" },
+    diagnosis: { summary: "the focus asked for was 'headers get dropped'", failureSignature: "sha256:x", replayItems: [] },
+    outcome: { status: "probation" },
+  });
+
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), true);
+
+  assert.equal(
+    fs.readFileSync(file, "utf8"),
+    `${JSON.stringify(
+      {
+        format: "f",
+        trigger: { surface: "observer", focus: null },
+        diagnosis: { summary: null, failureSignature: "sha256:x", replayItems: [] },
+        outcome: { status: "probation" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), false);
+});
+
+test("clearDecisionFocus: a record whose focus is already null still gets its summary cleared", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const file = writeDecision(staged, { trigger: { surface: "command", focus: null }, diagnosis: { summary: "no focus was asked for" } });
+
+  assert.equal(await clearDecisionFocus(fixture.pkg, staged.relative), true);
+
+  const record = JSON.parse(fs.readFileSync(file, "utf8")) as { diagnosis: { summary: unknown } };
+  assert.equal(record.diagnosis.summary, null);
+});
+
+test("clearDecisionFocus: the rewritten record of staging is 0600 even when it was 0644", async (t) => {
+  const fixture = createFixture(t);
+  const staged = stagedCandidate(fixture);
+  const file = writeDecision(staged, { trigger: { surface: "observer", focus: "x" } });
+  fs.chmodSync(file, 0o644);
+
+  await clearDecisionFocus(fixture.pkg, staged.relative);
+
+  assert.equal(modeOf(file), 0o600);
+});
+
+async function historyRecord(fixture: Fixture): Promise<{ skill: SkillRef; file: string }> {
+  const skill = makeSkill(fixture);
+  await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
+  const file = await writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, makeDecision());
+  return { skill, file };
+}
+
+test("clearHistoryDecisionFocus: nulls trigger.focus and diagnosis.summary of the accepted record and nothing else, keeping its mode", async (t) => {
+  const fixture = createFixture(t);
+  const { skill, file } = await historyRecord(fixture);
+  fs.chmodSync(file, 0o640);
+  const before = JSON.parse(fs.readFileSync(file, "utf8")) as DecisionRecord;
+
+  assert.equal(await clearHistoryDecisionFocus(skill.realDir, file), true);
+
+  const after = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+  assert.equal(before.trigger.focus, "merged cells");
+  assert.deepEqual(after, {
+    ...before,
+    trigger: { ...before.trigger, focus: null },
+    diagnosis: { ...before.diagnosis, summary: null },
+  });
+  assert.deepEqual(Object.keys(after), Object.keys(before));
+  assert.equal(modeOf(file), 0o640);
+  assert.equal(await clearHistoryDecisionFocus(skill.realDir, file), false);
+});
+
+test("clearHistoryDecisionFocus: a history or a record that is not there is left alone", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const missing = path.join(skill.realDir, ".history", BASE_TIMESTAMP, DECISION_FILE);
+  assert.equal(await clearHistoryDecisionFocus(skill.realDir, missing), false);
+
+  await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
+  assert.equal(await clearHistoryDecisionFocus(skill.realDir, missing), false);
+});
+
+test("clearHistoryDecisionFocus: a path outside the .history/ of the skill, or not a decision.json, is refused and untouched", async (t) => {
+  const fixture = createFixture(t);
+  const { skill, file } = await historyRecord(fixture);
+  const staged = stagedCandidate(fixture);
+  const record = { trigger: { surface: "observer", focus: "keep me" }, diagnosis: { summary: "keep me" } };
+  const inStaging = writeDecision(staged, record);
+  fs.mkdirSync(path.join(skill.realDir, "lessons"), { recursive: true });
+  const inLessons = path.join(skill.realDir, "lessons", DECISION_FILE);
+  fs.writeFileSync(inLessons, JSON.stringify(record), "utf8");
+  const escaping = path.join(skill.realDir, ".history", BASE_TIMESTAMP, "..", "..", "lessons", DECISION_FILE);
+  const otherName = path.join(path.dirname(file), "SKILL.md");
+
+  for (const target of [inStaging, inLessons, escaping, otherName]) {
+    await assert.rejects(
+      () => clearHistoryDecisionFocus(skill.realDir, target),
+      (error: unknown) => error instanceof SriPerimeterError,
+      target,
+    );
+  }
+
+  assert.equal(fs.readFileSync(inLessons, "utf8"), JSON.stringify(record));
+  assert.equal((JSON.parse(fs.readFileSync(inStaging, "utf8")) as typeof record).trigger.focus, "keep me");
+});
+
+test("clearHistoryDecisionFocus: a record reached through a link that leaves .history/ is refused", async (t) => {
+  const fixture = createFixture(t);
+  const { skill } = await historyRecord(fixture);
+  const outside = path.join(fixture.base, "outside");
+  fs.mkdirSync(outside, { recursive: true });
+  const outsideRecord = path.join(outside, DECISION_FILE);
+  fs.writeFileSync(outsideRecord, JSON.stringify({ trigger: { focus: "keep me" } }), "utf8");
+  fs.symlinkSync(outside, path.join(skill.realDir, ".history", "linked"));
+
+  await assert.rejects(
+    () => clearHistoryDecisionFocus(skill.realDir, path.join(skill.realDir, ".history", "linked", DECISION_FILE)),
+    (error: unknown) => error instanceof SriPerimeterError,
+  );
+  assert.equal(fs.readFileSync(outsideRecord, "utf8"), JSON.stringify({ trigger: { focus: "keep me" } }));
+});
+
+// Staging is private: directories 0700 and files 0600 for everything this module creates under it, and nothing outside it changes.
+function defaultModes(fixture: Fixture): { file: number; dir: number } {
+  const file = path.join(fixture.base, "default-mode-file");
+  const dir = path.join(fixture.base, "default-mode-dir");
+  fs.writeFileSync(file, "x", "utf8");
+  fs.mkdirSync(dir);
+  return { file: modeOf(file), dir: modeOf(dir) };
+}
+
+test("writeStagingCandidate: the staging tree it creates is 0700 for directories and 0600 for the lesson and decision.json", async (t) => {
+  const fixture = createFixture(t);
+
+  const result = await writeStagingCandidate(inputFor(fixture));
+
+  for (const dir of [stagingDir(fixture.pkg), path.dirname(result.stagingPath), result.stagingPath, path.dirname(result.lessonPath)]) {
+    assert.equal(modeOf(dir), 0o700, dir);
+  }
+  assert.equal(modeOf(result.lessonPath), 0o600);
+  assert.equal(modeOf(result.decisionPath), 0o600);
+});
+
+test("writeStagingCandidate: a second candidate in the same millisecond gets a private directory too", async (t) => {
+  const fixture = createFixture(t);
+
+  await writeStagingCandidate(inputFor(fixture));
+  const second = await writeStagingCandidate(inputFor(fixture));
+
+  assert.equal(path.basename(path.dirname(second.stagingPath)), `${BASE_TIMESTAMP}-2`);
+  assert.equal(modeOf(path.dirname(second.stagingPath)), 0o700);
+  assert.equal(modeOf(second.decisionPath), 0o600);
+});
+
+test("rewriteStagingDecision: the rewritten record stays 0600", async (t) => {
+  const fixture = createFixture(t);
+  const staged = await writeStagingCandidate(inputFor(fixture));
+  fs.chmodSync(staged.decisionPath, 0o644);
+
+  await rewriteStagingDecision(fixture.pkg, staged.stagingPath, makeDecision());
+
+  assert.equal(modeOf(staged.decisionPath), 0o600);
+});
+
+test("writeTextAtomically: a file under <base>/staging is 0600 and one under state/ keeps the default mode", async (t) => {
+  const fixture = createFixture(t);
+  const root = privateRoot(fixture);
+  const defaults = defaultModes(fixture);
+  const runs = path.join(stagingDir(root), BASE_TIMESTAMP, "pdf-tools", "gate", "runs");
+  fs.mkdirSync(runs, { recursive: true });
+  fs.mkdirSync(stateDir(root), { recursive: true });
+  const inStaging = path.join(runs, "1-1-base.jsonl");
+  const inState = path.join(stateDir(root), "signals.json");
+
+  await writeTextAtomically(inStaging, "{}\n", runs);
+  await writeTextAtomically(inState, "{}\n", stateDir(root));
+
+  assert.equal(modeOf(inStaging), 0o600);
+  assert.equal(modeOf(inState), defaults.file);
+});
+
+test("copySkillTree: an arm copied under <base>/staging is 0700/0600 and a copy anywhere else keeps the default modes", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  fs.mkdirSync(path.join(skill.realDir, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(skill.realDir, "scripts", "run.sh"), "echo\n", "utf8");
+  const defaults = defaultModes(fixture);
+  const root = privateRoot(fixture);
+  const stagingRoot = stagingDir(root);
+  fs.mkdirSync(path.join(stagingRoot, BASE_TIMESTAMP), { recursive: true });
+  const arm = path.join(stagingRoot, BASE_TIMESTAMP, "pdf-tools", "gate", "arm");
+  const elsewhere = path.join(fixture.base, "elsewhere");
+
+  await copySkillTree(skill.realDir, arm, stagingRoot);
+  await copySkillTree(skill.realDir, elsewhere, fixture.base);
+
+  for (const dir of [arm, path.join(arm, "scripts")]) assert.equal(modeOf(dir), 0o700, dir);
+  for (const file of ["SKILL.md", path.join("scripts", "run.sh")]) assert.equal(modeOf(path.join(arm, file)), 0o600, file);
+  assert.equal(modeOf(path.join(elsewhere, "scripts")), defaults.dir);
+  assert.equal(modeOf(path.join(elsewhere, "SKILL.md")), defaults.file);
+});
+
+test("writes into the skill (lesson, history snapshot and record) keep the default modes", async (t) => {
+  const fixture = createFixture(t);
+  const skill = makeSkill(fixture);
+  const defaults = defaultModes(fixture);
+  const staged = await writeStagingCandidate(inputFor(fixture, { skill }));
+
+  const lessonPath = await writeLessonFile(skill.realDir, LESSON_SLUG, lessonTextFor(makeDraft()), staged.contentHash);
+  const snapshot = await snapshotForHistory(skill.realDir, BASE_TIMESTAMP);
+  const record = await writeHistoryDecision(skill.realDir, BASE_TIMESTAMP, makeDecision());
+
+  assert.equal(modeOf(lessonPath), defaults.file);
+  assert.equal(modeOf(path.join(snapshot, "SKILL.md")), defaults.file);
+  assert.equal(modeOf(snapshot), defaults.dir);
+  assert.equal(modeOf(record), defaults.file);
 });

@@ -51,7 +51,7 @@ const CASE_BANK_REFERENCE = path.join(REFERENCES_DIR, "case-bank.md");
 // How SKILL.md has to name the reference for a reader to find it: the path relative to the file that points.
 const REFERENCE_POINTER = "references/case-bank.md";
 
-// The four names the manual has to teach, one key per member of the union: a fifth action stops compiling here
+// The five names the manual has to teach, one key per member of the union: a fifth action stops compiling here
 // instead of reaching the manual unnoticed, which is what makes this table a guard against the union growing. What
 // is asserted of the manual is the presence of the word and never a judgement about the sentence it appears in.
 const ACTION_NAMES: Record<SkillImproveAction, string> = {
@@ -59,6 +59,7 @@ const ACTION_NAMES: Record<SkillImproveAction, string> = {
   propose: "propose",
   gate: "gate",
   validate: "validate",
+  record: "record",
 };
 
 // The outcome vocabulary, one key per member of the union, for the same reason as the actions: every answer of a call
@@ -77,6 +78,8 @@ const OUTCOME_NAMES: Record<SkillImproveOutcome, string> = {
   "no-baseline": "no-baseline",
   "bank-valid": "bank-valid",
   "bank-refused": "bank-refused",
+  "observe-disabled": "observe-disabled",
+  recorded: "recorded",
   error: "error",
 };
 

@@ -1,6 +1,6 @@
 ---
 name: improving-skills
-description: "Teaches the pi-simple-sri improvement loop: the skill_improve tool with its four actions, diagnose, propose, gate and validate; the /skill-improve command, the only surface that accepts a lesson into a skill; the replay budget a gate spends; the four classes of failure a replay can measure; how a verdict, a rejection and an abstention are read; and the case bank that measures an improvement, which the user writes. Use when the user asks to improve, diagnose or measure a skill of the session inventory, asks what a gate verdict means, or wants a case bank for a skill."
+description: "Teaches the pi-simple-sri improvement loop: the skill_improve tool with its five actions, diagnose, propose, gate, validate and record; the /skill-improve command, the only surface that accepts a lesson into a skill; the replay budget a gate spends; the four classes of failure a replay can measure; how a verdict, a rejection and an abstention are read; and the case bank that measures an improvement, which the user writes. Use when the user asks to improve, diagnose or measure a skill of the session inventory, asks what a gate verdict means, or wants a case bank for a skill."
 ---
 
 # The improvement loop
@@ -13,7 +13,7 @@ the skill as it stands and against the skill with the change, and it records the
 short procedural note, stored as a file inside the skill, that pi reads the next time it applies that skill.
 
 Two surfaces drive the loop, and they do not have the same powers. The `skill_improve` tool is what the model calls,
-and it carries four actions: `diagnose`, `propose`, `gate` and `validate`. The `/skill-improve` command is what the
+and it carries five actions: `diagnose`, `propose`, `gate`, `validate` and `record`. The `/skill-improve` command is what the
 user types, and it runs the chain that ends in a write: it proposes, it gates and it accepts. Only the command
 accepts. An acceptance writes the lesson into the skill, adds one reference line to its `SKILL.md` and takes a
 snapshot of the skill before the first edit, so the tool has no action, flag or argument that edits a skill.
@@ -53,9 +53,9 @@ publishes is named `improving-skills`, and no skill that answers to that name is
 `published-by-this-package`, which no setting changes. Both arrive as `not-eligible`, and the reason in the answer
 says which one it was.
 
-## The four actions and what each costs
+## The actions and what each costs
 
-The four actions are priced differently, and the price is what decides who may run them:
+The actions are priced differently, and the price is what decides who may run them:
 
 - `diagnose` costs nothing: no model call, no write, no run. It derives the evidence from the current branch of the
   session, names the failure signature, and lists the replay items it would measure. Its answer is `diagnosed`, or
@@ -71,6 +71,7 @@ The four actions are priced differently, and the price is what decides who may r
   whole gate with `invalid-run`; a gate that reaches the twenty minutes, and a call the user cancelled, abstain with
   `interrupted`. A bank that declares a rubric adds at most one call per case, capped at 256 tokens of output, and
   only after the mechanical rule already accepted.
+- `record` costs one appended line and no model call, and it is covered in its own section below.
 - `validate` costs nothing: one file read, one parse, no model call, no write, no run. Its answer is `bank-valid` or
   `bank-refused`, and a call that names no `bankPath` answers `error` with the reason `missing-bank-path`.
 
@@ -142,6 +143,8 @@ The answer of a call carries an outcome, and the outcome decides what happens ne
 | `no-baseline` | The bank that a directional attempt needs could not be read, so no case was replayed and nothing was spent. The reason names the first violation, the candidate stays in staging, and the retry is `/skill-improve <skill> --staged=<stagingPath>` once the bank is there. |
 | `bank-valid` | The bank was read as data under the profile the call declared. |
 | `bank-refused` | The bank could not be read: absent, unreadable, over the byte cap of the format, not JSON, or holding a violation, which the reason names as its first one. Nothing was spent and nothing was written. |
+| `recorded` | One self-report line was appended by `record`; the skill was not edited and nothing was accepted. |
+| `observe-disabled` | `record` found the observer off, so nothing was written. |
 | `not-eligible` | Two causes, and the reason in the answer names which one: the settings `allow` and `deny` exclude the skill, or the skill answers to the name `improving-skills`, which this package reserves with `published-by-this-package` and no setting changes. |
 | `no-evidence` | The session holds no replayable failure, or the artifact or the bank of a defect could not be read. |
 | `unknown-skill` | No skill of the inventory answers to that name, which is also the answer for a standalone `.md` file: it is in the inventory and it is no candidate, because it has no directory of its own for lessons and history. The answer offers the eligible set instead of guessing a spelling. |
@@ -248,12 +251,47 @@ Without a bank there is nothing to measure a confirmation against, so nothing is
 same confirmation can be given again with a bank. A suspicion never decides anything on its own: it does not edit the skill,
 it does not open an attempt until the user confirms it, and `[NEVER]` treat it as a failure of the session or of the skill.
 
+## The observer and the `record` action
+
+The package can also notice corrections on its own, across sessions, when the user turned `pi-simple-sri.observe.enabled`
+on. A deferred judge reads stored sessions, the findings group into patterns, and a pattern that recurs is proposed to
+the user in a dialog; the lesson is accepted only through `/skill-improve --review=<id>`, which asks again (the id only
+travels in that one-token form). None of that runs per turn and none of it is the model's to start.
+
+What the model may tell the user about it, and no more: the dialog shows the planned gate runs (arms x repetitions x
+items, at most), and says the gate proves the lesson works on the cases, not that the pattern is real. A lesson the
+observer could not measure is offered on probation and labelled "not measured". An accepted lesson closes its pattern
+until a session newer than the acceptance shows the correction again; a rejected one is never offered again as the same lesson; a lesson
+whose skill changed after it was staged is closed as stale and cannot be accepted. A gate that could not conclude stages
+a fresh candidate, twice at most, and then offers probation. A proposal that cannot be prepared is retried after 24 hours,
+then 72 hours, then 7 days.
+
+The model's one part is the fifth action of the tool, `record`: it takes a skill and a short note in `focus` (at most 300
+characters) and appends one self-report to the observer's store, with a weight of 0.4 against the 1.0 of the user's own
+`--note`. It answers `observe-disabled` when the observer is off. It edits no skill, runs no gate and accepts nothing.
+Use it only when the user corrected the skill's behaviour in this session; a correction the user wants kept is better
+given to them as `/skill-improve <skill> --note <text>`.
+
+The flags are the user's: `--scan` (with `--dry-run`, `--limit=<n>`, which needs `--dry-run`, and `--since=YYYY-MM-DD`),
+`--review[=<id>]`, `--setup`, `<skill> --note <text>` and `<skill> --forget`. In a `--scan`, Accept runs the review inline and
+reloads once; in the background, Accept sends the review command only when the session is idle, because a reload while
+pi streams is dropped. `--forget` erases what the observer and the signal collector hold about the skill (events,
+confirmed signals, the content and gate runs of candidates never accepted, generated-bank drafts, an auto-generated
+bank and `trigger.focus`) and keeps user or skill-shipped banks, accepted lessons, the index of attempts and the verdicts of
+the records. A lesson accepted on probation was never replayed, and the dialog says so; only skills the user listed in
+`pi-simple-sri.observe.replay.allow` are ever measured with real runs, and the list is read again before a bank is
+promoted and before the gate runs.
+
+The limits to state honestly: the observer's attribution of a run to a skill is noisy, `--setup` rewrites `settings.json`
+as 2-space JSON, `--forget` cannot remove what names no skill, and the dispatch of `--review` from the background was
+checked on pi 1.5.2 only.
+
 ## What this skill does not do
 
 The limits of this skill are few, and none of them is a matter of taste:
 
 - It does not edit a skill. Lessons land through an acceptance, and an acceptance is the command's.
-- It does not accept. There is no action, flag or argument of the tool that writes a lesson into a skill.
+- It does not accept. There is no action, flag or argument of the tool that writes a lesson into a skill, `record` included.
 - `[NEVER]` gate without a request, because the budget is the user's to spend.
 - It does not invent a case, however plausible the question looks.
 - It does not repair a bank: `validate` names the first violation and stops, and the correction is the author's.

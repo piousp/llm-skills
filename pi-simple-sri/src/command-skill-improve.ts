@@ -21,11 +21,11 @@ import {
   listEligibleSkills,
   proposeSkill,
   type ImproveFlowContext,
-  type ImproveFlowDeps,
   type ImproveFlowModelRegistry,
   type ImprovementEntry,
   type ProposeFn,
 } from "./improve-flow.ts";
+import { recordedSkillHashOf } from "./gate/probation.ts";
 import { readLedger, type Ledger } from "./ledger.ts";
 import {
   acceptedText,
@@ -51,14 +51,20 @@ import {
   unknownSkillText,
 } from "./messages.ts";
 import { metricsOf } from "./metrics.ts";
-import { wireDirectionalGate } from "./model-call.ts";
+import { createModelCall, wireDirectionalGate } from "./model-call.ts";
 import { ATTEMPTS_FILE, COMMAND_NAME, SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
+import type { CycleReport } from "./observe/cycle.ts";
+import { forgetSkill } from "./observe/forget.ts";
+import { recordObservation, type ObservationDeps } from "./observe/note.ts";
+import type { ReviewContext, ReviewResult } from "./observe/review.ts";
+import { runSetup, type SetupReport } from "./observe/setup.ts";
+import { MAX_SUMMARY_CHARS } from "./observe/types.ts";
 import { RETIREMENT_REASONS, retireLesson, type RetireDeps, type RetirementReason } from "./retirement.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
 import type { SignalCollector, Suspicion } from "./signals.ts";
 import { standingOf } from "./standing.ts";
 import { assertNever, type DecisionRecord, type DecisionSurface, type SkillRef, type SriConfig } from "./types.ts";
-import { quote, toErrorMessage } from "./values.ts";
+import { codePointLength, currentTime, quote, toErrorMessage } from "./values.ts";
 import { writeBase, stateDir } from "./write-base.ts";
 
 // The /skill-improve command: one run of the loop over one named skill (P8), and from M1 the one surface of
@@ -117,6 +123,10 @@ export type NotifyFn = (message: string, type: NotifyType) => void;
 
 export interface SkillImproveUi {
   notify(message: string, type?: NotifyType): void;
+  // The two dialogs the observer flags need. Optional because a host with no interactive UI has neither, and a run that
+  // needs one (--forget, --setup, --review) refuses instead of assuming the answer.
+  confirm?(title: string, message: string, options?: { signal?: AbortSignal }): Promise<boolean>;
+  select?(title: string, options: string[], opts?: { signal?: AbortSignal; timeout?: number }): Promise<string | undefined>;
 }
 
 export interface SkillImproveMessage {
@@ -163,7 +173,7 @@ export interface SkillImproveContext extends ImproveFlowContext {
 // it there. It is a seam and not a member of the context because pi's command context carries no
 // message channel, and a wrapper that copied the context to add one would freeze the getters pi builds
 // it with (dist/core/extensions/runner.js:724-728).
-export interface SkillImproveDeps extends ImproveFlowDeps {
+export interface SkillImproveDeps extends ObservationDeps {
   appendEntry?: (customType: string, data: ImprovementEntry) => void;
   notify?: NotifyFn;
   sendMessage?: (message: SkillImproveMessage) => void;
@@ -192,6 +202,27 @@ export interface SkillImproveDeps extends ImproveFlowDeps {
   // because the command is also driven by tests and by hosts that hold no collector, and a session without one has no
   // suspicion to confirm -- the answer is `unknown-signal`, which spends nothing.
   signals?: SignalCollector;
+  // The observer (src/observe/): --scan and --review run the production cycle and review, which the wiring binds to the
+  // session (src/observe/wire.ts); a host that binds none answers those two flags with a refusal. `setup` and `forget` have
+  // real defaults and are seams for the test of the chain.
+  observe?: ObserveSurface;
+  setup?: typeof runSetup;
+  forget?: typeof forgetSkill;
+}
+
+// What --scan asks of the cycle: the mode, the lower date and the number of episodes a dry run judges. The wiring completes
+// the rest of the cycle input (settings, clock, current session file).
+export interface ObserveScanInput {
+  mode: "scan" | "dry-run";
+  since?: string;
+  sampleSize?: number;
+}
+
+// `review` without an id is the latest proposal waiting for review, which the wiring resolves. Neither member reloads: only
+// this command may, and only after an acceptance.
+export interface ObserveSurface {
+  scan(input: ObserveScanInput): Promise<CycleReport>;
+  review(id: string | undefined, ctx: ReviewContext): Promise<ReviewResult>;
 }
 
 export interface SkillImproveArgs {
@@ -226,11 +257,24 @@ export interface SkillImproveArgs {
   // Why the lesson stops applying (M3, S4): one key of RETIREMENT_REASONS, and the detail travels in the focus, because a
   // closed key with no sentence is a reason the record of the retirement cannot carry.
   reason?: RetirementReason;
+  // The observer runs. Each one ends the run and takes none of the flags above: --scan reads the stored sessions (--dry-run
+  // writes nothing and judges a sample, --since and --limit narrow it), --review asks about one proposal (the id travels
+  // as --review=<id>, as the dispatch of the cycle writes it), --setup suggests the skills a gate may replay, --forget erases
+  // what the observer holds about the skill, and --note records the focus as a user note about it.
+  scan?: boolean;
+  dryRun?: boolean;
+  since?: string;
+  limit?: number;
+  review?: boolean;
+  reviewId?: string;
+  setup?: boolean;
+  forget?: boolean;
+  note?: boolean;
 }
 
 // The syntax of the command, in one place: the usage line it prints and the sentence of a usage error. The flags are
 // `--name=value` in a single token, so a focus with spaces cannot be confused with one of them, and `--` ends the flags.
-const USAGE_SYNTAX = `<skill> [focus] [--bank=<path>] [--signal=<id>] [--defect] [--staged=<stagingPath>] [--metrics] [--verify] [--retire=<slug>] [--reason=<key>]`;
+const USAGE_SYNTAX = `<skill> [focus] [--bank=<path>] [--signal=<id>] [--defect] [--staged=<stagingPath>] [--metrics] [--verify] [--retire=<slug>] [--reason=<key>] | --scan [--dry-run [--limit=<n>]] [--since=YYYY-MM-DD] | --review[=<id>] | --setup | <skill> --forget | <skill> --note <text>`;
 
 // The first token names the skill and the following ones are the focus, so a focus with spaces arrives as one string.
 // Repeated whitespace is collapsed because it carries no meaning here, and an argument string of spaces is no argument at
@@ -256,6 +300,15 @@ export function parseSkillImproveArgs(args: string): SkillImproveArgs {
   let defect = false;
   let metrics = false;
   let verify = false;
+  let scan = false;
+  let dryRun = false;
+  let since: string | undefined;
+  let limit: number | undefined;
+  let review = false;
+  let reviewId: string | undefined;
+  let setup = false;
+  let forget = false;
+  let note = false;
   const focusWords: string[] = [];
 
   for (let index = 0; index < words.length; index += 1) {
@@ -280,6 +333,29 @@ export function parseSkillImproveArgs(args: string): SkillImproveArgs {
       }
       if (flag.name === "verify" && value === undefined) {
         verify = true;
+        continue;
+      }
+      if (value === undefined && (flag.name === "scan" || flag.name === "dry-run" || flag.name === "setup" || flag.name === "forget" || flag.name === "note")) {
+        if (flag.name === "scan") scan = true;
+        else if (flag.name === "dry-run") dryRun = true;
+        else if (flag.name === "setup") setup = true;
+        else if (flag.name === "forget") forget = true;
+        else note = true;
+        continue;
+      }
+      // The id travels in the one-token form of every other flag, `--review=<id>`, which is how the cycle dispatches it; a
+      // bare `--review` names no id, and a word after it is a skill or a focus that the rules below refuse.
+      if (flag.name === "review" && value !== "") {
+        review = true;
+        if (value !== undefined) reviewId = value;
+        continue;
+      }
+      if (flag.name === "since" && value !== undefined && isCalendarDate(value)) {
+        since = value;
+        continue;
+      }
+      if (flag.name === "limit" && value !== undefined && /^[1-9][0-9]*$/.test(value)) {
+        limit = Number(value);
         continue;
       }
       if ((flag.name === "bank" || flag.name === "staged") && value !== undefined && value !== "") {
@@ -307,6 +383,21 @@ export function parseSkillImproveArgs(args: string): SkillImproveArgs {
     }
     focusWords.push(word);
   }
+
+  refuseObserverMisuse({ scan, dryRun, since, limit, review, setup, forget, note }, {
+    skill,
+    focusWords,
+    others: [
+      ...(bankPath === undefined ? [] : ["--bank"]),
+      ...(defect ? ["--defect"] : []),
+      ...(staged === undefined ? [] : ["--staged"]),
+      ...(signal === undefined ? [] : ["--signal"]),
+      ...(retire === undefined ? [] : ["--retire"]),
+      ...(reasonKey === undefined ? [] : ["--reason"]),
+      ...(metrics ? ["--metrics"] : []),
+      ...(verify ? ["--verify"] : []),
+    ],
+  });
 
   // The check of S3 reads the index and the bytes it names, so it takes no other flag for the reason the report of S2 takes
   // none: a check and a measurement of a candidate are two different requests, and one invocation does one job. The refusal
@@ -415,7 +506,91 @@ export function parseSkillImproveArgs(args: string): SkillImproveArgs {
   if (verify) parsed.verify = true;
   if (retire !== undefined) parsed.retire = retire;
   if (reasonKey !== undefined) parsed.reason = retirementReasonOf(reasonKey);
+  if (scan) parsed.scan = true;
+  if (dryRun) parsed.dryRun = true;
+  if (since !== undefined) parsed.since = since;
+  if (limit !== undefined) parsed.limit = limit;
+  if (review) parsed.review = true;
+  if (reviewId !== undefined) parsed.reviewId = reviewId;
+  if (setup) parsed.setup = true;
+  if (forget) parsed.forget = true;
+  if (note) parsed.note = true;
   return parsed;
+}
+
+// A date as the user types it, and one that exists: 2026-02-30 is refused instead of rolling over to March.
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+interface ObserverFlags {
+  scan: boolean;
+  dryRun: boolean;
+  since: string | undefined;
+  limit: number | undefined;
+  review: boolean;
+  setup: boolean;
+  forget: boolean;
+  note: boolean;
+}
+
+// The refusals of the observer flags, asked before the ones of the older flags so that a pair like `--scan --verify` is
+// described by the sentence of the new flag. Every one of them comes before anything is read: one invocation does one job, the
+// runs that name no skill take none, and the two that act on a skill require it.
+function refuseObserverMisuse(
+  flags: ObserverFlags,
+  rest: { skill: string | undefined; focusWords: readonly string[]; others: readonly string[] },
+): void {
+  const refuse = (detail: string): never => {
+    throw new SriFailClosedError(`/${COMMAND_NAME} ${detail} Nothing was read. Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`);
+  };
+
+  const runs = [
+    ...(flags.scan ? ["--scan"] : []),
+    ...(flags.review ? ["--review"] : []),
+    ...(flags.setup ? ["--setup"] : []),
+    ...(flags.forget ? ["--forget"] : []),
+    ...(flags.note ? ["--note"] : []),
+  ];
+
+  if (runs.length === 0) {
+    const narrowers = [
+      ...(flags.dryRun ? ["--dry-run"] : []),
+      ...(flags.since === undefined ? [] : ["--since"]),
+      ...(flags.limit === undefined ? [] : ["--limit"]),
+    ];
+    if (narrowers.length > 0) refuse(`${narrowers.join(", ")} only narrows a --scan, and the run named none.`);
+    return;
+  }
+
+  if (runs.length > 1) {
+    refuse(`${runs.join(" and ")} are separate runs and one invocation does one job.`);
+  }
+  const [run] = runs;
+  if (rest.others.length > 0) {
+    refuse(`${run} takes none of the flags of a run that proposes, measures, reports or retires, and the run also named ${rest.others.join(", ")}.`);
+  }
+
+  if (run !== "--scan" && (flags.dryRun || flags.since !== undefined || flags.limit !== undefined)) {
+    refuse(`--dry-run, --since and --limit are only valid with --scan, and the run was ${run}.`);
+  }
+  if (run === "--scan" && flags.limit !== undefined && !flags.dryRun) {
+    refuse(`--limit is the number of episodes a --dry-run judges, and the run named no --dry-run.`);
+  }
+
+  const named = rest.skill ?? rest.focusWords.join(" ");
+  if ((run === "--scan" || run === "--review" || run === "--setup") && named !== "") {
+    refuse(`${run} answers for all the skills and not for one: ${quote(named)} names the subject of a single run.`);
+  }
+  if (run === "--forget") {
+    if (rest.skill === undefined) refuse(`--forget needs the skill whose observations it erases, and the run named none.`);
+    if (rest.focusWords.length > 0) refuse(`--forget takes no focus: it erases everything the observer holds about the skill.`);
+  }
+  if (run === "--note" && (rest.skill === undefined || rest.focusWords.length === 0)) {
+    refuse(`--note needs the skill and the text of the note: --note records what you say about that skill.`);
+  }
 }
 
 // The key of a reason, out of the closed vocabulary of src/retirement.ts. A key outside it is a reason the record of a
@@ -444,7 +619,7 @@ function flagOf(word: string): Flag {
 }
 
 function usageErrorText(word: string): string {
-  return `/${COMMAND_NAME} does not understand ${quote(word)}: the flags are --bank=<path>, --signal=<id>, --defect, --staged=<stagingPath>, --metrics, --verify, --retire=<slug> and --reason=<key>, each one token with its value after the equals sign, and -- ends the flags so that what follows is the focus. Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`;
+  return `/${COMMAND_NAME} does not understand ${quote(word)}: the flags are --bank=<path>, --signal=<id>, --defect, --staged=<stagingPath>, --metrics, --verify, --retire=<slug>, --reason=<key>, --scan, --dry-run, --since=YYYY-MM-DD, --limit=<n>, --review[=<id>], --setup, --forget and --note, each one token with its value after the equals sign, and -- ends the flags so that what follows is the focus. Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`;
 }
 
 export async function runSkillImprove(
@@ -499,10 +674,35 @@ async function improve(args: string, run: Run): Promise<void> {
     return;
   }
 
+  // The observer runs that answer for all the skills. Each one ends the run, and none reads the inventory to propose: the
+  // parser refused every combination with the flags of a proposal, a gate or a retirement.
+  if (parsed.setup === true) {
+    await runSetupFlag(run);
+    return;
+  }
+  if (parsed.scan === true) {
+    await runScan(parsed, run);
+    return;
+  }
+  if (parsed.review === true) {
+    await runReview(parsed.reviewId, run);
+    return;
+  }
+
   // No skill named: the command answers with what it can do and on which skills, so the offer is
   // the eligible set and never the whole inventory.
   if (parsed.skill === undefined) {
     notify(usageText(await listEligibleSkills(ctx, deps)), "info");
+    return;
+  }
+
+  // The two observer runs that act on one skill; the parser guarantees the skill, and the note.
+  if (parsed.forget === true) {
+    await runForget(parsed.skill, run);
+    return;
+  }
+  if (parsed.note === true) {
+    await runNote(parsed.skill, parsed.focus ?? "", run);
     return;
   }
 
@@ -780,13 +980,7 @@ async function retireAcceptedLesson(
   // here instead of at the next session start. waitForIdle first, because pi warns and returns without reloading while the
   // agent is streaming; and nothing may run after reload, because the code that followed lands in the frame the reload
   // invalidated, where every getter of the context throws. The warning below reads no member of the context.
-  await ctx.waitForIdle();
-  try {
-    await ctx.reload();
-  } catch (error) {
-    warnAfterReload(run, retirementReloadFailedText(toErrorMessage(error)));
-  }
-  return;
+  await reloadSession(run, retirementReloadFailedText);
 }
 
 // The authoritative record of the acceptance a retirement is about: the latest `accepted` line of this skill whose record
@@ -1004,7 +1198,7 @@ async function runGate(target: GateTarget, run: Run): Promise<GateFlowResult | D
 // needs comes from two places and no third one: the candidate the gate measured, and the record the gate rewrote,
 // which carries the candidate it measured and the hashes of the skill it measured it against.
 async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, run: Run): Promise<void> {
-  const { ctx, deps, notify } = run;
+  const { deps, notify } = run;
   const { record, skillContentHash } = await stagedRecordOf(target, gate);
 
   // D-C (OA10, S7): the verdict the acceptance re-checks before it writes. It is re-verified where the runs are spent (the
@@ -1072,13 +1266,7 @@ async function acceptIntoSkill(target: GateTarget, gate: GateConcludedResult, ru
   // Nothing may run after reload -- the code that followed lands in the frame the reload invalidated, where every
   // getter of the context throws. That is an invariant of this site, not a note about one version of it, and it is
   // the reason the warning below reads no member of the context.
-  await ctx.waitForIdle();
-  try {
-    await ctx.reload();
-  } catch (error) {
-    warnAfterReload(run, reloadFailedText(toErrorMessage(error)));
-  }
-  return;
+  await reloadSession(run, reloadFailedText);
 }
 
 // The record the gate left in the candidate, with the hash of the skill it measured. The acceptance writes the
@@ -1099,7 +1287,7 @@ async function stagedRecordOf(
   const record = resolved.value;
   // The record is the authority of the two steps: a gate that answered one verdict and a record that carries
   // another describe two runs, and the acceptance is the one step that must never guess between them.
-  if (record.gate.status !== "gate-accepted") {
+  if (record.gate.status !== "gate-accepted" && record.gate.status !== "probation") {
     throw new SriWriterError(
       `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and the record says ${quote(record.gate.status)}: nothing was accepted`,
       gate.decisionPath,
@@ -1108,10 +1296,11 @@ async function stagedRecordOf(
 
   // The hash of the SKILL.md the gate measured is read from the preregistration and not from the result of a basis:
   // that block is the one the two bases share, and the result of the replay base -- where M1 kept it -- is null in a
-  // gate of the case-bank base. A preregistration with no hash describes a gate that measured nothing this acceptance
-  // can be compared against, so the read fails closed instead of accepting under a hash nobody recorded.
-  const skillContentHash = record.gate.preregistration.skillContentHash;
-  if (skillContentHash === undefined) {
+  // gate of the case-bank base. A candidate on probation kept the hash in its own block (recordedSkillHashOf). A record
+  // with no hash describes a gate that measured nothing this acceptance can be compared against, so the read fails closed
+  // instead of accepting under a hash nobody recorded.
+  const skillContentHash = recordedSkillHashOf(record.gate);
+  if (skillContentHash === null) {
     throw new SriWriterError(
       `the gate answered ${quote(gate.kind)} for ${quote(gate.decisionPath)} and its preregistration carries no skillContentHash: nothing was accepted`,
       gate.decisionPath,
@@ -1141,6 +1330,18 @@ function channelOf(ctx: SkillImproveContext, deps: SkillImproveDeps): NotifyFn {
 
     console.error(`${COMMAND_NAME}: ${message}`);
   };
+}
+
+// The closing of every run that wrote into a skill (an acceptance, a retirement, and a review that accepted): the session
+// reads the skill again here instead of at the next start. waitForIdle comes first because pi warns and returns without
+// reloading while the agent is streaming, and the handler never sees a rejection. Nothing may run after the reload.
+async function reloadSession(run: Run, failedText: (reason: string) => string): Promise<void> {
+  await run.ctx.waitForIdle();
+  try {
+    await run.ctx.reload();
+  } catch (error) {
+    warnAfterReload(run, failedText(toErrorMessage(error)));
+  }
 }
 
 // The reload can fail with the runner already gone, so the warning that reports it reads no member of the
@@ -1188,6 +1389,216 @@ function recordEntry(run: Run, entry: ImprovementEntry): void {
   }
 }
 
+// --scan: one cycle of the observer over the stored sessions, in the mode the flags chose. The command only reports what the
+// cycle answers; the cycle decides what is read, judged and offered.
+async function runScan(parsed: SkillImproveArgs, run: Run): Promise<void> {
+  const observe = run.deps.observe;
+  if (observe === undefined) {
+    run.notify(observerUnavailableText("--scan"), "error");
+    return;
+  }
+
+  const report = await observe.scan({
+    mode: parsed.dryRun === true ? "dry-run" : "scan",
+    ...(parsed.since === undefined ? {} : { since: parsed.since }),
+    ...(parsed.limit === undefined ? {} : { sampleSize: parsed.limit }),
+  });
+  run.notify(scanText(report), report.status === "done" ? "info" : "warning");
+
+  // An Accept in the dialog of the cycle (b) sends no nested message: the review runs here, with the command context that
+  // can reload.
+  if (report.proposal === "review-dispatched" && report.proposalId !== null) {
+    await runReview(report.proposalId, run);
+  }
+}
+
+// --review: the user's side of a proposal. The review asks, gates in the foreground when nothing was measured, and accepts
+// on the answer; it never reloads, so this is the one place that does, and only after an acceptance. The reload is the
+// helper of the two other writing runs (M2): the cycle dispatches this from a settled session, and a reload while the agent
+// streams is dropped by pi, hence waitForIdle first.
+async function runReview(id: string | undefined, run: Run): Promise<void> {
+  const { ctx, deps, notify } = run;
+  const observe = deps.observe;
+  if (observe === undefined) {
+    notify(observerUnavailableText("--review"), "error");
+    return;
+  }
+  const ui = ctx.ui;
+  if (!ctx.hasUI || ui.select === undefined) {
+    notify(`/${COMMAND_NAME} --review asks you before it accepts anything, and this session has no interactive UI: nothing was gated and nothing was accepted.`, "error");
+    return;
+  }
+
+  const result = await observe.review(id, {
+    ui: {
+      select: (title, options, opts) => ui.select?.(title, options, opts) ?? Promise.resolve(undefined),
+      notify: (message, type) => ui.notify(message, type),
+    },
+  });
+
+  switch (result) {
+    case "accepted":
+      notify("The lesson was accepted into the skill; reloading the session so it takes effect.", "info");
+      await reloadSession(run, reloadFailedText);
+      return;
+    case "rejected":
+      notify("The proposal was rejected and nothing was written into the skill.", "info");
+      return;
+    case "declined":
+      notify("Nothing was accepted; the proposal stays available for review.", "info");
+      return;
+    case "nothing-to-review":
+      notify("There is no proposal waiting for review: it was not found, was already accepted or rejected, or the gate rejected it.", "info");
+      return;
+    case "retryable":
+      // The review already told why, in its own notice; the skill is untouched.
+      return;
+    default:
+      return assertNever(result);
+  }
+}
+
+// --setup: which skills the gate may replay with real runs. The report is what the run decided and wrote; the questions were
+// the dialogs of the run itself, and the LLM pass of it is offered only with a model to ask.
+async function runSetupFlag(run: Run): Promise<void> {
+  const { ctx, deps, notify } = run;
+  const ui = ctx.ui;
+  if (!ctx.hasUI || ui.confirm === undefined) {
+    notify(`/${COMMAND_NAME} --setup asks you to confirm every skill and the write of settings.json, and this session has no interactive UI: nothing was changed.`, "error");
+    return;
+  }
+
+  const model = ctx.model;
+  const complete =
+    model === undefined
+      ? undefined
+      : createModelCall({ registry: ctx.modelRegistry, model, sessionId: ctx.sessionManager.getSessionId() });
+
+  const report = await (deps.setup ?? runSetup)(
+    {
+      agentDir: deps.agentDir ?? getAgentDir(),
+      cwd: ctx.cwd,
+      ui: {
+        confirm: (title, message, options) => ui.confirm?.(title, message, options) ?? Promise.resolve(false),
+        notify: (message, type) => ui.notify(message, type),
+      },
+    },
+    { listSkills: deps.listSkills ?? listSkills, ...(complete === undefined ? {} : { complete }) },
+  );
+  notify(setupText(report), "info");
+}
+
+// <skill> --forget: erases what the observer and the signal collector hold about one skill. It asks first, because it cannot
+// be undone, and the skill is not looked up: a skill that was uninstalled is exactly one whose traces a user wants gone.
+async function runForget(skill: string, run: Run): Promise<void> {
+  const { ctx, deps, notify } = run;
+  const ui = ctx.ui;
+  if (!ctx.hasUI || ui.confirm === undefined) {
+    notify(`/${COMMAND_NAME} ${skill} --forget needs your confirmation, and this session has no interactive UI: nothing was erased.`, "error");
+    return;
+  }
+
+  const confirmed = await ui.confirm(
+    `Forget skill ${quote(skill)}?`,
+    "Erases what the observer and the signal collector hold about this skill: its episodes, observations, proposals; the lessons of its candidates that were never accepted; the bank copy and the gate runs of every candidate, accepted ones included; the observer banks; and its auto-generated bank at banks/<skill>.json. The decision records stay (the ones in the history of accepted lessons too), but their trigger focus and diagnosis summary are erased. Banks you wrote or that the skill ships, accepted lessons, the lesson copy of accepted candidates and the attempts index stay. This cannot be undone.",
+  );
+  if (!confirmed) {
+    notify(`Nothing was erased for skill ${quote(skill)}.`, "info");
+    return;
+  }
+
+  const base = deps.base ?? writeBase(deps.agentDir ?? getAgentDir());
+  const report = await (deps.forget ?? forgetSkill)(base, skill, (deps.now ?? currentTime)());
+  if (report.status === "locked") {
+    notify(`A scan holds the observer lock, so nothing was erased for skill ${quote(skill)}: run the same command again when it finishes.`, "warning");
+    return;
+  }
+
+  const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+  const banksKept =
+    report.banksKept.length === 0 ? "" : ` Banks kept (not generated by the observer): ${report.banksKept.join(", ")}.`;
+  const skipped =
+    report.historySkipped.length === 0
+      ? ""
+      : ` Warning: ${count(report.historySkipped.length, "accepted decision record", "accepted decision records")} could not be cleared (outside the history of the skill, moved or missing), so the pattern text stays there: ${report.historySkipped.join(", ")}.`;
+  notify(
+    `Forgot skill ${quote(skill)}: removed ${count(report.observeRemoved, "observer line", "observer lines")} and ${count(report.signalsRemoved, "signal line", "signal lines")}, erased ${count(report.stagingErased.length, "file", "files")} of staged candidates${report.stagingMissing ? " (there is no staging directory)" : ""}, ${count(report.draftsRemoved, "draft", "drafts")} and ${count(report.runsRemoved, "gate run", "gate runs")}, and removed ${count(report.banksRemoved.length, "auto-generated bank", "auto-generated banks")}. Erased the trigger focus and diagnosis summary of ${count(report.recordsCleared, "decision record", "decision records")}.${banksKept}${skipped} Accepted lessons and the attempts index were kept.`,
+    report.historySkipped.length === 0 ? "info" : "warning",
+  );
+}
+
+// <skill> --note <text>: the user's own observation, the heaviest source. The record is the one the tool's `record` action
+// writes (recordObservation), with the user as its source, so the two cannot disagree about the anchor or the pattern.
+async function runNote(skill: string, text: string, run: Run): Promise<void> {
+  const { ctx, deps, notify } = run;
+  if (codePointLength(text) > MAX_SUMMARY_CHARS) {
+    notify(`The note is longer than ${MAX_SUMMARY_CHARS} characters: shorten it. Nothing was written.`, "error");
+    return;
+  }
+
+  const result = await recordObservation({ source: "user-note", skillName: skill, text }, ctx, deps);
+
+  switch (result.kind) {
+    case "recorded":
+      notify(`Recorded your note for skill ${quote(result.event.skill)} (weight ${result.event.weight}); the skill was not edited. A lesson is proposed only if the pattern recurs across sessions, and you approve it.`, "info");
+      return;
+    case "observe-disabled":
+      notify(`Observation is off, so the note for skill ${quote(skill)} was not recorded: set pi-simple-sri.observe.enabled to true in settings.json. Nothing was written.`, "warning");
+      return;
+    case "no-user-message":
+      notify(`This session has no user message to anchor the note for skill ${quote(skill)} on; nothing was written.`, "warning");
+      return;
+    case "unknown-skill":
+      notify(unknownSkillText(SURFACE, result.skillName, result.standalone, result.eligible), "warning");
+      return;
+    case "not-eligible":
+      notify(notEligibleText(result.skill, result.reason), "warning");
+      return;
+    default:
+      return assertNever(result);
+  }
+}
+
+function observerUnavailableText(flag: string): string {
+  return `/${COMMAND_NAME} ${flag} needs the observer, and this host did not bind it: nothing was read and nothing was written.`;
+}
+
+// What a cycle did, in the numbers it reports. A status other than `done` says why the numbers are what they are.
+function scanText(report: CycleReport): string {
+  const dry = report.mode === "dry-run";
+  switch (report.status) {
+    case "disabled":
+      return "Observation is off: set pi-simple-sri.observe.enabled to true in settings.json. Nothing was read.";
+    case "locked":
+      return "Another scan holds the observer lock; nothing was read. Run it again when that one finishes.";
+    case "declined":
+      return "The cost estimate was declined: nothing was judged and nothing was written.";
+    case "done":
+    case "interrupted":
+      break;
+    default:
+      return assertNever(report.status);
+  }
+
+  const lines = [
+    `${dry ? "Dry run" : "Scan"} ${report.status === "done" ? "finished" : "interrupted"}: ${report.files} session files, ${report.episodes} episodes, ${report.judgeCalls} judge calls, ${report.observations} observations; ${report.blocked} left for the next scan.`,
+  ];
+  if (dry) lines.push("Nothing was written to the observer store.");
+  if (report.labeling !== null) lines.push(`Labeling file: ${report.labeling.file} (${report.labeling.records} records).`);
+  if (!dry && report.proposal !== "none") {
+    lines.push(`Proposal: ${report.proposal}${report.proposalId === null ? "" : ` (${report.proposalId})`}.`);
+  }
+  return lines.join("\n");
+}
+
+function setupText(report: SetupReport): string {
+  if (report.aborted) return "Setup was interrupted: nothing was written to settings.json.";
+
+  const accepted = report.accepted.length;
+  const outcome = accepted === 0 ? "you allowed none" : report.written ? `you allowed ${accepted}, written to settings.json (pi-simple-sri.observe.replay.allow)` : `you allowed ${accepted}, but settings.json was not written`;
+  return `Setup: ${report.classified.length} skills classified, ${report.suggested.length} suggested as read-only, ${report.alreadyAllowed.length} already allowed; ${outcome}.`;
+}
+
 // The command's own sentence: what is about to be spent, said before it is (no other surface spends it, and a
 // gate of twelve runs is a long silence otherwise).
 function gateStartedText(skill: SkillRef): string {
@@ -1199,9 +1610,9 @@ function gateStartedText(skill: SkillRef): string {
 // confirmation (M3, S6) are in the syntax line because the parser accepts them and the usage error names them; what each one
 // is for is the description of the command and of the tool (extensions/index.ts).
 //
-// The four ways of giving feedback are listed here and not in a description, because the user who typed the command
+// The four ways of giving feedback (the fourth needs observation on) are listed here and not in a description, because the user who typed the command
 // alone is exactly the one the channel is for (M1c, S11, Q26): the failures of the session, the two profiles of a bank
-// and the tool the model registers a correction with. Each line is the invocation that reaches it, so the help is
+// and the record action of the tool, with which the model logs a note about a skill. Each line is the invocation that reaches it, so the help is
 // usable without reading anything else.
 //
 // The syntax line shows the focus and --signal together, and the parser refuses the pair (M3, S11b): the focus of a
@@ -1212,11 +1623,17 @@ function usageText(eligible: readonly SkillRef[]): string {
   return [
     `Usage: /${COMMAND_NAME} ${USAGE_SYNTAX}`,
     "Stages a lesson candidate for one skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows -- gates it with a paired replay and accepts it into the skill only when the gate passes; --staged=<stagingPath> gates a candidate that is already in staging, and the gate spends tokens; --metrics reports the numbers of the attempts already recorded, with no generation and no gate; --verify checks the accepted lessons against the records that accepted them, with no model, no gate and no write; --signal=<id> --bank=<path> confirms one suspicion the collector holds open as a directional attempt on the skill, measured by the cases of that bank, and a confirmation that names no bank spends nothing and leaves the suspicion open; a focus next to --signal is refused instead of dropped, because the focus of a confirmed suspicion is the suspicion itself; --retire=<slug> --reason=<key> retires one accepted lesson of the skill for a recorded reason, and the detail of that reason is the focus of the run.",
-    "Feedback it can record, in four ways:",
+    "Feedback it can record, in four ways (the fourth only when observation is on):",
     `  - a tool failure of this session: /${COMMAND_NAME} <skill> [focus]`,
     `  - a directional improvement, measured against the cases a bank declares: /${COMMAND_NAME} <skill> --bank=<path>`,
     `  - a defect an artifact shows, measured against the truth that bank declares: /${COMMAND_NAME} <skill> --bank=<path> --defect`,
-    `  - a correction or a rejection the model registers before anything is spent: the ${SKILL_IMPROVE_TOOL_NAME} tool`,
+    `  - a self-report the model records about a skill, when observation is on: the ${SKILL_IMPROVE_TOOL_NAME} tool, action record`,
+    "The observer (when pi-simple-sri.observe.enabled is true), each one ending the run:",
+    `  - /${COMMAND_NAME} --scan [--dry-run [--limit=<n>]] [--since=YYYY-MM-DD]: reads the stored sessions; --dry-run writes nothing to the store, estimates the cost and asks before it judges a sample`,
+    `  - /${COMMAND_NAME} --review[=<id>]: asks about a proposal, gates it if it was not measured, and accepts it only on your answer`,
+    `  - /${COMMAND_NAME} --setup: suggests the read-only skills a gate may replay with real runs, and writes the ones you confirm to settings.json`,
+    `  - /${COMMAND_NAME} <skill> --forget: after a confirmation, erases what the observer holds about the skill`,
+    `  - /${COMMAND_NAME} <skill> --note <text>: records your note about the skill, with the highest weight`,
     `Eligible skills: ${listedNames(eligible)}.`,
   ].join("\n");
 }

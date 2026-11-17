@@ -1,0 +1,637 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/pi-simple-sri/observe@1.json",
+  "title": "pi-simple-sri observe event, format 1",
+  "description": "One line of state/observe.jsonl: the append-only memory of the observer (episodes, judgements, observations, proposals and the answers of the user). A closed oneOf of ten events chosen by `type`; every level sets additionalProperties: false. src/observe/types.ts is the authority on the union and src/observe/store.ts reads tolerantly (a line this schema refuses is skipped and counted), so the negative cases live in test/unit/observe-event-schema.test.ts. A change of the shape or meaning of a field is a new format.",
+  "oneOf": [
+    {
+      "description": "Written once, by the first enabled cycle. Its `at` is the moment of opt-in: nothing older is read.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "opt-in"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    {
+      "description": "One run of a skill found in a saved session. Pointers only, never content; clean episodes are persisted too.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "id",
+        "skill",
+        "sessionId",
+        "sessionFile",
+        "cwd",
+        "startEntryId",
+        "endEntryId",
+        "anchorEntryIds",
+        "startedAt",
+        "attribution",
+        "providers",
+        "flags",
+        "clean"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "episode"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "description": "sha256 of [skill, startEntryId], first 12 hex.",
+          "type": "string",
+          "pattern": "^ep-[0-9a-f]{12}$"
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionId": {
+          "description": "The session header id.",
+          "type": "string",
+          "minLength": 1
+        },
+        "sessionFile": {
+          "description": "Path of the session file the pointers refer to.",
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "description": "The cwd of the session header.",
+          "type": "string",
+          "minLength": 1
+        },
+        "startEntryId": {
+          "description": "First entry of the episode.",
+          "type": "string",
+          "minLength": 1
+        },
+        "endEntryId": {
+          "description": "Last entry of the episode.",
+          "type": "string",
+          "minLength": 1
+        },
+        "anchorEntryIds": {
+          "description": "The user-authored entries of the episode.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "startedAt": {
+          "description": "Timestamp of the first entry; the decay of the episode counts from it.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "attribution": {
+          "description": "How the episode was attributed to the skill.",
+          "enum": [
+            "explicit",
+            "implicit"
+          ]
+        },
+        "providers": {
+          "description": "The providers of the assistant messages of the episode.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "flags": {
+          "description": "The kinds of flag the prefilter raised.",
+          "type": "array",
+          "items": {
+            "enum": [
+              "tool-error",
+              "correction",
+              "rewritten-draft",
+              "repeated-request"
+            ]
+          }
+        },
+        "clean": {
+          "description": "True when the episode shows no sign of correction.",
+          "type": "boolean"
+        }
+      }
+    },
+    {
+      "description": "The verdict of the deferred judge about one episode.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "episodeId",
+        "model",
+        "outcome"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "judged"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "episodeId": {
+          "description": "The episode judged.",
+          "type": "string",
+          "pattern": "^ep-[0-9a-f]{12}$"
+        },
+        "model": {
+          "description": "provider/id of the judge.",
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "description": "What the judge answered.",
+          "enum": [
+            "findings",
+            "clean",
+            "failed",
+            "skipped"
+          ]
+        },
+        "reason": {
+          "description": "Why the judge failed or skipped.",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "description": "One finding about a skill, redacted. A pattern is derived from `patternId`; there is no pattern event.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "id",
+        "episodeId",
+        "sessionId",
+        "skill",
+        "source",
+        "kind",
+        "summary",
+        "confidence",
+        "weight",
+        "anchorEntryId",
+        "patternId"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "observation"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "description": "sha256 of [source, episodeId ?? sessionId, anchorEntryId, kind], first 12 hex.",
+          "type": "string",
+          "pattern": "^ob-[0-9a-f]{12}$"
+        },
+        "episodeId": {
+          "description": "The episode, or null for a note or a self-report outside one.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^ep-[0-9a-f]{12}$"
+        },
+        "sessionId": {
+          "description": "The session the observation comes from.",
+          "type": "string",
+          "minLength": 1
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "description": "Who observed it.",
+          "enum": [
+            "user-note",
+            "judge",
+            "self-report",
+            "mechanical"
+          ]
+        },
+        "kind": {
+          "description": "The type of correction.",
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "description": "Redacted text.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "confidence": {
+          "description": "The judge's confidence, null for the other sources.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "weight": {
+          "description": "Weight before decay.",
+          "type": "number",
+          "minimum": 0
+        },
+        "anchorEntryId": {
+          "description": "The entry of the session the observation points at.",
+          "type": "string",
+          "minLength": 1
+        },
+        "patternId": {
+          "description": "The pattern the observation belongs to.",
+          "type": "string",
+          "pattern": "^pt-[0-9a-f]{12}$"
+        }
+      }
+    },
+    {
+      "description": "A lesson staged from a pattern.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "id",
+        "patternId",
+        "skill",
+        "stagingPath",
+        "candidateHash",
+        "gate",
+        "bankPath",
+        "provenance",
+        "cwd",
+        "skillContentHash"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "proposal"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "id": {
+          "description": "sha256 of [patternId, candidateHash], first 12 hex.",
+          "type": "string",
+          "pattern": "^pr-[0-9a-f]{12}$"
+        },
+        "patternId": {
+          "description": "The pattern proposed.",
+          "type": "string",
+          "pattern": "^pt-[0-9a-f]{12}$"
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "stagingPath": {
+          "description": "Relative to the write base.",
+          "type": "string",
+          "minLength": 1
+        },
+        "candidateHash": {
+          "description": "The content hash of the staged lesson.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "gate": {
+          "description": "What verifies the lesson.",
+          "enum": [
+            "bank",
+            "probation"
+          ]
+        },
+        "bankPath": {
+          "description": "The bank the gate reads; null for probation.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "provenance": {
+          "description": "Who wrote the bank; null for probation.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "user",
+            "skill-shipped",
+            "auto",
+            null
+          ]
+        },
+        "cwd": {
+          "description": "The directory the gate runs in.",
+          "type": "string",
+          "minLength": 1
+        },
+        "skillContentHash": {
+          "description": "SHA-256 digest (sha256:<64 hex>) of SKILL.md when the lesson was staged; acceptance compares against it.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    {
+      "description": "A proposal that could not be prepared: the pattern waits 24h after the first such failure, 72h after the second and 7d after the third or later.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "skill",
+        "patternId",
+        "reason"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "prepare-failed"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "patternId": {
+          "description": "The pattern whose proposal could not be prepared.",
+          "type": "string",
+          "pattern": "^pt-[0-9a-f]{12}$"
+        },
+        "reason": {
+          "description": "Why, redacted.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    {
+      "description": "One answer of the user (or its absence) to a prompt about a proposal.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "proposalId",
+        "stage",
+        "answer"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "prompt"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "proposalId": {
+          "description": "The proposal asked about.",
+          "type": "string",
+          "pattern": "^pr-[0-9a-f]{12}$"
+        },
+        "stage": {
+          "description": "a: approve lesson and bank; b: accept with the gate result.",
+          "enum": [
+            "a",
+            "b"
+          ]
+        },
+        "answer": {
+          "description": "The answer.",
+          "enum": [
+            "approve",
+            "reject",
+            "later",
+            "timeout",
+            "accept"
+          ]
+        }
+      }
+    },
+    {
+      "description": "What a gate run came to, classed for the observer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "proposalId",
+        "class",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "gate-outcome"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "proposalId": {
+          "description": "The proposal gated.",
+          "type": "string",
+          "pattern": "^pr-[0-9a-f]{12}$"
+        },
+        "class": {
+          "description": "Closed outcome class.",
+          "enum": [
+            "accepted",
+            "rejected",
+            "retryable",
+            "not-measurable"
+          ]
+        },
+        "status": {
+          "description": "The status of the decision record outcome.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "description": "The reason the gate gave, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    {
+      "description": "A pattern that must not be proposed again until new observations arrive.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "patternId",
+        "skill",
+        "reason",
+        "candidateHash"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "tombstone"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "patternId": {
+          "description": "The pattern.",
+          "type": "string",
+          "pattern": "^pt-[0-9a-f]{12}$"
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "description": "Why it is buried.",
+          "enum": [
+            "user-rejected",
+            "gate-rejected",
+            "accepted",
+            "stale"
+          ]
+        },
+        "candidateHash": {
+          "description": "The candidate that was rejected; never proposed again.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    {
+      "description": "The user erased everything about a skill: events at or before this one are ignored.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "type",
+        "at",
+        "skill"
+      ],
+      "properties": {
+        "format": {
+          "description": "The versioned id of the format. A line of another version is a line of another contract.",
+          "const": "pi-simple-sri/observe@1"
+        },
+        "type": {
+          "description": "The event this line reports; it picks the branch of the oneOf.",
+          "const": "forget"
+        },
+        "at": {
+          "description": "When the event was appended, from the one clock of the package (UTC, milliseconds).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "skill": {
+          "description": "The skill name.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  ]
+}

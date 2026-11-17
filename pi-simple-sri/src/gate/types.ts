@@ -244,8 +244,9 @@ export interface GatePlanOptions {
 }
 
 // A gate that concluded answers with one of the three statuses GATE_STATUSES reserves for it: the two
-// decisions and the abstention, without the two states of a gate that has not concluded yet.
-export type GateVerdict = Exclude<GateStatus, "not-run" | "preregistered">;
+// decisions and the abstention, without the two states of a gate that has not concluded yet and without probation, which
+// is a candidate no gate measured.
+export type GateVerdict = Exclude<GateStatus, "not-run" | "preregistered" | "probation">;
 
 // Why a concluded gate says what it says. `below-threshold` is the only reason the rule produces and `judge-failed`
 // the only one the second condition produces: the mechanics accepted and the judge did not, which is a rejection and

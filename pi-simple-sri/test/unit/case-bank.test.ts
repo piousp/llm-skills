@@ -13,13 +13,16 @@ import {
   caseBankDigest,
   caseBankReason,
   loadCaseBank,
+  parseCaseBankText,
 } from "../../src/case-bank.ts";
 import type { CaseBankError, CaseBankProfile } from "../../src/case-bank.ts";
 import { CASE_CHECK_KINDS } from "../../src/checks.ts";
 import { MAX_EXCERPT_CODE_POINTS } from "../../src/evidence.ts";
 import { sha256Digest } from "../../src/hash.ts";
 import { CASE_BANK_FILE } from "../../src/names.ts";
+import { PROVENANCES } from "../../src/observe/types.ts";
 import { isPlainObject } from "../../src/values.ts";
+import { fixturePath } from "./observe-fixtures.ts";
 import { loadBankSchema, loadDecisionSchema, validateAgainstBankSchema } from "./schema-reader.ts";
 
 // M1c, S3: the neutral bank of cases. Every case of this suite writes a bank into a mkdtemp and reads it back through
@@ -444,6 +447,13 @@ const REJECTIONS: readonly Rejection[] = [
     schemaCatches: true,
   },
   {
+    name: "a provenance outside the vocabulary",
+    profile: "baseline",
+    bank: { ...BASELINE_BANK, provenance: "robot" },
+    detail: '"provenance" must be one of "user", "skill-shipped", "auto", got "robot"',
+    schemaCatches: true,
+  },
+  {
     name: "two cases with the same id",
     profile: "baseline",
     bank: { format: CASE_BANK_FORMAT, cases: [FLAGS_CASE, { ...ONTO_CASE, id: FLAGS_CASE.id }] },
@@ -635,4 +645,56 @@ test("case-bank.schema.json: the fixtures the schema can express validate the sa
     if (row.schemaCatches) assert.notDeepEqual(violations, [], `the schema reports ${row.name} too`);
     else assert.deepEqual(violations, [], `the schema cannot express ${row.name}`);
   }
+});
+
+// WP9: the optional `provenance` of the root. The fixtures are the banks of the observer: the generated one must read
+// back with its provenance, and the one with no positive check is still a bank for the reader (negative checks are legal
+// in a bank a user writes) -- the generator is what refuses it (test/unit/observe-auto-bank.test.ts).
+for (const provenance of PROVENANCES) {
+  test(`loadCaseBank: keeps provenance ${provenance} as written`, async (t) => {
+    const fixture = createFixture(t);
+    writeBank(fixture.file, { ...BASELINE_BANK, provenance });
+
+    const loaded = await loadCaseBank(fixture.file, "baseline");
+
+    assert.equal(loaded.ok && loaded.value.provenance, provenance);
+  });
+}
+
+test("loadCaseBank: a bank without provenance answers none", async (t) => {
+  const fixture = createFixture(t);
+  writeBank(fixture.file, BASELINE_BANK);
+
+  const loaded = await loadCaseBank(fixture.file, "baseline");
+
+  assert.equal(loaded.ok && Object.hasOwn(loaded.value, "provenance"), false);
+});
+
+test("loadCaseBank: the auto fixture reads as an auto bank of two cases", async () => {
+  const loaded = await loadCaseBank(fixturePath("banks", "auto.json"), "baseline");
+
+  assert.equal(loaded.ok, true);
+  if (!loaded.ok) return;
+  assert.equal(loaded.value.provenance, "auto");
+  assert.deepEqual(
+    loaded.value.cases.map((entry) => entry.id),
+    ["case-1", "case-2"],
+  );
+});
+
+test("parseCaseBankText: answers the same refusals as the file reader, without a file", () => {
+  const notJson = parseCaseBankText("{", "baseline");
+  assert.equal(!notJson.ok && notJson.error.error, "not-json");
+
+  const invalid = parseCaseBankText(JSON.stringify({ ...BASELINE_BANK, provenance: "robot" }), "baseline");
+  assert.equal(!invalid.ok && invalid.error.error, "invalid");
+
+  const valid = parseCaseBankText(JSON.stringify({ ...BASELINE_BANK, provenance: "auto" }), "baseline");
+  assert.equal(valid.ok && valid.value.provenance, "auto");
+});
+
+test("case-bank.schema.json: the provenance of the schema is the vocabulary of the observer", () => {
+  assert.deepEqual(schemaNode(loadBankSchema(), "properties", "provenance").enum, [...PROVENANCES]);
+  assert.deepEqual(validateAgainstBankSchema({ ...BASELINE_BANK, provenance: "auto" }), []);
+  assert.notDeepEqual(validateAgainstBankSchema({ ...BASELINE_BANK, provenance: "robot" }), []);
 });

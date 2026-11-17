@@ -16,6 +16,7 @@ import {
 import type { ImproveFlowContext, ImproveFlowDeps, ImproveFlowSession } from "../src/improve-flow.ts";
 import { feedbackNoticeText, signalText } from "../src/messages.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR, SKILL_IMPROVE_TOOL_NAME } from "../src/names.ts";
+import { createObserveRuntime, type ObserveSeams, type ObserveStartContext } from "../src/observe/wire.ts";
 import { createSignalCollector, turnObservationOf } from "../src/signals.ts";
 import { writeBase } from "../src/write-base.ts";
 import {
@@ -31,7 +32,9 @@ import {
 // only which surface is called and which dependencies it is called with.
 //
 //   /skill-improve <skill> [focus] [--bank=<path>] [--signal=<id>] [--defect] [--staged=<stagingPath>]
-//                  [--metrics] [--verify] [--retire=<slug> --reason=<key>]  -> runSkillImprove
+//                  [--metrics] [--verify] [--retire=<slug> --reason=<key>]
+//                  | --scan [--dry-run [--limit=<n>]] [--since=YYYY-MM-DD] | --review[=<id>] | --setup
+//                  | <skill> --forget | <skill> --note <text>                -> runSkillImprove
 //   skill_improve { action, skill, focus, stagingPath, bankPath, defect }  -> createSkillImproveTool
 //
 // Both run the same loop (src/improve-flow.ts), so the command and the tool cannot disagree about
@@ -50,12 +53,19 @@ import {
 // of the turn is the one pi drew. Since S6 it is also the dependency the command confirms a suspicion with, so the memory
 // the session raised and the one a `/skill-improve --signal=<id>` reads are the same object.
 //
+// The fifth is the observer (src/observe/): when the user turned it on, a session that starts with the reason "startup" or
+// "new" in the TUI, and is a top-level one, runs one background cycle over the stored sessions of the other runs (decision 2,
+// Q1), and the surface of the command binds `--scan` and `--review` to the same wiring (src/observe/wire.ts). The cycle holds
+// a resource -- an abortable task and the dialogs it opened -- that belongs to the session that started it, so a
+// session_shutdown handler aborts it; and `agent_settled` runs what `--review`'s dispatch deferred, because a command that
+// pi runs while the agent streams cannot reload the session (spike Q1). Neither handler decides anything about the turn.
+//
 // What the factory does not do is as much part of the contract as what it does: no process, no socket, no timer and no
 // read at registration (docs/extensions.md:58-60). The root below is path arithmetic and nothing is resolved before a
 // session starts; the settings, the inventory, the model, the writer and the clock are all resolved inside a run; the
 // hydration of the collector reads one file per session, and the collector appends one line when it raises a new
-// suspicion, and neither happens at registration. That is also why no session_shutdown handler is registered: nothing
-// here holds a resource that would need one -- the two event handlers hold the memory of one session and return.
+// suspicion, and neither happens at registration. The collector holds the memory of one session and returns; the only
+// resource a handler of this file holds past its return is the observer's background cycle, and session_shutdown ends it.
 //
 // Importing this module runs nothing either. The only statements at module level declare types and
 // constants, so a `pi -e` that loads the file and never calls the factory registers nothing.
@@ -75,23 +85,33 @@ import {
 // --verify), the confirmation of a suspicion (--signal) with its bank, and the retirement (--retire) with its reason --
 // because a flag that exists and is not named here is a flag the reader has to guess. This command is also the only surface
 // that may accept a candidate (Q12), and the description says so instead of promising that nothing is ever edited.
-const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows instead of the cases to measure --, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>] [--signal=<id>] [--metrics] [--verify] [--retire=<slug> --reason=<key>]. --staged=<stagingPath> gates a candidate that is already in staging instead of proposing a second one, and a bank that is absent or unreadable spends nothing, leaves the candidate in staging and leaves the attempt retryable. --metrics reports the numbers of the attempts already recorded and --verify checks every accepted lesson against the record that accepted it, the two of them reading the index alone, and --signal=<id> --bank=<path> confirms one suspicion the collector holds open as a directional attempt whose focus is the suspicion itself. --retire=<slug> --reason=<key> takes one accepted lesson back out of use for a recorded reason, and the detail of that reason is the focus of the run. The gate spends tokens on every run and needs at least two distinct items to have a paired design to run, abstaining with insufficient-items below that; this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does.`;
+const COMMAND_DESCRIPTION = `Stage a lesson candidate for one installed skill -- from the failures of this session, or from the cases a --bank=<path> declares, with --defect when that bank describes a defect an artifact shows instead of the cases to measure --, gate it with a paired replay and accept it into the skill only when the gate passes: /${COMMAND_NAME} <skill> [focus] [--bank=<path>] [--defect] [--staged=<stagingPath>] [--signal=<id>] [--metrics] [--verify] [--retire=<slug> --reason=<key>]. --staged=<stagingPath> gates a candidate that is already in staging instead of proposing a second one, and a bank that is absent or unreadable spends nothing, leaves the candidate in staging and leaves the attempt retryable. --metrics reports the numbers of the attempts already recorded and --verify checks every accepted lesson against the record that accepted it, the two of them reading the index alone, and --signal=<id> --bank=<path> confirms one suspicion the collector holds open as a directional attempt whose focus is the suspicion itself. --retire=<slug> --reason=<key> takes one accepted lesson back out of use for a recorded reason, and the detail of that reason is the focus of the run. The gate spends tokens on every run and needs at least two distinct items to have a paired design to run, abstaining with insufficient-items below that; this command is the only surface that accepts: the ${SKILL_IMPROVE_TOOL_NAME} tool never does. When pi-simple-sri.observe.enabled is true the observer adds: --scan [--dry-run [--limit=<n>]] [--since=YYYY-MM-DD] reads the stored sessions (--dry-run writes nothing and asks before it judges a sample), --review[=<id>] asks about one proposal the observer staged and accepts only on your answer, --setup chooses which skills the gate may replay with real runs, <skill> --forget erases what the observer holds about a skill, and <skill> --note <text> records a correction as it happens.`;
 
 // The seams a test may replace: everything the loop resolves for itself, plus the two gate flows the command chains
 // after it and the tool runs on its own. The gate's own seams are the tool's, and the acceptance's are not here
 // at all -- only the command accepts (Q12), every test of that step drives the command directly, and the
 // wiring is what keeps the tool's dependencies free of any seam that could write a skill. No path travels
 // through the wiring: the write base follows the agent directory, so the factory passes nothing of its own.
-export type SriSeams = ImproveFlowDeps & Pick<SkillImproveToolDeps, "gate" | "gateDirectional" | "gateDeps">;
+//
+// The observer's seams (settings reader, clock, the production dependencies of the cycle, the cycle itself) are the one member
+// that is not the loop's: they travel under `observe` and stop at the wiring.
+export type SriSeams = ImproveFlowDeps &
+  Pick<SkillImproveToolDeps, "gate" | "gateDirectional" | "gateDeps"> & { observe?: ObserveSeams };
 
 // The command registration as this factory writes it, with the handler's context narrowed to the
 // fields the command reads (SkillImproveContext, src/command-skill-improve.ts). pi's own
 // ExtensionCommandContext satisfies it, which the narrowing in sriExtension below proves at compile
 // time; narrowing what a handler reads is what lets a test drive it with a six-field fake instead of
 // a whole host context.
+//
+// The observer's surface needs three members the command does not: the mode, the idle check and the session files. They are
+// optional here, so a context without them (a test) still drives every other flag, and `--scan` and `--review` answer that
+// no observer is bound.
+export type SriCommandContext = SkillImproveContext & Pick<ObserveStartContext, "mode" | "isIdle" | "sessionManager">;
+
 export interface SriCommandRegistration {
   description?: string;
-  handler: (args: string, ctx: SkillImproveContext) => Promise<void>;
+  handler: (args: string, ctx: SriCommandContext) => Promise<void>;
 }
 
 // The registered tool, narrowed the same way: pi's ToolDefinition with the parameters, the details
@@ -148,27 +168,50 @@ export interface SriNoticeContext {
 // it is.
 export interface SriTurnEndContext extends SriNoticeContext, Pick<ImproveFlowContext, "cwd" | "model"> {}
 
-// Both handlers answer a promise because both wait on a file the collector owns -- its hydration, and the line of a new
-// suspicion -- and neither answers a value: pi allows either, and a handler that returned entries or `continue` would be
+// The turn_end and session_start handlers answer a promise because both wait on a file the collector owns -- its hydration,
+// and the line of a new suspicion -- and none of the handlers answers a value: pi allows either, and a handler that returned entries or `continue` would be
 // deciding something about the turn, which this package does not do.
+// The session_start handler also starts the observer, which reads the mode, the model registry and the session files of the
+// context pi hands it: all of them optional here, as ObserveStartContext declares, so the notice stays drivable with two members.
+export type SriSessionStartContext = ObserveStartContext;
+
 export type SriSessionStartHandler = (
   event: SriSessionStartEvent,
-  ctx: SriNoticeContext,
+  ctx: SriSessionStartContext,
 ) => void | Promise<void>;
+
+// The session ended or is being replaced: why, as pi reports it (SessionShutdownEvent). The handler only ends the observer's cycle.
+export interface SriSessionShutdownEvent {
+  readonly type: "session_shutdown";
+  readonly reason: "quit" | "reload" | "new" | "resume" | "fork";
+}
+
+export type SriSessionShutdownHandler = (event: SriSessionShutdownEvent) => void | Promise<void>;
+
+// The agent went idle. Nothing of the event is read: the handler runs what was deferred until pi is idle.
+export interface SriAgentSettledEvent {
+  readonly type: "agent_settled";
+}
+
+export type SriAgentSettledHandler = (event: SriAgentSettledEvent) => void | Promise<void>;
 
 export type SriTurnEndHandler = (event: SriTurnEndEvent, ctx: SriTurnEndContext) => void | Promise<void>;
 
-// The slice of ExtensionAPI this package uses: the two registrations, the two channels that only
-// the extension API carries (appendEntry and sendMessage do not exist on the context pi hands a
-// handler or a tool), and the two events it listens to. The session entry of this package is always the
+// The slice of ExtensionAPI this package uses: the two registrations, the three channels that only
+// the extension API carries (appendEntry, sendMessage and sendUserMessage do not exist on the context pi hands a
+// handler or a tool), and the four events it listens to. The session entry of this package is always the
 // same payload, so appendEntry is narrowed to it here rather than at every call site.
 export interface SriExtensionApi {
   registerCommand(name: string, options: SriCommandRegistration): void;
   registerTool(tool: SkillImproveToolDefinition): void;
   appendEntry(customType: string, data?: ImprovementEntry): void;
   sendMessage(message: SkillImproveMessage): void;
+  // `/skill-improve --review <id>`, dispatched by the observer as a user message that pi expands into the command.
+  sendUserMessage(content: string, options?: { expandPromptTemplates?: boolean }): void | Promise<void>;
   on(event: "turn_end", handler: SriTurnEndHandler): () => void;
   on(event: "session_start", handler: SriSessionStartHandler): () => void;
+  on(event: "session_shutdown", handler: SriSessionShutdownHandler): () => void;
+  on(event: "agent_settled", handler: SriAgentSettledHandler): () => void;
 }
 
 // What pi loads and calls once per session. The parameter is pi's own ExtensionAPI, so what this
@@ -188,12 +231,14 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   // never registered cannot be offered to the model either.
   if (isReplayChild()) return;
 
+  const { observe: observeSeams, ...flowSeams } = seams;
+
   // The dependencies both surfaces share, resolved once per extension instance: the flow's seams and the
   // gate's (absent in production, where the loop and the gate resolve each one) and the entry channel. Where a
   // run writes is not here: the base follows the agent directory the loop resolves itself, so the wiring holds
   // no path of the package's own.
   const deps: SkillImproveToolDeps = {
-    ...seams,
+    ...flowSeams,
     // The entry channel is the session record of an attempt and lives on the extension API, not on
     // the context a handler receives, so the wiring is the only place that can connect it.
     appendEntry: (customType, data) => {
@@ -208,6 +253,16 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   // It is created before the dependencies below because it is one of them since S6: the command confirms a suspicion through
   // this same collector, so the object the two handlers hold and the one a confirmation reads are one object.
   const signals = createSignalCollector(() => writeBase(getAgentDir()));
+
+  // The observer: created here and idle until a session starts. It reads no settings and starts nothing at registration.
+  // Its directory and clock follow the seams the loop was given, so the command and the observer cannot read two agent directories.
+  const seamAgentDir = flowSeams.agentDir;
+  const seamNow = flowSeams.now;
+  const observer = createObserveRuntime(api, {
+    ...(seamAgentDir === undefined ? {} : { agentDir: () => seamAgentDir }),
+    ...(seamNow === undefined ? {} : { now: seamNow }),
+    ...observeSeams,
+  });
 
   // The command's own dependency: the message channel. With a UI the command notifies through
   // ctx.ui, and only a run without one needs this channel, which is why it is the command's and not
@@ -230,7 +285,10 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
   api.registerCommand(COMMAND_NAME, {
     description: COMMAND_DESCRIPTION,
     handler: async (args, ctx) => {
-      await runSkillImprove(args, ctx, commandDeps);
+      // The surface of the observer is bound to this call's context, which is why it is built here and not with the other
+      // dependencies: the context is passed through untouched, and a context with no dialogs binds none.
+      const observe = observer.surface(ctx);
+      await runSkillImprove(args, ctx, observe === undefined ? commandDeps : { ...commandDeps, observe });
     },
   });
 
@@ -255,6 +313,14 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
 
     if (event.reason === "reload") return;
     ctx.ui.notify(feedbackNoticeText(), "info");
+
+    // The observer, last: the notice above is owed whatever the cycle does. start() answers at once and the cycle runs in the
+    // background; whatever it throws is its own to report, and a bug there cannot break the start of a session.
+    try {
+      observer.start(event, ctx);
+    } catch {
+      // Swallowed on purpose: see the comment above.
+    }
   });
 
   // M3 (S5): the end of a turn is where the two silent signals of Q25 are noticed. The handler observes, reports one line
@@ -269,6 +335,17 @@ export function registerSurfaces(api: SriExtensionApi, seams: SriSeams = {}): vo
     } catch {
       // Swallowed on purpose: see the comment above.
     }
+  });
+
+  // The cycle and the dialogs it opened belong to the session that ends here, and so does the context they hold: a reload, a
+  // new session and a quit all end it. stop() is idempotent and never throws.
+  api.on("session_shutdown", () => {
+    observer.stop();
+  });
+
+  // The agent is idle again: the review the cycle could not dispatch while the agent streamed is dispatched now.
+  api.on("agent_settled", () => {
+    observer.settled();
   });
 }
 

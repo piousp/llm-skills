@@ -465,3 +465,50 @@ test("mergeEvidence: an empty second list leaves the first one as it was", () =>
 
   assert.deepEqual(mergeEvidence(a, []), a);
 });
+
+const SKILL_BLOCK = '<skill name="pdf-tables" location="/skills/pdf-tables/SKILL.md">\n# PDF tables\nUse pdftotext.\n</skill>';
+
+// B1: a /skill:x invocation reaches the transcript as the skill block plus the user's arguments;
+// the prompt of a failure is what the user typed, never the skill's own text.
+test("deriveEvidence: the prompt of a failure under a skill block is the user message only", () => {
+  const entries = [
+    userEntry(0, `${SKILL_BLOCK}\n\nextract the table from report.pdf`),
+    assistantEntry(1, [toolCall("call-1", "bash", { command: "pdftotext report.pdf -" })]),
+    toolResultEntry(2, { callId: "call-1", toolName: "bash", text: "boom", isError: true }),
+  ];
+
+  const { items, contextById } = deriveEvidence(entries);
+
+  assert.equal(contextById.get(items[0].id)?.prompt, "extract the table from report.pdf");
+});
+
+test("deriveEvidence: a skill block without user args yields no prompt", () => {
+  const entries = [
+    userEntry(0, SKILL_BLOCK),
+    assistantEntry(1, [toolCall("call-1", "bash", { command: "pdftotext report.pdf -" })]),
+    toolResultEntry(2, { callId: "call-1", toolName: "bash", text: "boom", isError: true }),
+  ];
+
+  const { items, contextById } = deriveEvidence(entries);
+
+  assert.equal(contextById.get(items[0].id)?.prompt, undefined);
+});
+
+test("deriveEvidence: a user correction excerpt never carries the skill block", () => {
+  const entries = [
+    ...failingBashTranscript(),
+    userEntry(3, `${SKILL_BLOCK}\n\nno, the table is on page 4`),
+  ];
+
+  const correction = deriveEvidence(entries).items.find((item) => item.kind === "user_correction");
+
+  assert.equal(correction?.excerpt, "no, the table is on page 4");
+});
+
+test("deriveEvidence: a bare skill block neither corrects a pending error nor becomes a prompt", () => {
+  const entries = [...failingBashTranscript(), userEntry(3, SKILL_BLOCK)];
+
+  const { items } = deriveEvidence(entries);
+
+  assert.equal(items.some((item) => item.kind === "user_correction"), false);
+});

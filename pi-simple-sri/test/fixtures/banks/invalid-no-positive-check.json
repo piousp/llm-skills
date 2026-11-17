@@ -1,0 +1,9 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "provenance": "auto",
+  "description": "Every case has only negative checks: the bank cannot tell a candidate from the incumbent.",
+  "cases": [
+    { "id": "case-1", "prompt": "summarise the changelog", "checks": [{ "kind": "not-contains", "value": "Added" }] },
+    { "id": "case-2", "prompt": "summarise the release notes", "checks": [{ "kind": "not-regex", "pattern": "^Here is" }] }
+  ]
+}

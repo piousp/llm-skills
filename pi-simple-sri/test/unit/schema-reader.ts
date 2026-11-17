@@ -13,7 +13,7 @@ import { isPlainObject } from "../../src/values.ts";
 // not execute it as a suite; tsconfig includes test/**/*, so it is typechecked like everything else.
 //
 // One contract per schema is read here, and each answer names the document it validated: the path of a violation starts
-// with the name of the contract -- "decision", "case-bank", "signal" or "retirement" -- so a failure says which file it
+// with the name of the contract -- "decision", "case-bank", "signal", "retirement" or "observe-event" -- so a failure says which file it
 // came from. test/unit/decision-schema.test.ts keeps the negative cases of the first, test/unit/case-bank.test.ts the ones
 // of the second, test/unit/signal-schema.test.ts the ones of the third (M3, S5) and test/unit/retirement-schema.test.ts the
 // ones of the fourth (M3, S4): they are the files that fix what this reader catches, one injected fault per case, so a
@@ -25,6 +25,7 @@ const DECISION_SCHEMA_FILE = "decision.schema.json";
 const CASE_BANK_SCHEMA_FILE = "case-bank.schema.json";
 const SIGNAL_SCHEMA_FILE = "signal.schema.json";
 const RETIREMENT_SCHEMA_FILE = "retirement.schema.json";
+const OBSERVE_EVENT_SCHEMA_FILE = "observe-event.schema.json";
 
 // A schema as it is on disk, untyped on purpose: every read of it narrows a field to a keyword, and a cast to a
 // shape of our own invention would be the one thing the reader cannot check.
@@ -52,12 +53,18 @@ export function loadRetirementSchema(): unknown {
   return readSchema(RETIREMENT_SCHEMA_FILE);
 }
 
+// The line of state/observe.jsonl, one contract of ten events chosen by a oneOf on `type`.
+export function loadObserveEventSchema(): unknown {
+  return readSchema(OBSERVE_EVENT_SCHEMA_FILE);
+}
+
 // Read once each: a schema is a file of the package and not of the run, and every validation below reads the same
 // bytes the negative cases of the two suites describe.
 const DECISION_SCHEMA: unknown = loadDecisionSchema();
 const CASE_BANK_SCHEMA: unknown = loadBankSchema();
 const SIGNAL_SCHEMA: unknown = loadSignalSchema();
 const RETIREMENT_SCHEMA: unknown = loadRetirementSchema();
+const OBSERVE_EVENT_SCHEMA: unknown = loadObserveEventSchema();
 
 // The violations of `document` against schemas/decision.schema.json, with the JSON pointer of each one. An empty
 // list is the record satisfying the schema.
@@ -78,6 +85,11 @@ export function validateAgainstSignalSchema(document: unknown): string[] {
 // The same reading over schemas/retirement.schema.json.
 export function validateAgainstRetirementSchema(document: unknown): string[] {
   return violationsAgainst(RETIREMENT_SCHEMA, document, "retirement");
+}
+
+// The same reading over schemas/observe-event.schema.json.
+export function validateAgainstObserveEventSchema(document: unknown): string[] {
+  return violationsAgainst(OBSERVE_EVENT_SCHEMA, document, "observe-event");
 }
 
 function violationsAgainst(schema: unknown, document: unknown, at: string): string[] {

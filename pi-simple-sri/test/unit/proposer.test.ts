@@ -12,7 +12,7 @@ import {
   type ProposeSuccess,
   type SkillContext,
 } from "../../src/proposer.ts";
-import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
+import { LESSON_GATE_ACCEPTED, LESSON_GATE_PROBATION } from "../../src/types.ts";
 import type { Diagnosis, EvidenceItem } from "../../src/types.ts";
 
 // The proposer is tested against a fake `complete`, never a provider: the module owns the prompt,
@@ -211,6 +211,29 @@ test("propose: the lesson text carries the frontmatter of the published lesson",
   assert.equal(proposal.lessonText.includes(`gate: "${LESSON_GATE_ACCEPTED}"`), true);
 });
 
+// The observer carries the label of the gate through the input: a probation lesson is serialized with it, so the text
+// the user reads and the text that lands are one file, and an input without it is the lesson M2 always wrote.
+test("propose: a probation label reaches the draft and the frontmatter of the lesson", async () => {
+  const fake = fakeComplete({ text: replyText() });
+
+  const proposal = await proposeOrFail(fake, proposeInput({ lessonGate: LESSON_GATE_PROBATION }));
+
+  assert.equal(proposal.draft.gate, LESSON_GATE_PROBATION);
+  assert.equal(proposal.lessonText.includes(`gate: "${LESSON_GATE_PROBATION}"`), true);
+  assert.equal(proposal.lessonText.includes(`gate: "${LESSON_GATE_ACCEPTED}"`), false);
+  assert.deepEqual(parseLesson(proposal.lessonText), { ok: true, value: proposal.draft });
+});
+
+test("propose: an explicit accepted label is the default one", async () => {
+  const explicit = await proposeOrFail(
+    fakeComplete({ text: replyText() }),
+    proposeInput({ lessonGate: LESSON_GATE_ACCEPTED }),
+  );
+  const implicit = await proposeOrFail(fakeComplete({ text: replyText() }), proposeInput());
+
+  assert.deepEqual(explicit.draft, implicit.draft);
+});
+
 test("propose: the lesson text is a lesson parseLesson reads back as the same draft", async () => {
   const fake = fakeComplete({ text: replyText() });
 
@@ -285,6 +308,14 @@ test("propose: a reply framed by prose and a code fence still yields the lesson"
   const proposal = await proposeOrFail(fake, proposeInput());
 
   assert.equal(proposal.draft.slug, REPLY_SLUG);
+});
+
+test("propose: prose with a closing brace after the object still yields the lesson", async () => {
+  const fake = fakeComplete({ text: `${replyText()}\nHope that helps :-} (see {above})` });
+
+  const proposal = await proposeOrFail(fake, proposeInput());
+
+  assert.equal(proposal.draft.title, REPLY_TITLE);
 });
 
 // F3: a preamble that spells the shape it asked for is the failure this rule exists for. The braces

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { SriPerimeterError } from "./errors.ts";
 import { isInsideOrEqual, resolveExistingAncestor } from "./perimeter.ts";
+import { BANKS_DIR } from "./names.ts";
 import { quote } from "./values.ts";
 
 // Where a run writes: `<agentDir>/sri`, with staging/ and state/ under it.
@@ -28,6 +29,15 @@ export function stagingDir(base: string): string {
 
 export function stateDir(base: string): string {
   return path.join(base, "state");
+}
+
+// The case banks of the user (<base>/banks/<skill>.json) and the labeling output of a dry-run scan. Paths only, like the two above.
+export function banksDir(base: string): string {
+  return path.join(base, BANKS_DIR);
+}
+
+export function labelingDir(base: string): string {
+  return path.join(base, "labeling");
 }
 
 // Records and answers name a candidate relative to the base of the run and never by absolute path: a

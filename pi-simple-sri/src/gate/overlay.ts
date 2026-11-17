@@ -8,7 +8,7 @@ import * as skillReference from "../skill-reference.ts";
 import type { GateOverlays, Result, SkillRef } from "../types.ts";
 import { quote, toErrorMessage } from "../values.ts";
 import { relativeToBase, stagingDir } from "../write-base.ts";
-import { copySkillTree, discardStagingCandidate, writeTextAtomically } from "../writer.ts";
+import { copySkillTree, discardStagingCandidate, ensurePrivateDir, writeTextAtomically } from "../writer.ts";
 
 // The two arms of the gate (Q9): the skill as it stands and the skill plus the candidate lesson, each one
 // copied into staging so the replay reads a skill directory and never the real skill. What the two arms may
@@ -137,7 +137,7 @@ export async function buildArmOverlays(input: OverlayRequest): Promise<OverlayRe
     // The directory is created here, so it is checked before it exists: no primitive below sees this mkdir
     // (I10), and a skill without lessons/ is the ordinary case for the first lesson of a skill.
     assertWritable(candidateLessonsDir, [candidateDir]);
-    fs.mkdirSync(candidateLessonsDir, { recursive: true });
+    ensurePrivateDir(candidateLessonsDir, candidateDir);
     await writeTextAtomically(
       path.join(candidateDir, skillReference.lessonReferencePath(input.slug)),
       input.lessonText,

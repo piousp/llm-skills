@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { assertWritable } from "../perimeter.ts";
 import type {
@@ -10,6 +9,7 @@ import type {
   ReplayRunRecord,
 } from "../types.ts";
 import { relativeToBase } from "../write-base.ts";
+import { ensurePrivateDir } from "../writer.ts";
 import { evaluateExpectation } from "./expectation.ts";
 import type { GateRequest, GateSeams } from "./flow.ts";
 import type { OverlayArms } from "./overlay.ts";
@@ -139,7 +139,7 @@ export async function spendBudget(input: BudgetInput): Promise<BudgetResult> {
 function prepareRunsDir(candidateDir: string): string {
   const runsDir = path.join(candidateDir, GATE_DIR, RUNS_DIR);
   assertWritable(runsDir, [candidateDir]);
-  fs.mkdirSync(runsDir, { recursive: true });
+  ensurePrivateDir(runsDir, candidateDir);
   return runsDir;
 }
 

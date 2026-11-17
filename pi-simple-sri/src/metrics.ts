@@ -1,7 +1,7 @@
 import { isKnownAttemptEvent } from "./attempts.ts";
 import type { Ledger, LedgerLine } from "./ledger.ts";
 import type { GateBlock, GateStatus, ReplayRunRecord } from "./types.ts";
-import { isLater, isRetired } from "./vitality.ts";
+import { ACCEPTED_EVENT, isLater, isRetired } from "./vitality.ts";
 
 // The metrics of the series of sessions (M3, S2; OA5 of the plan with the third amendment of the author): the numbers
 // the exit criterion of the milestone is written with, projected from the ledger and from nothing else.
@@ -45,8 +45,9 @@ const UNKNOWN_EVENT = "unknown";
 // "user_correction:-" says out loud that the class is the whole of it.
 const NO_TOOL = "-";
 
-// The three statuses of a gate that concluded, of either basis (rule 2). The two that are absent are a gate that never
-// ran and one that only preregistered its rule, and neither measured a thing a rate could be built on.
+// The three statuses of a gate that concluded, of either basis (rule 2). The three that are absent are a gate that never
+// ran, one that only preregistered its rule and a candidate on probation, which no gate measured: none of them measured a
+// thing a rate could be built on, and probation is counted on its own (`Metrics.probation`).
 const CONCLUDED_GATE_STATUSES = ["gate-accepted", "gate-rejected", "gate-abstained"] as const;
 
 type ConcludedGateStatus = (typeof CONCLUDED_GATE_STATUSES)[number];
@@ -87,6 +88,9 @@ export interface SkillTally {
 export interface Metrics {
   attempts: Record<string, number>; // only the events that appear, plus "unknown" (rule 1)
   gated: GateTally;
+  // Lessons accepted on probation: no gate measured them, so they are in no verdict and in no rate of the gate, and they are
+  // still lessons in force that can recur (src/gate/probation.ts).
+  probation: number;
   bySkill: readonly SkillTally[];
   records: { present: number; missing: number };
   acceptanceRate: number; // 0 when the denominator is 0 (rule 4)
@@ -113,6 +117,7 @@ export function metricsOf(ledger: Ledger): Metrics {
   return {
     attempts: attemptCountsOf(ledger.lines),
     gated,
+    probation: probationCountOf(ledger.lines),
     bySkill,
     records: coverageOf(ledger.lines),
     // Rule 4, on the denominator the lens names: the attempts that reached a gate, which is `gated.attempts` because that
@@ -193,7 +198,9 @@ function gateCountsOf(
 function verdictOf(entry: LedgerLine): "accepted" | "rejected" | "abstained" | null {
   switch (entry.line.event) {
     case "accepted":
-      return entry.record !== null && entry.record.outcome.status === "accepted" ? "accepted" : null;
+      // A lesson accepted on probation is an acceptance of the user and not a verdict of the gate: it never ran, so counting
+      // it would put an acceptance in the numerator of a rate whose denominator it never reached.
+      return isAcceptance(entry) && !isProbation(entry) ? "accepted" : null;
     case "gate-rejected":
       return "rejected";
     case "gate-abstained":
@@ -203,6 +210,20 @@ function verdictOf(entry: LedgerLine): "accepted" | "rejected" | "abstained" | n
       // neither is a refusal that answered before there was anything to measure.
       return null;
   }
+}
+
+// The acceptance of rule 2: the line the acceptance writes with the record that backs it saying so.
+function isAcceptance(entry: LedgerLine): boolean {
+  return entry.line.event === ACCEPTED_EVENT && entry.record !== null && entry.record.outcome.status === "accepted";
+}
+
+// An acceptance whose record says no gate measured the candidate.
+function isProbation(entry: LedgerLine): boolean {
+  return entry.record !== null && entry.record.gate.status === "probation";
+}
+
+function probationCountOf(lines: readonly LedgerLine[]): number {
+  return lines.filter((entry) => isAcceptance(entry) && isProbation(entry)).length;
 }
 
 // What one concluded gate adds to the report: the pairs of its incumbent arm, the regressions it counted and the split of
@@ -321,7 +342,7 @@ function lessonsOf(lines: readonly LedgerLine[]): AcceptedLesson[] {
   const lessons: AcceptedLesson[] = [];
 
   for (const entry of lines) {
-    if (verdictOf(entry) !== "accepted") continue;
+    if (!isAcceptance(entry)) continue;
     if (isRetired(entry, lines)) continue;
 
     lessons.push({

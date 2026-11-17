@@ -1,0 +1,8 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "description": "Cases a user wrote for demo-skill.",
+  "cases": [
+    { "id": "breaking-only", "prompt": "summarise the changelog, only breaking changes", "checks": [{ "kind": "contains", "value": "BREAKING" }, { "kind": "not-contains", "value": "Added" }] },
+    { "id": "no-preamble", "prompt": "summarise the release notes", "checks": [{ "kind": "regex", "pattern": "^- " }] }
+  ]
+}

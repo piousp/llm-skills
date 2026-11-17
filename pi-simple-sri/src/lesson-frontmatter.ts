@@ -59,7 +59,8 @@ type LessonFields = Omit<LessonDraft, "slug">;
 type RawLessonFields = Omit<{ [K in keyof LessonFields]: unknown }, "body"> & { body: string };
 
 // lowercase, accents folded to ASCII, every run of anything else replaced by one "-", hyphens
-// trimmed from both ends, at most 64 characters, never empty. "Extracción de tablas: celdas"
+// trimmed from both ends, at most 64 characters cut at a word boundary when one sits in the second
+// half of the limit (a single very long word is cut hard), never empty. "Extracción de tablas: celdas"
 // becomes "extraccion-de-tablas-celdas"; "!!!" becomes "lesson".
 export function slugify(title: string): string {
   const folded = foldAscii(title)
@@ -68,8 +69,17 @@ export function slugify(title: string): string {
     .replace(/^-+|-+$/g, "");
 
   // Truncation can leave a hyphen at the end, which the pattern for a lesson slug forbids.
-  const truncated = folded.slice(0, MAX_SLUG_LENGTH).replace(/-+$/g, "");
+  const truncated = cutAtWordBoundary(folded).replace(/-+$/g, "");
   return truncated === "" ? FALLBACK_SLUG : truncated;
+}
+
+// The boundary is the last "-" at or before the limit; a boundary in the first half would keep a stub
+// of the title, so then the cut is hard.
+function cutAtWordBoundary(slug: string): string {
+  if (slug.length <= MAX_SLUG_LENGTH) return slug;
+
+  const boundary = slug.lastIndexOf("-", MAX_SLUG_LENGTH);
+  return boundary > MAX_SLUG_LENGTH / 2 ? slug.slice(0, boundary) : slug.slice(0, MAX_SLUG_LENGTH);
 }
 
 // Emits the block above followed by the body, with exactly one trailing newline so appending to

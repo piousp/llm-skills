@@ -1,0 +1,8 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "description": "A bank shipped inside the skill.",
+  "cases": [
+    { "id": "interactive-flag", "prompt": "How do I rewrite the last 3 commits with git rebase?", "checks": [{ "kind": "contains", "value": "--interactive" }] },
+    { "id": "onto-needs-a-base", "prompt": "How do I move a branch onto main with git rebase?", "checks": [{ "kind": "regex", "pattern": "^git rebase --onto" }] }
+  ]
+}

@@ -3,6 +3,106 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- The observer: deferred detection of corrections across sessions, off until `pi-simple-sri.observe.enabled` is
+  set. On `session_start` (reasons `startup` and `new`, TUI, top-level session) a background cycle cuts the other
+  session files into episodes of one skill run (explicit `/skill:x` or implicit read of its `SKILL.md`), flags them
+  with a deterministic prefilter, sends the ones with a correction or a repeated request to an LLM judge within a
+  daily budget, and groups the findings into patterns in `state/observe.jsonl`. Secrets are redacted before the judge
+  and before the store, files are 0600 and directories 0700.
+- A pattern seen in at least two sessions on two UTC days, with decayed weight of 1.6 or more and a posterior
+  P(rate > 0.15) of 0.8 or more (not mechanical-only), becomes one proposal at most per 24 hours. The user is asked in
+  a dialog (Later, Approve, Reject); the gate runs in the background, a second dialog shows the result, and Accept
+  dispatches `/skill-improve --review=<id>` (`pi.sendUserMessage`), which asks again and is the only step that accepts
+  and reloads. The dispatch is sent only when the session is idle: otherwise it waits for `agent_settled` and checks
+  `isIdle()` again, and if the session is busy then the user gets a notice. During `--scan`, Accept runs the review inline
+  in the command and reloads once on an acceptance.
+- The lifecycle of a pattern: an accepted lesson closes its pattern (tombstone `accepted`) until a newer observation;
+  a lesson refused as `skill-drift`, or staged without `skillContentHash`, is closed with a `stale` tombstone and the pattern
+  reopens on a newer observation; "newer" is the session time (the episode's `startedAt`), not the ingest time; only the
+  latest proposal of a pattern is live (cycle reuse and `--review`); a retryable gate stages a fresh candidate, twice at
+  most per pattern, then offers probation; a proposal that cannot be prepared waits 24 h, 72 h and 7 d after the 1st,
+  2nd and 3rd-or-later failure (`prepare-failed` event); `observe.replay.allow` is read again before a bank is promoted
+  and before the gate (a skill taken off the list is retryable and then probation).
+- Prompt (a) shows the gate runs planned (arms x repetitions x items, at most), not how often the pattern was seen, and
+  states that the gate proves the lesson works on the cases, not that the pattern is real; a probation lesson is
+  labelled "not measured".
+- `--forget` erases the skill's observer events and confirmed signals, the content and gate runs of its candidates that
+  were never accepted, the bank copy and gate runs of the accepted ones, the drafts of generated banks, `trigger.focus` and
+  `diagnosis.summary` in its `decision.json` files (history records included) and `banks/<skill>.json` when the observer
+  generated it; it keeps user and skill-shipped banks, accepted lessons, `attempts.jsonl`, the verdicts and the `forget`
+  event, which is written first. A history record it cannot clear is listed in the report (`historySkipped`) and warned,
+  not thrown; `recordsCleared` counts the records nulled. A forget that lands while the cycle prepares a proposal stops it and discards what it made
+  (`discardSkillArtifacts`: artifacts only, no event rewrite, no lock).
+- Prompt (a) counts the observations it does not list as `+N more`, and the pattern line is the shortest summary of at
+  least 12 characters (the shortest one there is when none reaches it).
+- `src/json-reply.ts`: one reader of a model reply that must hold one JSON object, shared by the proposer, the observer's
+  judge, the bank generator and `--setup`.
+- `ensurePrivateDir` in `src/writer.ts`: the directories the observer owns are made after the perimeter check.
+- Settings `pi-simple-sri.observe.enabled`, `judgeModel`, `limits.judgeCallsPerDay` (default 20) and
+  `replay.allow` (default empty: only listed skills are ever replayed with real runs; the rest go on probation).
+- Probation: a lesson no gate measured, accepted by the user, recorded with its own status `probation`, counted
+  apart in `--metrics` and treated as intact by `--verify`. The decision surface `observer` records proposals from a
+  pattern.
+- Case banks for the observer: `<agent dir>/sri/banks/<skill>.json`, the legacy `case-bank.json` shipped by a skill
+  (read only), and a bank generated from at least two episodes of two sessions in one cwd, approved by the user
+  before the gate runs. A bank has an optional `provenance` (`user`, `skill-shipped`, `auto`).
+- Flags: `/skill-improve --setup`, `--scan [--dry-run [--limit=<n>]] [--since=YYYY-MM-DD]`, `--review[=<id>]` (the id
+  only as `--review=<id>`), `<skill> --note <text>` and `<skill> --forget`. `--limit` is the number of episodes a dry run
+  judges and is refused without `--dry-run`. The tool gains the action `record`: it takes `skill` and the note in `focus`
+  (at most 300 characters), appends a self-report and never edits a skill, gates or accepts; it answers `observe-disabled`
+  when the observer is off.
+- `--scan --dry-run` writes nothing to the store, asks before it spends and writes labeling records to
+  `<agent dir>/sri/labeling/`; `scripts/score-labels.ts` scores them (precision and recall of the judge, recall of
+  the prefilter).
+- `schemas/observe-event.schema.json`, and an optional `provenance` in `schemas/case-bank.schema.json`.
+
+### Fixed
+
+- B1: the `<skill>` block is no longer read as what the user typed in the evidence, the replay prompt and the signal
+  prompts (`splitSkillBlock`).
+- B2: the signal collector keys "same turn" and the signal id on the entry id of the user message and the ordinal of the
+  user prompt, not on pi's `turnIndex`, which restarts on every agent run.
+- B3: `signals.jsonl` is compacted oldest first, so the reader folds the newest lines, and the compaction keeps the lines
+  another session appended since its read, compared by content (a session that compacted first leaves a shorter file).
+- A case bank that exists and cannot be read is no longer treated as no bank: `resolveBank` answers `found`, `absent` or
+  `unusable`, and a generated bank no longer replaces an unreadable one.
+- An unusable bank no longer stops the observer cycle: that pattern is recorded as a failed preparation with the reason
+  (`prepare-failed`, 24 h, 72 h, 7 d backoff) and the next pattern is tried.
+- A resumed session whose episode grew is read again (the latest `episode` event per id wins); a judge that failed or was
+  skipped no longer consumes the episode; episodes of a forgotten skill are skipped before the prefilter and the judge.
+- `schemas/observe-event.schema.json`: proposals carry `skillContentHash` (`sha256:<64 hex>`) and the union has
+  `prepare-failed`; `schemas/decision.schema.json` and `src/gate/probation.ts` accept a case-bank record that concluded
+  `gate-abstained`/`no-improvement` as probation.
+- B4 (exclude bank from overlay): a `case-bank.json` shipped inside a skill is no longer copied into the arms of the
+  replay.
+- The text that promised that the tool registers a correction now says what happens: when
+  `pi-simple-sri.observe.enabled` is on, `record` stores the correction as a note for a later review, without editing any
+  skill or accepting anything; with the observer off nothing is stored.
+
+### Changed
+
+- `/skill-improve --verify`, `--metrics` and the lesson frontmatter understand `probation`.
+- The extension registers a `session_shutdown` handler that aborts the background cycle, and an `agent_settled` handler
+  that runs the review dispatch the cycle deferred.
+- `ensurePrivateDir` replaces `ensureStateDir` and the `mkdirSync` of the observer's wiring, so the observer no longer
+  creates directories outside the writer chokepoint.
+- Acceptance of an observer proposal compares the skill with the digest recorded at staging, never one computed at
+  accept time.
+
+### Documented
+
+- `--setup` rewrites `settings.json` as 2-space JSON, so other formatting is lost. Implicit attribution reads a session
+  in file order, not along the active branch, and is noisy. The spike behind the dispatch of `--review` ran on pi 1.5.2, not
+  on the 1.4.0 development dependency.
+- `--forget` cannot remove content that carries no `skill` field (an unconfirmed suspicion), and a line appended between
+  its last read and the rename is lost. After a stale close, the same lesson proposed again the same day is a failed
+  preparation (24 h backoff). The judge budget counts a persistently failing episode once. The dry-run sample is the most
+  recent N. `scripts/` is outside `tsconfig`. The gate proves the lesson works on the cases, not that the pattern is real.
+
 ## [0.0.2] - 2026-11-06
 
 ### Changed

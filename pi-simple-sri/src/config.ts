@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { SriConfigError } from "./errors.ts";
 import { SETTINGS_FILE } from "./names.ts";
+import { DEFAULT_JUDGE_CALLS_PER_DAY } from "./observe/types.ts";
+import type { ObserveConfig, ObserveModelRef } from "./observe/types.ts";
 import type { SriConfig } from "./types.ts";
 import { describe, isPlainObject, toErrorMessage } from "./values.ts";
 
@@ -71,12 +73,10 @@ export function parseSriConfig(raw: unknown): SriConfig {
   return parseSriConfigAt(raw);
 }
 
-// Reads the settings file given by the caller (the agent dir path comes from
-// getAgentDir() at the call site, never hardcoded here). A missing file is the
-// default config: every skill eligible except the name this package reserves (src/names.ts) and what
-// `deny` removes.
-export function readSriConfig(settingsPath: string): SriConfig {
-  if (!fs.existsSync(settingsPath)) return emptyConfig();
+// The parsed settings file, or undefined when there is none. Both readers below start here, so the two fail closed on the
+// same unreadable or invalid file with the same wording.
+function readSettingsJson(settingsPath: string): unknown {
+  if (!fs.existsSync(settingsPath)) return undefined;
 
   let text: string;
   try {
@@ -86,12 +86,20 @@ export function readSriConfig(settingsPath: string): SriConfig {
   }
 
   // Strict JSON, no JSONC: pi parses settings.json with JSON.parse as well (E3).
-  let raw: unknown;
   try {
-    raw = JSON.parse(text);
+    return JSON.parse(text);
   } catch (error) {
     throw fail(`invalid JSON: ${toErrorMessage(error)}`, settingsPath);
   }
+}
+
+// Reads the settings file given by the caller (the agent dir path comes from
+// getAgentDir() at the call site, never hardcoded here). A missing file is the
+// default config: every skill eligible except the name this package reserves (src/names.ts) and what
+// `deny` removes.
+export function readSriConfig(settingsPath: string): SriConfig {
+  const raw = readSettingsJson(settingsPath);
+  if (raw === undefined) return emptyConfig();
 
   return parseSriConfigAt(raw, settingsPath);
 }
@@ -106,5 +114,87 @@ export type ConfigReader = (settingsPath: string) => SriConfig;
 // acceptance of the command -- ask here instead, so a run cannot read the settings of one directory while its gate reads the
 // settings of another. The reader is a parameter because the seam a test replaces is the reader, and not the join.
 export function readSriConfigOf(agentDir: string, read: ConfigReader = readSriConfig): SriConfig {
+  return read(path.join(agentDir, SETTINGS_FILE));
+}
+
+// The observer's settings, `pi-simple-sri.observe`. They are parsed apart from the skills lists: a broken `observe` must
+// not take eligibility down with it, and the other way round. Off by default: nothing is observed until the user opts in.
+function emptyObserveConfig(): ObserveConfig {
+  return { enabled: false, judgeModel: null, judgeCallsPerDay: DEFAULT_JUDGE_CALLS_PER_DAY, replayAllow: [] };
+}
+
+// "provider/id", split at the first slash: the id of a model may hold slashes of its own.
+function readJudgeModel(value: unknown, label: string, settingsPath?: string): ObserveModelRef {
+  const slash = typeof value === "string" ? value.indexOf("/") : -1;
+  if (typeof value !== "string" || slash < 1 || slash === value.length - 1) {
+    throw fail(`${label} must be "provider/id", got ${describe(value)}`, settingsPath);
+  }
+  return { provider: value.slice(0, slash), id: value.slice(slash + 1) };
+}
+
+function readObjectAt(parent: Record<string, unknown>, key: string, label: string, settingsPath?: string): Record<string, unknown> | undefined {
+  const value = parent[key];
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) {
+    throw fail(`${label} must be an object, got ${describe(value)}`, settingsPath);
+  }
+  return value;
+}
+
+function parseObserveConfigAt(raw: unknown, settingsPath?: string): ObserveConfig {
+  const config = emptyObserveConfig();
+  if (!isPlainObject(raw)) {
+    throw fail(`settings must be a JSON object, got ${describe(raw)}`, settingsPath);
+  }
+
+  const section = readObjectAt(raw, SETTINGS_KEY, `"${SETTINGS_KEY}"`, settingsPath);
+  const observePath = `${SETTINGS_KEY}.observe`;
+  const observe = section === undefined ? undefined : readObjectAt(section, "observe", `"${observePath}"`, settingsPath);
+  if (observe === undefined) return config;
+
+  if (observe.enabled !== undefined) {
+    if (typeof observe.enabled !== "boolean") {
+      throw fail(`"${observePath}.enabled" must be a boolean, got ${describe(observe.enabled)}`, settingsPath);
+    }
+    config.enabled = observe.enabled;
+  }
+
+  if (observe.judgeModel !== undefined) {
+    config.judgeModel = readJudgeModel(observe.judgeModel, `"${observePath}.judgeModel"`, settingsPath);
+  }
+
+  const limits = readObjectAt(observe, "limits", `"${observePath}.limits"`, settingsPath);
+  const calls = limits?.judgeCallsPerDay;
+  if (calls !== undefined) {
+    if (typeof calls !== "number" || !Number.isInteger(calls) || calls < 0) {
+      throw fail(`"${observePath}.limits.judgeCallsPerDay" must be a non-negative integer, got ${describe(calls)}`, settingsPath);
+    }
+    config.judgeCallsPerDay = calls;
+  }
+
+  const replay = readObjectAt(observe, "replay", `"${observePath}.replay"`, settingsPath);
+  if (replay?.allow !== undefined) {
+    config.replayAllow = readStringList(replay.allow, `"${observePath}.replay.allow"`, settingsPath);
+  }
+
+  return config;
+}
+
+// Validates an already-parsed settings object; the same contract as parseSriConfig for the observer's keys.
+export function parseObserveConfig(raw: unknown): ObserveConfig {
+  return parseObserveConfigAt(raw);
+}
+
+export function readObserveConfig(settingsPath: string): ObserveConfig {
+  const raw = readSettingsJson(settingsPath);
+  if (raw === undefined) return emptyObserveConfig();
+
+  return parseObserveConfigAt(raw, settingsPath);
+}
+
+export type ObserveConfigReader = (settingsPath: string) => ObserveConfig;
+
+// The observer's settings of one agent directory; the join and the reader seam are the ones of readSriConfigOf.
+export function readObserveConfigOf(agentDir: string, read: ObserveConfigReader = readObserveConfig): ObserveConfig {
   return read(path.join(agentDir, SETTINGS_FILE));
 }

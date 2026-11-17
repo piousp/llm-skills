@@ -19,7 +19,7 @@
           "const": "raised"
         },
         "id": {
-          "description": "\"sg-\" plus the first 8 hex of sha256(JSON.stringify([kind, sessionId, turnIndex, subject])). The prefix is part of the spelling because the id is quoted in a command and is read apart from the file it came from.",
+          "description": "\"sg-\" plus the first 8 hex of sha256(JSON.stringify([kind, sessionId, anchorEntryId, subject])), where anchorEntryId is the entry of the user message the turn answers (the ordinal of that prompt, as a number, when the branch had no such message). The prefix is part of the spelling because the id is quoted in a command and is read apart from the file it came from.",
           "type": "string",
           "pattern": "^sg-[0-9a-f]{8}$"
         },
@@ -38,14 +38,15 @@
           "minLength": 1
         },
         "turnIndex": {
-          "description": "The turn of the session the suspicion points at: the turn of the rewrite, or the turn of the repeated prompt.",
+          "description": "The ordinal, counted from 0, of the user prompt the suspicion points at among the prompts of the branch: the prompt the rewrite answers, or the repeated prompt itself. It is not pi's own turn index, which starts again at every agent run and would name two prompts with one number.",
           "type": "integer",
           "minimum": 0
         },
         "subject": {
-          "description": "What the suspicion is about: the rewritten path, or the significant tokens of the repeated prompt joined by single spaces. It is the material of the id, so it is the field a reader compares.",
+          "description": "What the suspicion is about: the rewritten path, or the significant tokens of the repeated prompt joined by single spaces, cut at the length of an evidence excerpt (src/evidence.ts). It is the material of the id, so it is the field a reader compares.",
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 200
         },
         "excerpt": {
           "description": "The concrete fragment, at the length an evidence excerpt is kept (src/evidence.ts): the turn and the path of a rewrite, or the prompt as the user wrote it.",
@@ -54,8 +55,9 @@
           "maxLength": 200
         },
         "prompt": {
-          "description": "The prompt of the user of the turn the suspicion points at, as it was written. Absent prompts are spelled with the empty string rather than by dropping the field, so the field is always there and a reader never guesses whether its absence meant \"no prompt\" or \"an older writer\".",
-          "type": "string"
+          "description": "The prompt of the user of the turn the suspicion points at, as the user wrote it -- without the <skill> block a skill invocation carries -- and cut at the length of an evidence excerpt. Absent prompts are spelled with the empty string rather than by dropping the field, so the field is always there and a reader never guesses whether its absence meant \"no prompt\" or \"an older writer\".",
+          "type": "string",
+          "maxLength": 200
         },
         "model": {
           "description": "\"provider/model\" of the turn, when the turn or the session names one.",

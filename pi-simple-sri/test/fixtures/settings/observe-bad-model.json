@@ -1,0 +1,5 @@
+{
+  "pi-simple-sri": {
+    "observe": { "enabled": true, "judgeModel": "claude-haiku-4-5" }
+  }
+}

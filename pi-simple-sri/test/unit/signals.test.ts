@@ -5,6 +5,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage, ToolCall, Usage } from "@earendil-works/pi-ai";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { MAX_EXCERPT_CODE_POINTS } from "../../src/evidence.ts";
 import { SIGNALS_FILE } from "../../src/names.ts";
 import {
   createSignalCollector,
@@ -16,6 +19,7 @@ import {
   SIGNAL_FORMAT,
   SIGNAL_KINDS,
   TRACKED_PATHS,
+  turnObservationOf,
   type RaisedSignalLine,
   type SignalCollector,
   type SignalState,
@@ -23,6 +27,7 @@ import {
   type WriteCall,
 } from "../../src/signals.ts";
 import { stateDir } from "../../src/write-base.ts";
+import { skillBlockText } from "./observe-fixtures.ts";
 
 // The collector of silent signals (M3, S5, Q25). Two halves are tested apart, the way the module is split: the detection is
 // a function of an observation and a state, and the collector is the half that names a suspicion, remembers it and writes
@@ -313,8 +318,9 @@ test("hydrate folds the file: a consumed id is not pending and an unknown line i
 });
 
 // The fold of the file answers `open` and `known` together: the file is rewritten past its ceiling with the last event of
-// every id, newest first, and every id survives the rewrite.
-test("hydrate rewrites a file over its ceiling with the last event of every id", async (t) => {
+// every id, oldest first (B3: the reader folds from the tail, so the tail has to be the newest end), and every id survives
+// the rewrite.
+test("hydrate rewrites a file over its ceiling with the last event of every id, oldest first", async (t) => {
   const fixture = createFixture(t);
   const ids = 20;
   const rounds = 7;
@@ -340,12 +346,94 @@ test("hydrate rewrites a file over its ceiling with the last event of every id",
 
   const rewritten = linesOf(signalsPath(fixture));
   assert.equal(rewritten.length, ids);
-  // Newest first, one line per id: the id of the last line of the file comes first and the one of its first line last.
-  assert.equal(JSON.parse(rewritten[0]).id, `sg-${(ids - 1).toString(16).padStart(8, "0")}`);
-  assert.equal(JSON.parse(rewritten.at(-1) ?? "{}").id, "sg-00000000");
-  // The last event of every id is `raised`, so all of them are open and the fold keeps no more than OPEN_CAP.
+  // Oldest first, one line per id: the id whose last event was the oldest is the first line, the newest one is the last.
+  assert.equal(JSON.parse(rewritten[0]).id, "sg-00000000");
+  assert.equal(JSON.parse(rewritten.at(-1) ?? "{}").id, `sg-${(ids - 1).toString(16).padStart(8, "0")}`);
+  // The last event of every id is `raised`, so all of them are open and the fold keeps no more than OPEN_CAP, newest first.
   assert.equal(collector.pending().length, OPEN_CAP);
   assert.equal(collector.pending()[0].id, `sg-${(ids - 1).toString(16).padStart(8, "0")}`);
+
+  // The point of the order: a session that reads the rewritten file sees the same open suspicions, in the same order, as the
+  // one that rewrote it. A file written newest first would have made the next fold take the oldest ones for the newest.
+  const next = await hydratedCollector(fixture);
+  assert.deepEqual(
+    next.pending().map((open) => open.id),
+    collector.pending().map((open) => open.id),
+  );
+});
+
+// B3: the ceiling is of lines, and the rewrite keeps the newest ones: ids that outnumber the ceiling lose the oldest, and the
+// ones that stay are the last MAX_SIGNAL_LINES of the file, still in chronological order.
+test("hydrate keeps the newest 128 ids when the file holds more, in chronological order", async (t) => {
+  const fixture = createFixture(t);
+  const total = 140;
+  const seeded: RaisedSignalLine[] = [];
+  for (let index = 0; index < total; index++) {
+    seeded.push(raisedLine({ id: `sg-${index.toString(16).padStart(8, "0")}`, subject: `/work/file-${index}.md` }));
+  }
+  seedSignalsFile(fixture, seeded);
+
+  const collector = await hydratedCollector(fixture);
+
+  const rewritten = linesOf(signalsPath(fixture)).map((line) => JSON.parse(line).id);
+  assert.equal(rewritten.length, 128);
+  assert.equal(rewritten[0], `sg-${(total - 128).toString(16).padStart(8, "0")}`);
+  assert.equal(rewritten.at(-1), `sg-${(total - 1).toString(16).padStart(8, "0")}`);
+  assert.equal(collector.pending()[0].id, `sg-${(total - 1).toString(16).padStart(8, "0")}`);
+});
+
+function idOf(index: number): string {
+  return `sg-${index.toString(16).padStart(8, "0")}`;
+}
+
+// B3 under concurrency: another session appends between this session's read and its rename. The hook runs exactly there.
+test("compaction carries a line another session appended between the read and the rename, in order", async (t) => {
+  const fixture = createFixture(t);
+  const total = 140;
+  seedSignalsFile(
+    fixture,
+    Array.from({ length: total }, (_, index) => raisedLine({ id: idOf(index), subject: `/work/file-${index}.md` })),
+  );
+  const appendedId = idOf(0xabc);
+  const collector = createSignalCollector(() => fixture.base, {
+    afterRead: () => {
+      fs.appendFileSync(signalsPath(fixture), `${JSON.stringify(raisedLine({ id: appendedId }))}\n`, "utf8");
+    },
+  });
+  await collector.hydrate(fixture.base, SESSION);
+
+  const ids = linesOf(signalsPath(fixture)).map((line) => JSON.parse(line).id);
+  // The newest 128 of what was read, oldest first, and the concurrent line after them.
+  assert.equal(ids.length, 129);
+  assert.deepEqual(ids.slice(0, 128), Array.from({ length: 128 }, (_, index) => idOf(total - 128 + index)));
+  assert.equal(ids[128], appendedId);
+});
+
+// Another session compacted first: the file is shorter than the number of lines this session read, and what it appended after
+// that compaction must not be skipped by a count of lines.
+test("compaction carries lines appended after another session compacted the file first", async (t) => {
+  const fixture = createFixture(t);
+  const total = 140;
+  seedSignalsFile(
+    fixture,
+    Array.from({ length: total }, (_, index) => raisedLine({ id: idOf(index), subject: `/work/file-${index}.md` })),
+  );
+  const afterCompactionIds = [idOf(0xaaa), idOf(0xbbb)];
+  const collector = createSignalCollector(() => fixture.base, {
+    afterRead: () => {
+      const kept = Array.from({ length: 128 }, (_, index) =>
+        raisedLine({ id: idOf(total - 128 + index), subject: `/work/file-${total - 128 + index}.md` }),
+      );
+      const appended = afterCompactionIds.map((id) => raisedLine({ id }));
+      fs.writeFileSync(signalsPath(fixture), [...kept, ...appended].map((line) => `${JSON.stringify(line)}\n`).join(""), "utf8");
+    },
+  });
+  await collector.hydrate(fixture.base, SESSION);
+
+  const ids = linesOf(signalsPath(fixture)).map((line) => JSON.parse(line).id);
+  assert.equal(ids.length, 130);
+  assert.deepEqual(ids.slice(128), afterCompactionIds);
+  assert.equal(new Set(ids).size, 130);
 });
 
 test("take consumes the suspicion, records it and a second take does not find it", async (t) => {
@@ -416,4 +504,207 @@ test("detectSignals does not modify the state it is given", () => {
 test("SIGNAL_KINDS declares the two kinds of the format", () => {
   assert.deepEqual([...SIGNAL_KINDS], ["rewritten-draft", "repeated-request"]);
   assert.equal(SIGNAL_FORMAT, "pi-simple-sri/signal@1");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// B1 (the prompt is what the user typed) and B2 (the turn is the user prompt, not pi's turn counter)
+// ---------------------------------------------------------------------------------------------------------------------
+
+const USAGE: Usage = {
+  input: 1,
+  output: 1,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 2,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+const SOURCES = { cwd: "/work", model: undefined };
+function invocation(args?: string): string {
+  return skillBlockText("pdf-tools", "/skills/pdf-tools/SKILL.md", "SKILL BODY", args);
+}
+
+function userEntry(id: string, text: string): SessionEntry {
+  return {
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2026-11-02T14:00:00.000Z",
+    message: { role: "user", content: text, timestamp: 0 },
+  };
+}
+
+function assistantMessage(content: ToolCall[]): AssistantMessage {
+  return {
+    role: "assistant",
+    content,
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet-4-5",
+    usage: USAGE,
+    stopReason: "toolUse",
+    timestamp: 0,
+  };
+}
+
+function assistantEntry(id: string, message: AssistantMessage): SessionEntry {
+  return { type: "message", id, parentId: null, timestamp: "2026-11-02T14:00:01.000Z", message };
+}
+
+function writeMessage(callId: string, target: string, content: string): AssistantMessage {
+  return assistantMessage([{ type: "toolCall", id: callId, name: "write", arguments: { path: target, content } }]);
+}
+
+function expectedAnchoredId(kind: string, anchorEntryId: string, subject: string): string {
+  const material = JSON.stringify([kind, SESSION, anchorEntryId, subject]);
+  return `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`;
+}
+
+test("turnObservationOf: the prompt of a skill invocation is what follows the <skill> block, not the block", () => {
+  const typed = "extract the merged-cell table from report.pdf";
+  const branch = [userEntry("u1", invocation(typed))];
+
+  const observed = turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, branch, SOURCES);
+
+  assert.equal(observed.userPrompt, typed);
+  assert.equal(observed.userPrompt?.includes("SKILL BODY"), false);
+});
+
+test("turnObservationOf: a message that is only the <skill> block is not a prompt", () => {
+  const branch = [userEntry("u1", invocation())];
+
+  const observed = turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, branch, SOURCES);
+
+  assert.equal(observed.userPrompt, null);
+  assert.equal(observed.anchorEntryId, undefined);
+});
+
+// The block is the skill's own text: it repeats at every invocation, so a collector that read it as a prompt would flag the
+// second invocation of any skill as a repeated request.
+test("a second invocation of a skill with a different request is not a repeated request", async (t) => {
+  const fixture = createFixture(t);
+  const collector = await hydratedCollector(fixture);
+  const first = [userEntry("u1", invocation("extract the table from report.pdf"))];
+  const second = [
+    ...first,
+    assistantEntry("a1", writeMessage("c1", NOTES, "one")),
+    userEntry("u2", invocation("summarize the invoice from march")),
+  ];
+
+  await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, first, SOURCES));
+  const raised = await collector.observe(
+    turnObservationOf({ turnIndex: 0, message: writeMessage("c2", "/work/other.md", "two") }, second, SOURCES),
+  );
+
+  assert.deepEqual(raised, []);
+});
+
+test("turnObservationOf: the index is the ordinal of the user prompt in the branch, whatever pi's turnIndex says", () => {
+  const branch = [
+    userEntry("u1", "write the notes of the meeting"),
+    assistantEntry("a1", writeMessage("c1", NOTES, "one")),
+    userEntry("u2", "now rewrite them as a list"),
+    assistantEntry("a2", writeMessage("c2", NOTES, "two")),
+    userEntry("u3", "and add the decisions"),
+  ];
+
+  // pi starts its turn counter again at every agent run: the same value for three different prompts.
+  const first = turnObservationOf({ turnIndex: 0, message: writeMessage("c", NOTES, "x") }, branch.slice(0, 1), SOURCES);
+  const second = turnObservationOf({ turnIndex: 0, message: writeMessage("c", NOTES, "x") }, branch.slice(0, 3), SOURCES);
+  const third = turnObservationOf({ turnIndex: 0, message: writeMessage("c", NOTES, "x") }, branch, SOURCES);
+
+  assert.deepEqual([first.turnIndex, second.turnIndex, third.turnIndex], [0, 1, 2]);
+  assert.deepEqual([first.anchorEntryId, second.anchorEntryId, third.anchorEntryId], ["u1", "u2", "u3"]);
+});
+
+// The case B2 exists for: two prompts, and pi's counter at 0 in both runs. Keyed on the counter, the rewrite under the second
+// prompt was read as the same turn and raised nothing.
+test("a rewrite under a later prompt raises a rewritten-draft although pi's turn index restarted", async (t) => {
+  const fixture = createFixture(t);
+  const collector = await hydratedCollector(fixture);
+  const firstBranch = [userEntry("u1", "write the notes of the meeting")];
+  const secondBranch = [
+    ...firstBranch,
+    assistantEntry("a1", writeMessage("c1", NOTES, "one")),
+    userEntry("u2", "rewrite them as a bullet list"),
+  ];
+
+  await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, firstBranch, SOURCES));
+  const raised = await collector.observe(
+    turnObservationOf({ turnIndex: 0, message: writeMessage("c2", NOTES, "two") }, secondBranch, SOURCES),
+  );
+
+  assert.equal(raised.length, 1);
+  assert.equal(raised[0].kind, "rewritten-draft");
+  assert.equal(raised[0].turnIndex, 1);
+  assert.equal(raised[0].id, expectedAnchoredId("rewritten-draft", "u2", NOTES));
+});
+
+// The other half: several turns under one prompt are the model refining its draft, and pi's counter says 0, 1, 2 inside one
+// run. The anchor is the same entry for all of them.
+test("a rewrite under the same prompt raises nothing, in every turn of the run", async (t) => {
+  const fixture = createFixture(t);
+  const collector = await hydratedCollector(fixture);
+  const branch = [userEntry("u1", "write the notes of the meeting")];
+
+  const raised = [
+    ...(await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, branch, SOURCES))),
+    ...(await collector.observe(turnObservationOf({ turnIndex: 1, message: writeMessage("c2", NOTES, "two") }, branch, SOURCES))),
+    ...(await collector.observe(turnObservationOf({ turnIndex: 2, message: writeMessage("c3", NOTES, "three") }, branch, SOURCES))),
+  ];
+
+  assert.deepEqual(raised, []);
+});
+
+// A steering message is a user message: the turn that follows it answers a new prompt, so a rewrite after it is flagged.
+test("a steering message opens a new prompt: a rewrite after it is flagged", async (t) => {
+  const fixture = createFixture(t);
+  const collector = await hydratedCollector(fixture);
+  const before = [userEntry("u1", "write the notes of the meeting")];
+  const after = [...before, assistantEntry("a1", writeMessage("c1", NOTES, "one")), userEntry("u-steer", "no, use a table")];
+
+  await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "one") }, before, SOURCES));
+  const raised = await collector.observe(
+    turnObservationOf({ turnIndex: 1, message: writeMessage("c2", NOTES, "two") }, after, SOURCES),
+  );
+
+  assert.equal(raised.length, 1);
+  assert.equal(raised[0].id, expectedAnchoredId("rewritten-draft", "u-steer", NOTES));
+});
+
+test("the id of a suspicion hashes the anchor entry: the same rewrite under another entry is another suspicion", async (t) => {
+  const first = createFixture(t);
+  const second = createFixture(t);
+  const idUnder = async (fixture: Fixture, anchor: string): Promise<string> => {
+    const collector = await hydratedCollector(fixture);
+    const branch = [userEntry("u0", "start"), assistantEntry("a0", writeMessage("c0", NOTES, "one")), userEntry(anchor, "again please")];
+    await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c0", NOTES, "one") }, branch.slice(0, 1), SOURCES));
+    const raised = await collector.observe(turnObservationOf({ turnIndex: 0, message: writeMessage("c1", NOTES, "two") }, branch, SOURCES));
+    return raised[0].id;
+  };
+
+  assert.notEqual(await idUnder(first, "u-a"), await idUnder(second, "u-b"));
+});
+
+// B1: what is persisted is cut at the cap of an excerpt, the subject of a repeated request included, and the id is taken
+// over the cut subject so the next session computes the same one.
+test("the prompt and the subject of a suspicion are cut at MAX_EXCERPT_CODE_POINTS when they are persisted", async (t) => {
+  const fixture = createFixture(t);
+  const collector = await hydratedCollector(fixture);
+  const words = Array.from({ length: 60 }, (_, index) => `distinctword${index}`);
+  const prompt = `please ${words.join(" ")}`;
+  const longer = `${prompt} and then something more`;
+
+  await collector.observe(observation(0, { userPrompt: prompt }));
+  const raised = await collector.observe(observation(1, { userPrompt: longer }));
+
+  assert.equal(raised.length, 1);
+  const [suspicion] = raised;
+  assert.equal(suspicion.kind, "repeated-request");
+  assert.equal([...suspicion.prompt].length, MAX_EXCERPT_CODE_POINTS);
+  assert.equal([...suspicion.subject].length, MAX_EXCERPT_CODE_POINTS);
+  assert.equal(suspicion.id, expectedId("repeated-request", 1, suspicion.subject));
+
+  const line = JSON.parse(linesOf(signalsPath(fixture))[0]);
+  assert.equal([...line.prompt].length, MAX_EXCERPT_CODE_POINTS);
+  assert.equal([...line.subject].length, MAX_EXCERPT_CODE_POINTS);
 });

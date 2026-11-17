@@ -12,6 +12,10 @@ Working notes for this package. Not part of the published documentation.
 | `src/case-bank.ts` | The neutral bank of cases: the versioned format, its two profiles and the one reader of the file |
 | `src/checks.ts` | The mechanical predicate of the fourth class: the four kinds of check, and the one place a check is executed |
 | `src/gate/` | The paired replay gate: execution contracts, expectation evaluator, arm overlays, replay runner, budget, scorer, the two flows, judge, acceptance |
+| `src/observe/` | The observer: deferred detection of corrections across sessions, the store, the patterns, the proposal and the review. See [The observer](#the-observer) |
+| `src/skill-block.ts` | `splitSkillBlock`: the one place a `<skill>` block is told apart from what the user typed |
+| `src/json-reply.ts` | The shared reading of a model reply that has to hold one JSON object (`firstObjectWhere`, `scanObjects`): used by the proposer, the observer's judge, the bank generator and `--setup` |
+| `scripts/` | `score-labels.ts`, run by hand over the labeling files of a dry-run. Not published, not covered by `tsconfig` |
 | `src/vitality.ts` | The force of an accepted lesson: the event the acceptance writes, and the two predicates the rule of retirement is made of, shared by the metrics and the check of an accepted lesson |
 | `schemas/` | Versioned JSON schemas: `decision.json`, the case bank, `retirement.json` and the lines of `signals.jsonl`, validated by tests |
 | `skills/` | The skill this package publishes: the manual, its `references/` and the two case-bank templates. Ships in the tarball because `files` names it, and pi discovers it because `pi.skills` declares it |
@@ -101,7 +105,9 @@ quantiles.
   refuses to append after a tail that does not end with a newline, so every later append of that
   installation fails the same way until somebody opens the index and looks. That is deliberate -- a line
   glued onto a truncated one is an index nobody can parse, and a writer that quietly repaired the file
-  would bury the damage instead of reporting it.
+  would bury the damage instead of reporting it. The one lock of the package, `state/observe.lock`, is not an
+  exception to this reasoning: it guards a scan and a forget, which read a whole file and write it back, and no
+  append ever takes it ([The observer](#the-observer)).
 - The gate measures copies. Both arms are built inside the candidate directory of staging and the
   replay is pointed at them, so a gate that passes and an acceptance that fails leave the skill exactly
   as it was.
@@ -779,6 +785,269 @@ and is not remembered twice (`:198`, `:387`). The consequence is written into th
 user message spells identically is read as the message it repeats and raises nothing, because the tokens cannot
 tell "asked again on purpose" from "the loop went on", and guessing would raise a suspicion at every turn of a
 loop the agent runs under one message.
+
+### The observer
+
+`src/observe/` detects corrections after the fact, across sessions, and proposes a lesson for the pattern they
+form. It is opt-in (`pi-simple-sri.observe.enabled`, default false, read by `readObserveConfigOf` in
+`src/config.ts`, apart from the skills lists so a broken `observe` cannot take eligibility down). It spends no model
+call per turn: the contract of the collector of signals below still holds, and the judge is deferred.
+
+**Modules**, one responsibility each:
+
+| Module | What it does |
+|---|---|
+| `types.ts` | Constants, the closed union of events, the id function (`observeId`: prefix plus 12 hex of sha256 of the JSON of the parts) and the shapes the others hand to each other. `schemas/observe-event.schema.json` mirrors the union, and a test keeps them from drifting |
+| `session-file.ts`, `episodes.ts` | Read-only access to the session files (`sessionsRootOf`, grouped or flat layout, never `run-*`), reading to the last newline through pi's parser (old formats migrate there), and segmentation into episodes |
+| `prefilter.ts`, `redact.ts` | The deterministic flags (tool error, correction lexicon EN/ES over user-authored text, rewritten draft, repeated request) and the secret redaction |
+| `judge.ts` | The prompt, the reading of the answer (through `src/json-reply.ts`), `providerGate` and the cost estimate. The model arrives as a `CompleteFn` |
+| `store.ts`, `cursor.ts`, `lock.ts`, `forget.ts` | The tolerant reader and the fold of `observe.jsonl`, the cursor, the scan lock and `--forget` |
+| `beta.ts`, `patterns.ts` | The posterior, decay, grouping findings into patterns and the threshold |
+| `banks.ts`, `auto-bank.ts` | Which bank measures a skill (`resolveBank` answers `found`, `absent` or `unusable`) and the generator of a bank from episodes |
+| `review.ts`, `outcome.ts`, `prompts.ts` | `reviewProposal`, the classification of a gate result, the dialogs and `dispatchReview` |
+| `setup.ts` | `--setup`: the side-effect scanner and the write of `replay.allow` |
+| `cycle.ts`, `labeling.ts` | The sequencing of one cycle, and the labeled records of a dry-run |
+| `wire.ts` | Binds the real collaborators to `CycleDeps` and `ReviewDeps`, and decides when a cycle may start |
+
+**The store.** `state/observe.jsonl` is append-only, one event per line, written by `appendObserveLine`
+(`src/writer.ts`) with mode 0600, in the order of the calls. The union is closed: `opt-in`, `episode`, `judged`,
+`observation`, `proposal`, `prepare-failed`, `prompt`, `gate-outcome`, `tombstone` and `forget`. There is no stored
+pattern: a pattern is the set of observations that share a `patternId`, and the id of a new one is derived from its first
+observation. A proposal id is `observeId("pr", [patternId, candidateHash, stagingPath])`, so every staged candidate has its
+own proposal, and a proposal records the `skillContentHash` (`sha256:<hex>` of the `SKILL.md` at staging). An
+episode holds pointers into a session file (`sessionFile`, entry ids) and no content; an observation holds a redacted
+summary of at most 300 characters. Clean episodes are stored too, because they count against the pattern.
+`readObserveLog` tolerates what it cannot use as the signals reader does: a line that is not JSON, of another format or
+type, or without the fields the fold reads is skipped, and a truncated tail is dropped.
+
+`foldObserveState(events, now)` is pure and applies, in order: dedupe by id (a fork shares the entry ids of the
+prefix it copied, so a rescan sees the same episode twice; the spike confirmed ids survive a fork for the shared
+prefix only; the first one wins, except for an episode, where the latest `episode` event per id wins because its end
+moves when the session grows), drop everything that started before `optInAt` (a note or a self-report is never cut by
+it: the user or the skill wrote it on purpose), drop everything of a skill at or before its `forget` (compared with the
+time of the session, so an old session scanned again after the forget does not bring the skill back), and drop
+anything older than 365 days. The time of an observation is its episode's `startedAt`, and its own `at` when it has no
+episode. Proposals, tombstones and prepare failures are compared by their own `at`. A `judged` event is a duplicate of
+another with the same episode, model and outcome, which is why the daily budget counts a persistently failing episode
+once, however often it is retried. Decay is not applied there: it is the reader's job, at read time, with a 90-day
+half-life.
+
+**The lock, and why it is an exception to the append rule.** The log is appended with `O_APPEND` and no lock, as
+the index is. `withScanLock` (`lock.ts`) guards only the two operations that read a whole file and write it back: the
+scan and `forgetSkill`. It is `state/observe.lock`, claimed with `createExclusiveFile` and kept alive by a
+heartbeat every 60 seconds; a lock not written for 5 minutes is stale and the next caller takes it over, but only the
+very lock it judged stale. Each holder carries a token, checks it before it beats and before it releases, and `fn`
+receives a signal that aborts when the lock was lost. The gate and the dialogs never run under the lock; the lock
+is the one thing the package takes besides the file mutation queue, and it guards the rewrites, never an append, so the
+rule of the index (O_APPEND, one write per line, no lock) is intact for the three append-only files.
+
+**`--forget`** (`forget.ts`, `forgetSkill`, under the lock) erases:
+
+- from `observe.jsonl`: the `episode`, `observation`, `proposal`, `prepare-failed` and `tombstone` events of the skill, the
+  `judged` of those episodes and the `prompt` and `gate-outcome` of those proposals; a line that is not JSON is dropped
+  too, because it may hold what is being forgotten;
+- from `signals.jsonl`: every line of an id that has a `consumed` line naming the skill;
+- the content of every staged candidate of the skill that was never accepted (`eraseStagingContent`: lessons and bank
+  copy) and its `gate/runs/`; of the accepted ones only the bank copy (`eraseStagingBank`) and `gate/runs/`; the drafts in
+  `staging/observer-banks/<skill>-<12 hex>` (matched whole, so `demo` never takes `demo-skill`), and `banks/<skill>.json`
+  only when its provenance is `auto`;
+- `trigger.focus` and `diagnosis.summary` are set to null in the `decision.json` of every candidate of the skill, accepted
+  or not, and in the record of each acceptance in `<skill>/.history`, because they name the pattern.
+
+It keeps `attempts.jsonl`, `.history`, the lessons of accepted candidates, the verdicts of every `decision.json`, banks the
+user wrote or the skill ships (it reports them), a bank it cannot read (not known to be generated) and every `forget`
+event. The `forget {skill, at}` event is appended FIRST, right after taking the lock, so a failure in the rewrites or the
+artifacts never leaves a half-forgotten skill without its cutoff. A history record that cannot be cleared (ledger path
+outside the `.history` of the skill, missing directory, moved skill, unreadable record) is not thrown: its path goes to
+`ForgetReport.historySkipped` and the command warns; a path that escapes the perimeter is never followed. `recordsCleared`
+counts the `decision.json` files nulled (staging and history). The artifact half is `discardSkillArtifacts(base, skill)`, which `forgetSkill`
+calls and which the cycle binds as `CycleDeps.discardArtifacts`: it touches no event and takes no lock, so a cycle that
+already holds the scan lock can call it. `rewriteFile` reads the file, reads it again right before the write and plans
+again if it changed, so a line appended in between is not dropped; the instant between that second read and the
+rename is not covered (see the limits), and appends take no lock. A file rewritten by a forget ends with mode 0600. Every
+directory the observer owns is made by `ensurePrivateDir(dir, base)` (`src/writer.ts`), which checks the perimeter before
+the mkdir. It replaced `ensureStateDir` (which created the state directory outside the chokepoint) and the three
+`mkdirSync` of `wire.ts`: `cursor.ts`, `lock.ts` and `wire.ts` call it, and `appendObserveLine`, `writePrivateFile` and
+`createExclusiveFile` create their directory through it, so no `mkdirSync` of the observer bypasses the chokepoint.
+
+**The cursor** (`state/observe-cursor.json`, keyed by the id of the session header) only decides whether a file is read
+again, by path, size and mtime. It holds no offset: a file is always parsed to its last newline and the fold dedupes
+what was seen. A file touched less than 30 minutes ago, and the session in progress, are skipped until a later start. A
+cursor that is lost or damaged costs a re-read and nothing else. `cursorEntryOf` stores the hash of the first line; `planScan`
+does not compare it.
+
+**One cycle** (`runObserveCycle`, `cycle.ts`) does no I/O of its own; every collaborator arrives in `CycleDeps`.
+Modes are `background`, `scan` and `dry-run`.
+
+1. Under the lock: write `opt-in` if there is none, plan the scan, read each file, segment, and for each episode
+   whose stored end (`endEntryId`) differs from the one just read (a resumed session grew, so it is processed again;
+   the latest `episode` event per id wins in the fold): skip it if the skill was forgotten at or after the episode's
+   `startedAt` (before the prefilter and before any judge call), prefilter, judge within the daily budget and the
+   provider gate, assign patterns, append the events of the file and then advance its cursor. A judge that failed or
+   was skipped does not consume the episode: nothing marks it done, its file does not advance the cursor, and a later
+   start judges it again (a failed call is recorded in `judged` and counts against the budget; a skipped one never
+   happened and does not). A file with an episode left unjudged (budget, provider mismatch, abort, failed or skipped
+   judge) does not advance its cursor.
+2. Outside the lock: take the proposable patterns in order (posterior, then weight, then id) until one yields a
+   proposal; a pattern that could not be prepared, or whose lesson is already in the skill, does not hold back the next.
+3. Prepare. A skill not in `replay.allow` is on probation. Otherwise `resolveBank` is asked: `found` gates against it,
+   `absent` falls through to generation, and `unusable` (a bank that exists and cannot be read, in `banks/` or shipped
+   by the skill) makes `wire.ts` throw the "exists and cannot be used as a bank" error instead of generating a bank over
+   it. The cycle catches that throw for the pattern: it is a failed preparation (`prepare-failed` with the error as
+   reason), the next pattern is tried, and nothing is generated over the file. Without a bank, `selectBankEpisodes` needs 2 cases from 2 sessions in one cwd (the cwd of the session wins), then
+   the generator writes a draft in staging before the lesson exists, and the proposer never sees its checks. With too few
+   cases the pattern is `pending`, and after 14 days it falls to probation. `proposeSkill` then runs with `observed:
+   {patternId, gate}` on the surface `observer`; its focus carries the rejected candidates of the pattern (tombstones
+   `user-rejected` and `gate-rejected` only; `accepted` and `stale` are not refusals). A `pending`, a failed generation
+   or proposal, an unusable bank, a candidate whose hash already has a tombstone, and a bank promotion that throws each write a
+   `prepare-failed` event (reason redacted, at most 200 characters): the pattern waits 24 h after its first failure, 72 h
+   after the second and 7 d after the third or later, counted from the latest.
+4. Which proposal is live. Only the **latest** proposal of a pattern (by `at`) is live, for the cycle's reuse and for
+   `--review` without an id alike (`latestProposals`); a restaged candidate replaces it and earlier ones are never gated
+   or offered again. The latest is reused instead of regenerated unless its hash has a tombstone or its gate was
+   rejected. If the ledger already holds an `accepted` line for its hash (`isAccepted`), the cycle writes a tombstone
+   with reason `accepted` and goes to the next pattern. A retryable gate outcome on the reused proposal is not retried on
+   the same candidate (a concluded record is not gated again): a **fresh** candidate is staged, at most twice per pattern
+   (`MAX_GATE_RESTAGINGS`, counted over all the retryable outcomes of the pattern's proposals); the next retryable answer
+   makes the following candidate a probation one.
+5. Dialog (a): Later, Approve, Reject (60 s timeout counts as `later`). `replay.allow` is read again first: a `bank`
+   proposal for a skill the user took out of the list writes a `retryable` outcome (`refused`, `replay-not-allowed`)
+   without asking and without promoting a bank, and the next start stages a fresh candidate, which is on probation. On
+   Approve an auto bank is promoted to `banks/` (`createExclusiveFile`; a path already equal to the promoted bank of the
+   skill is returned unchanged, and an identical existing file is accepted) and the gate runs in the background;
+   probation skips the gate and records `PROBATION_OUTCOME`, `{class: "not-measurable", status: "probation", reason:
+   "not measured"}`.
+6. Dialog (b) and the dispatch. The Accept of (b) only dispatches `--review=<id>`, which asks again; the cycle never
+   accepts and never reloads. During `--scan` the surface replaces the dispatch with a no-op and the command runs the
+   review inline (see M2 below).
+
+After every `await` of the offer phase (after `bank.select`/`generate`, after `propose`, before `promote`, before
+`runGate`, before each dialog) the cycle re-reads the fold, and if the skill was forgotten at or after the moment the cycle
+started it stops without writing that proposal and calls `CycleDeps.discardArtifacts(skill)` (`discardSkillArtifacts`:
+artifacts only, no event rewrite, no lock). A `discardArtifacts` that throws is caught, the skill is listed in
+`CycleReport.discardFailed`, and the cycle goes on.
+
+**The lifecycle of a pattern**, as `patterns.ts` and the tombstones decide it. A pattern is closed by a tombstone and
+reopens when an observation of the pattern is dated after the latest tombstone, where "dated" is the **session time**
+(the observation's episode `startedAt`; its own `at` when it has no episode), never the moment the log learned of it: a
+session that ended before the tombstone and is read after it does not reopen the pattern. The tombstone reasons:
+`user-rejected`, `gate-rejected`, `accepted` (the lesson is in the skill) and `stale`. `stale` is written by
+`reviewProposal` when `accept` is refused as `skill-drift` and when a proposal has no `skillContentHash` (a legacy one):
+it closes that proposal, prompt (b) is not offered again for it, and the pattern reopens like any other on a newer
+observation. Other gates: snooze (24 h after `later`/`timeout`), one proposal per 24 h in total, the backoff of the failed
+preparations above. A gate result is classified by `classifyGateResult` with an exhaustive `assertNever` over the
+reasons: `below-threshold` and `judge-failed` are rejected (tombstone), `no-improvement` is not measurable, and every
+reason that proves nothing is retryable. A not-measurable bank outcome is offered in prompt (b) as "not measured" and,
+if accepted, the concluded record is converted to a probation one.
+
+The prompts show `realRuns`, the number of gate runs planned (`planDesign(cases, "case-bank").design.plannedRuns`:
+arms x repetitions x items, at most), not how many times the pattern was seen; a probation proposal plans none and says
+"not measured". Prompt (a) always carries `GATE_PROOF_NOTICE` (D3) and prompt (b) carries it when the lesson was
+measured: the gate shows the lesson makes the cases pass, not that the pattern is real.
+
+**Probation** is a gate status of its own (`GATE_STATUSES`, `DecisionOutcomeStatus`), not a flag. `probationRecordOf`
+(`src/gate/probation.ts`) turns a not-run replay record, or a concluded case-bank record whose gate abstained for
+`no-improvement`, into a probation one (any other record is refused: it would erase a verdict), `acceptCandidate` accepts
+it after the same skill-drift check against the hash recorded at staging (`recordedSkillHashOf` reads it from the
+preregistration or the `probation` block), metrics count probation on its own and leave it out of every
+rate, and `--verify` treats a probation lesson as intact. The lesson frontmatter `gate` is `accepted` or `probation`.
+The decision surface `observer` is its own so that a record never claims a surface that did not make it.
+
+**M2 is intact.** Only the command reloads. The background cycle dispatches `/skill-improve --review=<id>` (the id
+travels as `--review=<id>`; `--review <id>` with a space names no id and is refused) with
+`pi.sendUserMessage(text, {expandPromptTemplates: true})` (`dispatchReview`, mode `deferred-command`). The spike
+(pi 1.5.2, real TUI) found that an idle dispatch runs the extension command and `ctx.reload()` works inside it, but
+that a dispatch while streaming also runs the command, and its `ctx.reload()` returns silently without reloading
+(pi shows a warning). So the dispatch happens only if the session is idle, otherwise it is deferred to `agent_settled`
+(`ObserveRuntime.settled()`), re-checking `isIdle()` right before the send; if it is not idle then, the user gets a notice
+with the command. A failed send is a notice too. Callbacks still waiting are dropped on `session_shutdown`. A reload is
+never assumed: `runReview` reloads only after an acceptance, through the shared `waitForIdle` -> reload helper.
+
+During `--scan` there is no nested message: `surface.scan` replaces `dispatchReview` with a no-op, the cycle reports
+`review-dispatched` with the proposal id, and `runScan` calls `runReview(id)` inline with the command context (the only
+one that can reload), which asks again and reloads once, only on an acceptance. Other spike facts the code relies on: `ctx.ui.select` accepts `{timeout,
+signal}` and returns `undefined` for a timeout, Esc and an abort alike, so the code reads `signal.aborted` to tell the
+abort apart and counts the rest as `later`; `session_start.reason` is `startup | new | resume | fork | reload` and only
+`startup` and `new` start a cycle; `ctx.mode === "tui"` is the TUI test (`hasUI` is also true in RPC); the sessions
+directory comes from `ctx.sessionManager.getSessionDir()`. The 1.4.0 devDependency was not tested by the spike.
+
+**The review** (`reviewProposal`) takes only the latest proposal of a pattern; one that is tombstoned or already accepted
+answers `nothing-to-review`. A proposal with no `skillContentHash` is closed with a `stale` tombstone. It asks prompt (a)
+first when the user never approved the lesson (and the bank), so a `--review` of a proposal the cycle never offered still
+asks before it spends. It never gates a probation proposal. For a bank proposal whose outcome is missing or retryable it
+calls `promoteBank` (which refuses a skill no longer in `replay.allow` before writing anything: the review notifies and
+answers `retryable`) and gates in the foreground against the promoted path; a rejected outcome tombstones, a retryable
+one notifies that a fresh candidate is staged at a later start. Then `offerAcceptance`, the answer is recorded, and
+`acceptCandidate` runs only on Accept with `expectedSkillContentHash` = the `skillContentHash` recorded at staging, never
+one computed at accept time. A `skill-drift` refusal (or no hash) closes the proposal with a `stale` tombstone. For a
+probation proposal, and for a bank outcome that is `not-measurable`, the accept wraps `probationRecordOf`, which also
+accepts a concluded case-bank record whose gate abstained for `no-improvement` (its basis stays in the record). On an
+acceptance the review writes a tombstone `accepted`. `--review` without an id walks the latest proposals newest first
+and takes the first that is not `nothing-to-review`.
+
+**The wiring** (WP14a): `extensions/index.ts` starts the cycle on `session_start` only when the reason is `startup`
+or `new`, the mode is TUI, the session is top-level and not a replay child, and observe is enabled. It is
+fire-and-forget behind an `AbortController`, and `session_shutdown` aborts it, which is why the header of the
+extension no longer says there is no such handler: the cycle is a session-scoped resource. The background task
+checks the signal after every await and an interrupted gate is `retryable`. `agent_settled` calls
+`ObserveRuntime.settled()`, which runs the callbacks `dispatchReview` deferred.
+
+**Bugs fixed on the way**, named in the code and tests:
+
+- B1: the `<skill>` block was read as what the user typed. `splitSkillBlock` (`src/skill-block.ts`) is used by the
+  evidence (so the replay prompt no longer carries the block twice and the diagnosis keys are computed on the
+  user's text) and by the signals' `userPromptOf`.
+- B2: `turnIndex` is reset by pi on every agent run, so "same turn" was wrong. The collector now uses the ordinal of
+  the user prompt on the branch, and the signal id hashes `[kind, sessionId, anchorEntryId, subject]`.
+- B3: `compactSignalFile` wrote newest first while the reader folded from the tail as if it were newest. It now writes
+  the last event of every id, oldest first, keeping the newest 128. It also carries over what another session appended
+  between its read and its write: it re-reads the file and keeps every complete line that is not in the `seen` set of the
+  first read, comparing by **content** and not by position, because a session that compacted first leaves a file shorter
+  than the one that was read (the shrink case a positional tail would get wrong). `SignalCollectorOptions.afterRead` is
+  the seam a test uses to be that other session. The instant between the second read and the rename is the one window
+  left, and a line lost there is a suspicion the session that raised it still reported.
+- B4 (exclude bank from overlay): `copySkillTree` skips `case-bank.json` (`EXCLUDED_COPY_ENTRIES`), so a bank shipped
+  inside a skill never reaches the replay arms. The gate's own bank copy sits in staging next to the candidate and is
+  unaffected. Not to be confused with the older label B4 in `src/config.ts`.
+- The false promise of `messages.ts` and of the tool description that the tool "records a correction": the `record`
+  action now does what that says, and only that: it appends a self-report (weight 0.4), never edits a skill and
+  never accepts. It answers `observe-disabled` when `observe.enabled` is off, which is why the notice is conditional:
+  "When `pi-simple-sri.observe.enabled` is on, ...". `record` takes the skill and the note in `focus` (at most 300
+  characters; empty or longer answers `error`).
+- One shared reader of a model reply that must hold one JSON object, `src/json-reply.ts` (`firstObjectWhere`: every `{`
+  is a candidate start, the balanced object that opens there is parsed, braces inside strings do not count, and the
+  first one the caller accepts wins), used by `proposer.ts`, `judge.ts`, `auto-bank.ts` and `setup.ts` instead of four
+  copies.
+- `resolveBank` is tri-state (`found`, `absent`, `unusable`): a bank that exists and cannot be read used to be `null`,
+  the same as no bank, and a generated bank would have replaced it. `forget.ts` uses the same reader to tell an `auto`
+  bank from one that is not known to be generated.
+
+**Known limits**, left as they are:
+
+- `--setup` rewrites `settings.json` as 2-space JSON, so other formatting is lost. It re-reads the file right before
+  writing and prints a snippet if it changed.
+- Implicit attribution reads the session in file order, not along the active branch, and is noisy: an assistant that
+  read a `SKILL.md` for another reason is attributed a run of the skill.
+- `--forget` removes by the `skill` of an event and by the ids that hang from it. Content that carries no `skill` field
+  stays: a signal that was raised and never consumed names no skill, so it is not erased. It keeps `forget` events,
+  `attempts.jsonl`, `.history`, accepted candidates, user and skill-shipped banks, and the verdicts of `decision.json`.
+- The unlocked window of `--forget`: `rewriteFile` re-reads right before the write, but a line appended between that
+  second read and the rename is lost, and appends (`--note`, `record`, a signal) take no lock.
+- `--forget` leaves titles and slugs in the `decision.json` of forgotten candidates, does not touch the files of the
+  labeling dry run, and does not change staging directories of older versions (0755/0644). A record of a moved or missing
+  skill keeps its text (`historySkipped`). Two long distinct titles can map to the same slug, the class of the old 64-char
+  cut.
+- F-3: after a `stale` close, an identical lesson proposed again the same day has the hash of the closed candidate, so
+  the cycle writes a prepare failure ("the candidate was already decided on") and the pattern waits 24 h.
+- The judge budget deduplicates `judged` events by episode, model and outcome, so an episode that fails every time is
+  counted once however often it is retried, and the daily cap understates what was spent on it.
+- The dry-run sample is the most recent N episodes by `startedAt` (default 30, `--limit=<n>`), not a random one.
+- A note or a self-report joins the latest pattern of the same skill and source, so notes about different corrections of
+  one skill add up in one pattern.
+- The dispatch was spiked on pi 1.5.2 only. On the 1.4.0 devDependency the behaviour of `sendUserMessage` with
+  `expandPromptTemplates`, of the deferral and of the dropped reload is untested.
+- The gate proves the lesson makes the cases pass, not that the pattern is real; a probation lesson was never measured.
+- `scripts/` is outside `tsconfig` and outside the published files.
 
 ## Tests
 

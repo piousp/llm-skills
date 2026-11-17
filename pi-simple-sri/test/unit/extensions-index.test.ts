@@ -14,10 +14,14 @@ import type { AssistantMessage, ToolCall, Usage, UserMessage } from "@earendil-w
 import sriExtension, {
   registerSurfaces,
   type SkillImproveToolDefinition,
+  type SriAgentSettledHandler,
+  type SriCommandContext,
   type SriCommandRegistration,
   type SriExtensionApi,
   type SriNoticeContext,
   type SriSeams,
+  type SriSessionShutdownHandler,
+  type SriSessionStartContext,
   type SriSessionStartEvent,
   type SriSessionStartHandler,
   type SriTurnEndContext,
@@ -34,6 +38,8 @@ import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import type { GateRequest } from "../../src/gate/flow.ts";
 import { feedbackNoticeText, signalText } from "../../src/messages.ts";
 import { COMMAND_NAME, REPLAY_ENV_VAR, SIGNALS_FILE } from "../../src/names.ts";
+import type { CycleDeps, CycleInput, CycleReport } from "../../src/observe/cycle.ts";
+import type { ObserveConfig } from "../../src/observe/types.ts";
 import type { ProposeFn } from "../../src/improve-flow.ts";
 import { SIGNAL_FORMAT, type Suspicion } from "../../src/signals.ts";
 import {
@@ -247,6 +253,8 @@ interface Harness {
   /** Every read of the context's `ui`, in order: a copied context reads it eagerly (see the test below). */
   uiReads: string[];
   modelCalls: string[];
+  /** Every `sendUserMessage` the factory's api received: the dispatch of `--review` goes through it. */
+  userMessages: { content: string; options: { expandPromptTemplates?: boolean } | undefined }[];
   /** The context a command handler or a tool execute receives, with the fields both read. */
   ctx: SkillImproveContext;
   command(): SriCommandRegistration;
@@ -310,6 +318,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
   const notified: NotifiedCall[] = [];
   const uiReads: string[] = [];
   const modelCalls: string[] = [];
+  const userMessages: Harness["userMessages"] = [];
 
   const pi: SriExtensionApi = {
     registerCommand(name, registration) {
@@ -325,6 +334,9 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     },
     sendMessage(message) {
       messages.push(message);
+    },
+    async sendUserMessage(content, options) {
+      userMessages.push({ content, options });
     },
     on(event, handler) {
       onEvents.push(event);
@@ -414,6 +426,7 @@ function makeHarness(options: HarnessOptions = {}): Harness {
     notified,
     uiReads,
     modelCalls,
+    userMessages,
     ctx,
     command: () => commandOf(commands),
     tool: () => toolOf(tools),
@@ -483,7 +496,7 @@ function uiOf(harness: Harness): SkillImproveUi {
   };
 }
 
-function handlerOf(harness: Harness, event: "session_start" | "turn_end"): unknown {
+function handlerOf(harness: Harness, event: "session_start" | "turn_end" | "session_shutdown" | "agent_settled"): unknown {
   const handler = harness.handlers.get(event);
   assert.ok(handler !== undefined, `the factory must register a ${event} handler`);
   return handler;
@@ -495,6 +508,14 @@ function sessionStartHandlerOf(harness: Harness): SriSessionStartHandler {
 
 function turnEndHandlerOf(harness: Harness): SriTurnEndHandler {
   return handlerOf(harness, "turn_end") as SriTurnEndHandler;
+}
+
+function shutdownHandlerOf(harness: Harness): SriSessionShutdownHandler {
+  return handlerOf(harness, "session_shutdown") as SriSessionShutdownHandler;
+}
+
+function settledHandlerOf(harness: Harness): SriAgentSettledHandler {
+  return handlerOf(harness, "agent_settled") as SriAgentSettledHandler;
 }
 
 // Drives the one session_start handler the factory registered, with a context narrowed to the members the handler reads
@@ -529,13 +550,16 @@ function writeTurn(callId: string, target: string, content: string): AssistantMe
 
 // Drives the one turn_end handler the factory registered. The answer is asserted here and not at every call site: the
 // handler adds nothing to the turn, so every call has to answer undefined.
+//
+// The branch carries one user prompt per turn (`entry-1`, `entry-2`, ...): a suspicion is keyed on the prompt a turn answers
+// and not on pi's own turn counter, which this handler no longer reads (B2).
 async function endTurn(harness: Harness, turnIndex: number, message: AssistantMessage): Promise<void> {
   const ctx: SriTurnEndContext = {
     ui: uiOf(harness),
     cwd: CWD,
     model: undefined,
     sessionManager: {
-      getBranch: () => [],
+      getBranch: () => Array.from({ length: turnIndex }, (_, index) => userEntry(index + 1, `do step ${index + 1}`)),
       getSessionId: () => SESSION_ID,
     },
   };
@@ -543,38 +567,42 @@ async function endTurn(harness: Harness, turnIndex: number, message: AssistantMe
   assert.equal(answer, undefined, "the turn_end handler adds nothing to the turn and answers undefined");
 }
 
-// The line the collector would write for the rewrite below, as the seeded file carries it: the id is computed here and not
-// with the collector's own function, so the file is the input of the hydration and not a copy of its output.
-function raisedSignalLine(turnIndex: number, subject: string): string {
-  const material = JSON.stringify(["rewritten-draft", SESSION_ID, turnIndex, subject]);
-  const id = `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`;
+// The id of a suspicion, computed here and not with the collector's own function. The suspicion of "turn N" is the one raised by
+// the Nth turn of endTurn: its prompt is the entry `entry-N` and its index is the ordinal of that prompt, N - 1.
+function anchoredSignalId(turn: number, subject: string): string {
+  const material = JSON.stringify(["rewritten-draft", SESSION_ID, `entry-${turn}`, subject]);
+  return `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`;
+}
+
+// The line the collector would write for the rewrite below, as the seeded file carries it: the file is the input of the
+// hydration and not a copy of its output.
+function raisedSignalLine(turn: number, subject: string): string {
   return `${JSON.stringify({
     format: SIGNAL_FORMAT,
     event: "raised",
-    id,
+    id: anchoredSignalId(turn, subject),
     kind: "rewritten-draft",
     createdAt: "2026-11-02T14:03:22.481Z",
     sessionId: SESSION_ID,
-    turnIndex,
+    turnIndex: turn - 1,
     subject,
-    excerpt: `turn ${turnIndex - 1}: ${subject}`,
-    prompt: "",
+    excerpt: `turn ${turn - 2}: ${subject}`,
+    prompt: `do step ${turn}`,
   })}\n`;
 }
 
 // The suspicion the two turns below raise, as the sentence of src/messages.ts renders it: the notice is asserted whole,
 // because a notice that named another file or another kind would still be a notice.
-function rewrittenDraftSuspicion(turnIndex: number, subject: string): Suspicion {
-  const material = JSON.stringify(["rewritten-draft", SESSION_ID, turnIndex, subject]);
+function rewrittenDraftSuspicion(turn: number, subject: string): Suspicion {
   return {
-    id: `sg-${createHash("sha256").update(material).digest("hex").slice(0, 8)}`,
+    id: anchoredSignalId(turn, subject),
     kind: "rewritten-draft",
     createdAt: "2026-11-02T14:03:22.481Z",
     sessionId: SESSION_ID,
-    turnIndex,
+    turnIndex: turn - 1,
     subject,
-    excerpt: `turn ${turnIndex - 1}: ${subject}`,
-    prompt: "",
+    excerpt: `turn ${turn - 2}: ${subject}`,
+    prompt: `do step ${turn}`,
   };
 }
 
@@ -622,10 +650,11 @@ test("the factory registers the command and the tool, exactly once each", () => 
   assert.equal(tool.description.includes("bankPath"), true);
   assert.equal(tool.description.includes("defect"), true);
   assert.equal(tool.description.includes("retryable"), true);
-  // M1c (S11, Q26): the model is told, before it spends anything, that this tool is also where a correction or a
-  // rejection is recorded -- the other channel, the notice at the start of a session, is one a model may never read.
-  assert.equal(tool.description.includes("Before any of that is spent"), true);
-  assert.equal(tool.description.includes("a correction or a rejection"), true);
+  // The tool tells the model what `record` is and is not: a self-report line in the observer log, which edits and accepts
+  // nothing. The old sentence promised that a rejection is recorded, and nothing recorded one.
+  assert.equal(tool.description.includes("record appends a self-report"), true);
+  assert.equal(tool.description.includes("only adds one line to the log"), true);
+  assert.equal(tool.description.includes("a correction or a rejection"), false);
 });
 
 // M1c (S11, Q26, OA8): the package tells the reader that the feedback of a session can be recorded, from two channels
@@ -637,9 +666,10 @@ test("the factory registers one handler per event, and registering them reports 
   registerSurfaces(harness.pi, harness.seams);
 
   // One handler per event: a second session_start handler would be the second notice OA8 accepted the risk of only once,
-  // and a second turn_end handler would raise every suspicion twice.
-  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
-  assert.equal(harness.handlers.size, 2);
+  // and a second turn_end handler would raise every suspicion twice. The other two belong to the observer: the end of the
+  // session aborts its cycle, and the idle agent runs the review it deferred.
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end", "session_shutdown", "agent_settled"]);
+  assert.equal(harness.handlers.size, 4);
   // The registration is not the notice: a session that never starts reports nothing, and nothing of the loop ran.
   assert.deepEqual(harness.notified, []);
 });
@@ -660,6 +690,13 @@ test("the session_start handler reports the feedback notice once, as info", asyn
   assert.equal(notice.includes("--bank=<path>"), true);
   assert.equal(notice.includes("spends tokens"), true);
   assert.equal(notice.includes("at least two distinct tool failures"), true);
+  // The record action exists only when observation is on, and the notice says so instead of promising it unconditionally.
+  assert.equal(
+    notice.includes(
+      "When `pi-simple-sri.observe.enabled` is on, the skill_improve tool records a correction the user made as a note for a later review, without editing any skill or accepting anything.",
+    ),
+    true,
+  );
   // It is one line, and it reports and returns: no file, no model and no candidate behind it.
   assert.equal(notice.includes("\n"), false);
   assert.deepEqual(harness.log.settingsReads, []);
@@ -668,6 +705,16 @@ test("the session_start handler reports the feedback notice once, as info", asyn
   assert.deepEqual(harness.log.attempts, []);
   assert.deepEqual(harness.entries, []);
   assert.deepEqual(harness.modelCalls, []);
+});
+
+// The ordinal a suspicion carries is the one of the user prompt, and the line says prompt.
+test("signalText names the prompt a suspicion was raised in, with the ordinal it carries", () => {
+  const rewritten = signalText({ ...rewrittenDraftSuspicion(3, "/work/notes.md"), turnIndex: 2 });
+  const repeated = signalText({ ...rewrittenDraftSuspicion(3, "/work/notes.md"), kind: "repeated-request", excerpt: "do it again", turnIndex: 2 });
+
+  assert.equal(rewritten.includes("written again in prompt 2 with different arguments"), true);
+  assert.equal(repeated.includes("this prompt asks, in substance, for what an earlier prompt already asked"), true);
+  assert.equal(`${rewritten} ${repeated}`.includes(" turn "), false);
 });
 
 // The value a reload carries is the one that is not news: pi reloads a session after an acceptance (M2), and the notice
@@ -834,9 +881,10 @@ test("registering runs no part of the loop", () => {
   // The registration did happen; only the loop was left untouched.
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
-  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end", "session_shutdown", "agent_settled"]);
   assert.deepEqual(harness.entries, []);
   assert.deepEqual(harness.messages, []);
+  assert.deepEqual(harness.userMessages, []);
   // Registering the handlers reports nothing by itself: the notice is the event's, not the wiring's.
   assert.deepEqual(harness.notified, []);
 });
@@ -1106,5 +1154,200 @@ test("the replay guard answers only to the value \"1\"", () => {
 
   assert.deepEqual(harness.commandNames, [COMMAND_NAME]);
   assert.deepEqual(harness.toolNames, [SKILL_IMPROVE_TOOL_NAME]);
-  assert.deepEqual(harness.onEvents, ["session_start", "turn_end"]);
+  assert.deepEqual(harness.onEvents, ["session_start", "turn_end", "session_shutdown", "agent_settled"]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The observer (src/observe/wire.ts): what the registration does with it. The rules of when a cycle starts are tested in
+// test/unit/observe-wire.test.ts; here only that the extension connects the events and the command to it.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const ENABLED: ObserveConfig = { enabled: true, judgeModel: null, judgeCallsPerDay: 20, replayAllow: [] };
+const DONE_REPORT: CycleReport = {
+  mode: "scan",
+  status: "done",
+  files: 2,
+  episodes: 3,
+  judgeCalls: 1,
+  observations: 1,
+  blocked: 0,
+  proposal: "none",
+  proposalId: null,
+  discardFailed: [],
+  labeling: null,
+};
+// The cycle seam never reads its dependencies: the run seam below is what stands in for the cycle.
+const NO_DEPS = {} as CycleDeps;
+
+interface ObserverRecorder {
+  runs: CycleInput[];
+  signals: AbortSignal[];
+  deferred: ((callback: () => void) => void)[];
+  reads: string[];
+}
+
+// Replaces the settings reader, the production dependencies and the cycle of the observer. With `hang` the cycle does not end
+// until it is aborted, which is what a cycle waiting on a dialog does.
+function observeSeams(harness: Harness, config: ObserveConfig = ENABLED, hang = false): ObserverRecorder {
+  const recorder: ObserverRecorder = { runs: [], signals: [], deferred: [], reads: [] };
+  harness.seams.observe = {
+    agentDir: () => AGENT_DIR,
+    readConfig: (agentDir) => {
+      recorder.reads.push(agentDir);
+      return config;
+    },
+    cycleDeps: async (_ctx, _api, options) => {
+      recorder.deferred.push(options.onSettled);
+      return NO_DEPS;
+    },
+    run: async (input) => {
+      recorder.runs.push(input);
+      if (input.signal !== undefined) recorder.signals.push(input.signal);
+      const signal = input.signal;
+      if (hang && signal !== undefined) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      return DONE_REPORT;
+    },
+  };
+  return recorder;
+}
+
+function tuiContext(harness: Harness, overrides: Partial<SriSessionStartContext> = {}): SriSessionStartContext {
+  return {
+    ui: {
+      notify: uiOf(harness).notify,
+      select: async () => undefined,
+      confirm: async () => false,
+    },
+    sessionManager: {
+      getBranch: () => [],
+      getSessionId: () => SESSION_ID,
+      getSessionDir: () => "/sessions/--work-reports--",
+      getSessionFile: () => "/sessions/--work-reports--/2026-11-02_session-test.jsonl",
+    },
+    mode: "tui",
+    cwd: CWD,
+    model: undefined,
+    modelRegistry: { complete: async () => { throw new Error("the wiring test never reaches the model"); } },
+    isIdle: () => true,
+    ...overrides,
+  };
+}
+
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("the session_start handler starts the observer cycle in the background for startup and new", async (t) => {
+  useAgentDir(t);
+  for (const reason of ["startup", "new"] as const) {
+    const harness = makeHarness();
+    const recorder = observeSeams(harness);
+    registerSurfaces(harness.pi, harness.seams);
+
+    await sessionStartHandlerOf(harness)({ type: "session_start", reason }, tuiContext(harness));
+    await settle();
+
+    assert.equal(recorder.runs.length, 1, `the cycle must start for ${reason}`);
+    assert.equal(recorder.runs[0].mode, "background");
+    assert.equal(recorder.runs[0].currentSessionFile, "/sessions/--work-reports--/2026-11-02_session-test.jsonl");
+    assert.equal(recorder.runs[0].ctxCwd, CWD);
+    assert.equal(recorder.reads.at(-1), AGENT_DIR, "the observer reads the settings of the agent directory the loop was given");
+    // The notice of the session is still owed, and it comes first.
+    assert.deepEqual(harness.notified, [{ message: feedbackNoticeText(), type: "info" }]);
+  }
+});
+
+test("the session_start handler starts no cycle for resume, fork or reload, outside the TUI, or with observation off", async (t) => {
+  useAgentDir(t);
+  const cases: { name: string; reason: SriSessionStartEvent["reason"]; ctx: (h: Harness) => SriSessionStartContext; config?: ObserveConfig }[] = [
+    { name: "resume", reason: "resume", ctx: (h) => tuiContext(h) },
+    { name: "fork", reason: "fork", ctx: (h) => tuiContext(h) },
+    { name: "reload", reason: "reload", ctx: (h) => tuiContext(h) },
+    { name: "rpc mode", reason: "startup", ctx: (h) => tuiContext(h, { mode: "rpc" }) },
+    { name: "print mode", reason: "startup", ctx: (h) => tuiContext(h, { mode: "print" }) },
+    { name: "a context with no dialogs", reason: "startup", ctx: (h) => ({ ...tuiContext(h), ui: { notify: uiOf(h).notify } }) },
+    { name: "observation off", reason: "startup", ctx: (h) => tuiContext(h), config: { ...ENABLED, enabled: false } },
+  ];
+
+  for (const entry of cases) {
+    const harness = makeHarness();
+    const recorder = observeSeams(harness, entry.config);
+    registerSurfaces(harness.pi, harness.seams);
+
+    await sessionStartHandlerOf(harness)({ type: "session_start", reason: entry.reason }, entry.ctx(harness));
+    await settle();
+
+    assert.deepEqual(recorder.runs, [], `no cycle may start for ${entry.name}`);
+  }
+});
+
+test("session_shutdown aborts the running cycle, and agent_settled runs what a review deferred", async (t) => {
+  useAgentDir(t);
+  const harness = makeHarness();
+  const recorder = observeSeams(harness, ENABLED, true);
+  registerSurfaces(harness.pi, harness.seams);
+
+  await sessionStartHandlerOf(harness)({ type: "session_start", reason: "startup" }, tuiContext(harness));
+  await settle();
+  assert.equal(recorder.signals[0]?.aborted, false);
+
+  // The cycle defers the dispatch of its review; nothing runs until the agent is idle.
+  const ran: string[] = [];
+  recorder.deferred[0]?.(() => ran.push("review"));
+  assert.deepEqual(ran, []);
+  await settledHandlerOf(harness)({ type: "agent_settled" });
+  assert.deepEqual(ran, ["review"]);
+  await settledHandlerOf(harness)({ type: "agent_settled" });
+  assert.deepEqual(ran, ["review"], "a deferred callback runs once");
+
+  await shutdownHandlerOf(harness)({ type: "session_shutdown", reason: "quit" });
+  assert.equal(recorder.signals[0]?.aborted, true);
+  // Idempotent: a second shutdown (a reload after a quit) changes nothing and throws nothing.
+  await shutdownHandlerOf(harness)({ type: "session_shutdown", reason: "reload" });
+});
+
+test("the command binds the observer to a context that can ask, and answers that none is bound to one that cannot", async (t) => {
+  useAgentDir(t);
+  const harness = makeHarness();
+  const recorder = observeSeams(harness);
+  registerSurfaces(harness.pi, harness.seams);
+
+  // The plain command context of the rest of this file has no dialogs, no mode and no session files.
+  await harness.command().handler("--scan", harness.ctx);
+  assert.deepEqual(recorder.runs, []);
+  assert.equal(harness.notified.at(-1)?.message.includes("did not bind"), true);
+
+  const ui = { ...uiOf(harness), select: async () => undefined, confirm: async () => false };
+  const ctx: SriCommandContext = {
+    ...harness.ctx,
+    ui,
+    mode: "tui",
+    isIdle: () => true,
+    sessionManager: {
+      getBranch: () => [],
+      getSessionId: () => SESSION_ID,
+      getSessionDir: () => "/sessions/--work-reports--",
+      getSessionFile: () => "/sessions/--work-reports--/2026-11-02_session-test.jsonl",
+    },
+  };
+  await harness.command().handler("--scan --since=2026-11-01", ctx);
+
+  // deepEqual above narrows the recorder's list to never[]; the annotation reads it back as what it is.
+  const runs: CycleInput[] = recorder.runs;
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.mode, "scan");
+  assert.equal(runs[0]?.since, "2026-11-01");
+  assert.equal(runs[0]?.currentSessionFile, "/sessions/--work-reports--/2026-11-02_session-test.jsonl");
+  assert.equal(harness.notified.at(-1)?.message.includes("Scan finished: 2 session files, 3 episodes"), true);
+});
+
+test("the command description names the observer flags", () => {
+  const harness = makeHarness();
+  registerSurfaces(harness.pi, harness.seams);
+
+  const description = harness.command().description ?? "";
+  for (const flag of ["--scan", "--dry-run", "--since=YYYY-MM-DD", "--review[=<id>]", "--setup", "--forget", "--note"]) {
+    assert.equal(description.includes(flag), true, `the description must name ${flag}`);
+  }
+  assert.equal(description.includes("pi-simple-sri.observe.enabled"), true);
 });

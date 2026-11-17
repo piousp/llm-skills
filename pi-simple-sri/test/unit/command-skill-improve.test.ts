@@ -19,6 +19,7 @@ import {
   runSkillImprove,
   type ImprovementEntry,
   type NotifyType,
+  type ObserveSurface,
   type ProposeFn,
   type SkillImproveContext,
   type SkillImproveDeps,
@@ -45,6 +46,11 @@ import {
 } from "../../src/retirement.ts";
 import { countReferenceLines, lessonReferencePath, upsertReferenceLine } from "../../src/skill-reference.ts";
 import type { SignalCollector, Suspicion } from "../../src/signals.ts";
+import type { CycleReport } from "../../src/observe/cycle.ts";
+import type { forgetSkill } from "../../src/observe/forget.ts";
+import type { ReviewResult } from "../../src/observe/review.ts";
+import type { runSetup, SetupReport } from "../../src/observe/setup.ts";
+import { OBSERVE_FORMAT, type ObserveEvent } from "../../src/observe/types.ts";
 import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
 import type { AttemptLine, DecisionOutcomeStatus, DecisionRecord, GateBlock, LessonDraft, SkillRef, SriConfig } from "../../src/types.ts";
 import { sha256Digest } from "../../src/hash.ts";
@@ -270,6 +276,17 @@ interface HarnessOptions {
   signals?: SignalCollector;
   // The reload of M2 that fails, with the runner already gone: the run has to report it and still resolve.
   reloadFailure?: Error;
+  // The dialogs of the observer flags. Absent is a host with no such dialog; the answer of a confirmation is the value, and a
+  // selection answers what the function returns.
+  confirm?: boolean;
+  select?: (title: string, options: string[]) => string | undefined;
+  // The observer: the surface the wiring binds (--scan, --review), and the seams of --setup and --forget.
+  observe?: ObserveSurface;
+  setup?: typeof runSetup;
+  forget?: typeof forgetSkill;
+  // Whether observation is on, and the events the observer log already holds.
+  observeEnabled?: boolean;
+  observed?: readonly ObserveEvent[];
 }
 
 interface Harness {
@@ -295,6 +312,9 @@ interface Harness {
   calls: string[];
   idleCalls: number;
   reloadCalls: number;
+  // The confirmations the run asked, and the events it appended to the observer log.
+  confirms: { title: string; message: string }[];
+  appended: ObserveEvent[];
   run: (args: string) => Promise<void>;
 }
 
@@ -337,6 +357,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const acceptRequests: AcceptRequest[] = [];
   const retireRequests: RetireRequest[] = [];
   const calls: string[] = [];
+  const confirms: Harness["confirms"] = [];
+  const stored: ObserveEvent[] = [...(options.observed ?? [])];
+  const appended: ObserveEvent[] = [];
   let idleCalls = 0;
   let reloadCalls = 0;
 
@@ -358,6 +381,20 @@ function createHarness(options: HarnessOptions = {}): Harness {
         calls.push("notify");
         notified.push({ message, type: type ?? "info" });
       },
+      ...(options.confirm === undefined
+        ? {}
+        : {
+            confirm: async (title: string, message: string) => {
+              calls.push("confirm");
+              confirms.push({ title, message });
+              return options.confirm === true;
+            },
+          }),
+      ...(options.select === undefined
+        ? {}
+        : {
+            select: async (title: string, choices: string[]) => options.select?.(title, choices),
+          }),
     },
     // The two members of the command context that M2 needs. Both resolve instead of acting, and each one is counted and
     // recorded in `calls` so a test can assert the order of the three calls without replacing the context. A reload of
@@ -464,6 +501,22 @@ function createHarness(options: HarnessOptions = {}): Harness {
     // The collector of the silent signals (M3, S6): absent unless a test hands one over, which is the session of a host that
     // registered no collector -- the shape the confirmation answers `unknown-signal` for.
     ...(options.signals === undefined ? {} : { signals: options.signals }),
+    ...(options.observe === undefined ? {} : { observe: options.observe }),
+    ...(options.setup === undefined ? {} : { setup: options.setup }),
+    ...(options.forget === undefined ? {} : { forget: options.forget }),
+    readObserveConfig: () => ({
+      enabled: options.observeEnabled ?? true,
+      judgeModel: null,
+      judgeCallsPerDay: 20,
+      replayAllow: [],
+    }),
+    observeLog: {
+      read: async () => [...stored],
+      append: async (_base, events) => {
+        stored.push(...events);
+        appended.push(...events);
+      },
+    },
     // The message channel is a seam of the dependencies and not a member of the context: pi's command
     // context carries no sendMessage, so the wiring connects it here and a run without it degrades to
     // stderr.
@@ -502,6 +555,8 @@ function createHarness(options: HarnessOptions = {}): Harness {
     acceptRequests,
     retireRequests,
     calls,
+    confirms,
+    appended,
     // Read when the caller reads them: the run increments them after this object was built.
     get idleCalls() {
       return idleCalls;
@@ -617,7 +672,7 @@ test("runSkillImprove: without arguments it reports the usage and the eligible s
   assert.equal(harness.notified[0].message.includes("system-config"), false);
 
   // M1c (S11, Q26): the help names the four ways feedback reaches this command -- the failures of the session, the two
-  // profiles of a bank and the tool the model registers a correction with -- because a user who typed the command alone
+  // profiles of a bank and the record action of the tool, with which the model logs a note about a skill -- because a user who typed the command alone
   // is the reader the line exists for. Each one is the invocation that reaches it, and the gate's cost is in the help too.
   const help = harness.notified[0].message;
   assert.equal(help.includes("a tool failure of this session"), true);
@@ -625,7 +680,9 @@ test("runSkillImprove: without arguments it reports the usage and the eligible s
   // The third is asserted by the continuation the description line does not carry: the same words appear in the sentence
   // above it, and what proves the fourth way is listed is the clause of the line itself.
   assert.equal(help.includes("a defect an artifact shows, measured against the truth that bank declares"), true);
-  assert.equal(help.includes("a correction or a rejection"), true);
+  // The fourth way is what the tool does: a self-report. It no longer promises a correction or a rejection it did not record.
+  assert.equal(help.includes("a correction or a rejection"), false);
+  assert.equal(help.includes("a self-report the model records about a skill"), true);
   assert.equal(help.includes("--bank=<path> --defect"), true);
   assert.equal(help.includes(SKILL_IMPROVE_TOOL_NAME), true);
   assert.equal(help.includes("spends tokens"), true);
@@ -3294,4 +3351,665 @@ test("runSkillImprove: a session without a collector answers unknown-signal and 
   assert.deepEqual(harness.writes, []);
   assert.deepEqual(harness.attempts, []);
   assert.deepEqual(harness.entries, []);
+});
+
+// ---------------------------------------------------------------------------------------------
+// WP14b: the observer flags --scan, --review, --setup, --forget and --note
+// ---------------------------------------------------------------------------------------------
+
+const REVIEW_ID = "pr-0123456789ab";
+
+function cycleReport(overrides: Partial<CycleReport> = {}): CycleReport {
+  return {
+    mode: "scan",
+    status: "done",
+    files: 3,
+    episodes: 5,
+    judgeCalls: 2,
+    observations: 4,
+    blocked: 1,
+    proposal: "none",
+    proposalId: null,
+    discardFailed: [],
+    labeling: null,
+    ...overrides,
+  };
+}
+
+function setupReport(overrides: Partial<SetupReport> = {}): SetupReport {
+  return {
+    classified: [],
+    alreadyAllowed: [],
+    suggested: [],
+    accepted: [],
+    llm: { asked: false, calls: 0 },
+    written: false,
+    aborted: false,
+    ...overrides,
+  };
+}
+
+// A surface that records what the command asked and answers what the test says. `reviewed` keeps the id of every review.
+function observeSurface(answers: { scan?: CycleReport; review?: ReviewResult } = {}): {
+  surface: ObserveSurface;
+  scans: Parameters<ObserveSurface["scan"]>[0][];
+  reviewed: (string | undefined)[];
+} {
+  const scans: Parameters<ObserveSurface["scan"]>[0][] = [];
+  const reviewed: (string | undefined)[] = [];
+  return {
+    scans,
+    reviewed,
+    surface: {
+      scan: async (input) => {
+        scans.push(input);
+        return answers.scan ?? cycleReport();
+      },
+      review: async (id) => {
+        reviewed.push(id);
+        return answers.review ?? "declined";
+      },
+    },
+  };
+}
+
+test("parseSkillImproveArgs: the observer flags are parsed as themselves", () => {
+  assert.deepEqual(parseSkillImproveArgs("--setup"), { setup: true });
+  assert.deepEqual(parseSkillImproveArgs("--scan"), { scan: true });
+  assert.deepEqual(parseSkillImproveArgs("--scan --dry-run --limit=5 --since=2026-10-01"), {
+    scan: true,
+    dryRun: true,
+    limit: 5,
+    since: "2026-10-01",
+  });
+  assert.deepEqual(parseSkillImproveArgs("--review"), { review: true });
+  assert.deepEqual(parseSkillImproveArgs("pdf-tools --forget"), { skill: "pdf-tools", forget: true });
+  assert.deepEqual(parseSkillImproveArgs("pdf-tools --note always use lattice"), {
+    skill: "pdf-tools",
+    focus: "always use lattice",
+    note: true,
+  });
+});
+
+// The cycle dispatches `/skill-improve --review=<id>`; a word after a bare --review is a skill, never its id.
+test("parseSkillImproveArgs: --review takes its id only after the equals sign", () => {
+  assert.deepEqual(parseSkillImproveArgs(`--review=${REVIEW_ID}`), { review: true, reviewId: REVIEW_ID });
+  assert.throws(() => parseSkillImproveArgs("--review="), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs(`--review ${REVIEW_ID}`), SriFailClosedError);
+  assert.throws(() => parseSkillImproveArgs(`--review=${REVIEW_ID} pdf-tools`), SriFailClosedError);
+});
+
+test("parseSkillImproveArgs: a malformed date or limit is a usage error", () => {
+  for (const args of [
+    "--scan --since=2026-02-30",
+    "--scan --since=2026-1-1",
+    "--scan --since=yesterday",
+    "--scan --since",
+    "--scan --dry-run --limit=0",
+    "--scan --dry-run --limit=abc",
+    "--scan --dry-run --limit=-3",
+    "--scan --dry-run --limit",
+    "--scan=yes",
+    "--setup=yes",
+    "pdf-tools --forget=yes",
+  ]) {
+    assert.throws(() => parseSkillImproveArgs(args), SriFailClosedError, args);
+  }
+});
+
+test("parseSkillImproveArgs: the observer flags refuse every combination the rules forbid", () => {
+  for (const args of [
+    // --scan, --setup and --review take no skill and no focus.
+    "--scan pdf-tools",
+    "--scan some words",
+    "--setup pdf-tools",
+    "--review pr-1 pdf-tools",
+    "pdf-tools --review",
+    // --forget and --note require the skill; --forget takes no focus, --note requires the text.
+    "--forget",
+    "pdf-tools --forget extra words",
+    "pdf-tools --note",
+    "--note",
+    // --dry-run, --since and --limit only narrow a --scan, and --limit only a --dry-run.
+    "--dry-run",
+    "--since=2026-10-01",
+    "--limit=3",
+    "--scan --limit=3",
+    "--setup --dry-run",
+    "pdf-tools --forget --since=2026-10-01",
+    // Two runs in one invocation.
+    "--scan --setup",
+    "--scan --review",
+    "pdf-tools --forget --note text",
+    // None of them combines with the flags of a proposal, a gate, a report or a retirement.
+    "--scan --bank=/abs/x.json",
+    "--setup --staged=x",
+    "--review --signal=sg-1",
+    "pdf-tools --forget --retire=x --reason=stale",
+    "pdf-tools --note text --defect --bank=/abs/x.json",
+    "--scan --metrics",
+    "--setup --verify",
+    "pdf-tools --forget --reason=stale",
+  ]) {
+    assert.throws(() => parseSkillImproveArgs(args), SriFailClosedError, args);
+  }
+});
+
+test("runSkillImprove: the usage line and the help name the observer flags", async () => {
+  const harness = createHarness();
+
+  await harness.run("");
+
+  const help = harness.notified[0].message;
+  for (const flag of ["--scan", "--dry-run", "--since=YYYY-MM-DD", "--limit=<n>", "--review", "--setup", "--forget", "--note"]) {
+    assert.equal(help.includes(flag), true, flag);
+  }
+
+  await harness.run("--force");
+  const refusal = harness.notified.at(-1)?.message ?? "";
+  assert.equal(refusal.includes("--scan, --dry-run, --since=YYYY-MM-DD, --limit=<n>, --review[=<id>], --setup, --forget and --note"), true);
+});
+
+test("runSkillImprove: --scan asks the cycle for a scan and reports its numbers", async () => {
+  const observe = observeSurface();
+  const harness = createHarness({ observe: observe.surface });
+
+  await harness.run("--scan --since=2026-10-01");
+
+  assert.deepEqual(observe.scans, [{ mode: "scan", since: "2026-10-01" }]);
+  assert.equal(harness.notified.length, 1);
+  assert.equal(harness.notified[0].type, "info");
+  assert.equal(
+    harness.notified[0].message,
+    "Scan finished: 3 session files, 5 episodes, 2 judge calls, 4 observations; 1 left for the next scan.",
+  );
+  // The scan proposes and gates nothing of its own, and reloads nothing.
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.gateRequests, []);
+  assert.equal(harness.reloadCalls, 0);
+});
+
+test("runSkillImprove: --scan --dry-run passes the sample size, says nothing was written and names the labeling file", async () => {
+  const observe = observeSurface({
+    scan: cycleReport({ mode: "dry-run", labeling: { file: "/agent/sri/labeling/2026.jsonl", records: 30 } }),
+  });
+  const harness = createHarness({ observe: observe.surface });
+
+  await harness.run("--scan --dry-run --limit=30");
+
+  assert.deepEqual(observe.scans, [{ mode: "dry-run", sampleSize: 30 }]);
+  const text = harness.notified[0].message;
+  assert.equal(text.startsWith("Dry run finished"), true);
+  assert.equal(text.includes("Nothing was written to the observer store."), true);
+  assert.equal(text.includes("/agent/sri/labeling/2026.jsonl (30 records)"), true);
+});
+
+test("runSkillImprove: --scan reports why a cycle that did not run did not", async () => {
+  const cases: [CycleReport["status"], string][] = [
+    ["disabled", "pi-simple-sri.observe.enabled"],
+    ["locked", "lock"],
+    ["declined", "cost estimate was declined"],
+    ["interrupted", "interrupted"],
+  ];
+  for (const [status, fragment] of cases) {
+    const harness = createHarness({ observe: observeSurface({ scan: cycleReport({ status }) }).surface });
+
+    await harness.run("--scan");
+
+    assert.equal(harness.notified.length, 1, status);
+    assert.equal(harness.notified[0].type, "warning", status);
+    assert.equal(harness.notified[0].message.includes(fragment), true, status);
+  }
+});
+
+// Decision 4: an Accept during --scan runs the review inline, with the command context that can reload, and sends no
+// nested message.
+test("runSkillImprove: --scan with a review-dispatched report reviews that id once, inline, and reloads once on accept", async () => {
+  const observe = observeSurface({
+    scan: cycleReport({ proposal: "review-dispatched", proposalId: REVIEW_ID }),
+    review: "accepted",
+  });
+  const harness = createHarness({ observe: observe.surface, select: () => "x" });
+
+  await harness.run("--scan");
+
+  assert.deepEqual(observe.reviewed, [REVIEW_ID]);
+  assert.equal(harness.reloadCalls, 1);
+  assert.equal(harness.idleCalls, 1);
+  assert.deepEqual(harness.calls.slice(-2), ["waitForIdle", "reload"]);
+  assert.equal(harness.notified[0].message.startsWith("Scan finished"), true);
+});
+
+test("runSkillImprove: --scan reloads nothing when the inline review did not accept", async () => {
+  const answers: ReviewResult[] = ["rejected", "declined", "nothing-to-review", "retryable"];
+  for (const answer of answers) {
+    const observe = observeSurface({
+      scan: cycleReport({ proposal: "review-dispatched", proposalId: REVIEW_ID }),
+      review: answer,
+    });
+    const harness = createHarness({ observe: observe.surface, select: () => "x" });
+
+    await harness.run("--scan");
+
+    assert.deepEqual(observe.reviewed, [REVIEW_ID], answer);
+    assert.equal(harness.reloadCalls, 0, answer);
+    assert.equal(harness.idleCalls, 0, answer);
+  }
+});
+
+test("runSkillImprove: --scan runs no review when the report does not say review-dispatched", async () => {
+  const reports = [
+    cycleReport({ proposal: "awaiting-review", proposalId: REVIEW_ID }),
+    cycleReport({ proposal: "later", proposalId: REVIEW_ID }),
+    cycleReport({ proposal: "rejected", proposalId: REVIEW_ID }),
+    cycleReport({ proposal: "review-dispatched", proposalId: null }),
+    cycleReport({ mode: "dry-run", proposal: "none" }),
+  ];
+  for (const [index, report] of reports.entries()) {
+    const observe = observeSurface({ scan: report, review: "accepted" });
+    const harness = createHarness({ observe: observe.surface, select: () => "x" });
+
+    await harness.run("--scan");
+
+    assert.deepEqual(observe.reviewed, [], String(index));
+    assert.equal(harness.reloadCalls, 0, String(index));
+  }
+});
+
+test("runSkillImprove: --scan and --review refuse a host that bound no observer", async () => {
+  for (const args of ["--scan", "--review"]) {
+    const harness = createHarness({ select: () => "x" });
+
+    await harness.run(args);
+
+    assert.equal(harness.notified.length, 1, args);
+    assert.equal(harness.notified[0].type, "error", args);
+    assert.equal(harness.notified[0].message.includes("did not bind it"), true, args);
+  }
+});
+
+// M2: only the command reloads, and only after an acceptance, in the order of the two other writing runs.
+test("runSkillImprove: --review hands the id to the review and reloads after an acceptance, in order", async () => {
+  const observe = observeSurface({ review: "accepted" });
+  const harness = createHarness({ observe: observe.surface, select: () => "x" });
+
+  await harness.run(`--review=${REVIEW_ID}`);
+
+  assert.deepEqual(observe.reviewed, [REVIEW_ID]);
+  assert.deepEqual(harness.calls, ["notify", "waitForIdle", "reload"]);
+  assert.equal(harness.notified[0].message.includes("accepted"), true);
+});
+
+test("runSkillImprove: --review without an id leaves the choice of the proposal to the review", async () => {
+  const observe = observeSurface({ review: "declined" });
+  const harness = createHarness({ observe: observe.surface, select: () => "x" });
+
+  await harness.run("--review");
+
+  assert.deepEqual(observe.reviewed, [undefined]);
+});
+
+test("runSkillImprove: --review reloads only when the lesson was accepted", async () => {
+  const answers: ReviewResult[] = ["rejected", "declined", "nothing-to-review", "retryable"];
+  for (const answer of answers) {
+    const harness = createHarness({ observe: observeSurface({ review: answer }).surface, select: () => "x" });
+
+    await harness.run(`--review=${REVIEW_ID}`);
+
+    assert.equal(harness.reloadCalls, 0, answer);
+    assert.equal(harness.idleCalls, 0, answer);
+  }
+});
+
+test("runSkillImprove: a reload that fails after a review is reported and the run still resolves", async () => {
+  const harness = createHarness({
+    observe: observeSurface({ review: "accepted" }).surface,
+    select: () => "x",
+    reloadFailure: new Error("runner gone"),
+    withSendMessage: true,
+  });
+
+  await harness.run(`--review=${REVIEW_ID}`);
+
+  // The warning leaves through the channel that reads no member of the context the reload invalidated.
+  assert.equal(harness.reloadCalls, 1);
+  assert.equal(harness.calls.at(-1), "reload");
+  assert.equal(harness.sent.at(-1)?.content, reloadFailedText("runner gone"));
+});
+
+test("runSkillImprove: --review without an interactive UI asks nothing and accepts nothing", async () => {
+  const observe = observeSurface({ review: "accepted" });
+  const noSelect = createHarness({ observe: observe.surface });
+  const noUi = createHarness({ observe: observe.surface, select: () => "x", hasUI: false, withSendMessage: true });
+
+  await noSelect.run(`--review=${REVIEW_ID}`);
+  await noUi.run(`--review=${REVIEW_ID}`);
+
+  assert.deepEqual(observe.reviewed, []);
+  assert.equal(noSelect.notified[0].type, "error");
+  assert.equal(noUi.sent[0].content.includes("no interactive UI"), true);
+  assert.equal(noSelect.reloadCalls + noUi.reloadCalls, 0);
+});
+
+test("runSkillImprove: --review gives the review the dialogs of the session", async () => {
+  const shown: string[] = [];
+  const surface: ObserveSurface = {
+    scan: async () => cycleReport(),
+    review: async (_id, review) => {
+      shown.push((await review.ui.select("Accept?", ["accept", "later"])) ?? "none");
+      review.ui.notify("hello", "info");
+      return "declined";
+    },
+  };
+  const harness = createHarness({ observe: surface, select: (title) => (title === "Accept?" ? "accept" : undefined) });
+
+  await harness.run("--review");
+
+  assert.deepEqual(shown, ["accept"]);
+  assert.equal(harness.notified.some((n) => n.message === "hello"), true);
+});
+
+test("runSkillImprove: --setup builds the context, passes the session model for the LLM pass and reports the outcome", async () => {
+  const seen: { agentDir: string; cwd: string; hasComplete: boolean; answered: boolean | undefined }[] = [];
+  const setup: typeof runSetup = async (context, deps) => {
+    seen.push({
+      agentDir: context.agentDir,
+      cwd: context.cwd,
+      hasComplete: deps.complete !== undefined,
+      answered: await context.ui.confirm("title", "message"),
+    });
+    return setupReport({ classified: [{ skill: "a", class: "read-only", source: "static", indicators: [] }], suggested: ["a"], accepted: ["a"], written: true });
+  };
+  const harness = createHarness({ setup, confirm: true, model: MODEL });
+
+  await harness.run("--setup");
+
+  assert.deepEqual(seen, [{ agentDir: AGENT_DIR, cwd: CWD, hasComplete: true, answered: true }]);
+  assert.equal(
+    harness.notified.at(-1)?.message,
+    "Setup: 1 skills classified, 1 suggested as read-only, 0 already allowed; you allowed 1, written to settings.json (pi-simple-sri.observe.replay.allow).",
+  );
+  assert.equal(harness.reloadCalls, 0);
+});
+
+test("runSkillImprove: --setup offers no LLM pass without a session model", async () => {
+  let hasComplete = true;
+  const setup: typeof runSetup = async (_context, deps) => {
+    hasComplete = deps.complete !== undefined;
+    return setupReport();
+  };
+  const harness = createHarness({ setup, confirm: true });
+
+  await harness.run("--setup");
+
+  assert.equal(hasComplete, false);
+});
+
+test("runSkillImprove: --setup says when nothing was written and when it was interrupted", async () => {
+  const notWritten = createHarness({
+    confirm: true,
+    setup: async () => setupReport({ accepted: ["a"], written: false }),
+  });
+  const aborted = createHarness({ confirm: true, setup: async () => setupReport({ aborted: true }) });
+
+  await notWritten.run("--setup");
+  await aborted.run("--setup");
+
+  assert.equal(notWritten.notified.at(-1)?.message.includes("settings.json was not written"), true);
+  assert.equal(aborted.notified.at(-1)?.message.includes("interrupted"), true);
+});
+
+test("runSkillImprove: --setup without a confirmation dialog changes nothing", async () => {
+  let called = false;
+  const harness = createHarness({
+    setup: async () => {
+      called = true;
+      return setupReport();
+    },
+  });
+
+  await harness.run("--setup");
+
+  assert.equal(called, false);
+  assert.equal(harness.notified[0].type, "error");
+  assert.equal(harness.notified[0].message.includes("nothing was changed"), true);
+});
+
+test("runSkillImprove: --forget asks first and erases nothing when the answer is no", async () => {
+  const forgotten: string[] = [];
+  const harness = createHarness({
+    confirm: false,
+    forget: async (_base, skill) => {
+      forgotten.push(skill);
+      return { status: "locked" };
+    },
+  });
+
+  await harness.run("pdf-tools --forget");
+
+  assert.equal(harness.confirms.length, 1);
+  assert.equal(harness.confirms[0].title.includes("pdf-tools"), true);
+  assert.deepEqual(forgotten, []);
+  assert.equal(harness.notified.at(-1)?.message.includes("Nothing was erased"), true);
+});
+
+test("runSkillImprove: a confirmed --forget erases under the base, with the clock of the run, and reports the counts", async () => {
+  const calls: { base: string; skill: string; now: Date }[] = [];
+  const harness = createHarness({
+    confirm: true,
+    forget: async (base, skill, now) => {
+      calls.push({ base, skill, now });
+      return {
+        status: "forgotten",
+        observeRemoved: 4,
+        signalsRemoved: 1,
+        stagingErased: ["staging/x/lessons/a.md", "staging/x/case-bank.json"],
+        stagingMissing: false,
+        banksRemoved: ["banks/pdf-tools.json"],
+        banksKept: ["/skills/pdf-tools/case-bank.json"],
+        draftsRemoved: 3,
+        runsRemoved: 2,
+        recordsCleared: 3,
+        historySkipped: [],
+      };
+    },
+  });
+
+  await harness.run("pdf-tools --forget");
+
+  assert.deepEqual(calls, [{ base: BASE, skill: "pdf-tools", now: NOW }]);
+  assert.equal(harness.notified.at(-1)?.type, "info");
+  const text = harness.notified.at(-1)?.message ?? "";
+  assert.equal(text.includes("Erased the trigger focus and diagnosis summary of 3 decision records."), true);
+  assert.equal(text.includes("Warning"), false);
+  assert.equal(text.includes("removed 4 observer lines and 1 signal line"), true);
+  assert.equal(text.includes("erased 2 files of staged candidates"), true);
+  assert.equal(text.includes("3 drafts and 2 gate runs"), true);
+  assert.equal(text.includes("removed 1 auto-generated bank"), true);
+  assert.equal(text.includes("Banks kept (not generated by the observer): /skills/pdf-tools/case-bank.json."), true);
+  assert.equal(text.includes("Accepted lessons and the attempts index were kept"), true);
+  // The confirmation says what is erased and what stays, before anything is.
+  const detail = harness.confirms[0].message;
+  assert.equal(detail.includes("banks/<skill>.json"), true);
+  assert.equal(detail.includes("Banks you wrote or that the skill ships"), true);
+  assert.equal(detail.includes("the bank copy and the gate runs of every candidate, accepted ones included"), true);
+  assert.equal(detail.includes("The decision records stay (the ones in the history of accepted lessons too), but their trigger focus and diagnosis summary are erased"), true);
+  assert.equal(detail.includes("the lesson copy of accepted candidates"), true);
+  assert.deepEqual(harness.proposals, []);
+  assert.equal(harness.reloadCalls, 0);
+});
+
+test("runSkillImprove: --forget lists the accepted records it could not clear and warns", async () => {
+  const harness = createHarness({
+    confirm: true,
+    forget: async () => ({
+      status: "forgotten",
+      observeRemoved: 0,
+      signalsRemoved: 0,
+      stagingErased: [],
+      stagingMissing: false,
+      banksRemoved: [],
+      banksKept: [],
+      draftsRemoved: 0,
+      runsRemoved: 0,
+      recordsCleared: 1,
+      historySkipped: ["/moved/pdf-tools/.history/x/decision.json", "/elsewhere/decision.json"],
+    }),
+  });
+
+  await harness.run("pdf-tools --forget");
+
+  const last = harness.notified.at(-1);
+  assert.equal(last?.type, "warning");
+  assert.equal(last?.message.includes("Forgot skill"), true);
+  assert.equal(last?.message.includes("Erased the trigger focus and diagnosis summary of 1 decision record."), true);
+  assert.equal(
+    last?.message.includes("Warning: 2 accepted decision records could not be cleared (outside the history of the skill, moved or missing), so the pattern text stays there: /moved/pdf-tools/.history/x/decision.json, /elsewhere/decision.json."),
+    true,
+  );
+});
+
+test("runSkillImprove: --forget while a scan holds the lock erases nothing and says so", async () => {
+  const harness = createHarness({ confirm: true, forget: async () => ({ status: "locked" }) });
+
+  await harness.run("pdf-tools --forget");
+
+  assert.equal(harness.notified.at(-1)?.type, "warning");
+  assert.equal(harness.notified.at(-1)?.message.includes("lock"), true);
+});
+
+test("runSkillImprove: --forget without a confirmation dialog erases nothing", async () => {
+  let called = false;
+  const harness = createHarness({
+    forget: async () => {
+      called = true;
+      return { status: "locked" };
+    },
+  });
+
+  await harness.run("pdf-tools --forget");
+
+  assert.equal(called, false);
+  assert.equal(harness.notified[0].type, "error");
+  assert.equal(harness.notified[0].message.includes("nothing was erased"), true);
+});
+
+test("runSkillImprove: --note appends a user note of weight 1 anchored on the last user message", async () => {
+  const harness = createHarness({
+    branch: [userEntry(0, "first ask"), toolCallEntry(1), toolErrorEntry(2), userEntry(3, "again")],
+  });
+
+  await harness.run("pdf-tools --note   keep   the header row ");
+
+  assert.equal(harness.appended.length, 1);
+  const [event] = harness.appended;
+  assert.ok(event.type === "observation");
+  assert.equal(event.format, OBSERVE_FORMAT);
+  assert.equal(event.source, "user-note");
+  assert.equal(event.weight, 1);
+  assert.equal(event.skill, "pdf-tools");
+  assert.equal(event.anchorEntryId, "entry-3");
+  assert.equal(event.sessionId, SESSION_ID);
+  assert.equal(event.episodeId, null);
+  assert.equal(event.summary, "keep the header row");
+  assert.equal(event.at, NOW_ISO);
+
+  assert.equal(harness.notified.at(-1)?.type, "info");
+  assert.deepEqual(harness.proposals, []);
+  assert.deepEqual(harness.writes, []);
+  assert.deepEqual(harness.attempts, []);
+  assert.equal(harness.reloadCalls, 0);
+});
+
+test("runSkillImprove: --note redacts a secret before it is stored", async () => {
+  const harness = createHarness();
+
+  await harness.run("pdf-tools --note it printed sk-ant-abcdefghijklmnopqrstuvwxyz0123 again");
+
+  const [event] = harness.appended;
+  assert.ok(event.type === "observation");
+  assert.equal(event.summary.includes("sk-ant-"), false);
+  assert.equal(event.summary.includes("[REDACTED]"), true);
+});
+
+test("runSkillImprove: --note records nothing when observation is off, the skill is unknown, ineligible or the note too long", async () => {
+  const off = createHarness({ observeEnabled: false });
+  await off.run("pdf-tools --note keep the header");
+  assert.equal(off.notified.at(-1)?.message.includes("pi-simple-sri.observe.enabled"), true);
+
+  const unknown = createHarness();
+  await unknown.run("no-such-skill --note keep the header");
+  assert.equal(unknown.notified.at(-1)?.type, "warning");
+
+  const denied = createHarness({ config: { allow: [], deny: ["pdf-tools"] } });
+  await denied.run("pdf-tools --note keep the header");
+  assert.equal(denied.notified.at(-1)?.message.includes("not eligible"), true);
+
+  const long = createHarness();
+  await long.run(`pdf-tools --note ${"x".repeat(301)}`);
+  assert.equal(long.notified.at(-1)?.type, "error");
+
+  for (const harness of [off, unknown, denied, long]) assert.deepEqual(harness.appended, []);
+});
+
+test("runSkillImprove: --note in a session with no user message has nothing to anchor on", async () => {
+  const harness = createHarness({ branch: unpromptedBranch() });
+
+  await harness.run("pdf-tools --note keep the header");
+
+  assert.deepEqual(harness.appended, []);
+  assert.equal(harness.notified.at(-1)?.message.includes("no user message"), true);
+});
+
+// The acceptance of a probation candidate: the record carries no preregistration, so the digest the acceptance compares with
+// the SKILL.md is the one of the probation block.
+test("runSkillImprove: a staged run accepts a record that says probation, under the hash its own block recorded", async (t: TestContext) => {
+  const base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "sri-command-probation-"));
+  t.after(() => {
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const skillDir = path.join(base, "skills", SKILL.name);
+  const { skillText, lessonText } = stageAcceptedCandidate(base, skillDir);
+  const gated = gateAcceptedRecord({
+    skillName: SKILL.name,
+    skillDir,
+    contentHash: sha256Digest(lessonText),
+    skillContentHash: sha256Digest(skillText),
+  });
+  const probation: DecisionRecord = {
+    ...gated,
+    gate: {
+      basis: "replay",
+      status: "probation",
+      budget: gated.gate.budget,
+      tokens: gated.gate.tokens,
+      preregistration: null,
+      replay: null,
+      probation: { recordedAt: NOW_ISO, skillContentHash: sha256Digest(skillText) },
+    },
+    outcome: { status: "probation", reason: "not measured: no gate ran for this candidate", decidedAt: NOW_ISO },
+  };
+  fs.writeFileSync(path.join(base, STAGING_RELATIVE, DECISION_FILE), JSON.stringify(probation), "utf8");
+
+  const harness = createHarness({
+    base,
+    skills: [makeSkill({ dir: skillDir, realDir: skillDir })],
+    gate: async () => ({
+      kind: "gate-accepted",
+      reason: null,
+      stagingPath: STAGING_RELATIVE,
+      decisionPath: DECISION_RELATIVE,
+      plannedRuns: 8,
+      usedRuns: 8,
+      overlays: null,
+    }),
+    accept: async () => ({ ok: false, error: { reason: "slug-already-referenced", detail: "stub: the request is the proof" } }),
+  });
+
+  await harness.run(`pdf-tools --staged=${STAGING_RELATIVE}`);
+
+  assert.equal(harness.acceptRequests.length, 1);
+  assert.equal(harness.acceptRequests[0].expectedSkillContentHash, sha256Digest(skillText));
+  assert.equal(harness.acceptRequests[0].decision.gate.status, "probation");
 });

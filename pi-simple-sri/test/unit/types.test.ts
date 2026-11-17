@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertNever, GATE_STATUSES, outcomeStatusFor } from "../../src/types.ts";
+import { assertNever, GATE_STATUSES, LESSON_GATE_ACCEPTED, LESSON_GATE_PROBATION, outcomeStatusFor } from "../../src/types.ts";
 import type {
   DecisionOutcomeStatus,
+  Diagnosis,
+  RecordedDiagnosis,
   GateBlock,
   GateBudget,
   GateCaseBankResult,
@@ -174,6 +176,16 @@ function gateOf(basis: BasisName, status: GateStatus): GateBlock {
               overlays: OVERLAYS,
             },
           };
+        case "probation":
+          return {
+            basis: "replay",
+            status: "probation",
+            budget: NOT_PLANNED,
+            tokens: ZERO_TOKENS,
+            preregistration: null,
+            replay: null,
+            probation: { recordedAt: "2026-11-02T14:04:00.000Z", skillContentHash: `sha256:${"a".repeat(64)}` },
+          };
         default:
           return assertNever(status);
       }
@@ -211,12 +223,29 @@ function gateOf(basis: BasisName, status: GateStatus): GateBlock {
             replay: null,
             caseBank: { ...CASE_BANK_RESULT, verdict: status },
           };
+        case "probation":
+          // A concluded bank that could not measure the lesson, accepted as it is: its result stays under its own key.
+          return {
+            basis: "case-bank",
+            status: "probation",
+            budget: SPENT,
+            tokens: JUDGE_TOKENS,
+            preregistration: CASE_BANK_PREREGISTRATION,
+            replay: null,
+            caseBank: { ...CASE_BANK_RESULT, verdict: "gate-abstained", reason: "no-improvement" },
+            probation: { recordedAt: "2026-11-02T14:30:00.000Z", skillContentHash: SKILL_CONTENT_HASH },
+          };
         default:
           return assertNever(status);
       }
     default:
       return assertNever(basis);
   }
+}
+
+// The statuses a basis can hold: every basis holds all six, probation of the case-bank base being a bank that found no improvement.
+function statusesOf(_basis: BasisName): readonly GateStatus[] {
+  return GATE_STATUSES;
 }
 
 // The dispatch over the basis, which is the one the second base extends: a block whose `basis` this switch does not list
@@ -244,6 +273,7 @@ function stateOf(gate: GateBlock): string {
     case "gate-accepted":
     case "gate-rejected":
     case "gate-abstained":
+    case "probation":
       return `${basisOf(gate)}:${gate.status}`;
     default:
       return assertNever(gate);
@@ -252,11 +282,11 @@ function stateOf(gate: GateBlock): string {
 
 test("GateBlock: every basis in every status is one variant, and the dispatch over them closes", () => {
   const states = BASES.flatMap((basis) =>
-    GATE_STATUSES.map((status) => ({ gate: gateOf(basis, status), name: `${basis}:${status}` })),
+    statusesOf(basis).map((status) => ({ gate: gateOf(basis, status), name: `${basis}:${status}` })),
   );
 
-  // The ten records the six variants can hold -- two states without a result and three with one, in each base -- named
-  // the way a dispatch that narrows by basis and then by status names them.
+  // The twelve records the eight variants can hold -- two states without a result, three with one and the probation, in each
+  // base -- named the way a dispatch that narrows by basis and then by status names them.
   assert.deepEqual(
     states.map((entry) => stateOf(entry.gate)),
     states.map((entry) => entry.name),
@@ -273,6 +303,7 @@ test("outcomeStatusFor: total over GATE_STATUSES, the statuses both bases write"
     "gate-accepted",
     "gate-rejected",
     "gate-abstained",
+    "probation",
     "accepted",
   ];
 
@@ -283,7 +314,33 @@ test("outcomeStatusFor: total over GATE_STATUSES, the statuses both bases write"
 
   // The second base holds one of those statuses in every state, and the block it writes is the argument of the same
   // call: the parameter of gateOf is GateStatus, so a status outside the mapping is a record this file cannot build.
-  for (const status of GATE_STATUSES) {
+  for (const status of statusesOf("case-bank")) {
     assert.equal(gateOf("case-bank", status).status, status);
   }
+});
+
+// Probation is a status of its own end to end: the gate block, the outcome and the value a lesson is written with. None of
+// them borrows the word of a verdict, because a candidate no gate measured must not read as one the gate accepted.
+test("probation: the gate status, the outcome and the lesson gate are named apart from every verdict", () => {
+  assert.equal(outcomeStatusFor("probation"), "probation");
+  assert.equal(LESSON_GATE_PROBATION, "probation");
+  assert.notEqual(LESSON_GATE_PROBATION, LESSON_GATE_ACCEPTED);
+  assert.equal(GATE_STATUSES.includes("probation"), true);
+  assert.equal(gateOf("replay", "probation").status, "probation");
+  // A bank that found no improvement keeps its basis and its result when it goes on probation.
+  const banked = gateOf("case-bank", "probation");
+  assert.equal(banked.basis, "case-bank");
+  assert.equal(banked.basis === "case-bank" && banked.status === "probation" ? banked.caseBank.reason : null, "no-improvement");
+});
+
+// A forget nulls the summary of the diagnosis a record keeps (src/writer.ts), while a diagnosis that is built always has one.
+// The first half is the type that lets the record say it; the directive is the other half: a built Diagnosis does not.
+test("RecordedDiagnosis: the summary of a record may be null, the one of a built diagnosis may not", () => {
+  const signature = `sha256:${"0".repeat(64)}`;
+  const recorded: RecordedDiagnosis = { summary: null, failureSignature: signature, replayItems: [] };
+  // @ts-expect-error a built diagnosis always has a summary
+  const built: Diagnosis = { summary: null, failureSignature: signature, replayItems: [] };
+
+  assert.equal(recorded.summary, null);
+  assert.equal(built.replayItems.length, 0);
 });

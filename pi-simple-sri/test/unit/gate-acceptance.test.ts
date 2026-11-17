@@ -13,6 +13,7 @@ import {
   type AcceptRequest,
   type AcceptResult,
 } from "../../src/gate/acceptance.ts";
+import { probationRecordOf, recordedSkillHashOf } from "../../src/gate/probation.ts";
 import { ATTEMPTS_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
 import { countReferenceLines } from "../../src/skill-reference.ts";
 import type { DecisionRecord } from "../../src/types.ts";
@@ -574,4 +575,66 @@ test("acceptCandidate: an eligible skill follows the protocol of the slice", asy
   assert.equal(value.referenceAdded, true);
   assert.equal(readFile(path.join(fixture.lessonsDir, `${SLUG}.md`)), LESSON_TEXT);
   assert.equal(countReferenceLines(readFile(fixture.skillFilePath), SLUG), 1);
+});
+
+// Probation: a candidate no gate measured. The record names no verdict, and the acceptance still takes it the way it takes
+// any other -- the user's confirmation is the only thing that decided -- with the same protocol and the same drift guard.
+// `stagedHash` is the digest recorded when the candidate was staged: the request never computes it from the skill as it stands
+// when the acceptance is asked for (the wiring test of src/observe/wire.ts proves the real binding does not either).
+function probationRequestFor(fixture: Fixture, lessonText: string, stagedHash: string): AcceptRequest {
+  const contentHash = digestOf(lessonText);
+  const staged = decisionRecord(contentHash);
+  const notRun: DecisionRecord = {
+    ...staged,
+    gate: {
+      basis: "replay",
+      status: "not-run",
+      budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+      tokens: staged.gate.tokens,
+      preregistration: null,
+      replay: null,
+    },
+    outcome: { status: "proposed", reason: null, decidedAt: null },
+  };
+  const decision = probationRecordOf(notRun, stagedHash, NOW);
+  const expected = recordedSkillHashOf(decision.gate);
+  if (expected === null) assert.fail("a probation record carries the digest of the skill it was staged against");
+
+  return { ...requestFor(fixture, lessonText), decision, expectedSkillContentHash: expected };
+}
+
+test("acceptCandidate: a candidate on probation is accepted, and its history record keeps the probation block", async (t) => {
+  const fixture = createFixture(t);
+  const request = probationRequestFor(fixture, LESSON_TEXT, digestOf(readFile(fixture.skillFilePath)));
+
+  const value = accepted(await acceptCandidate(request, seams()));
+
+  assert.equal(readFile(value.lessonPath), LESSON_TEXT);
+  assert.equal(countReferenceLines(readFile(fixture.skillFilePath), SLUG), 1);
+
+  // The gate block still says no gate measured it, and the outcome is the user's acceptance.
+  const record: unknown = JSON.parse(readFile(value.historyPath));
+  assert.deepEqual(record, {
+    ...request.decision,
+    outcome: { status: "accepted", reason: null, decidedAt: NOW.toISOString() },
+  });
+  assert.equal(request.decision.gate.status, "probation");
+  assert.equal(request.decision.outcome.status, "probation");
+});
+
+test("acceptCandidate: a SKILL.md edited since a probation was staged is refused as drift and nothing is written", async (t) => {
+  const fixture = createFixture(t);
+  // Recorded at the staging, before the skill is edited; the request is built after the edit and still carries this digest.
+  const stagedHash = digestOf(readFile(fixture.skillFilePath));
+
+  fs.appendFileSync(fixture.skillFilePath, "\nAlso read the appendix.\n", "utf8");
+  const request = probationRequestFor(fixture, LESSON_TEXT, stagedHash);
+  assert.notEqual(digestOf(readFile(fixture.skillFilePath)), stagedHash);
+
+  const refused = rejection(await acceptCandidate(request, seams(forbiddenWrites())));
+
+  assert.equal(refused.reason, "skill-drift");
+  assert.equal(refused.detail.includes(stagedHash), true);
+  assert.deepEqual(relativeTree(fixture.skillDir), [SKILL_FILE, "lessons/pdf-first.md"]);
+  assert.equal(fs.existsSync(attemptsPath(fixture)), false);
 });

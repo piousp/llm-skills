@@ -9,7 +9,7 @@ import { serializeLesson } from "../../src/lesson-frontmatter.ts";
 import { DECISION_FILE, HISTORY_DIR, LESSONS_DIR, SKILL_FILE } from "../../src/names.ts";
 import { lessonReferencePath } from "../../src/skill-reference.ts";
 import { standingOf } from "../../src/standing.ts";
-import { LESSON_GATE_ACCEPTED } from "../../src/types.ts";
+import { LESSON_GATE_ACCEPTED, LESSON_GATE_PROBATION } from "../../src/types.ts";
 import type { DecisionRecord, GateBlock, GateTokens, LessonDraft } from "../../src/types.ts";
 import { lessonHashes } from "../../src/writer.ts";
 import type { LessonHashes } from "../../src/writer.ts";
@@ -344,6 +344,39 @@ test("standingOf: a lesson whose frontmatter says proposed and whose bytes are t
   // The record and the line say the candidate was accepted, and the file on disk says it was proposed.
   assert.equal(record.outcome.status, "accepted");
   assert.equal(fs.readFileSync(lessonPathOf(fixture, draft.slug), "utf8").includes('status: "proposed"'), true);
+
+  const report = await standingOf(ledgerOf(acceptedEntry(fixture, record)));
+
+  const [check] = report.checks;
+  assert.equal(check.standing, "intact");
+  assert.equal(check.referenced, true);
+  assert.equal(check.detail, undefined);
+  assert.deepEqual(report.skills, [{ skill: SKILL, worst: "intact", lessons: 1 }]);
+});
+
+// A lesson accepted on probation is verified like any other: the record names the pair of hashes and the bytes on disk are
+// those, whatever the frontmatter says its gate was. The record carries the probation block and no gate verdict.
+test("standingOf: a lesson accepted on probation is intact when its bytes are the ones of the record", async (t) => {
+  const fixture = createFixture(t);
+  const draft = draftOf({ gate: LESSON_GATE_PROBATION });
+  const text = lessonTextOf(draft);
+  const hashes = hashesOf(text);
+  writeLesson(fixture, draft.slug, text);
+  writeSkillFile(fixture, [draft.slug]);
+
+  const record: DecisionRecord = {
+    ...recordOf({ realDir: fixture.skillDir, draft, hashes }),
+    gate: {
+      basis: "replay",
+      status: "probation",
+      budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+      tokens: { proposal: TOKENS, incumbent: TOKENS, candidate: TOKENS, total: TOKENS },
+      preregistration: null,
+      replay: null,
+      probation: { recordedAt: TS, skillContentHash: HASH },
+    },
+  };
+  assert.equal(fs.readFileSync(lessonPathOf(fixture, draft.slug), "utf8").includes(`gate: "${LESSON_GATE_PROBATION}"`), true);
 
   const report = await standingOf(ledgerOf(acceptedEntry(fixture, record)));
 

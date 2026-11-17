@@ -7,6 +7,8 @@ import path from "node:path";
 import { SriPerimeterError } from "../../src/errors.ts";
 import {
   assertBaseOutsideSkill,
+  banksDir,
+  labelingDir,
   relativeToBase,
   stagingDir,
   stateDir,
@@ -41,6 +43,15 @@ test("writeBase: a directory of the package under the agent directory", (t) => {
   assert.equal(path.basename(writeBase(tree.agentDir)), "sri");
   // Computed, not created: importing and asking must never touch the disk.
   assert.equal(fs.existsSync(writeBase(tree.agentDir)), false);
+});
+
+test("banksDir and labelingDir: under the base, creating nothing", (t) => {
+  const tree = createAgentTree(t);
+
+  assert.equal(banksDir(tree.base), path.join(tree.base, "banks"));
+  assert.equal(labelingDir(tree.base), path.join(tree.base, "labeling"));
+  assert.equal(fs.existsSync(banksDir(tree.base)), false);
+  assert.equal(fs.existsSync(labelingDir(tree.base)), false);
 });
 
 test("stagingDir and stateDir: under the base, creating nothing", (t) => {

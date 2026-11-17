@@ -1,8 +1,9 @@
 import type { AssistantMessage, Context, TextContent } from "@earendil-works/pi-ai";
 import { describeExpectation } from "./diagnosis.ts";
 import { ProposerError } from "./errors.ts";
+import { firstObjectWhere, scanObjects } from "./json-reply.ts";
 import { MAX_BODY_BYTES, serializeLesson, slugify } from "./lesson-frontmatter.ts";
-import { LESSON_GATE_ACCEPTED } from "./types.ts";
+import { LESSON_GATE_ACCEPTED, LESSON_GATE_PROBATION } from "./types.ts";
 import type { Diagnosis, EvidenceItem, GateBasis, LessonDraft, Result } from "./types.ts";
 import { describe, isPlainObject, quote, toErrorMessage } from "./values.ts";
 
@@ -102,6 +103,10 @@ export type CompleteFn = (
   options: { signal?: AbortSignal; maxTokens: number },
 ) => Promise<AssistantMessage>;
 
+// The two labels a candidate is written with: the lesson a gate will measure, and the one the observer offers on probation,
+// which no gate measures. Absent in the input is the first one.
+export type LessonGate = typeof LESSON_GATE_ACCEPTED | typeof LESSON_GATE_PROBATION;
+
 export interface ProposeInput {
   diagnosis: Diagnosis;
   skill: SkillContext;
@@ -116,6 +121,7 @@ export interface ProposeInput {
   // failures are the cases the user wrote, so a run of it carries no evidence item and still has something
   // to write from. The base decides which way the guard below reads; it never decides what the prompt hides.
   basis?: GateBasis;
+  lessonGate?: LessonGate;
   focus?: string;
   now: Date;
   // What the caller aborts with: pi aborts the signal of a tool call it cancels, and a command has
@@ -196,7 +202,7 @@ export function createProposer(complete: CompleteFn): Proposer {
         title: reply.value.title,
         date: utcDate(now),
         status: "accepted",
-        gate: LESSON_GATE_ACCEPTED,
+        gate: input.lessonGate ?? LESSON_GATE_ACCEPTED,
         sourceEvidence: evidence.map((item: EvidenceItem) => item.id),
         body: reply.value.body,
       };
@@ -389,24 +395,16 @@ interface ReplyFields {
 // message a reader of the first object would get: not valid JSON, not an object, or the field that
 // failed. A text with no object at all, or one where every object stops mid-way, is reported as such.
 function parseReply(text: string): Result<ReplyFields, ProposerError> {
-  let starts = 0;
-  let firstRejection: ProposerError | undefined;
+  const found = firstObjectWhere(text, isReplyObject);
+  if (found !== null) return { ok: true, value: { title: found.title.trim(), body: found.body.trim() } };
 
-  for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
-    starts += 1;
-
-    const object = balancedObjectAt(text, start);
-    // An object that opens and never closes is skipped instead of ending the parse: a later object
-    // may still be complete, and a reply with none is truncated as a whole.
-    if (object === undefined) continue;
-
-    const reply = replyFieldsOf(object);
-    if (reply.ok) return reply;
-    firstRejection ??= reply.error;
-  }
-
-  if (firstRejection !== undefined) {
-    return fail(firstRejection.message);
+  // An object that opens and never closes is skipped by the scan instead of ending the parse: a later object may still be
+  // complete, and a reply with none is truncated as a whole.
+  const { objects, starts } = scanObjects(text);
+  const first = objects[0];
+  if (first !== undefined) {
+    const rejection = replyFieldsOf(first);
+    if (!rejection.ok) return fail(rejection.error.message);
   }
 
   return fail(
@@ -414,6 +412,14 @@ function parseReply(text: string): Result<ReplyFields, ProposerError> {
       ? "the reply does not contain a JSON object"
       : "the reply holds an unterminated JSON object: the answer is truncated",
   );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function isReplyObject(value: unknown): value is { title: string; body: string } {
+  return isPlainObject(value) && isNonEmptyString(value.title) && isNonEmptyString(value.body);
 }
 
 // One candidate: the text between its "{" and its matching "}", parsed and checked against the shape
@@ -441,39 +447,6 @@ function replyFieldsOf(json: string): Result<ReplyFields, ProposerError> {
   }
 
   return { ok: true, value: { title: title.trim(), body: body.trim() } };
-}
-
-// The balanced {...} that opens at `start`, honouring strings and their escapes so a brace inside the
-// body does not end the object. undefined means the object never closes; that is not a rejection by
-// itself, because another object later in the text may still be the answer.
-function balancedObjectAt(text: string, start: number): string | undefined {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return text.slice(start, index + 1);
-      }
-    }
-  }
-
-  return undefined;
 }
 
 // The lesson date is the day the proposal was made in UTC. A local clock would date the lesson a

@@ -79,6 +79,16 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
     messagePart: "longer than 200",
   },
   {
+    name: "a prompt over the cap of an evidence excerpt (the prompt is cut when it is persisted)",
+    line: () => ({ ...raisedLine(), prompt: "x".repeat(201) }),
+    messagePart: "longer than 200",
+  },
+  {
+    name: "a subject over the cap of an evidence excerpt (the subject is cut when it is persisted)",
+    line: () => ({ ...raisedLine(), subject: "x".repeat(201) }),
+    messagePart: "longer than 200",
+  },
+  {
     name: "a line that carries the payload of both events",
     line: () => ({ ...raisedLine(), at: AT, skill: "pdf-tools" }),
     messagePart: "branches of the oneOf matched",
@@ -143,7 +153,7 @@ for (const negative of NEGATIVE_CASES) {
 //
 // The cap of the excerpt is the other number the two files share, and its owner is src/evidence.ts: the collector cuts the
 // excerpt at that constant and the schema states the limit in its own bytes, in the branch of the raised event. Nothing
-// else ties the contract to the constant, so the two are compared here instead of described.
+// else ties the contract to the constant, so the two are compared below instead of described.
 test("the schema declares the format and the kinds the collector writes", () => {
   const schema: unknown = loadSignalSchema();
   assert.ok(isPlainObject(schema), "the schema of the signals must be a JSON object");
@@ -155,7 +165,33 @@ test("the schema declares the format and the kinds the collector writes", () => 
   }
 });
 
-test("the schema cuts the excerpt at the cap src/evidence.ts owns", () => {
+// The three texts of a raised line the collector cuts when it persists (B1): the excerpt always was, and the prompt and the
+// subject are now, so the schema states the same limit for the three.
+test("the schema cuts the excerpt, the subject and the prompt at the cap src/evidence.ts owns", () => {
+  const properties = raisedProperties();
+
+  for (const field of ["excerpt", "subject", "prompt"]) {
+    const node: unknown = properties[field];
+    assert.ok(isPlainObject(node), `the raised event must declare the ${field}`);
+    assert.equal(node.maxLength, MAX_EXCERPT_CODE_POINTS, `${field} must be cut at the cap of an evidence excerpt`);
+  }
+});
+
+// B2: the id is the hash over the entry of the user message the turn answers, not over pi's turn index, which starts again
+// at every agent run. The schema is where a reader of the file learns which, so it has to say so.
+test("the schema documents the id over the anchor entry and the turnIndex as a prompt ordinal", () => {
+  const properties = raisedProperties();
+  const id: unknown = properties.id;
+  const turnIndex: unknown = properties.turnIndex;
+  assert.ok(isPlainObject(id) && typeof id.description === "string", "the id must be described");
+  assert.ok(isPlainObject(turnIndex) && typeof turnIndex.description === "string", "the turnIndex must be described");
+
+  assert.equal(id.description.includes("anchorEntryId"), true);
+  assert.equal(id.description.includes("[kind, sessionId, turnIndex, subject]"), false);
+  assert.equal(turnIndex.description.includes("ordinal"), true);
+});
+
+function raisedProperties(): Record<string, unknown> {
   const schema: unknown = loadSignalSchema();
   assert.ok(isPlainObject(schema), "the schema of the signals must be a JSON object");
 
@@ -165,8 +201,5 @@ test("the schema cuts the excerpt at the cap src/evidence.ts owns", () => {
   assert.ok(isPlainObject(raised), "the branch of the raised event must be a schema node");
   const properties = raised.properties;
   assert.ok(isPlainObject(properties), "the raised event must declare the properties of its line");
-  const excerpt: unknown = properties.excerpt;
-  assert.ok(isPlainObject(excerpt), "the raised event must declare the excerpt");
-
-  assert.equal(excerpt.maxLength, MAX_EXCERPT_CODE_POINTS);
-});
+  return properties;
+}

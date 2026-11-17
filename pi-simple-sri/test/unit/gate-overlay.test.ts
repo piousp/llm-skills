@@ -370,3 +370,16 @@ for (const entry of SECTION_MISSING_CASES) {
     assert.equal(upsertReferenceLine(ensured, SLUG, TITLE), upsertReferenceLine(entry.before, SLUG, TITLE));
   });
 }
+
+// The lessons directory of the candidate arm is created by the overlay itself when the skill has none (the first lesson of a
+// skill), so it is private like the rest of staging and not a mkdir with the default mode.
+test("buildArmOverlays: the lessons directory the overlay creates is 0700", async (t) => {
+  const fixture = createFixture(t);
+  fs.rmSync(path.join(fixture.skill.realDir, "lessons"), { recursive: true, force: true });
+
+  const arms = armsOf(await buildArmOverlays(request(fixture)));
+
+  const lessonsDir = path.join(arms.candidateDir, "lessons");
+  assert.equal(fs.statSync(lessonsDir).mode & 0o777, 0o700);
+  assert.equal(readFile(path.join(lessonsDir, `${SLUG}.md`)), LESSON_TEXT);
+});

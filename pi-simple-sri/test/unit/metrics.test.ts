@@ -326,6 +326,51 @@ test("metricsOf: the acceptance rate is over the attempts that reached a gate", 
   assert.equal(metrics.recurrenceRate, 0);
 });
 
+// A lesson accepted on probation never met a gate. It is a lesson in force -- it can come back -- and it is in none of the
+// verdicts: counted as an acceptance it would sit in the numerator of a rate whose denominator it never reached.
+test("metricsOf: a lesson accepted on probation is counted apart and enters no rate of the gate", () => {
+  const probationGate: GateBlock = {
+    basis: "replay",
+    status: "probation",
+    budget: UNSPENT,
+    tokens: TOKEN_TALLY,
+    preregistration: null,
+    replay: null,
+    probation: { recordedAt: TS, skillContentHash: HASH },
+  };
+  const ledger = ledgerOf(
+    entryOf(0, lineOf("accepted", { skill: "a" }), {
+      record: recordOf({ skill: "a", evidence: [evidenceOf("tool_error", "read")], gate: probationGate, outcome: "accepted" }),
+    }),
+    entryOf(1, lineOf("accepted", { skill: "b", candidateHash: OTHER_HASH }), {
+      record: recordOf({ skill: "b", gate: acceptedGate(), outcome: "accepted" }),
+    }),
+    entryOf(2, lineOf("proposed", { skill: "a", ts: LATER }), {
+      record: recordOf({ skill: "a", evidence: [evidenceOf("tool_error", "read")] }),
+    }),
+  );
+
+  const metrics = metricsOf(ledger);
+
+  assert.equal(metrics.probation, 1);
+  // Only the gated acceptance is a verdict: the rate is over one attempt and not over two.
+  assert.equal(metrics.gated.accepted, 1);
+  assert.equal(metrics.gated.attempts, 1);
+  assert.equal(metrics.acceptanceRate, 1);
+  assert.deepEqual(metrics.bySkill, [
+    { skill: "a", accepted: 0, rejected: 0, abstained: 0, recurrences: 1, lessons: 1 },
+    { skill: "b", accepted: 1, rejected: 0, abstained: 0, recurrences: 0, lessons: 1 },
+  ]);
+  // The probation lesson is in force and it came back, so it is in the recurrence like every other lesson.
+  assert.equal(metrics.recurrenceRate, 0.5);
+  // The pairs are the ones of the gated acceptance alone: a probation block has no run to count.
+  assert.equal(metrics.gated.pairs, 1);
+});
+
+test("metricsOf: a series with no probation reports zero of them", () => {
+  assert.equal(metricsOf(ledgerOf(entryOf(0, lineOf("proposed")))).probation, 0);
+});
+
 // The column of support of OA5: the pairs the gate replayed and the ones it counted as a regression. The two numbers are
 // read from the block the gate wrote and never re-derived from the runs, so the report cannot disagree with the record
 // (src/gate/scorer.ts, regressionsOf).

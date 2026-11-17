@@ -58,12 +58,12 @@ import { quote } from "./values.ts";
 // The line the extension reports once at the start of a session (M1c, S11, Q26). It exists because the channels of the
 // package fail differently: the description of the tool is what a model reads and a session notice is what a user reads,
 // and neither reader is guaranteed to see the other. So the line names what can be recorded and through which surface --
-// the failures of the session, the two profiles of a bank, and the tool a correction or a rejection is registered with --
+// the failures of the session, the two profiles of a bank, and -- only when observation is on -- the tool a correction is recorded with for a later review --
 // and the two costs of the gate that have to be known before running it: the tokens a run spends, and the floor of two
 // distinct items below which the paired replay has nothing to compare (MIN_ITEMS, src/gate/scorer.ts). It promises
 // nothing beyond them, and the line names no skill and no path.
 export function feedbackNoticeText(): string {
-  return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from at least two distinct tool failures of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows, and the ${SKILL_IMPROVE_TOOL_NAME} tool registers a correction; the gate spends tokens before a skill is edited.`;
+  return `Feedback that improves the installed skills can be recorded and gated: /${COMMAND_NAME} <skill> learns from at least two distinct tool failures of this session, --bank=<path> measures a directional improvement, --bank=<path> --defect a defect an artifact shows. When \`pi-simple-sri.observe.enabled\` is on, the ${SKILL_IMPROVE_TOOL_NAME} tool records a correction the user made as a note for a later review, without editing any skill or accepting anything. The gate spends tokens before a skill is edited.`;
 }
 
 // The set of skills offered for improvement, as the names of the eligible ones in one comma-separated
@@ -136,8 +136,19 @@ const TOOL_IN_STAGING = "; the skill is untouched and the candidate stays in sta
 const COMMAND_NOT_EDITED = "; the skill was not edited.";
 
 // The clause each surface appends to the sentence it built.
+//
+// The observer proposes from a pattern and never accepts on its own, like the tool: what the user does with a candidate is
+// the command's, so its answers carry the clause of the tool.
 function withClause(surface: DecisionSurface, clause: { tool: string; command: string }): string {
-  return surface === "tool" ? clause.tool : clause.command;
+  switch (surface) {
+    case "command":
+      return clause.command;
+    case "tool":
+    case "observer":
+      return clause.tool;
+    default:
+      return assertNever(surface);
+  }
 }
 
 export function gatePassedText(
@@ -211,9 +222,9 @@ export function signalText(suspicion: Suspicion): string {
 
   switch (suspicion.kind) {
     case "rewritten-draft":
-      return `possible rewritten draft: the file ${quote(suspicion.subject)} was written in an earlier turn and written again in turn ${suspicion.turnIndex} with different arguments. ${tail}`;
+      return `possible rewritten draft: the file ${quote(suspicion.subject)} was written in an earlier prompt and written again in prompt ${suspicion.turnIndex} with different arguments. ${tail}`;
     case "repeated-request":
-      return `possible repeated request: this turn asks, in substance, for what an earlier turn already asked -- ${quote(suspicion.excerpt)}. ${tail}`;
+      return `possible repeated request: this prompt asks, in substance, for what an earlier prompt already asked -- ${quote(suspicion.excerpt)}. ${tail}`;
     default:
       // A kind of a later version that reaches this build of the messages is a sentence nobody wrote: the dispatch names it
       // instead of rendering it with the wording of another one.
@@ -376,9 +387,16 @@ export function metricsText(metrics: Metrics): string {
     `quality defects that failed: ${metrics.buried.toolError} by a tool error, ${metrics.buried.text} by the text.`,
   ];
 
+  if (metrics.probation > 0) lines.push(probationText(metrics.probation));
   if (metrics.records.missing > 0) lines.push(coverageText(metrics.records));
 
   return lines.join("\n");
+}
+
+// The lessons accepted without a gate: said apart from the rates because they are in none of them, and only when there is one,
+// so a report of a series with no probation reads as it always did.
+function probationText(count: number): string {
+  return `${count} ${count === 1 ? "lesson was" : "lessons were"} accepted on probation: no gate measured ${count === 1 ? "it" : "them"}, so ${count === 1 ? "it is" : "they are"} in no rate above.`;
 }
 
 // The share of the attempts that reached a gate that the acceptance accepted. The rate is the one src/metrics.ts projected --

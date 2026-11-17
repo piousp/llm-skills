@@ -18,7 +18,6 @@ import {
   listEligibleSkills,
   proposeSkill,
   type ImproveFlowContext,
-  type ImproveFlowDeps,
   type ImprovementEntry,
 } from "./improve-flow.ts";
 import {
@@ -36,19 +35,28 @@ import {
 } from "./messages.ts";
 import { wireDirectionalGate } from "./model-call.ts";
 import { SKILL_IMPROVE_TOOL_NAME } from "./names.ts";
+import { recordObservation, type ObservationDeps } from "./observe/note.ts";
+import { MAX_SUMMARY_CHARS, type ObservationEvent } from "./observe/types.ts";
 import type { GenerationUsage } from "./proposer.ts";
 import { findSkill, listSkills } from "./skills-inventory.ts";
-import { assertNever, type DecisionSurface, type Diagnosis, type Eligibility, type SkillRef } from "./types.ts";
-import { quote, toErrorMessage } from "./values.ts";
+import {
+  assertNever,
+  type DecisionSurface,
+  type Diagnosis,
+  type Eligibility,
+  type SkillRef,
+} from "./types.ts";
+import { codePointLength, quote, toErrorMessage } from "./values.ts";
 import { writeBase } from "./write-base.ts";
 
-// The skill_improve tool, the second surface of the loop (P9, Q7, M1). It answers four questions the
+// The skill_improve tool, the second surface of the loop (P9, Q7, M1). It answers five questions the
 // model can ask mid-session:
 //
 //   diagnose  what failed in this session, and what would a replay have to test? Read-only.
 //   propose   the same, plus one generation and the staging write.
 //   gate      run the replay budget over a candidate already in staging, which spends tokens.
 //   validate  read the case bank a bankPath names and report the first violation, or that it is valid. Read-only.
+//   record    append a self-report about one skill to the observer log (weight 0.4). It edits nothing and accepts nothing.
 //
 // diagnose and propose run the pipeline of src/improve-flow.ts, the same one /skill-improve runs, so the
 // command and the tool cannot disagree about what is eligible, what counts as evidence or what the
@@ -56,8 +64,9 @@ import { writeBase } from "./write-base.ts";
 // measures the candidate, which the command then carries into the acceptance.
 // What differs is the answer: the command notifies, the tool returns a tool result, and the tool never
 // accepts -- acceptance edits a skill and belongs to the command alone (Q12). That is why the action
-// vocabulary has four values and no acceptance among them: a candidate this action gates stays in staging,
-// untouched, until whoever runs the command decides to accept it, and the fourth action writes nothing at all.
+// vocabulary has no acceptance among its values: a candidate this action gates stays in staging,
+// untouched, until whoever runs the command decides to accept it, and validate writes nothing at all. record writes one
+// line of the observer log and never reaches a skill.
 //
 // Rule 3: the description below travels in every session that loads this tool, so it says in one
 // sentence that the tool never edits the skill. The rest of the promise is in the code: the only
@@ -94,21 +103,29 @@ const SURFACE: DecisionSurface = "tool";
 // caller the path of those bytes instead of making it guess.
 const GATE_DIR = "gate";
 
-export type SkillImproveAction = "diagnose" | "propose" | "gate" | "validate";
+export type SkillImproveAction = "diagnose" | "propose" | "gate" | "validate" | "record";
 
-// The action names the four entry points of the surfaces, and the schema accepts nothing else: a tool call
-// outside this union is refused by the runtime before execute() runs. None of the four accepts a candidate:
+// The action names the entry points of the surfaces, and the schema accepts nothing else: a tool call
+// outside this union is refused by the runtime before execute() runs. None of them accepts a candidate:
 // acceptance edits a skill and belongs to the command alone (Q12).
 export const skillImproveParams = Type.Object({
   action: Type.Union(
-    [Type.Literal("diagnose"), Type.Literal("propose"), Type.Literal("gate"), Type.Literal("validate")],
+    [
+      Type.Literal("diagnose"),
+      Type.Literal("propose"),
+      Type.Literal("gate"),
+      Type.Literal("validate"),
+      Type.Literal("record"),
+    ],
     {
       description:
-        "diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens: a budget needs at least two distinct items, and below that the answer is insufficient-items; validate reads the case bank that bankPath names and reports its first violation or that the bank is valid, and it writes nothing and spends nothing",
+        `diagnose reports what failed and what the replay would test; propose stages a lesson candidate; gate runs the replay budget over a candidate already in staging, which spends tokens: a budget needs at least two distinct items, and below that the answer is insufficient-items; validate reads the case bank that bankPath names and reports its first violation or that the bank is valid, and it writes nothing and spends nothing; record appends a self-report about the skill to the observer log, with the note in focus (at most ${MAX_SUMMARY_CHARS} characters), when the user turned observation on: it never edits the skill and never accepts, and one report proposes nothing`,
     },
   ),
   skill: Type.String({ description: "Exact skill name, as listed by the inventory" }),
-  focus: Type.Optional(Type.String({ description: "Optional hint about what to improve" })),
+  focus: Type.Optional(
+    Type.String({ description: "Optional hint about what to improve; for record, the note: what the user corrected" }),
+  ),
   // Typebox has no conditional without oneOf, so "gate needs a candidate" cannot live in the schema. It lives
   // in runGate as a typed refusal with stable details, and this description is the only warning the model gets
   // from the schema: the rule enforced, not merely documented, is the check before the first read.
@@ -159,6 +176,8 @@ export type SkillImproveOutcome =
   | "no-baseline"
   | "bank-valid"
   | "bank-refused"
+  | "recorded"
+  | "observe-disabled"
   | "error";
 
 // The documented shape of `details` (rule 6). `reason` is the vocabulary of the refusal for the predictable
@@ -206,7 +225,7 @@ export interface ToolDetails {
 // (a base with no baseline is one of its outcomes), so a test that proves the dispatch cannot drive it through the seam of
 // the other base. The judge it requires is not a seam: the one wiring of src/model-call.ts builds it from the session, and a
 // test that wants a verdict replaces the whole flow instead of the call inside it.
-export interface SkillImproveToolDeps extends ImproveFlowDeps {
+export interface SkillImproveToolDeps extends ObservationDeps {
   appendEntry?: (customType: string, data: ImprovementEntry) => void;
   gate?: typeof gateStagedCandidate;
   gateDirectional?: typeof gateDirectionalCandidate;
@@ -221,10 +240,11 @@ const TOOL_DESCRIPTION = [
   "bank, with defect when that bank describes a defect an artifact shows, and gate measures the candidate with the cases of",
   "that bank. gate spends the replay budget it preregisters and every run of it spends tokens; a bank that is absent or",
   "unreadable spends nothing and leaves the attempt retryable. validate reads that one file and answers its first",
-  "violation, in the words gate uses, or that the bank is valid, without writing or spending. Before any of that is spent,",
-  "the tool also records a correction or a rejection: a correction the user made in this session, which propose reads, and",
-  "a draft the user rejected, which is a case of a bank of a defect. It never edits the skill and never accepts a candidate:",
-  "the only writes are the package staging tree, the attempt index and the session entry, and acceptance belongs to the",
+  "violation, in the words gate uses, or that the bank is valid, without writing or spending. record appends a self-report",
+  "to the observer log -- the skill and, in focus, a note of what the user corrected -- when the user turned observation on;",
+  "it only adds one line to the log, and one report proposes nothing: the observer proposes a lesson when a pattern recurs",
+  "across sessions and the user approves it. The tool never edits the skill and never accepts a candidate: the only writes",
+  "are the package staging tree, the attempt index, the observer log and the session entry, and acceptance belongs to the",
   "/skill-improve command.",
 ].join(" ");
 
@@ -285,6 +305,8 @@ export async function runSkillImproveTool(
         return await runGate(resolved, ctx, deps, signal);
       case "validate":
         return await runValidate(resolved);
+      case "record":
+        return await runRecord(resolved, ctx, deps);
       default:
         return assertNever(resolved.action);
     }
@@ -695,6 +717,50 @@ async function runValidate(params: SkillImproveParams): Promise<AgentToolResult<
   };
 }
 
+// The fifth action: one self-report about a skill, appended to the observer log. It spends no model call and writes one line;
+// the skill is only looked up. Observation is opt-in, so a session that did not turn it on records nothing and says so.
+async function runRecord(
+  params: SkillImproveParams,
+  ctx: ImproveFlowContext,
+  deps: SkillImproveToolDeps,
+): Promise<AgentToolResult<ToolDetails>> {
+  const action: SkillImproveAction = "record";
+  const note = params.focus?.trim() ?? "";
+
+  if (note === "") {
+    return failure(action, params.skill, "error", "missing-note", missingNoteText(params.skill));
+  }
+  if (codePointLength(note) > MAX_SUMMARY_CHARS) {
+    return failure(action, params.skill, "error", "note-too-long", noteTooLongText(params.skill));
+  }
+
+  const result = await recordObservation({ source: "self-report", skillName: params.skill, text: note }, ctx, deps);
+
+  switch (result.kind) {
+    case "recorded":
+      return {
+        content: [{ type: "text", text: recordedText(result.event) }],
+        details: { action, skill: result.event.skill, outcome: "recorded" },
+      };
+    case "observe-disabled":
+      return failure(action, params.skill, "observe-disabled", "observe-disabled", observeDisabledText(params.skill));
+    case "no-user-message":
+      return failure(action, params.skill, "error", "no-user-message", noUserMessageText(params.skill));
+    case "unknown-skill":
+      return failure(
+        action,
+        params.skill,
+        "unknown-skill",
+        "unknown-skill",
+        unknownSkillText(SURFACE, result.skillName, result.standalone, result.eligible),
+      );
+    case "not-eligible":
+      return failure(action, result.skill.name, "not-eligible", result.reason, notEligibleText(result.skill, result.reason));
+    default:
+      return assertNever(result);
+  }
+}
+
 // The sentence of a gate, from the vocabulary of src/messages.ts: three verdicts and the answer of a base with no baseline, and
 // no fifth, so a variant added to src/gate/types.ts stops compiling here.
 function verdictTextOf(skill: SkillRef, result: GateConcludedResult | NoBaselineResult): string {
@@ -789,6 +855,27 @@ function missingBankPathText(skill: string): string {
 // The sentence of the missing bank on the fourth action: the same missing argument gate refuses, said without the word defect.
 function validateNeedsBankText(skill: string): string {
   return `${SKILL_IMPROVE_TOOL_NAME}: validate needs the bankPath of the case bank to read for skill ${quote(skill)}, and the call carried none; nothing was read and no run was spent.`;
+}
+
+// The sentences of the fifth action: what was recorded and what that does not do, and why nothing was.
+function recordedText(event: ObservationEvent): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: recorded a self-report for skill ${quote(event.skill)} (weight ${event.weight}); the skill was not edited and nothing was accepted. A lesson is proposed only if the pattern recurs across sessions, and the user approves it.`;
+}
+
+function missingNoteText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: record needs the note in focus for skill ${quote(skill)}, and the call carried none; nothing was written.`;
+}
+
+function noteTooLongText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: the note for skill ${quote(skill)} is longer than ${MAX_SUMMARY_CHARS} characters; shorten it. Nothing was written.`;
+}
+
+function observeDisabledText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: observation is off, so the self-report for skill ${quote(skill)} was not recorded; the user turns it on with pi-simple-sri.observe.enabled in settings.json. Nothing was written.`;
+}
+
+function noUserMessageText(skill: string): string {
+  return `${SKILL_IMPROVE_TOOL_NAME}: this session has no user message to anchor the self-report for skill ${quote(skill)} on; nothing was written.`;
 }
 
 // The refusal of the fourth action: the reason of the reader travels as the reader wrote it, prefix included, because that is

@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 import { sha256Digest, sha256Hex } from "./hash.ts";
+import { splitSkillBlock } from "./skill-block.ts";
 import type { EvidenceItem, EvidenceKind } from "./types.ts";
 import { cutCodePoints, isPlainObject } from "./values.ts";
 
@@ -135,7 +136,7 @@ export function deriveEvidence(entries: readonly SessionMessageEntry[]): Derived
 // text corrects the error still pending, if there is one, and then becomes the prompt of the
 // turn the next assistant reply opens.
 function handleUserMessage(derivation: Derivation, message: UserMessage, timestamp: number): void {
-  const text = textOf(message.content).trim();
+  const text = splitSkillBlock(textOf(message.content)).userText.trim();
   if (text === "") return;
 
   const { pending } = derivation;

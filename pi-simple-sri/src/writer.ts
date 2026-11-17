@@ -6,12 +6,23 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { SriWriterError } from "./errors.ts";
 import { sha256Digest } from "./hash.ts";
 import { parseLesson, serializeLesson } from "./lesson-frontmatter.ts";
-import { ATTEMPTS_FILE, DECISION_FILE, HISTORY_DIR, LESSONS_DIR, RETIREMENT_FILE, SIGNALS_FILE, SKILL_FILE } from "./names.ts";
+import {
+  ATTEMPTS_FILE,
+  CASE_BANK_FILE,
+  DECISION_FILE,
+  HISTORY_DIR,
+  LESSONS_DIR,
+  OBSERVE_FILE,
+  RETIREMENT_FILE,
+  SIGNALS_FILE,
+  SKILL_FILE,
+} from "./names.ts";
+import type { ObserveEvent } from "./observe/types.ts";
 // Type-only, so the append of a signal line does not make this module depend on the collector at run time: the
 // collector is the module that writes through this chokepoint, and the shape of the line it writes is declared there.
 import type { SignalLine } from "./signals.ts";
-import { stagingDir, stateDir } from "./write-base.ts";
-import { assertWritable, isInsideOrEqual } from "./perimeter.ts";
+import { relativeToBase, stagingDir, stateDir, writeBase } from "./write-base.ts";
+import { assertWritable, isInsideOrEqual, resolveExistingAncestor, SriPerimeterError } from "./perimeter.ts";
 import * as skillReference from "./skill-reference.ts";
 import type { AttemptLine, DecisionRecord, Result, RetirementRecord, SkillRef } from "./types.ts";
 import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile, quote, toErrorMessage } from "./values.ts";
@@ -32,11 +43,15 @@ import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile,
 //   4. reads the file back and compares the bytes, so a write that did not land is an
 //      error instead of a silent success (verification on write, not only on read).
 //
-// The two writes of the package that are not a temporary file and a rename are the appends to the two files that are only
-// ever added to: the index of attempts and the file of signals. One line is appended to them, in one write, and the write
-// is verified against the tail of the file instead of against a read of the whole thing (appendAttemptLine, OA11;
-// appendSignalLine, M3 S5). Everything above -- the perimeter first, the queue around it -- still holds for both, and both
-// go through the same private helper so the protocol exists once.
+// The writes of the package that are not a temporary file and a rename are the appends to the three files that are only
+// ever added to: the index of attempts, the file of signals and the log of the observer. One line is appended to them, in
+// one write, and the write is verified against the tail of the file instead of against a read of the whole thing
+// (appendAttemptLine, OA11; appendSignalLine, M3 S5; appendObserveLine). Everything above -- the perimeter first, the queue
+// around it -- still holds for all of them, and they go through the same private helper so the protocol exists once.
+//
+// Two more things are not a rename: createExclusiveFile (O_EXCL, the claim of the lock of the observer) and the removals
+// (removeFileIn, removeStagingDir and the erasures of a forget), which pass the same perimeter. The directories the observer
+// owns are made by ensurePrivateDir, which checks the perimeter before it creates anything.
 //
 // Nothing here renders lesson frontmatter: src/lesson-frontmatter.ts owns that format
 // (P6) and hands the serialized file over as text. This module only moves bytes, hashes
@@ -49,15 +64,41 @@ import { isAlreadyExistsError, isMissingPathError, isPlainObject, isRegularFile,
 const TEMP_PREFIX = ".sri-write-";
 const MAX_TIMESTAMP_ATTEMPTS = 100;
 
+// What the observer creates is private to the user: the observations are about what the user asked and corrected. Only
+// what the observer writes carries these modes; the attempts and the signals keep the defaults they always had.
+const PRIVATE_FILE_MODE = 0o600;
+const PRIVATE_DIR_MODE = 0o700;
+
+// Staging holds what the observer asked for and what was said about it (the lessons, the focus in decision.json, the copies of banks,
+// the runs of the gate), so everything this module creates under it is private too. writeStagingCandidate knows the base; the two
+// primitives that take only a root (writeTextAtomically, copySkillTree) recognize a path of staging by its place: <base>/staging, where
+// the base is the `sri` directory writeBase names. A path anywhere else keeps the modes it always had.
+const BASE_DIR_NAME = path.basename(writeBase(""));
+const STAGING_DIR_NAME = path.basename(stagingDir(""));
+
+function isUnderStaging(target: string): boolean {
+  const parts = path.resolve(target).split(path.sep);
+  for (let index = 1; index < parts.length - 1; index += 1) {
+    if (parts[index] === STAGING_DIR_NAME && parts[index - 1] === BASE_DIR_NAME) return true;
+  }
+  return false;
+}
+
 // How much wider than its own line the verification of an append reads the tail of the index. The queue
 // serializes this process only (OA11), so a line another process of pi appended between the write of this one
 // and the read that follows it can be the last line of the file, and the line of this call then sits one or
 // more lines back. A line of the index is a few hundred bytes, so this slack holds a whole cluster of them.
 const TAIL_SLACK_BYTES = 8 * 1024;
 
-// What a copy of a skill tree never receives: the skill's own history and its version control directory.
-// Both live inside the skill directory and neither is part of what pi loads from it (Q9).
-const EXCLUDED_COPY_ENTRIES: readonly string[] = [HISTORY_DIR, ".git"];
+// What a copy of a skill tree never receives, by file name at any depth: the skill's own history, its version control
+// directory and its case bank. The first two live inside the skill directory and neither is part of what pi loads from it
+// (Q9).
+//
+// B4 (exclude bank from overlay): a case bank shipped inside the skill is the gate's material and not the skill's, so an arm
+// that carried it would show the replayed model the very cases it is judged on. The copy of the bank the gate leaves next
+// to a staged candidate does not come through here: it is written by writeTextAtomically. Because the match is by name at
+// any depth, a file called case-bank.json in a subdirectory of the skill is left behind too.
+const EXCLUDED_COPY_ENTRIES: readonly string[] = [HISTORY_DIR, ".git", CASE_BANK_FILE];
 
 // The error class lives in src/errors.ts with the rest of the fail-closed errors; it is
 // re-exported here because this is the module that raises it.
@@ -143,7 +184,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
     );
   }
 
-  fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.mkdirSync(stagingRoot, { recursive: true, mode: PRIVATE_DIR_MODE });
 
   const baseTimestamp = formatTimestamp(input.now, "staging directory");
 
@@ -162,7 +203,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
   const lessonPath = path.join(lessonsDir, lessonFileName);
   const decisionPath = path.join(candidateDir, DECISION_FILE);
 
-  fs.mkdirSync(lessonsDir, { recursive: true });
+  fs.mkdirSync(lessonsDir, { recursive: true, mode: PRIVATE_DIR_MODE });
 
   // Both hashes come from the same text (I6), through the one function that computes the pair
   // (lessonHashes below): the whole file as it will be written, and the normalized body of the draft
@@ -178,7 +219,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
   // added later cannot skip it.
   const lessonBytes = Buffer.from(input.lessonText, "utf8");
 
-  await writeFileQueued(lessonPath, lessonBytes, lessonsDir);
+  await writeFileQueued(lessonPath, lessonBytes, lessonsDir, PRIVATE_FILE_MODE);
 
   const { contentHash, bodyHash } = hashes.value;
   // decision.json lands last and already stamped: a record on disk means the lesson it names
@@ -190,6 +231,7 @@ export async function writeStagingCandidate(input: StagingWriteInput): Promise<S
       "utf8",
     ),
     candidateDir,
+    PRIVATE_FILE_MODE,
   );
 
   return {
@@ -226,10 +268,21 @@ export async function appendSignalLine(base: string, line: SignalLine): Promise<
   await appendStateLine(base, SIGNALS_FILE, line);
 }
 
+// The same append for the log of the observer: state/observe.jsonl, created 0600 inside a state/ created 0700. One
+// line per call and no lock (OA11): the lock of the observer guards the scan and the forget, never an append.
+export async function appendObserveLine(base: string, line: ObserveEvent): Promise<void> {
+  await appendStateLine(base, OBSERVE_FILE, line, true);
+}
+
 // The one append of the module: `file` is the name of an append-only file under state/, and the base of the run decides
 // the directory it lands in. The caller of an append names no path, so no caller can append outside the state directory
-// of the base it was given.
-async function appendStateLine(base: string, file: string, line: AttemptLine | SignalLine): Promise<void> {
+// of the base it was given. `isPrivate` sets the modes of what this call creates; a file or directory that exists keeps its own.
+async function appendStateLine(
+  base: string,
+  file: string,
+  line: AttemptLine | SignalLine | ObserveEvent,
+  isPrivate = false,
+): Promise<void> {
   requireAbsoluteBase(base, "append");
 
   // The base is known here, so the write is guarded against the whole state directory instead of the path the
@@ -237,7 +290,8 @@ async function appendStateLine(base: string, file: string, line: AttemptLine | S
   // here.
   const stateRoot = stateDir(base);
   const statePath = path.join(stateRoot, file);
-  fs.mkdirSync(stateRoot, { recursive: true });
+  if (isPrivate) ensurePrivateDir(stateRoot, base);
+  else fs.mkdirSync(stateRoot, { recursive: true });
 
   // One string, one write: the newline travels with the line, so a crash either lands the whole event or
   // leaves the file as it was to the last complete line.
@@ -246,7 +300,7 @@ async function appendStateLine(base: string, file: string, line: AttemptLine | S
 
   await withFileMutationQueue(statePath, async () => {
     await assertEndsWithNewline(statePath);
-    await appendQueued(statePath, bytes, stateRoot);
+    await appendQueued(statePath, bytes, stateRoot, isPrivate ? PRIVATE_FILE_MODE : undefined);
 
     // Verified by its tail: the question is whether the line landed, and the last bytes of the file answer
     // it without reading -- and certainly without rewriting -- the lines that were already there.
@@ -402,12 +456,13 @@ export async function copySkillTree(sourceRealDir: string, destinationDir: strin
   // exists (I10: nothing this module creates is created unguarded).
   assertWritable(destinationDir, [root]);
   const sourceDir = requireDirectory(sourceRealDir, "skill directory");
+  const isPrivate = isUnderStaging(destinationDir);
 
   return await withFileMutationQueue(destinationDir, async () => {
     try {
       // The root of every file of the copy is the copy itself: it exists from the mkdir inside copyTree,
       // and nothing the walk discovers can place a file outside it.
-      await copyTree(sourceDir, destinationDir, destinationDir, EXCLUDED_COPY_ENTRIES);
+      await copyTree(sourceDir, destinationDir, destinationDir, EXCLUDED_COPY_ENTRIES, isPrivate);
     } catch (error) {
       // A copy that fails halfway leaves an arm missing files, and an arm is read as the whole skill: it
       // is discarded instead of published, the same rule the history snapshot follows (I7).
@@ -429,9 +484,218 @@ export async function copySkillTree(sourceRealDir: string, destinationDir: strin
 // caller names the narrowest root the file may land in -- the directory the artefact belongs to -- and
 // this primitive only forwards to the write the rest of the module uses, so the temporary file, the
 // rename, the read-back and the symlink rule (Q11) are not restated here. No directory is created: a
-// target whose directory does not exist is a refusal, never an implicit mkdir.
+// target whose directory does not exist is a refusal, never an implicit mkdir. A file of the staging tree is created 0600.
 export async function writeTextAtomically(target: string, text: string, root: string): Promise<void> {
-  await writeFileQueued(target, Buffer.from(text, "utf8"), root);
+  await writeFileQueued(target, Buffer.from(text, "utf8"), root, isUnderStaging(target) ? PRIVATE_FILE_MODE : undefined);
+}
+
+// The directory of something the observer keeps, created 0700 with its missing parents, after the perimeter: `dir` has to be
+// `base` or inside it, and the part of it that exists, resolved through its links, has to be inside the resolved `base`, so a
+// link out of the base refuses before anything is created. Unlike the perimeter of a write, `base` may not exist yet: the
+// first call of a run creates it with the rest. Both paths must be absolute. An existing directory keeps its own mode.
+export function ensurePrivateDir(dir: string, base: string): void {
+  if (!path.isAbsolute(dir) || !path.isAbsolute(base)) {
+    throw new SriWriterError(`${quote(dir)} or ${quote(base)} is not absolute: refusing to create a directory`, dir);
+  }
+  const declared = path.resolve(dir);
+  if (!isInsideOrEqual(declared, path.resolve(base))) {
+    throw new SriPerimeterError(`refusing to create ${quote(declared)}: it is outside ${quote(base)}`, declared);
+  }
+  if (!isInsideOrEqual(resolveExistingAncestor(declared), resolveExistingAncestor(base))) {
+    throw new SriPerimeterError(
+      `refusing to create ${quote(declared)}: its existing part resolves outside ${quote(base)}`,
+      declared,
+    );
+  }
+  fs.mkdirSync(declared, { recursive: true, mode: PRIVATE_DIR_MODE });
+}
+
+// The write of the observer's files (the banks, the cursor, the settings it rewrites, the file a forget rewrites): the same
+// atomic write, with the temporary file created 0600 so the renamed file is never readable by others, not even briefly. Unlike
+// writeTextAtomically it creates the missing directories of the target, 0700, but only after the perimeter accepted the
+// target: `root` has to exist, and a directory that is a link out of it refuses the write before anything is created.
+export async function writePrivateFile(target: string, text: string, root: string): Promise<void> {
+  assertWritable(target, [root]);
+  ensurePrivateDir(path.dirname(target), root);
+  await withFileMutationQueue(target, () => writeFileAtomic(target, Buffer.from(text, "utf8"), root, PRIVATE_FILE_MODE));
+}
+
+// Creates the file only if it does not exist (O_EXCL), private, and answers whether this call created it. It is the claim
+// the lock of the observer is made of: of two callers racing for the same path exactly one gets true.
+export async function createExclusiveFile(target: string, text: string, root: string): Promise<boolean> {
+  assertWritable(target, [root]);
+  ensurePrivateDir(path.dirname(target), root);
+
+  return await withFileMutationQueue(target, async () => {
+    try {
+      await fs.promises.writeFile(target, text, { flag: "wx", mode: PRIVATE_FILE_MODE });
+      return true;
+    } catch (error) {
+      if (isAlreadyExistsError(error)) return false;
+      throw new SriWriterError(`cannot create ${quote(target)}: ${toErrorMessage(error)}`, target);
+    }
+  });
+}
+
+// Removes one file inside `root`. The answer says whether the path is gone afterwards, the reading removeLessonFile has: an
+// absent file is gone, and a directory is not removed (this is not a recursive delete).
+export async function removeFileIn(target: string, root: string): Promise<boolean> {
+  assertWritable(target, [root]);
+  return await withFileMutationQueue(target, async () => removeIfExists(target));
+}
+
+// The content of a staged candidate, erased (forget): its lessons and the copy of the bank. decision.json stays, with the
+// hashes and the verdict it carries, so the audit of what was decided survives the erasure of what was said. `stagingPath` is
+// relative to the base (the way records name it) or absolute; the answer lists what was removed, relative to the base and
+// sorted. Only files inside <base>/staging are removed.
+export async function eraseStagingContent(base: string, stagingPath: string): Promise<string[]> {
+  requireAbsoluteBase(base, "erase", stagingPath);
+
+  const stagingRoot = stagingDir(base);
+  const candidateDir = path.resolve(base, stagingPath);
+  assertWritable(candidateDir, [stagingRoot]);
+
+  const lessonsDir = path.join(candidateDir, LESSONS_DIR);
+  const lessons = fs.existsSync(lessonsDir) && fs.statSync(lessonsDir).isDirectory()
+    ? fs.readdirSync(lessonsDir).filter((name) => name.endsWith(".md")).map((name) => path.join(lessonsDir, name))
+    : [];
+
+  const removed: string[] = [];
+  for (const file of [path.join(candidateDir, CASE_BANK_FILE), ...lessons]) {
+    assertWritable(file, [stagingRoot]);
+    const existed = fs.existsSync(file);
+    if (existed && (await withFileMutationQueue(file, async () => removeIfExists(file)))) {
+      removed.push(relativeToBase(base, file));
+    }
+  }
+  return removed.sort();
+}
+
+// Only the copy of the bank of a staged candidate: the part of an accepted candidate that quotes prompts verbatim. The lesson
+// and decision.json stay. Same path rules and answer as eraseStagingContent.
+export async function eraseStagingBank(base: string, stagingPath: string): Promise<string[]> {
+  requireAbsoluteBase(base, "erase", stagingPath);
+
+  const stagingRoot = stagingDir(base);
+  const bank = path.join(path.resolve(base, stagingPath), CASE_BANK_FILE);
+  assertWritable(bank, [stagingRoot]);
+
+  const existed = fs.existsSync(bank);
+  const removed = existed && (await withFileMutationQueue(bank, async () => removeIfExists(bank)));
+  return removed ? [relativeToBase(base, bank)] : [];
+}
+
+// A directory of the staging tree removed with everything in it (the drafts of the observer's banks, the raw runs of a gate).
+// `target` is relative to the base or absolute, and it has to be inside <base>/staging and not staging itself. The answer is
+// the number of files it held; a directory that is not there answers 0, and a link or a file in its place is refused.
+export async function removeStagingDir(base: string, target: string): Promise<number> {
+  requireAbsoluteBase(base, "remove", target);
+
+  const stagingRoot = stagingDir(base);
+  const dir = path.resolve(base, target);
+  assertWritable(dir, [stagingRoot]);
+  if (dir === path.resolve(stagingRoot)) {
+    throw new SriWriterError(`refusing to remove ${quote(dir)}: it is the staging directory itself`, dir);
+  }
+
+  let stats: fs.Stats;
+  try {
+    stats = fs.lstatSync(dir);
+  } catch (error) {
+    if (isMissingPathError(error)) return 0;
+    throw new SriWriterError(`cannot inspect ${quote(dir)}: ${toErrorMessage(error)}`, dir);
+  }
+  if (!stats.isDirectory()) {
+    throw new SriWriterError(`refusing to remove ${quote(dir)}: it is not a directory`, dir);
+  }
+
+  return await withFileMutationQueue(dir, async () => {
+    const files = listRelativeFiles(dir).length;
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    return files;
+  });
+}
+
+// The pattern a candidate was proposed for travels in `trigger.focus` of its decision.json, and the summary of the diagnosis
+// quotes it (`diagnosis.summary`, src/diagnosis.ts): a forget sets both to null and leaves the rest of the record as it is,
+// which is not the rewrite of rewriteStagingDecision (that one verifies a lesson that a forget may have just erased). The
+// answer says whether the record changed: a record that is absent, is not JSON or has neither field is left alone. The file
+// is rewritten 0600, because it is in staging.
+export async function clearDecisionFocus(base: string, stagingPath: string): Promise<boolean> {
+  requireAbsoluteBase(base, "rewrite", stagingPath);
+
+  const stagingRoot = stagingDir(base);
+  const decisionPath = path.resolve(base, stagingPath, DECISION_FILE);
+  assertWritable(decisionPath, [stagingRoot]);
+
+  return await clearFocusCopies(decisionPath, stagingRoot, () => PRIVATE_FILE_MODE);
+}
+
+// The same erasure for the record of an acceptance, <skill>/.history/<timestamp>/decision.json, which copies the focus too.
+// `decisionPath` is what the index names; it has to be a decision.json inside the .history/ of `skillRealDir`, and anything else
+// is refused before a byte is read. A history that is not there has no record to clear. History is not private: the file keeps
+// the mode it has.
+export async function clearHistoryDecisionFocus(skillRealDir: string, decisionPath: string): Promise<boolean> {
+  const skillDir = requireDirectory(skillRealDir, "skill directory");
+  const historyDir = path.join(skillDir, HISTORY_DIR);
+  const target = path.resolve(decisionPath);
+
+  if (!isInsideOrEqual(target, historyDir) || path.basename(target) !== DECISION_FILE) {
+    throw new SriPerimeterError(
+      `refusing to rewrite ${quote(target)}: it is not a ${DECISION_FILE} inside ${quote(historyDir)}`,
+      target,
+    );
+  }
+  if (!fs.existsSync(historyDir)) return false;
+  assertWritable(target, [historyDir]);
+
+  return await clearFocusCopies(target, historyDir, (existing) => existing);
+}
+
+// `modeOf` answers the mode of the rewritten file from the one it had (undefined: the default of a new file).
+async function clearFocusCopies(
+  decisionPath: string,
+  root: string,
+  modeOf: (existing: number | undefined) => number | undefined,
+): Promise<boolean> {
+  return await withFileMutationQueue(decisionPath, async () => {
+    let text: string;
+    try {
+      text = await fs.promises.readFile(decisionPath, "utf8");
+    } catch (error) {
+      if (isMissingPathError(error)) return false;
+      throw new SriWriterError(`cannot read ${quote(decisionPath)}: ${toErrorMessage(error)}`, decisionPath);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return false;
+    }
+    if (!isPlainObject(parsed)) return false;
+
+    const next: Record<string, unknown> = { ...parsed };
+    let changed = false;
+    if (isPlainObject(parsed.trigger) && parsed.trigger.focus !== null && parsed.trigger.focus !== undefined) {
+      next.trigger = { ...parsed.trigger, focus: null };
+      changed = true;
+    }
+    if (isPlainObject(parsed.diagnosis) && parsed.diagnosis.summary !== null && parsed.diagnosis.summary !== undefined) {
+      next.diagnosis = { ...parsed.diagnosis, summary: null };
+      changed = true;
+    }
+    if (!changed) return false;
+
+    let existing: number | undefined;
+    try {
+      existing = (await fs.promises.stat(decisionPath)).mode & 0o777;
+    } catch {
+      existing = undefined;
+    }
+    await writeFileAtomic(decisionPath, Buffer.from(`${JSON.stringify(next, null, 2)}\n`, "utf8"), root, modeOf(existing));
+    return true;
+  });
 }
 
 export interface DecisionRewriteResult {
@@ -495,6 +759,7 @@ export async function rewriteStagingDecision(
         "utf8",
       ),
       stagingRoot,
+      PRIVATE_FILE_MODE,
     );
 
     return { decisionPath, contentHash, bodyHash };
@@ -810,8 +1075,8 @@ function allocateCandidateDir(stagingRoot: string, baseTimestamp: string): strin
     const dir = path.join(stagingRoot, name);
     try {
       // mkdir without recursive is the atomic test-and-set: it throws EEXIST for the
-      // loser, which is exactly the collision signal.
-      fs.mkdirSync(dir);
+      // loser, which is exactly the collision signal. The directory holds the lesson and the decision record, so it is private.
+      fs.mkdirSync(dir, { mode: PRIVATE_DIR_MODE });
       return dir;
     } catch (error) {
       if (!isAlreadyExistsError(error)) {
@@ -864,14 +1129,15 @@ function normalizeBody(body: string): string {
 // a layout that links it into the skill -- would lose the link. The link is resolved before the
 // temporary file exists, and the perimeter checks the resolved path: a link that points outside every
 // writable root is refused instead of followed out of it.
-async function writeFileAtomic(target: string, bytes: Buffer, root: string): Promise<void> {
+async function writeFileAtomic(target: string, bytes: Buffer, root: string, mode?: number): Promise<void> {
   const destination = resolveWriteTarget(target);
   assertWritable(destination, [root]);
   const tempPath = path.join(path.dirname(destination), `${TEMP_PREFIX}${randomUUID()}`);
 
   try {
     // "wx" never reuses an existing temporary file.
-    await fs.promises.writeFile(tempPath, bytes, { flag: "wx" });
+    // The mode is part of the creation, so no moment exists in which the file is readable by others.
+    await fs.promises.writeFile(tempPath, bytes, mode === undefined ? { flag: "wx" } : { flag: "wx", mode });
     await fs.promises.rename(tempPath, destination);
   } catch (error) {
     await removeIfExists(tempPath);
@@ -922,9 +1188,9 @@ function resolveWriteTarget(target: string): string {
 // call (staging/<ts>/<skill>/...), so serializing per file is enough here. The name says queue,
 // not verification: the byte comparison belongs to writeFileAtomic, which this wrapper only
 // calls.
-async function writeFileQueued(target: string, bytes: Buffer, root: string): Promise<void> {
+async function writeFileQueued(target: string, bytes: Buffer, root: string, mode?: number): Promise<void> {
   assertWritable(target, [root]);
-  await withFileMutationQueue(target, () => writeFileAtomic(target, bytes, root));
+  await withFileMutationQueue(target, () => writeFileAtomic(target, bytes, root, mode));
 }
 
 // `root` is the perimeter every copied file must stay inside; it is the same root the caller
@@ -936,8 +1202,9 @@ async function copyTree(
   destinationDir: string,
   root: string,
   exclude: readonly string[] = [],
+  isPrivate = false,
 ): Promise<void> {
-  fs.mkdirSync(destinationDir, { recursive: true });
+  fs.mkdirSync(destinationDir, isPrivate ? { recursive: true, mode: PRIVATE_DIR_MODE } : { recursive: true });
 
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     if (exclude.includes(entry.name)) continue;
@@ -945,9 +1212,9 @@ async function copyTree(
     const source = path.join(sourceDir, entry.name);
     const destination = path.join(destinationDir, entry.name);
     if (entry.isDirectory()) {
-      await copyTree(source, destination, root, exclude);
+      await copyTree(source, destination, root, exclude, isPrivate);
     } else if (entry.isFile()) {
-      await writeFileAtomic(destination, await readBytesOrThrow(source), root);
+      await writeFileAtomic(destination, await readBytesOrThrow(source), root, isPrivate ? PRIVATE_FILE_MODE : undefined);
     } else {
       // Symlinks and devices are refused: neither a snapshot nor an arm may depend on content outside
       // the skill, and a link can point anywhere, including out of the root the copy is guarded by.
@@ -1000,12 +1267,12 @@ async function assertEndsWithNewline(filePath: string): Promise<void> {
 // guard runs before the handle exists (I10), so no call site reaches the disk without the perimeter. The
 // handle is followed, not replaced: "a" writes through a symlink instead of renaming over it (Q11), and a
 // link that points outside the root was already refused above.
-async function appendQueued(target: string, bytes: Buffer, root: string): Promise<void> {
+async function appendQueued(target: string, bytes: Buffer, root: string, mode?: number): Promise<void> {
   assertWritable(target, [root]);
 
   let bytesWritten: number;
   try {
-    bytesWritten = await appendToFile(target, bytes);
+    bytesWritten = await appendToFile(target, bytes, mode);
   } catch (error) {
     throw new SriWriterError(`cannot append to ${quote(target)}: ${toErrorMessage(error)}`, target);
   }
@@ -1023,8 +1290,8 @@ async function appendQueued(target: string, bytes: Buffer, root: string): Promis
 // Opens, writes once and closes. The handle never outlives the call, so no caller can forget to close it, and
 // the write is one call with the whole line in it: O_APPEND puts those bytes at the end of the file as it is
 // when the kernel runs the write.
-async function appendToFile(target: string, bytes: Buffer): Promise<number> {
-  const handle = await fs.promises.open(target, "a");
+async function appendToFile(target: string, bytes: Buffer, mode?: number): Promise<number> {
+  const handle = await fs.promises.open(target, "a", mode);
   try {
     return (await handle.write(bytes)).bytesWritten;
   } finally {

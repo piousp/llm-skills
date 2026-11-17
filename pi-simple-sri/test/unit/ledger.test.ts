@@ -306,6 +306,29 @@ test("readLedger: a record with the whole spine still resolves", async (t) => {
   assert.deepEqual(entry.record?.gate, { basis: "replay", status: "not-run" });
 });
 
+// A record of a candidate accepted on probation has a gate block with no preregistration and no result, and a surface the
+// reader never names: the guard asks for the spine and a string status and basis, so it is a record like any other.
+test("readLedger: a record accepted on probation still resolves", async (t) => {
+  const fixture = createFixture(t);
+  const gate = {
+    basis: "replay",
+    status: "probation",
+    budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+    preregistration: null,
+    replay: null,
+    probation: { recordedAt: INDEX_TS, skillContentHash: CONTENT_HASH },
+  };
+  writeRecord(fixture, HISTORY_RELATIVE, decisionRecord({ gate, trigger: { surface: "observer", focus: null } }));
+  writeIndex(fixture, [lineOf("accepted", { historyPath: HISTORY_RELATIVE })]);
+
+  const ledger = await readLedger(fixture.base);
+
+  const [entry] = ledger.lines;
+  assert.equal(entry.problem, undefined);
+  assert.equal(entry.record?.gate.status, "probation");
+  assert.equal(entry.record?.outcome.status, "accepted");
+});
+
 // A line of a refusal that names no record is not a broken line: the attempt answered before a candidate existed, and
 // the absence of a record is what the line says rather than something a reader has to explain.
 test("readLedger: a line that names no record is not a problem", async (t) => {

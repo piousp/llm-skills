@@ -5,6 +5,7 @@ import type { SessionEntry, TurnEndEvent } from "@earendil-works/pi-coding-agent
 import { MAX_EXCERPT_CODE_POINTS, hashOfArguments, modelIdentity, textOf } from "./evidence.ts";
 import { sha256Hex } from "./hash.ts";
 import { SIGNALS_FILE } from "./names.ts";
+import { splitSkillBlock } from "./skill-block.ts";
 import { codePointLength, currentTime, cutCodePoints, isMissingPathError, isPlainObject, toErrorMessage } from "./values.ts";
 import { appendSignalLine, writeTextAtomically } from "./writer.ts";
 import { stateDir } from "./write-base.ts";
@@ -59,7 +60,7 @@ export const REMEMBERED_PROMPTS = 8;
 const MIN_SHARED_TOKENS = 3;
 // What makes a token significant: shorter ones are articles, prepositions and pronouns in most languages.
 const MIN_TOKEN_CODE_POINTS = 5;
-// The ceiling of the file, in lines. Past it, a hydration folds it -- the last event per id, newest first -- so a file
+// The ceiling of the file, in lines. Past it, a hydration folds it -- the last event per id, oldest first -- so a file
 // that a year of sessions grew stays a file a session can read in one go.
 const MAX_SIGNAL_LINES = 128;
 
@@ -71,14 +72,14 @@ const WRITE_TOOL_NAMES: readonly string[] = ["write", "edit"];
 // A suspicion the collector raised, with the id that names it in the whole package. It is a suspicion and not a defect:
 // the user may have rewritten the draft by choice, and only the confirmation of the user turns it into an attempt (S6).
 export interface Suspicion {
-  id: string; // "sg-" + 8 hex of sha256([kind, sessionId, turnIndex, subject])
+  id: string; // "sg-" + 8 hex of sha256([kind, sessionId, anchorEntryId, subject]); the ordinal stands in for an anchor a turn lacks
   kind: SignalKind;
   createdAt: string; // ISO date-time, stamped when the collector raised it
   sessionId: string;
-  turnIndex: number;
-  subject: string; // the rewritten path, or the normalized prompt that was repeated
+  turnIndex: number; // the ordinal of the user prompt the turn answers, in the branch (pi resets its own turnIndex on every agent run)
+  subject: string; // the rewritten path, or the normalized prompt that was repeated; <= MAX_EXCERPT_CODE_POINTS code points
   excerpt: string; // <= MAX_EXCERPT_CODE_POINTS code points
-  prompt: string; // the prompt of the user of the turn it points at, as it was written; "" when the turn had none
+  prompt: string; // the prompt of the user of the turn it points at, without the <skill> block and cut at MAX_EXCERPT_CODE_POINTS; "" when the turn had none
   model?: string; // "provider/model", when the turn or the session names one
 }
 
@@ -91,7 +92,11 @@ export interface WriteCall {
 // What one turn tells the collector. It is built from the event of the turn and the branch of the session
 // (turnObservationOf) and nothing else, so detectSignals stays a function of two values.
 export interface TurnObservation {
+  // The ordinal of the user prompt this turn answers, never pi's own turnIndex: pi starts it again at every agent run, so it
+  // would name two different prompts with one number (B2).
   turnIndex: number;
+  // The entry of that user message: what two turns of the same prompt share, and what the id of a suspicion hashes.
+  anchorEntryId?: string;
   writes: readonly WriteCall[]; // only write and edit
   userPrompt: string | null;
   model?: string;
@@ -109,6 +114,7 @@ export interface TurnSources {
 export interface TrackedPath {
   path: string;
   turnIndex: number;
+  anchorEntryId?: string;
   argsHash: string;
 }
 
@@ -201,7 +207,12 @@ export function foldObservation(state: SignalState, observation: TurnObservation
     const index = paths.findIndex((tracked) => tracked.path === write.path);
     if (index !== -1) paths.splice(index, 1);
     // The last write of a path inside one turn is the one that stands for the turn, and the newest path is first.
-    paths.unshift({ path: write.path, turnIndex: observation.turnIndex, argsHash: write.argsHash });
+    paths.unshift({
+      path: write.path,
+      turnIndex: observation.turnIndex,
+      ...(observation.anchorEntryId === undefined ? {} : { anchorEntryId: observation.anchorEntryId }),
+      argsHash: write.argsHash,
+    });
   }
 
   const prompts = [...state.prompts];
@@ -220,7 +231,8 @@ export function foldObservation(state: SignalState, observation: TurnObservation
 
 // What one turn is, read from the event of the turn and the branch of the session. The wiring does this and nothing
 // else: the tool calls of the turn live on the message the model answered with, and the prompt of the user is the last
-// user message the branch carries.
+// user message the branch carries. `event.turnIndex` is not read: the index of the observation is the ordinal of that
+// prompt in the branch, which only grows (B2).
 export function turnObservationOf(
   event: Pick<TurnEndEvent, "turnIndex" | "message">,
   branch: readonly SessionEntry[],
@@ -229,7 +241,7 @@ export function turnObservationOf(
   const message = event.message;
   const answered = message.role === "assistant" ? message : undefined;
   const writes = answered === undefined ? [] : writesOf(answered.content, sources.cwd);
-  const userPrompt = userPromptOf(branch);
+  const origin = promptOriginOf(branch);
 
   // The turn names its model on the assistant reply it produced, which is the model a failure of that turn belongs to
   // (OA5 of M1). A turn whose message is not an assistant reply names none, and the model of the session stands in for
@@ -239,9 +251,10 @@ export function turnObservationOf(
     sessionModelIdentity(sources.model);
 
   return {
-    turnIndex: event.turnIndex,
+    turnIndex: origin.ordinal,
+    ...(origin.anchorEntryId === undefined ? {} : { anchorEntryId: origin.anchorEntryId }),
     writes,
-    userPrompt,
+    userPrompt: origin.prompt,
     ...(model === undefined ? {} : { model }),
   };
 }
@@ -249,7 +262,12 @@ export function turnObservationOf(
 // The collector of one session, over the base of the run. The base arrives as a function and not as a path because
 // getAgentDir() is read when the call happens and never when the module is imported (dist/core/settings-manager.js:123):
 // the wiring passes `() => writeBase(getAgentDir())`, and nothing is resolved before a session starts.
-export function createSignalCollector(base: () => string): SignalCollector {
+export interface SignalCollectorOptions {
+  // Runs inside the compaction between the read of the file and the rename: the seam a test uses to be the other session.
+  afterRead?: () => void | Promise<void>;
+}
+
+export function createSignalCollector(base: () => string, options: SignalCollectorOptions = {}): SignalCollector {
   // The session the collector is accumulating for. Without it the id would name no session and the file would carry a
   // suspicion nobody can trace, so a collector that was never hydrated keeps its state and raises nothing.
   let sessionId: string | null = null;
@@ -282,7 +300,7 @@ export function createSignalCollector(base: () => string): SignalCollector {
       // Outside the turn and once per session: a file over its ceiling is folded here, so the next session that hydrates
       // reads a file under it.
       if (file.total > MAX_SIGNAL_LINES) {
-        await compactSignalFile(signalPath, hydratedBase, folded.last);
+        await compactSignalFile(signalPath, hydratedBase, folded.last, file.seen, options);
       }
     },
 
@@ -297,7 +315,9 @@ export function createSignalCollector(base: () => string): SignalCollector {
 
       const raised: Suspicion[] = [];
       for (const detection of detected) {
-        const id = signalId(detection.kind, currentSession, observation.turnIndex, detection.subject);
+        // What is persisted is capped, and the id is taken over the capped subject so a hydration names the same id.
+        const subject = cutCodePoints(detection.subject, MAX_EXCERPT_CODE_POINTS);
+        const id = signalId(detection.kind, currentSession, observation.anchorEntryId ?? observation.turnIndex, subject);
         if (known.has(id)) continue;
         known.add(id);
 
@@ -307,10 +327,10 @@ export function createSignalCollector(base: () => string): SignalCollector {
           createdAt: currentTime().toISOString(),
           sessionId: currentSession,
           turnIndex: observation.turnIndex,
-          subject: detection.subject,
+          subject,
           excerpt: detection.excerpt,
-          // The prompt of the turn it points at, as it was written; a turn without a user message says so with "".
-          prompt: observation.userPrompt ?? "",
+          // The prompt of the turn it points at, as the user wrote it; a turn without a user message says so with "".
+          prompt: cutCodePoints(observation.userPrompt ?? "", MAX_EXCERPT_CODE_POINTS),
           ...(observation.model === undefined ? {} : { model: observation.model }),
         };
 
@@ -344,11 +364,12 @@ export function createSignalCollector(base: () => string): SignalCollector {
   };
 }
 
-// The id of a suspicion: "sg-" plus the first 8 hex of the hash over (kind, session, turn, subject). The session is part
-// of the material on purpose -- the same rewrite in another session is a new occurrence with its own id, and it is
-// reported again -- so the id names one occurrence and never one class of occurrence.
-function signalId(kind: SignalKind, sessionId: string, turnIndex: number, subject: string): string {
-  const material = JSON.stringify([kind, sessionId, turnIndex, subject]);
+// The id of a suspicion: "sg-" plus the first 8 hex of the hash over (kind, session, anchor, subject). The anchor is the
+// entry of the user message the turn answers (the ordinal when the branch has none), so the id survives a restart of pi's
+// own turn counter. The session is part of the material on purpose -- the same rewrite in another session is a new
+// occurrence with its own id, and it is reported again -- so the id names one occurrence and never one class of occurrence.
+function signalId(kind: SignalKind, sessionId: string, anchor: string | number, subject: string): string {
+  const material = JSON.stringify([kind, sessionId, anchor, subject]);
   return `${ID_PREFIX}${sha256Hex(material).slice(0, ID_HEX_DIGITS)}`;
 }
 
@@ -357,8 +378,8 @@ function signalId(kind: SignalKind, sessionId: string, turnIndex: number, subjec
 function rewrittenDraftOf(observation: TurnObservation, state: SignalState): DetectedSignal | undefined {
   for (const write of observation.writes) {
     const tracked = state.paths.find((entry) => entry.path === write.path);
-    // A write of the same turn is the model refining its draft, and an identical digest is the same call repeated.
-    if (tracked === undefined || tracked.turnIndex === observation.turnIndex) continue;
+    // A write under the same user prompt is the model refining its draft, and an identical digest is the same call repeated.
+    if (tracked === undefined || answersSamePrompt(tracked, observation)) continue;
     if (tracked.argsHash === write.argsHash) continue;
 
     return {
@@ -369,6 +390,13 @@ function rewrittenDraftOf(observation: TurnObservation, state: SignalState): Det
   }
 
   return undefined;
+}
+
+function answersSamePrompt(tracked: TrackedPath, observation: TurnObservation): boolean {
+  if (tracked.anchorEntryId !== undefined && observation.anchorEntryId !== undefined) {
+    return tracked.anchorEntryId === observation.anchorEntryId;
+  }
+  return tracked.turnIndex === observation.turnIndex;
 }
 
 // The prompt of this turn repeating one of the prompts remembered. Two conditions and no third: one of the two token
@@ -442,19 +470,26 @@ function writesOf(content: AssistantMessage["content"], cwd: string): WriteCall[
   return writes;
 }
 
-// The prompt of the turn: the last user message the branch carries, which at the end of a turn is the message this turn
-// answered. A message without text (images only) is not a prompt, and the branch of a session that has not spoken yet
-// answers null.
-function userPromptOf(branch: readonly SessionEntry[]): string | null {
+// The prompt of the turn and where it sits in the branch: the last user message that holds text the user typed, the
+// ordinal of that message among the ones that do, and its entry. The text of a skill invocation is the skill's own block
+// followed by what the user typed, and only the second is the prompt (B1): a message that is the block alone is not one, and
+// the same rule is what the prefilter of the observer counts with. A message without text (images only) is not a prompt
+// either, and the branch of a session that has not spoken yet answers null and the ordinal 0.
+function promptOriginOf(branch: readonly SessionEntry[]): { prompt: string | null; ordinal: number; anchorEntryId?: string } {
   let prompt: string | null = null;
+  let anchorEntryId: string | undefined;
+  let ordinal = -1;
 
   for (const entry of branch) {
     if (entry.type !== "message" || entry.message.role !== "user") continue;
-    const text = textOf(entry.message.content);
-    if (text.trim() !== "") prompt = text;
+    const text = splitSkillBlock(textOf(entry.message.content)).userText;
+    if (text.trim() === "") continue;
+    prompt = text;
+    anchorEntryId = entry.id;
+    ordinal += 1;
   }
 
-  return prompt;
+  return { prompt, ordinal: Math.max(ordinal, 0), ...(anchorEntryId === undefined ? {} : { anchorEntryId }) };
 }
 
 function sessionModelIdentity(model: Model<Api> | undefined): string | undefined {
@@ -487,6 +522,8 @@ interface SignalFileRead {
   // Every line that ended with a newline, whether it could be read or not: the ceiling of the file is about what the
   // file holds and not about what this version understands of it.
   total: number;
+  // The text of those lines, in the form it was read and in the form a rewrite writes it: what a later read has to recognise.
+  seen: Set<string>;
 }
 
 // The reader of the file, tolerant by contract: a line that is not JSON, not an object, of another format or without the
@@ -497,7 +534,7 @@ async function readSignalFile(signalPath: string): Promise<SignalFileRead> {
   try {
     text = await fs.promises.readFile(signalPath, "utf8");
   } catch (error) {
-    if (isMissingPathError(error)) return { lines: [], total: 0 };
+    if (isMissingPathError(error)) return { lines: [], total: 0, seen: new Set() };
     throw new Error(`cannot read ${signalPath}: ${toErrorMessage(error)}`);
   }
 
@@ -507,12 +544,16 @@ async function readSignalFile(signalPath: string): Promise<SignalFileRead> {
   rawLines.pop();
 
   const lines: SignalLine[] = [];
+  const seen = new Set<string>();
   for (const raw of rawLines) {
+    seen.add(raw);
     const line = signalLineOf(raw);
-    if (line !== undefined) lines.push(line);
+    if (line === undefined) continue;
+    lines.push(line);
+    seen.add(JSON.stringify(line));
   }
 
-  return { lines, total: rawLines.length };
+  return { lines, total: rawLines.length, seen };
 }
 
 function signalLineOf(raw: string): SignalLine | undefined {
@@ -570,13 +611,13 @@ interface FoldedSignals {
   known: string[];
   // The suspicions whose last event is `raised`, newest first and capped.
   open: Suspicion[];
-  // The last event of every id, newest first: what the file says if it has to be rewritten, and what the fold reads.
+  // The last event of every id, newest first: what the file says if it has to be rewritten (the rewrite reverses it), and what the fold reads.
   last: SignalLine[];
 }
 
 function foldSignalLines(lines: readonly SignalLine[]): FoldedSignals {
-  // Backwards, keeping the first id met: the order of the fold is the file from the newest event to the oldest, which is
-  // the order a rewritten file keeps.
+  // Backwards, keeping the first id met: the file is read from its tail, the newest end, because a file is appended to
+  // and rewritten oldest first.
   const lastById = new Map<string, SignalLine>();
   for (let index = lines.length - 1; index >= 0; index--) {
     const line = lines[index];
@@ -605,13 +646,37 @@ function suspicionOf(line: RaisedSignalLine): Suspicion {
   };
 }
 
-// The rewrite of a file over its ceiling: the last event of every id, from the newest to the oldest, up to
-// MAX_SIGNAL_LINES. writeTextAtomically is the write of the chokepoint and the root is the state directory, which exists
-// because the file this rewrites is in it.
-async function compactSignalFile(signalPath: string, base: string, last: readonly SignalLine[]): Promise<void> {
-  const text = last
-    .slice(0, MAX_SIGNAL_LINES)
-    .map((line) => `${JSON.stringify(line)}\n`)
-    .join("");
+// The rewrite of a file over its ceiling: the last event of every id, oldest first and the newest MAX_SIGNAL_LINES of them
+// -- the file is read from its tail as the newest end, so it is written in that order (B3) --, followed by the lines
+// another session wrote since this one read it. writeTextAtomically is the write of the chokepoint and the root is the
+// state directory, which exists because the file this rewrites is in it. What remains is the instant between the second read
+// and the rename, which is accepted: a line lost there is a suspicion the session that raised it still reported.
+async function compactSignalFile(
+  signalPath: string,
+  base: string,
+  last: readonly SignalLine[],
+  seen: ReadonlySet<string>,
+  options: SignalCollectorOptions,
+): Promise<void> {
+  const chronological = last.slice(0, MAX_SIGNAL_LINES).reverse();
+  await options.afterRead?.();
+  const appended = await linesAppendedAfter(signalPath, seen);
+  const text = [...chronological.map((line) => JSON.stringify(line)), ...appended].map((line) => `${line}\n`).join("");
   await writeTextAtomically(signalPath, text, stateDir(base));
+}
+
+// The complete lines of the file that the first read did not see, as raw text: a rewrite that did not carry them would drop what
+// a concurrent session appended between its read and its write. They are told apart by content and not by position, because a
+// session that compacted first leaves a file shorter than the one that was read.
+async function linesAppendedAfter(signalPath: string, seen: ReadonlySet<string>): Promise<string[]> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(signalPath, "utf8");
+  } catch (error) {
+    if (isMissingPathError(error)) return [];
+    throw error;
+  }
+  const rawLines = text.split("\n");
+  rawLines.pop();
+  return rawLines.filter((line) => line !== "" && !seen.has(line));
 }

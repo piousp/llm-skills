@@ -322,6 +322,16 @@ const SLUG_CASES: SlugCase[] = [
   { title: "!!!", expected: "lesson" },
   { title: "a".repeat(70), expected: "a".repeat(64) },
   { title: `${"a".repeat(63)} b`, expected: "a".repeat(63) },
+  {
+    title: "Answer in prose only: no bullets or lists, and stay on the question asked",
+    expected: "answer-in-prose-only-no-bullets-or-lists-and-stay-on-the",
+  },
+  // The word ends exactly at the limit: nothing is dropped.
+  { title: `${"a".repeat(30)} ${"b".repeat(33)} c`, expected: `${"a".repeat(30)}-${"b".repeat(33)}` },
+  // The only boundary is in the first half: a hard cut keeps more of the title than a stub would.
+  { title: `ab ${"c".repeat(80)}`, expected: `ab-${"c".repeat(61)}` },
+  // A single very long word has no boundary: hard cut.
+  { title: "x".repeat(80), expected: "x".repeat(64) },
 ];
 
 for (const slugCase of SLUG_CASES) {
@@ -334,3 +344,40 @@ for (const slugCase of SLUG_CASES) {
     assert.equal(slug.length <= 64, true);
   });
 }
+
+const LONG_TITLE = "Answer in prose only: no bullets or lists, and stay on the question asked";
+
+test("slugify: a long title is cut at a word boundary, never inside a word", () => {
+  const slug = slugify(LONG_TITLE);
+  const words = new Set(LONG_TITLE.toLowerCase().split(/[^a-z0-9]+/));
+
+  assert.equal(slug.length <= 64, true);
+  assert.equal(slug.endsWith("-"), false);
+  for (const word of slug.split("-")) {
+    assert.equal(words.has(word), true, `${word} is not a whole word of the title`);
+  }
+});
+
+test("slugify: a title whose slug fits is not shortened", () => {
+  assert.equal(slugify("Keep answers short"), "keep-answers-short");
+  const exact = `${"a".repeat(31)} ${"b".repeat(32)}`;
+  assert.equal(slugify(exact), `${"a".repeat(31)}-${"b".repeat(32)}`);
+});
+
+test("slugify: a cut never leaves a trailing hyphen", () => {
+  for (const title of [LONG_TITLE, `${"a".repeat(63)} b`, `${"a".repeat(64)} b`, `${"a".repeat(40)}  ${"b".repeat(40)}`]) {
+    assert.match(slugify(title), SLUG_PATTERN);
+  }
+});
+
+test("a long title: the file name slugify(title) is the slug parseLesson reads back", () => {
+  const draft = makeDraft({ title: LONG_TITLE });
+  const slug = slugify(LONG_TITLE);
+
+  assert.equal(draft.slug, slug);
+  const text = serializeOrFail(draft);
+  const parsed = parseLesson(text);
+  if (!parsed.ok) assert.fail(`expected the file to parse, got: ${parsed.error}`);
+  assert.equal(parsed.value.slug, slug);
+  assert.equal(parsed.value.title, LONG_TITLE);
+});

@@ -17,7 +17,13 @@ import { SKILL_FILE } from "./names.ts";
 import { createProposer, type GenerationUsage, type ProposeInput, type ProposeResult } from "./proposer.ts";
 import { lessonReferencePath } from "./skill-reference.ts";
 import { findSkill, listSkills, type ListSkillsOptions } from "./skills-inventory.ts";
-import { DECISION_SCHEMA, outcomeStatusFor, toDecisionSkill } from "./types.ts";
+import {
+  DECISION_SCHEMA,
+  LESSON_GATE_ACCEPTED,
+  LESSON_GATE_PROBATION,
+  outcomeStatusFor,
+  toDecisionSkill,
+} from "./types.ts";
 import type {
   AttemptLine,
   DecisionRecord,
@@ -191,6 +197,11 @@ export interface ImproveFlowDeps {
   appendAttempt?: (base: string, line: AttemptLine) => Promise<void>;
 }
 
+export interface ObservedPattern {
+  patternId: string;
+  gate: "bank" | "probation";
+}
+
 // Which surface asked. It is the trigger of decision.json and the surface of the session entry, so
 // a record never claims to come from the surface that did not make it.
 export interface ImproveRequest {
@@ -210,6 +221,12 @@ export interface ImproveRequest {
   // reads it is the defect branch (S8); this flow only knows what it means for the base, and a defect is measured by
   // the replay flow (OA11), so such a request is not the base of the bank.
   defect?: boolean;
+  // The run proposes from a pattern the observer found (WP10b): its ask is the focus, the transcript of the open session is
+  // never read, and `gate` says how the lesson will be measured -- "bank" when `bankPath` names the bank the gate replays,
+  // "probation" when nothing replays and the lesson is offered unmeasured. The label of the lesson follows the gate.
+  // It requires the surface "observer" and a focus, and `bankPath` is present exactly when the gate is "bank"; a request
+  // that breaks one of those is refused before anything is read or written.
+  observed?: ObservedPattern;
   // The abort signal of the surface that asked, when it has one: a tool call carries one pi can
   // abort, a command has nothing to abort with and leaves it absent. It travels to the single model
   // call of the run and nothing else does (F7).
@@ -363,6 +380,8 @@ export async function proposeSkill(
   // value, so they cannot disagree about whether the run asked for anything.
   const focus = normalizeFocus(request.focus);
 
+  assertObservedRequest(request, focus);
+
   const target = await resolveRunTarget(request.skillName, ctx, seams);
   if (target.kind === "unknown-skill") return target;
 
@@ -410,11 +429,16 @@ export async function proposeSkill(
   // failure is not a refusal in this base -- while a request that names none is the run of M1, unchanged. The branch of
   // the defect reads neither: its evidence is the artifact above, so the session is not read for it either.
   const basis = basisOf(request);
-  const derived = basis === "replay" && materials === undefined ? sessionEvidence(ctx) : undefined;
+  //
+  // An observed run reads it neither, under either gate: its ask is the pattern, and the session that happens to be open
+  // is not where the pattern was seen.
+  const observed = request.observed;
+  const derived =
+    basis === "replay" && materials === undefined && observed === undefined ? sessionEvidence(ctx) : undefined;
 
   // Zero items is absence and not an empty result, and it is the refusal of the base that reads the transcript: a
   // summary of nothing would read like a diagnosis that found the skill healthy.
-  if (basis === "replay" && materials === undefined && derived === undefined) {
+  if (basis === "replay" && materials === undefined && observed === undefined && derived === undefined) {
     const hashes = attemptHashes("no-evidence", skill.name, focus);
     // No reason to pass, and that is the datum and not an omission: the entry of this branch carries null, because
     // the absence of a failure is the whole answer.
@@ -457,7 +481,10 @@ export async function proposeSkill(
     diagnosis,
     skill: { name: skill.name, description: skill.description, skillText },
     evidence,
-    basis,
+    // The guard of the proposer reads this as "where the failures are written down": for an observed run they are the
+    // observations behind the ask, which is the same answer the base of the bank gives, under either gate.
+    basis: observed === undefined ? basis : "case-bank",
+    ...(observed === undefined ? {} : { lessonGate: lessonGateOf(observed) }),
     now,
     ...(focus === undefined ? {} : { focus }),
     ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -577,6 +604,37 @@ export async function proposeSkill(
       candidate,
     ),
   };
+}
+
+function lessonGateOf(observed: ObservedPattern): typeof LESSON_GATE_ACCEPTED | typeof LESSON_GATE_PROBATION {
+  return observed.gate === "probation" ? LESSON_GATE_PROBATION : LESSON_GATE_ACCEPTED;
+}
+
+// The contract of `observed`, checked before the skill is resolved: a malformed request cannot be repaired by anything the
+// run reads, so it is refused while nothing has been read, spent or written.
+function assertObservedRequest(request: ImproveRequest, focus: string | undefined): void {
+  const observed = request.observed;
+  if (observed === undefined) return;
+
+  const problem = observedProblem(request, observed, focus);
+  if (problem !== undefined) {
+    throw new SriFailClosedError(`cannot propose from the observed pattern ${quote(observed.patternId)}: ${problem}`);
+  }
+}
+
+function observedProblem(
+  request: ImproveRequest,
+  observed: ObservedPattern,
+  focus: string | undefined,
+): string | undefined {
+  if (request.surface !== "observer") return `the surface is ${quote(request.surface)}, not "observer"`;
+  if (focus === undefined) return "the request carries no focus, and the pattern ask is the focus";
+  if (request.defect === true) return "a defect is another base and cannot be combined with a pattern";
+  if (observed.gate === "bank" && request.bankPath === undefined) return 'the gate "bank" needs a bank path';
+  if (observed.gate === "probation" && request.bankPath !== undefined) {
+    return 'the gate "probation" replays nothing and takes no bank path';
+  }
+  return undefined;
 }
 
 // The seams with their production default, resolved once per call.

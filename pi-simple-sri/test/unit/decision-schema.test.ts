@@ -271,6 +271,16 @@ function gateWith(status: GateStatus): GateBlock {
         // record the flow writes: the schema cannot tie them either, so the fixture says it once.
         replay: { ...REPLAY, verdict: status },
       };
+    case "probation":
+      return {
+        basis: "replay",
+        status: "probation",
+        budget: { plannedRuns: 0, usedRuns: 0, interruptedAt: null },
+        tokens: ZERO_TOKENS,
+        preregistration: null,
+        replay: null,
+        probation: { recordedAt: "2026-11-02T14:04:00.000Z", skillContentHash: CONTENT_HASH },
+      };
     default:
       return assertNever(status);
   }
@@ -280,7 +290,10 @@ function gateWith(status: GateStatus): GateBlock {
 // so the five records of this base -- two states without a result and three with one -- are one helper and not five
 // literals that could disagree with each other. The switch is exhaustive over GATE_STATUSES, so a status added to the
 // union loses its case here too.
-function caseBankWith(status: GateStatus): GateBlock {
+//
+// Probation is not a state this helper builds: a case-bank block reaches it only from a concluded one (probationRecordOf), so
+// the parameter leaves it out and the switch stays exhaustive over what remains.
+function caseBankWith(status: Exclude<GateStatus, "probation">): GateBlock {
   switch (status) {
     case "not-run":
       return {
@@ -644,6 +657,7 @@ test("outcomeStatusFor: a gate that decided is the outcome, a gate that did not 
     "gate-accepted",
     "gate-rejected",
     "gate-abstained",
+    "probation",
   ]);
   // An outcome the acceptance decides is not implied by any gate status, which is why the acceptance
   // writes it with the moment it decided.
@@ -664,11 +678,51 @@ test("decision.schema.json: the bases of the gate block are the two the variants
   assert.deepEqual(schemaNode("properties", "gate", "properties", "basis").enum, ["replay", "case-bank"]);
 });
 
+// The surface that wrote a record is a closed list, and the observer is the third: a proposal raised from a pattern is not
+// the command's and not the tool's.
+test("decision.schema.json: the surfaces of a trigger are the three a record can come from", () => {
+  assert.deepEqual(schemaNode("properties", "trigger", "properties", "surface").enum, ["command", "tool", "observer"]);
+});
+
+// Probation: a record whose gate never ran and that carries the digest of the skill it was staged against. It validates with
+// the observer as its surface, in the status the mapping gives it, and it is a block of the replay base.
+test("decision.schema.json: a candidate on probation validates with the observer as its surface", () => {
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    trigger: { surface: "observer", focus: "the lesson of a pattern" },
+    gate: gateWith("probation"),
+    outcome: { status: "probation", reason: "not measured: no gate ran for this candidate", decidedAt: "2026-11-02T14:04:00.000Z" },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+});
+
+// A concluded bank that found no improvement and was accepted as it is: the basis stays case-bank, the result the gate wrote
+// stays under its key, and the probation block is the one key added.
+test("decision.schema.json: a case-bank gate that abstained for no-improvement validates once it is on probation", () => {
+  const abstained = caseBankWith("gate-abstained");
+  if (abstained.basis !== "case-bank" || abstained.status !== "gate-abstained") assert.fail("the fixture is a concluded case-bank gate");
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    trigger: { surface: "observer", focus: "the lesson of a pattern" },
+    gate: {
+      ...abstained,
+      status: "probation",
+      caseBank: { ...abstained.caseBank, reason: "no-improvement" },
+      probation: { recordedAt: "2026-11-02T14:30:00.000Z", skillContentHash: CONTENT_HASH },
+    },
+    outcome: { status: "probation", reason: "not measured: no gate ran for this candidate", decidedAt: "2026-11-02T14:30:00.000Z" },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+});
+
 // M1c, the exit criterion of the slice from the other end: a record of the second base validates in every state it can be
 // written in -- not-run, preregistered, and the three a concluded gate has. The five records are built by one helper, so
 // the states the fixture names are the states GATE_STATUSES declares.
 test("decision.schema.json: a case-bank gate validates in every status it can hold", () => {
   for (const gateStatus of GATE_STATUSES) {
+    if (gateStatus === "probation") continue;
     const record: DecisionRecord = {
       ...VALID_RECORD,
       gate: caseBankWith(gateStatus),
@@ -904,6 +958,20 @@ test("decision.schema.json: a diagnosis with no replay item validates in the bas
   );
 });
 
+// A forget sets the summary of the diagnosis to null, because it quotes the pattern the forget erases, and the record has to
+// stay valid: --verify and a re-gate read it afterwards. The null is the only exception: an empty or a non-string summary is
+// still refused.
+test("decision.schema.json: a diagnosis whose summary a forget set to null validates", () => {
+  const record: DecisionRecord = {
+    ...VALID_RECORD,
+    trigger: { surface: "observer", focus: null },
+    diagnosis: { ...VALID_RECORD.diagnosis, summary: null },
+  };
+
+  assert.deepEqual(validateAgainstSchema(record), []);
+  assert.deepEqual(schemaNode("properties", "diagnosis", "properties", "summary").type, ["string", "null"]);
+});
+
 interface NegativeCase {
   name: string;
   build: () => unknown;
@@ -928,7 +996,7 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
     // the enum is what decides which statuses exist, and the negative has to stay outside it.
     build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "gate-passed" } }),
     expected: [
-      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", got "gate-passed"',
+      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "probation", "accepted", got "gate-passed"',
     ],
   },
   {
@@ -938,7 +1006,7 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
     // this case is what keeps a writer from reintroducing it on one side only.
     build: () => ({ ...VALID_RECORD, outcome: { ...VALID_RECORD.outcome, status: "accept-failed" } }),
     expected: [
-      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "accepted", got "accept-failed"',
+      'decision.outcome.status: expected one of "proposed", "not-eligible", "gate-accepted", "gate-rejected", "gate-abstained", "probation", "accepted", got "accept-failed"',
     ],
   },
   {
@@ -1151,6 +1219,58 @@ const NEGATIVE_CASES: readonly NegativeCase[] = [
       };
     },
     expected: ["decision.gate.replay.items[0].reps[0].checkFailures: the array has 0 items, fewer than 1"],
+  },
+  {
+    name: "a trigger surface outside the enum",
+    build: () => ({ ...VALID_RECORD, trigger: { surface: "daemon", focus: null } }),
+    expected: ['decision.trigger.surface: expected one of "command", "tool", "observer", got "daemon"'],
+  },
+  {
+    name: "a diagnosis with an empty summary",
+    build: () => ({ ...VALID_RECORD, diagnosis: { ...VALID_RECORD.diagnosis, summary: "" } }),
+    expected: ['decision.diagnosis.summary: "" is shorter than 1'],
+  },
+  {
+    name: "a diagnosis whose summary is not a string",
+    build: () => ({ ...VALID_RECORD, diagnosis: { ...VALID_RECORD.diagnosis, summary: 7 } }),
+    expected: ["decision.diagnosis.summary: expected string or null, got 7"],
+  },
+  {
+    name: "a diagnosis without a summary key",
+    build: () => {
+      const { summary: _summary, ...rest } = VALID_RECORD.diagnosis;
+      return { ...VALID_RECORD, diagnosis: rest };
+    },
+    expected: ['decision.diagnosis: the required property "summary" is missing'],
+  },
+  {
+    name: "a probation block without the digest of the skill it was staged against",
+    // The digest is what the acceptance compares against the skill: a probation that does not carry it describes a
+    // candidate whose drift nobody can detect, so the schema requires it instead of letting the acceptance guess.
+    build: () => ({
+      ...VALID_RECORD,
+      gate: { ...gateWith("probation"), probation: { recordedAt: "2026-11-02T14:04:00.000Z" } },
+    }),
+    expected: ['decision.gate.probation: the required property "skillContentHash" is missing'],
+  },
+  {
+    name: "a probation block with a digest that is not a sha256",
+    build: () => ({
+      ...VALID_RECORD,
+      gate: { ...gateWith("probation"), probation: { recordedAt: "2026-11-02T14:04:00.000Z", skillContentHash: "abc" } },
+    }),
+    expected: ['decision.gate.probation.skillContentHash: "abc" does not match /^sha256:[0-9a-f]{64}$/'],
+  },
+  {
+    name: "a property the schema does not declare under probation",
+    build: () => ({
+      ...VALID_RECORD,
+      gate: {
+        ...gateWith("probation"),
+        probation: { recordedAt: "2026-11-02T14:04:00.000Z", skillContentHash: CONTENT_HASH, approvedBy: "user" },
+      },
+    }),
+    expected: ['decision.gate.probation: the property "approvedBy" is not declared by the schema (additionalProperties: false)'],
   },
 ];
 

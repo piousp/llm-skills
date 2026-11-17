@@ -1,0 +1,9 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "provenance": "auto",
+  "description": "Generated from two episodes of different sessions.",
+  "cases": [
+    { "id": "case-1", "prompt": "summarise the changelog", "checks": [{ "kind": "contains", "value": "breaking" }] },
+    { "id": "case-2", "prompt": "summarise the release notes", "checks": [{ "kind": "regex", "pattern": "breaking", "flags": "i" }] }
+  ]
+}

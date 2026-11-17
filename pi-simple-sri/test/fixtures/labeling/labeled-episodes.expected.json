@@ -1,0 +1,6 @@
+{
+  "n": 10,
+  "judgePrecision": { "num": 4, "den": 5 },
+  "judgeRecall": { "num": 4, "den": 6 },
+  "prefilterRecall": { "num": 5, "den": 6 }
+}

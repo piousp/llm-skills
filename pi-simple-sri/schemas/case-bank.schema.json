@@ -11,6 +11,10 @@
       "description": "The versioned id of the format. A bank of another version is a different contract: src/case-bank.ts refuses it whole instead of reading it as this one with fields missing.",
       "const": "pi-simple-sri/case-bank@1"
     },
+    "provenance": {
+      "description": "Who wrote the bank: the user, the skill that ships it, or the observer that generated it from episodes. Absent reads as user.",
+      "enum": ["user", "skill-shipped", "auto"]
+    },
     "description": {
       "description": "For humans. It never enters a prompt, and an empty one is accepted: it says nothing, which is what the absence of the key would say too.",
       "type": "string",

@@ -530,6 +530,49 @@ test("resolveStagedCandidate: a staged candidate answers the record it carries",
   assert.deepEqual(recordOf(result), decisionRecord());
 });
 
+// A forget nulls diagnosis.summary and trigger.focus of a candidate that was never accepted and leaves it in staging, so a
+// re-gate through --staged reads such a record: nothing of the gate reads the summary, and the answer is the record as it is.
+function forgottenRecord(): DecisionRecord {
+  const record = decisionRecord();
+  return { ...record, trigger: { ...record.trigger, focus: null }, diagnosis: { ...record.diagnosis, summary: null } };
+}
+
+test("resolveStagedCandidate: a record whose summary a forget set to null is read", async (t) => {
+  const fixture = createFixture(t);
+  fs.writeFileSync(fixture.decisionPath, `${JSON.stringify(forgottenRecord(), null, 2)}\n`, "utf8");
+
+  const result = await resolveStagedCandidate(fixture.base, SKILL_NAME, fixture.candidateDir);
+
+  assert.deepEqual(recordOf(result), forgottenRecord());
+});
+
+test("gateStagedCandidate: a forgotten candidate is gated and its record keeps the null summary and stays valid", async (t) => {
+  const fixture = createFixture(t);
+  fs.writeFileSync(fixture.decisionPath, `${JSON.stringify(forgottenRecord(), null, 2)}\n`, "utf8");
+  const harness = createHarness();
+
+  const result = concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  assert.equal(result.kind, "gate-accepted");
+  const record = readRecord(fixture.decisionPath);
+  assert.equal(record.diagnosis.summary, null);
+  assert.equal(record.trigger.focus, null);
+  assert.deepEqual(validateAgainstSchema(record), []);
+});
+
+// The runs the gate keeps are as private as the rest of staging: the directory is created by the gate itself, so it has to be
+// created 0700 and not with the default mode of a mkdir.
+test("gateStagedCandidate: the directories of the runs are created 0700", async (t) => {
+  const fixture = createFixture(t);
+  const harness = createHarness();
+
+  concluded(await gateStagedCandidate(gateRequest(fixture), harness.deps));
+
+  const gateDir = path.join(fixture.candidateDir, "gate");
+  assert.equal(fs.statSync(gateDir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(gateDir, "runs")).mode & 0o777, 0o700);
+});
+
 // Every path this package publishes names a candidate relative to the base of the run, so a caller keeping
 // one of those spellings is the ordinary case and not an error.
 test("resolveStagedCandidate: the relative spelling of the candidate is the same candidate", async (t) => {

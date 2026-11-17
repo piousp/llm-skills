@@ -3,7 +3,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSriConfig, readSriConfig, readSriConfigOf, SriConfigError } from "../../src/config.ts";
+import {
+  parseObserveConfig,
+  parseSriConfig,
+  readObserveConfig,
+  readObserveConfigOf,
+  readSriConfig,
+  readSriConfigOf,
+  SriConfigError,
+} from "../../src/config.ts";
+import { DEFAULT_JUDGE_CALLS_PER_DAY } from "../../src/observe/types.ts";
+import type { ObserveConfig } from "../../src/observe/types.ts";
 import type { SriConfig } from "../../src/types.ts";
 
 const EMPTY_CONFIG: SriConfig = { allow: [], deny: [] };
@@ -30,6 +40,10 @@ function captureError(fn: () => unknown): unknown {
 }
 
 const FIXTURES = [
+  "observe-full.json",
+  "observe-minimal.json",
+  "observe-wrong-type.json",
+  "observe-bad-model.json",
   "minimal.json",
   "allow-and-deny.json",
   "unknown-keys.json",
@@ -292,4 +306,181 @@ test("readSriConfigOf: joins settings.json under the agent directory and reads i
 test("readSriConfigOf: an agent directory with no settings file answers the default config", () => {
   assert.equal(fs.existsSync(path.join(settingsDir(), "settings.json")), false);
   assert.deepEqual(readSriConfigOf(settingsDir()), EMPTY_CONFIG);
+});
+
+// WP2: the observer's settings live under `pi-simple-sri.observe`. They are read apart from SriConfig, fail closed with the
+// same error, and a broken `observe` never breaks the skills lists (nor the other way round).
+const DEFAULT_OBSERVE: ObserveConfig = {
+  enabled: false,
+  judgeModel: null,
+  judgeCallsPerDay: DEFAULT_JUDGE_CALLS_PER_DAY,
+  replayAllow: [],
+};
+
+const OBSERVE_REJECTIONS: RejectionCase[] = [
+  { name: "a non-object observe", raw: { "pi-simple-sri": { observe: true } }, messagePart: '"pi-simple-sri.observe" must be an object' },
+  { name: "a null observe", raw: { "pi-simple-sri": { observe: null } }, messagePart: '"pi-simple-sri.observe" must be an object' },
+  { name: "a string enabled", raw: { "pi-simple-sri": { observe: { enabled: "yes" } } }, messagePart: '"pi-simple-sri.observe.enabled" must be a boolean' },
+  { name: "a numeric enabled", raw: { "pi-simple-sri": { observe: { enabled: 1 } } }, messagePart: '"pi-simple-sri.observe.enabled" must be a boolean' },
+  { name: "a judgeModel without a provider", raw: { "pi-simple-sri": { observe: { judgeModel: "claude" } } }, messagePart: '"pi-simple-sri.observe.judgeModel" must be "provider/id"' },
+  { name: "a judgeModel with an empty id", raw: { "pi-simple-sri": { observe: { judgeModel: "anthropic/" } } }, messagePart: '"pi-simple-sri.observe.judgeModel" must be "provider/id"' },
+  { name: "a judgeModel with an empty provider", raw: { "pi-simple-sri": { observe: { judgeModel: "/claude" } } }, messagePart: '"pi-simple-sri.observe.judgeModel" must be "provider/id"' },
+  { name: "a non-string judgeModel", raw: { "pi-simple-sri": { observe: { judgeModel: 3 } } }, messagePart: '"pi-simple-sri.observe.judgeModel" must be "provider/id"' },
+  { name: "a non-object limits", raw: { "pi-simple-sri": { observe: { limits: 5 } } }, messagePart: '"pi-simple-sri.observe.limits" must be an object' },
+  { name: "a fractional judgeCallsPerDay", raw: { "pi-simple-sri": { observe: { limits: { judgeCallsPerDay: 2.5 } } } }, messagePart: '"pi-simple-sri.observe.limits.judgeCallsPerDay" must be a non-negative integer' },
+  { name: "a negative judgeCallsPerDay", raw: { "pi-simple-sri": { observe: { limits: { judgeCallsPerDay: -1 } } } }, messagePart: '"pi-simple-sri.observe.limits.judgeCallsPerDay" must be a non-negative integer' },
+  { name: "a string judgeCallsPerDay", raw: { "pi-simple-sri": { observe: { limits: { judgeCallsPerDay: "20" } } } }, messagePart: '"pi-simple-sri.observe.limits.judgeCallsPerDay" must be a non-negative integer' },
+  { name: "a non-object replay", raw: { "pi-simple-sri": { observe: { replay: [] } } }, messagePart: '"pi-simple-sri.observe.replay" must be an object' },
+  { name: "a string replay allow", raw: { "pi-simple-sri": { observe: { replay: { allow: "pdf-tools" } } } }, messagePart: '"pi-simple-sri.observe.replay.allow" must be an array of strings' },
+  { name: "a number inside replay allow", raw: { "pi-simple-sri": { observe: { replay: { allow: ["pdf-tools", 4] } } } }, messagePart: '"pi-simple-sri.observe.replay.allow" must be an array of strings' },
+  { name: "a non-object top level", raw: [], messagePart: "settings must be a JSON object" },
+  { name: "a non-object pi-simple-sri", raw: { "pi-simple-sri": "x" }, messagePart: '"pi-simple-sri" must be an object' },
+];
+
+for (const testCase of OBSERVE_REJECTIONS) {
+  test(`parseObserveConfig: rejects ${testCase.name}`, () => {
+    const error = captureError(() => parseObserveConfig(testCase.raw));
+
+    assert.ok(error instanceof SriConfigError);
+    assert.ok(
+      error.message.includes(testCase.messagePart),
+      `expected message to include ${JSON.stringify(testCase.messagePart)}, got ${JSON.stringify(error.message)}`,
+    );
+    assert.equal(error.settingsPath, undefined);
+  });
+}
+
+const OBSERVE_ACCEPTANCES: { name: string; raw: unknown; expected: ObserveConfig }[] = [
+  { name: "an empty object", raw: {}, expected: DEFAULT_OBSERVE },
+  { name: "the pi-simple-sri key with no observe", raw: { "pi-simple-sri": { skills: { allow: ["x"] } } }, expected: DEFAULT_OBSERVE },
+  { name: "an empty observe", raw: { "pi-simple-sri": { observe: {} } }, expected: DEFAULT_OBSERVE },
+  { name: "enabled only", raw: { "pi-simple-sri": { observe: { enabled: true } } }, expected: { ...DEFAULT_OBSERVE, enabled: true } },
+  {
+    name: "a judgeModel with a slash in the id",
+    raw: { "pi-simple-sri": { observe: { judgeModel: "openrouter/anthropic/claude" } } },
+    expected: { ...DEFAULT_OBSERVE, judgeModel: { provider: "openrouter", id: "anthropic/claude" } },
+  },
+  {
+    name: "a zero judgeCallsPerDay",
+    raw: { "pi-simple-sri": { observe: { limits: { judgeCallsPerDay: 0 } } } },
+    expected: { ...DEFAULT_OBSERVE, judgeCallsPerDay: 0 },
+  },
+  {
+    name: "every key",
+    raw: {
+      "pi-simple-sri": {
+        observe: {
+          enabled: true,
+          judgeModel: "anthropic/claude-haiku-4-5",
+          limits: { judgeCallsPerDay: 5, unknown: 1 },
+          replay: { allow: ["pdf-tools"], unknown: 1 },
+          unknown: 1,
+        },
+      },
+    },
+    expected: {
+      enabled: true,
+      judgeModel: { provider: "anthropic", id: "claude-haiku-4-5" },
+      judgeCallsPerDay: 5,
+      replayAllow: ["pdf-tools"],
+    },
+  },
+];
+
+for (const testCase of OBSERVE_ACCEPTANCES) {
+  test(`parseObserveConfig: accepts ${testCase.name}`, () => {
+    assert.deepEqual(parseObserveConfig(testCase.raw), testCase.expected);
+  });
+}
+
+test("parseObserveConfig: the default is off, so nothing observes until the user opts in", () => {
+  assert.equal(parseObserveConfig({}).enabled, false);
+});
+
+test("parseObserveConfig: the returned replay list does not alias the parsed object", () => {
+  const allow = ["pdf-tools"];
+  const config = parseObserveConfig({ "pi-simple-sri": { observe: { replay: { allow } } } });
+
+  allow.push("code-review");
+  assert.deepEqual(config.replayAllow, ["pdf-tools"]);
+});
+
+test("parseSriConfig: a malformed observe section does not break the skills lists", () => {
+  assert.deepEqual(parseSriConfig({ "pi-simple-sri": { skills: { allow: ["pdf-tools"] }, observe: "garbage" } }), {
+    allow: ["pdf-tools"],
+    deny: [],
+  });
+});
+
+test("parseObserveConfig: a malformed skills section does not break the observe settings", () => {
+  assert.deepEqual(parseObserveConfig({ "pi-simple-sri": { skills: "garbage", observe: { enabled: true } } }), {
+    ...DEFAULT_OBSERVE,
+    enabled: true,
+  });
+});
+
+test("readObserveConfig: a missing settings file yields the default, off", () => {
+  assert.deepEqual(readObserveConfig(settingsPath("no-such-file.json")), DEFAULT_OBSERVE);
+});
+
+test("readObserveConfig: a settings file without the observe key yields the default", () => {
+  assert.deepEqual(readObserveConfig(settingsPath("allow-and-deny.json")), DEFAULT_OBSERVE);
+});
+
+test("readObserveConfig: reads every key of the observe section", () => {
+  assert.deepEqual(readObserveConfig(settingsPath("observe-full.json")), {
+    enabled: true,
+    judgeModel: { provider: "anthropic", id: "claude-haiku-4-5" },
+    judgeCallsPerDay: 5,
+    replayAllow: ["pdf-tools", "code-review"],
+  });
+  assert.deepEqual(readObserveConfig(settingsPath("observe-minimal.json")), { ...DEFAULT_OBSERVE, enabled: true });
+});
+
+test("readObserveConfig: a wrong-typed key fails with the settings path on the error and in the message", () => {
+  const file = settingsPath("observe-wrong-type.json");
+
+  const error = captureError(() => readObserveConfig(file));
+
+  assert.ok(error instanceof SriConfigError);
+  assert.equal(error.settingsPath, file);
+  assert.ok(error.message.includes(file));
+  assert.ok(error.message.includes('"pi-simple-sri.observe.enabled" must be a boolean'));
+});
+
+test("readObserveConfig: a judgeModel that is not provider/id fails with the settings path", () => {
+  const file = settingsPath("observe-bad-model.json");
+
+  const error = captureError(() => readObserveConfig(file));
+
+  assert.ok(error instanceof SriConfigError);
+  assert.equal(error.settingsPath, file);
+  assert.ok(error.message.includes('"pi-simple-sri.observe.judgeModel" must be "provider/id"'));
+});
+
+test("readObserveConfig: malformed JSON fails closed like the skills reader", () => {
+  const file = settingsPath("malformed.json");
+
+  const error = captureError(() => readObserveConfig(file));
+
+  assert.ok(error instanceof SriConfigError);
+  assert.equal(error.settingsPath, file);
+  assert.ok(error.message.includes("invalid JSON"));
+});
+
+test("readObserveConfigOf: joins settings.json under the agent directory and reads it with the reader it is given", () => {
+  const reads: string[] = [];
+  const injected: ObserveConfig = { ...DEFAULT_OBSERVE, enabled: true };
+
+  const config = readObserveConfigOf("/agent", (settingsRead) => {
+    reads.push(settingsRead);
+    return injected;
+  });
+
+  assert.deepEqual(reads, [path.join("/agent", "settings.json")]);
+  assert.equal(config, injected);
+});
+
+test("readObserveConfigOf: an agent directory with no settings file answers the default", () => {
+  assert.deepEqual(readObserveConfigOf(settingsDir()), DEFAULT_OBSERVE);
 });

@@ -1,0 +1,11 @@
+{
+  "pi-simple-sri": {
+    "skills": { "allow": ["pdf-tools"] },
+    "observe": {
+      "enabled": true,
+      "judgeModel": "anthropic/claude-haiku-4-5",
+      "limits": { "judgeCallsPerDay": 5 },
+      "replay": { "allow": ["pdf-tools", "code-review"] }
+    }
+  }
+}

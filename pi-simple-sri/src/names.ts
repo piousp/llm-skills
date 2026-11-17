@@ -28,6 +28,14 @@ export const ATTEMPTS_FILE = "attempts.jsonl";
 // line per event, `raised` and `consumed`. It lives next to the index of attempts, under state/, because it is the memory
 // that survives the session which raised the suspicion, and it is its own file because a suspicion is not an attempt.
 export const SIGNALS_FILE = "signals.jsonl";
+// The observer's files (WP2). The log of episodes, observations and answers is append-only like the two above, in the same
+// state/ directory; the cursor and the lock sit next to it because they are the memory of one scan and its guard.
+export const OBSERVE_FILE = "observe.jsonl";
+export const OBSERVE_CURSOR_FILE = "observe-cursor.json";
+export const OBSERVE_LOCK_FILE = "observe.lock";
+// Under the write base, not under state/: the banks the user keeps, one <skill>.json each.
+export const BANKS_DIR = "banks";
+
 // The neutral bank of cases of M1c: the file a `--bank=<path>` names, and the name of the copy the gate leaves next
 // to the staged candidate so the cases it ran travel with it (Q24). Two modules build a path from this literal, which
 // is why it lives here; the versioned id of the format is not a file name and stays in src/case-bank.ts.
