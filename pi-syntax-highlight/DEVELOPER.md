@@ -14,6 +14,7 @@ Needs Node 24 or newer (the tests run through `--experimental-strip-types`) and 
 - `highlight.ts` wraps pi's `highlightCode` with a cache, and `tokens.ts` holds the SGR sequences the code reads directly.
 - `style-path.ts` and `emphasis.ts` handle the small decisions a path or a grep line needs: which color a basename gets, where the match sits inside a line (with the length and backtracking guards).
 - `grep-parse.ts` splits grep's `path:line: text` and `path-line- text` forms. `detect-language.ts` answers a language for a fence, and `detectOutputLanguage` answers one for a tool-output body.
+- `path-language.ts` answers the language of a file path: pi's extension table first, and its own table of gaps (`.groovy`, `.gvy`, `.gradle`, `.kts`, `.pl`, `.pm`, `.mk`, `.nix`, `.dart`) only where pi answers nothing. `read`, `grep` and `edit` all resolve through it, so the host answer always wins and no file pi already paints is repainted.
 - `markdown-fence-lang.ts` is the markdown pass: it labels unlabeled closed fences and nothing else.
 
 ## The resolver
@@ -40,11 +41,32 @@ Without an initialized theme the renderers fall back to the plain tool output co
 
 ## How a bash body gets its language
 
-Diff and JSON are recognized over the whole body. Anything else goes to `detectOutputLanguage`, which wraps the fence detector with an allowlist and two raised thresholds, because shell output is log-shaped far more often than code-shaped. Three false positives decided that design, all measured: two `key: value` lines are `git log`, `curl -I` headers are a YAML document to any count that ignores case, and "Update the docs in the table from last week" is SQL. A wrong label paints the body with a grammar that does not fit it, which reads worse than flat text.
+Diff and JSON are recognized over the whole body. Anything else goes to `detectOutputLanguage`, which wraps the fence detector with an allowlist and two raised thresholds, because shell output is log-shaped far more often than code-shaped. A wrong label paints the body with a grammar that does not fit it, which reads worse than flat text.
+
+The allowlist has 28 entries: `yaml`, `toml`, `sql`, `bash`, `python`, `javascript`, `typescript`, `go`, `rust`, `java`, `kotlin`, `scala`, `groovy`, `lua`, `css`, `scss`, `less`, `xml`, `html`, `dockerfile`, `makefile`, `c`, `cpp`, `php`, `ruby`, `powershell`, `jsx` and `tsx`. Left out on purpose: `haskell`, `elixir`, `cmake`, `gradle`, `protobuf`, `clojure` and `erlang`, which have no realistic terminal scenario; `properties`, because `key=value` is every config dump; and `csharp`, whose `using`/`namespace` directive is the only shape that identifies it, everything else it writes being shared with Java.
+
+The JVM languages and the stylesheets earn their place because each detector hangs on a whole declaration line instead of on a word. `java` needs `class`, `interface`, `enum` or `record` plus an uppercase name on the same line; `kotlin` needs `fun` with a closed parameter list, a `val`, a Kotlin-only modifier before the type keyword, or a named `object`; `scala` needs `object … extends`, a `case class` or an expression-bodied `def … : T =`; `groovy` needs `class X extends Y` or a `def` next to a Groovy-only signal; and a stylesheet is told apart by its own shape, `css` by two selector blocks plus two terminated declarations, `scss` by a `$name:` variable and `less` by a terminated `@name: …;` declaration, each with no program-shaped signal in the block (a `=>`, `function`, `const`, `interface`, `import` or `export` rules it out). That anchoring is what the keyword rule could not offer: `public static void main(String[] args)` appears verbatim in logs, so a bare `class` word or an access modifier used to be enough to read a build log as Java. Measured negatives, all of them flat: a `gradle build` log, `maven` output, `ktlint` output, a `properties` dump with dotted keys, and a `curl -I` body whose headers are lowercase.
 
 Detection reads the first `HIGHLIGHT_LINE_BUDGET` lines, the same lines the tokenizer will paint, so nothing is detected in a region that would stay flat anyway. A classified line (error, warning, `path:line:`) replaces the highlighted one instead of being wrapped inside it: `theme.fg()` closes at the end of the string and cannot recolor a span of an already painted line.
 
 `render-generic` does not use the detector. It recognizes JSON and diff only, and anything else keeps the plain content color.
+
+## The detector order
+
+The order of `DETECTORS` in `detect-language.ts` is part of the behavior, not an implementation detail: the first detector that answers wins, and several languages share a signal. The measured order is
+
+```
+json, ndjson, diff, shebang, markup, htmlFragment, dockerfile, makefile, c,
+scss, less, css, sql, python, ruby, go, rust, lua, yamlKeys, powershell,
+typescript, javascript, scala, groovy, managed, yaml, toml, properties, shell
+```
+
+- `scss` and `less` precede `css` because a preprocessor block also satisfies the plain css signals, and its own variable syntax is the more specific answer.
+- `lua` precedes TypeScript and JavaScript because all three write `function`, and lua is the one that asks for a closed parameter list with no brace on the same line.
+- The JVM block (`scala`, `groovy`, `managed`) sits after `typescript` and `javascript`, and not before. Measured: moving it up makes `interface A { a: string }` read as Kotlin or Java and breaks TypeScript detection in four shapes the tests already cover. The cost accepted for that is one line: a Java or Kotlin `class X` with no modifier of its own is only told apart from TypeScript by a signal of its own (`fun`, `val`, `object`, `case class`, `extends`).
+- Inside `managed`, Kotlin answers before Java, whose type rule accepts any line that carries `class` plus an uppercase name.
+
+The accepted ambiguities follow from that order and are spelled out in the README: an anonymous `companion object {` reads as Java, `sealed class X` reads as Java, and a Scala source whose only declaration is `val x = …` reads as Kotlin.
 
 ## The markdown pass
 
@@ -78,6 +100,8 @@ Seams the tests rely on:
 - `markdown-fence-lang.test.ts` and `markdown-render-parity.test.ts` cover the fence labeling and that the visible text is unchanged.
 - `extensions-index.test.ts` covers what is registered.
 - `highlight.test.ts` covers the theme cache; builders take an injected highlighter because `highlightCode` reads the module-global theme.
+- `path-language.test.ts` covers the path fallback: the host answer wins, and the gap table fills `.groovy`, `.gvy`, `.gradle`, `.kts`, `.pl`, `.pm`, `.mk`, `.nix` and `.dart`.
+- `detect-language.test.ts` is the guard of the shell allowlist: every language in it is detected from a real block (through the fence detector at least), and the measured logs stay flat as negatives (`gradle build`, `maven`, `ktlint`, a `properties` dump with dotted keys, and lowercase HTTP headers under a status line).
 - `emphasis.test.ts` includes the backtracking guard.
 
 To try a working copy without installing it, run `pi -e .` from the package directory. With `node_modules` present the extension can import a second copy of pi next to the host's: `keyHint` therefore comes from the render context, never from a module-level import, and languages beyond the eager set (about 21) are registered asynchronously, so the first render of a rarer language can be flat.

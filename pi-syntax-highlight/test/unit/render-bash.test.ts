@@ -306,3 +306,19 @@ test("buildBashBody: a partial result highlights a detected body and prints no t
   assert.equal(timer, undefined);
   assert.deepEqual(calls.map((call) => call.lang), ["yaml"]);
 });
+
+test("buildBashBody: a lua script is highlighted as one block", () => {
+  const calls: HighlightCall[] = [];
+  const output = ["local M = {}", "", "function M.greet(name)", '  print("hi")', "end", "", "return M"].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, [{ code: output, lang: "lua" }]);
+  assert.equal(body.split("\n")[2], "<lua>function M.greet(name)</lua>");
+});
+
+test("buildBashBody: a gradle log keeps the flat paint of the content color", () => {
+  const calls: HighlightCall[] = [];
+  const output = ["> Task :app:compileJava", "public static void main(String[] args) {", "BUILD SUCCESSFUL in 12s"].join("\n");
+  const { body } = buildBashBody(bashInput({ output, highlight: makeHighlight(calls) }));
+  assert.deepEqual(calls, []);
+  assert.equal(body, output.split("\n").map((line) => styled("toolOutput", line)).join("\n"));
+});

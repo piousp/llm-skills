@@ -53,6 +53,14 @@ const SHEBANG_INTERPRETERS: ReadonlyArray<readonly [RegExp, string]> = [
 
 const CSS_SELECTOR_BLOCK = /^[^{}\n]*?\{\s*$/gm;
 const CSS_DECLARATION = /^\s*[-a-zA-Z][-\w]*\s*:\s*[^;{}\n]+;$/gm;
+// A preprocessor is named by its own variable syntax: `$name:` is scss and
+// `@name:` is less. One `@` line is an annotation, a decorator or a Windows
+// path, so less asks for a whole declaration instead: the colon after the name,
+// no brace before the end of the line, and the `;` that terminates it. Those two
+// are the signal — `@Override` has no colon, and `@media (min-width: 768px) {`
+// opens a block instead of closing with a terminator.
+const SCSS_VARIABLE = /^[ \t]*\$[\w-]+[ \t]*:/m;
+const LESS_VARIABLE = /^[ \t]*@[\w-]+[ \t]*:[^{}\n]*;[ \t]*$/gm;
 // Any of these means the block is a program that happens to carry braces and
 // `name: value;` lines, not a stylesheet. A type annotation or an import list
 // carries the same `key: value` shape as a declaration.
@@ -146,9 +154,42 @@ const RUST_SIGNALS: readonly RegExp[] = [
 const RUST_PUBLIC_FUNC = /\bpub[ \t]+(?:async[ \t]+)?fn[ \t]+\w+/;
 
 const CSHARP_DIRECTIVE = /^[ \t]*(?:namespace[ \t]+[\w.]+|using[ \t]+[\w.]+)/m;
-const KOTLIN_FUNC = /^[ \t]*fun[ \t]+\w+/m;
-const ACCESS_MODIFIER = /\b(?:public|private|protected)\b/;
-const CLASS_MEMBER_KEYWORD = /\b(?:class|void|static)\b/;
+// The JVM languages share the `class` keyword, so each answer hangs on the whole
+// declaration line instead of on a word: `public static void main(String[] args)`
+// appears verbatim in gradle and maven logs, and a bare `class` member keyword
+// used to be enough to read such a log as Java.
+const JAVA_TYPE =
+  /^[ \t]*(?:(?:public|private|protected|final|abstract|static|sealed)[ \t]+)*(?:class|interface|enum|record)[ \t]+[A-Z]\w*/m;
+// `fun` alone is also a fish and a shell function keyword; the closed parameter
+// list on the same line is what makes it Kotlin.
+const KOTLIN_FUNC =
+  /^[ \t]*(?:(?:private|internal|public|protected|open|inline|suspend|override|operator)[ \t]+)*fun[ \t]+[\w.]+[ \t]*\([^)\n]*\)/m;
+// What tells Kotlin from Java is never the `class` line, which both write: it is
+// Kotlin's own words next to it. `val` has no Java reading (`var` does, since
+// Java 10, so it is not a signal), and these modifiers are the ones only Kotlin
+// puts before a type keyword; `enum` is in the list for `enum class`, since Java
+// writes `enum Color`, with the type name and no keyword.
+const KOTLIN_VAL = /^[ \t]*(?:(?:private|internal|public|protected)[ \t]+)*(?:const[ \t]+)?val[ \t]+\w+/m;
+const KOTLIN_MODIFIED_TYPE = /^[ \t]*(?:data|value|annotation|inline|open|internal|enum)[ \t]+(?:class|object|interface)[ \t]+[A-Z]\w*/m;
+const KOTLIN_OBJECT = /^[ \t]*(?:companion[ \t]+)?object[ \t]+[A-Z]\w*/m;
+const SCALA_OBJECT = /^[ \t]*(?:(?:final|sealed|abstract|implicit)[ \t]+)*object[ \t]+[\w.]+[ \t]+extends\b/m;
+const SCALA_CASE_CLASS = /^[ \t]*(?:(?:final|sealed|abstract)[ \t]+)*case[ \t]+class[ \t]+\w+[ \t]*\(/m;
+// An expression-bodied `def` with an explicit result type: the plain `def x(...)`
+// is python and ruby as much as it is scala, and `class X extends Y` is groovy.
+const SCALA_DEF = /^[ \t]*def[ \t]+\w+[ \t]*\([^)\n]*\)[ \t]*:[ \t]*[\w\[\], ]+[ \t]*=/m;
+// Groovy writes `extends` with spaces, the way Ruby writes `<`: a generic
+// `class Box<T>` or a `class A` body keeps the answer open.
+const GROOVY_CLASS = /^[ \t]*class[ \t]+[A-Z]\w*[ \t]+extends[ \t]+[\w.]+/m;
+// A Groovy script is mostly `def name = value`, which is an assignment in any
+// language, so it needs a second, Groovy-only signal next to it.
+const GROOVY_DEF = /^[ \t]*def[ \t]+\w+[ \t]*=[^=]/m;
+const GROOVY_SIGNAL = /\$\{|\bprintln\b/;
+// The trailing `$` of the second rule is what keeps `function foo() {` (a
+// JavaScript or shell function) out of lua; `end` is not a signal at all, because
+// it closes blocks in Ruby too.
+const LUA_LOCAL_FUNCTION = /^[ \t]*local[ \t]+function[ \t]+[\w.:]+/m;
+const LUA_FUNCTION = /^[ \t]*function[ \t]+[\w.:]+[ \t]*\([^)\n]*\)[ \t]*$/m;
+const LUA_REQUIRE = /^[ \t]*local[ \t]+\w+[ \t]*=[ \t]*require[ \t]*\(/m;
 
 const YAML_KEY = /^[A-Za-z_][\w.-]*:\s/gm;
 const YAML_ITEM = /^[ \t]*-[ \t]/gm;
@@ -169,6 +210,10 @@ const YAML_INDENTED_KEY = /^[ \t]+[A-Za-z_][\w.-]*:/gm;
 // are Title-Case and are the reason for the case rule: `curl -I` output is not
 // a document, but three of its headers satisfy any count that ignores case.
 const YAML_DOCUMENT_KEY = /^[a-z_][\w.-]*:[ \t]*(?:\S.*)?$/gm;
+// `curl -I` and a proxy dump print their header names in lowercase, which the
+// case rule above cannot tell from a document; the status line on top is the
+// only mark a response carries that a document never does.
+const HTTP_STATUS_LINE = /^HTTP\/[\d.]+\s+\d{3}\b/;
 
 const TOML_SECTION = /^\[[\w.-]+\][ \t]*$/m;
 const TOML_KEY_VALUE = /^\w[\w.-]*[ \t]*=/gm;
@@ -188,10 +233,13 @@ const TABLE_RULE = "|---";
 // a grammar that does not fit it, which reads worse than flat text, so a
 // language enters only when it really shows up in a terminal and its detector
 // is strict enough not to fire on a log. Left out for the first reason or the
-// second: java, csharp and kotlin (`public`, `static`, `using`, `fun` are log
-// words), css, scss and less (`key: value;` is also every environment dump),
-// lua, haskell, elixir, cmake, gradle, protobuf, clojure and erlang (no realistic
-// shell-output scenario), and properties (`key=value` is every config dump).
+// second: haskell, elixir, cmake, gradle, protobuf, clojure and erlang (no
+// realistic shell-output scenario), and properties (`key=value` is every config
+// dump). `csharp` stays out as well: its `using`/`namespace` directive is the
+// only shape that identifies it, and everything else it writes is shared with
+// Java. The JVM languages and the stylesheets are in, because each one is
+// anchored to a whole declaration line (see the managed, stylesheet and lua
+// detectors) and the measured logs below stay flat.
 const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
   "yaml", // kubectl, helm, compose
   "toml", // cat pyproject.toml, Cargo.toml
@@ -202,6 +250,14 @@ const OUTPUT_LANGUAGES: ReadonlySet<string> = new Set([
   "typescript",
   "go",
   "rust", // cat of source files
+  "java", // cat of a source file, IDE output
+  "kotlin",
+  "scala",
+  "groovy", // cat of a source file, gradle output that is code
+  "lua", // cat script.lua, which used to read as javascript
+  "css", // cat dist/app.css
+  "scss",
+  "less",
   "xml",
   "html", // curl
   "dockerfile",
@@ -277,6 +333,23 @@ function detectCss(text: string): string | undefined {
   return countMatches(text, CSS_DECLARATION) >= 2 ? "css" : undefined;
 }
 
+// The preprocessors keep the css shape and add their own variable syntax on top,
+// so the foreign-signal guard is the same one: a program that happens to carry
+// braces and `name: value;` lines is still not a stylesheet.
+function hasPreprocessorShape(text: string, variable: RegExp): boolean {
+  if (countMatches(text, variable) === 0) return false;
+  if (CSS_FOREIGN_SIGNAL.test(text)) return false;
+  return countMatches(text, CSS_SELECTOR_BLOCK) >= 1;
+}
+
+function detectScss(text: string): string | undefined {
+  return hasPreprocessorShape(text, SCSS_VARIABLE) ? "scss" : undefined;
+}
+
+function detectLess(text: string): string | undefined {
+  return hasPreprocessorShape(text, LESS_VARIABLE) ? "less" : undefined;
+}
+
 function detectSql(text: string): string | undefined {
   const firstWord = firstNonBlankLine(text).trim().split(/\s+/)[0] ?? "";
   if (!SQL_STATEMENT_KEYWORD.test(firstWord)) return undefined;
@@ -323,13 +396,45 @@ function detectRust(text: string): string | undefined {
   return countSignals(text, RUST_SIGNALS) >= 2 ? "rust" : undefined;
 }
 
+function detectLua(text: string): string | undefined {
+  const declared = LUA_LOCAL_FUNCTION.test(text) || LUA_FUNCTION.test(text) || LUA_REQUIRE.test(text);
+  return declared ? "lua" : undefined;
+}
+
+function detectScala(text: string): string | undefined {
+  const declared = SCALA_OBJECT.test(text) || SCALA_CASE_CLASS.test(text) || SCALA_DEF.test(text);
+  return declared ? "scala" : undefined;
+}
+
+function detectGroovy(text: string): string | undefined {
+  const script = GROOVY_DEF.test(text) && GROOVY_SIGNAL.test(text);
+  return GROOVY_CLASS.test(text) || script ? "groovy" : undefined;
+}
+
+function detectJava(text: string): string | undefined {
+  return JAVA_TYPE.test(text) ? "java" : undefined;
+}
+
+function detectKotlin(text: string): string | undefined {
+  const declared =
+    KOTLIN_FUNC.test(text) ||
+    KOTLIN_VAL.test(text) ||
+    KOTLIN_MODIFIED_TYPE.test(text) ||
+    KOTLIN_OBJECT.test(text);
+  return declared ? "kotlin" : undefined;
+}
+
+// Every signal above is Kotlin's alone, so Kotlin answers before Java, whose type
+// rule accepts any line that carries `class` plus an uppercase name. `fun`, `val`,
+// `data class`, `enum class` and `companion object` have no Java reading, while
+// `public class Main {` matches no Kotlin signal and stays Java. Accepted
+// ambiguities, in one line: `sealed class X` reads as Java, since Java 17 and
+// Kotlin share the form; and a Scala source whose only signal is `val x = 1`
+// reads as Kotlin, because the Scala detector runs first and covers `object ...
+// extends`, `case class` and `def ... : T =`.
 function detectManagedLanguage(text: string): string | undefined {
-  // `using`/`namespace` and `fun` identify one language on their own; a bare
-  // access modifier is shared by all three, and Java is the most common source
-  // of that shape.
   if (CSHARP_DIRECTIVE.test(text)) return "csharp";
-  if (KOTLIN_FUNC.test(text)) return "kotlin";
-  return ACCESS_MODIFIER.test(text) && CLASS_MEMBER_KEYWORD.test(text) ? "java" : undefined;
+  return detectKotlin(text) ?? detectJava(text);
 }
 
 function detectYaml(text: string): string | undefined {
@@ -343,8 +448,11 @@ function detectYamlKeys(text: string): string | undefined {
 }
 
 // Two bare `key: value` lines are as much git log and HTTP headers as they are a
-// document, so the guard asks for a third key or for structure.
+// document, so the guard asks for a third key or for structure. Lowercase header
+// names pass the case rule the document key carries, so a response is told apart
+// by its status line instead.
 function yamlSurvivesOutput(text: string): boolean {
+  if (HTTP_STATUS_LINE.test(firstNonBlankLine(text))) return false;
   const keys = countMatches(text, YAML_DOCUMENT_KEY);
   if (keys >= 3) return true;
   if (keys < 2) return false;
@@ -383,10 +491,19 @@ function nonTableLines(text: string): string {
 // The first detector that recognizes the snippet wins; the list runs from the
 // most to the least specific signal. No detector answers `markdown` or
 // `plaintext`, which would repaint the block worse than the flat color it has.
+// `scss` and `less` precede `css` because a preprocessor block also satisfies the
+// plain css signals and its own variable syntax is the more specific answer.
+// `lua` precedes TypeScript and JavaScript because all three write `function`,
+// and its closed parameter list is the stricter rule.
 // `go` and `rust` precede TypeScript and JavaScript because `import "fmt"` and
 // `let mut` match the JavaScript signals, and their own gates are stricter.
 // TypeScript precedes JavaScript for the same reason: `interface A { b: string }`
 // matches both, and the annotation is the more specific answer.
+// `scala` and `groovy` precede the managed block because they share the
+// `class X extends Y` shape with it.
+// The managed block follows TypeScript and JavaScript rather than preceding them:
+// `interface A { b: string }` is a type annotation that Java and Kotlin both read
+// as a declaration, and the annotation is the answer.
 // Bare `key: value` lines precede TypeScript too, because `name: string` is a
 // YAML entry as much as it is a type annotation; the one without braces and
 // assignments is the YAML document.
@@ -400,16 +517,21 @@ const DETECTORS: readonly Detector[] = [
   detectDockerfile,
   detectMakefile,
   detectC,
+  detectScss,
+  detectLess,
   detectCss,
   detectSql,
   detectPython,
   detectRuby,
   detectGo,
   detectRust,
+  detectLua,
   detectYamlKeys,
   detectPowerShell,
   detectTypeScript,
   detectJavaScript,
+  detectScala,
+  detectGroovy,
   detectManagedLanguage,
   detectYaml,
   detectToml,

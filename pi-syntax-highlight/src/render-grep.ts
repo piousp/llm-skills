@@ -1,7 +1,7 @@
-import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { applyEmphasis, findMatchRanges, type MatchOptions } from "./emphasis.ts";
 import { UNREADABLE_TEXT, parseGrepLine, type GrepLine } from "./grep-parse.ts";
 import { highlightLines, type HighlightFn } from "./highlight.ts";
+import { languageForPath } from "./path-language.ts";
 import { colonPrefix, moreLinesFooter, truncatedNotice } from "./render-utils.ts";
 import { BOLD_OFF, BOLD_ON, TOKEN, type StyleTheme } from "./tokens.ts";
 
@@ -33,7 +33,7 @@ export interface GrepInput {
 type MatchLine = Extract<GrepLine, { kind: "match" }>;
 
 function languageOf(entry: GrepLine): string | undefined {
-  return entry.kind === "match" || entry.kind === "context" ? getLanguageFromPath(entry.path) : undefined;
+  return entry.kind === "match" || entry.kind === "context" ? languageForPath(entry.path) : undefined;
 }
 
 function pathOf(entry: GrepLine): string | undefined {

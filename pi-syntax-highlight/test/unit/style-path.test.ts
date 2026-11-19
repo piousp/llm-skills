@@ -72,3 +72,8 @@ test("classifyPathLine: a trailing slash is a directory, anything else a file", 
   assert.deepEqual(classifyPathLine("src/a.ts"), { kind: "file", path: "src/a.ts" });
   assert.deepEqual(classifyPathLine("src/"), { kind: "dir", path: "src/" });
 });
+
+test("stylePath: a groovy source carries the code color", () => {
+  assert.equal(stylePath("Greeter.groovy", fakeTheme), "<b><syntaxType>Greeter.groovy</syntaxType></b>");
+  assert.equal(stylePath("script.gvy", fakeTheme), "<b><syntaxType>script.gvy</syntaxType></b>");
+});

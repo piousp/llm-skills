@@ -1,7 +1,7 @@
-import { getLanguageFromPath } from "@earendil-works/pi-coding-agent";
 import { diffWords } from "diff";
 import { applyEmphasis, type Range } from "./emphasis.ts";
 import { highlightLines, type HighlightFn } from "./highlight.ts";
+import { languageForPath } from "./path-language.ts";
 import { replaceTabs } from "./render-utils.ts";
 import { INVERSE_OFF, INVERSE_ON, TOKEN, type StyleTheme } from "./tokens.ts";
 
@@ -165,7 +165,7 @@ function runEnd(lines: EditDiffLine[], index: number, kind: EditDiffKind): numbe
 export function buildEditDiffText(input: EditDiffInput): string {
   if (input.diff === "") return "";
   const lines = input.diff.split("\n").map(classifyEditDiffLine);
-  const language = input.path === "" ? undefined : getLanguageFromPath(input.path);
+  const language = input.path === "" ? undefined : languageForPath(input.path);
   const styled: string[] = [];
   let index = 0;
   while (index < lines.length) {

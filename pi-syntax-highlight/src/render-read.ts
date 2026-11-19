@@ -1,5 +1,6 @@
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getLanguageFromPath } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "@earendil-works/pi-coding-agent";
 import { highlightLines, type HighlightFn } from "./highlight.ts";
+import { languageForPath } from "./path-language.ts";
 import { moreLinesFooter, replaceTabs } from "./render-utils.ts";
 import { TOKEN, type StyleTheme } from "./tokens.ts";
 
@@ -81,7 +82,7 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 }
 
 function languageOf(path: string): string | undefined {
-  return path === "" ? undefined : getLanguageFromPath(path);
+  return path === "" ? undefined : languageForPath(path);
 }
 
 // One call for the whole body: a per-line pass would break multi-line

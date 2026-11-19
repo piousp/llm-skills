@@ -42,7 +42,7 @@ export const INVERSE_OFF = "\x1b[27m";
 
 const CODE_EXTENSIONS = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
-  "go", "rs", "py", "rb", "php", "java", "kt", "kts", "swift",
+  "go", "rs", "py", "rb", "php", "java", "kt", "kts", "swift", "groovy", "gvy",
   "c", "h", "cc", "cpp", "cxx", "hpp", "cs", "scala", "lua", "pl", "pm",
   "ex", "exs", "erl", "hs", "zig", "dart", "sql", "graphql", "gql",
 ]);

@@ -3,6 +3,24 @@
 All notable changes to this project are documented in this file. The format
 follows Keep a Changelog, and this project uses semantic versioning.
 
+## [0.3.0] - 2026-11-19
+
+### Added
+
+- Language detection for Scala, Groovy, SCSS, Less and Lua in unlabeled fences.
+- `bash` and `powershell` bodies in Java, Kotlin, Scala, Groovy, Lua, CSS, SCSS or Less are highlighted as one block.
+- `src/path-language.ts`: `read`, `grep` and `edit` now highlight `.groovy`, `.gvy`, `.gradle`, `.kts`, `.pl`, `.pm`, `.mk`, `.nix` and `.dart` files, which the host's extension table does not know.
+
+### Changed
+
+- Java and Kotlin are recognized from a whole declaration line instead of access-modifier and class-member keywords, so a Gradle or Maven log stays flat.
+- The detector order is part of the contract and is documented in `DEVELOPER.md`.
+
+### Fixed
+
+- A `curl -I` body whose headers are lowercase is no longer painted as `yaml`: the status line on top marks it as a response and not as a document. The guard applies to shell output; a fence with the same lines still reads as `yaml`.
+- A Lua body or fence no longer reads as `javascript`.
+
 ## [0.2.1] - 2026-11-16
 
 ### Added

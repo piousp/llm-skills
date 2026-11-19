@@ -25,7 +25,7 @@ Needs pi 1.5.1 or newer. Node 24 or newer matters only for running the working c
 |---|---|
 | `grep` | Paths and line numbers styled, each matched line highlighted in the language of its file, the match itself emphasized. The truncation footer stays. |
 | `find`, `ls` | Directories dimmed with a trailing slash, basenames colored by file family. The limit footer stays. |
-| `bash`, `powershell` | Finished output styled: diffs, JSON, paths, errors, and a body in a recognized language (YAML, SQL, TOML, shell, Python, JavaScript, TypeScript, JSX, TSX, Go, Rust, C, C++, PHP, Ruby, PowerShell, Dockerfile, Makefile, XML, HTML). Error, warning and `path:line:` lines keep their own color inside a highlighted body. A collapsed call shows its last lines, the expand hint, and the duration. Only the first 400 lines are tokenized. |
+| `bash`, `powershell` | Finished output styled: diffs, JSON, paths, errors, and a body in a recognized language (YAML, SQL, TOML, shell, Python, JavaScript, TypeScript, JSX, TSX, Go, Rust, Java, Kotlin, Scala, Groovy, Lua, C, C++, PHP, Ruby, PowerShell, Dockerfile, Makefile, CSS, SCSS, Less, XML, HTML). Error, warning and `path:line:` lines keep their own color inside a highlighted body. A collapsed call shows its last lines, the expand hint, and the duration. Only the first 400 lines are tokenized. |
 | `read` | The expanded body is highlighted by file language. No line numbers, and a collapsed read stays silent, as in stock pi. The call header, errors and image results are stock. |
 | `edit` | The successful diff is highlighted by file language, line numbers dimmed, changed words in reverse video. A failure is drawn by stock pi. |
 | `write` | Stock pi. |
@@ -34,6 +34,8 @@ Needs pi 1.5.1 or newer. Node 24 or newer matters only for running the working c
 | Markdown fences | A closed fence with no label gets a detected language, so the block comes out colored. A fence that already carries a label is never rewritten, and `mermaid`, `math`, `latex` and `katex` are left alone. Applies to assistant messages, thinking blocks, custom messages and summaries. |
 
 Nothing else in the markdown is restyled.
+
+`read`, `grep` and `edit` take the language of a file from pi's extension table and, when it answers nothing, from a table of their own: `.groovy`, `.gvy`, `.gradle`, `.kts`, `.pl`, `.pm`, `.mk`, `.nix` and `.dart` are highlighted even though the host does not know them.
 
 ## Limits
 
@@ -45,6 +47,11 @@ Nothing else in the markdown is restyled.
 - Java-style `.properties` content is detected only inside fences, not in bash output.
 - HTML fragments are recognized by a list of known tags plus a closing tag; unknown tags stay flat. JSX without `className` or `={` can be detected as HTML.
 - A tool whose result renderer this package does not recognize keeps its own look.
+- `.sass` stays flat: highlight.js ships no `sass` grammar, although pi's extension table answers `sass` for it.
+- pi registers about 21 grammars at startup and loads the rest in the background: a body in a grammar outside that first set can stay flat on the first render of a session and be colored on the next.
+- An anonymous `companion object { … }` reads as Java: the Kotlin signal asks for a name after `object`.
+- `sealed class X` reads as Java, since Java 17 and Kotlin share the form; `enum class X` reads as Kotlin.
+- A Scala source that declares only `val x = …`, with no `object … extends`, `case class` or `def …: T =`, reads as Kotlin.
 - No initialized theme, no color: the renderers fall back to plain tool output.
 
 ## Development

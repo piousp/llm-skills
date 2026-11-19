@@ -190,9 +190,15 @@ test("detectOutputLanguage: a diff keeps the diff painter", () => {
   assert.equal(detectOutputLanguage(patch), undefined);
 });
 
-test("detectOutputLanguage: a java body is outside the allowlist", () => {
+test("detectOutputLanguage: a java source body is java, a gradle log is not", () => {
   assert.equal(
-    detectOutputLanguage('public class Main {\n    public static void main(String[] args) {'),
+    detectOutputLanguage('public class Main {\n    public static void main(String[] args) {\n        System.out.println("hi");\n    }\n}'),
+    "java",
+  );
+  // The same signature inside a build log is not a declaration: the detector is
+  // anchored to a whole declaration line, which is what keeps this one flat.
+  assert.equal(
+    detectOutputLanguage("> Task :app:compileJava\npublic static void main(String[] args) {\nBUILD SUCCESSFUL in 12s"),
     undefined,
   );
 });
@@ -355,4 +361,166 @@ test("html fragment: generics, jsx, unknown-tag xml and logs are not html", () =
   assert.equal(detectLanguage(`Array<string> is a generic\nMap<string, number> too, </p> aside`), undefined);
   assert.equal(detectLanguage(`<div>\nno closing tag here, just a log line`), undefined);
   assert.equal(detectOutputLanguage(`<6> kernel: started\n<6> kernel: stopped </b>`), undefined);
+});
+
+// 0.3.0: the JVM languages, the stylesheets and lua. Every positive is a real
+// block, and every negative is a real transcript of the same language, because
+// painting a build log with a grammar reads worse than the flat color.
+
+test("java: a declared type is java, a method signature in a log is not", () => {
+  assert.equal(detectLanguage(`public class Main {\n  private int x;\n}`), "java");
+  assert.equal(detectOutputLanguage(`public class Main {\n  public static void main(String[] a) {\n  }\n}`), "java");
+  // A gradle log echoes a method signature verbatim; it carries no declaration
+  // keyword on the line, which is what keeps the body flat.
+  assert.equal(
+    detectOutputLanguage(`> Task :app:compileJava\npublic static void main(String[] args) {\nBUILD SUCCESSFUL in 12s`),
+    undefined,
+  );
+  assert.equal(
+    detectOutputLanguage(`2024-01-02 03:04:05 INFO public static void main(String[] args)\n2024-01-02 03:04:06 INFO done`),
+    undefined,
+  );
+});
+
+test("kotlin: fun with a closed parameter list, or a declared type", () => {
+  assert.equal(detectLanguage(`fun main() {\n  println("hi")\n}`), "kotlin");
+  assert.equal(detectOutputLanguage(`fun main() {\n  println("hi")\n}`), "kotlin");
+  assert.equal(detectLanguage(`data class User(val name: String)\ndata class Point(val x: Int, val y: Int)`), "kotlin");
+  // ktlint prints path, line and message; it is not a source file.
+  assert.equal(
+    detectOutputLanguage(`src/Main.kt:3:1: Unexpected indentation (expected 4, got 2)\nsrc/Main.kt:5:1: Unexpected blank line`),
+    undefined,
+  );
+});
+
+test("kotlin: a source with fun, val and an unmodified class is kotlin, not java", () => {
+  // The measured regression: `class Greeter(private val name: String)` matched
+  // the Java type rule, which handed every Kotlin source to the Java grammar.
+  const source = `fun main() {
+    val items = listOf(1, 2, 3)
+    items.forEach { println(it) }
+}
+
+class Greeter(private val name: String) {
+    fun greet() = "hello $name"
+}`;
+  assert.equal(detectLanguage(source), "kotlin");
+  assert.equal(detectOutputLanguage(source), "kotlin");
+  // The Kotlin-only modifier before the type keyword carries the answer on its
+  // own, without a `fun` or a `val` in the block.
+  assert.equal(detectLanguage(`data class User(val name: String, val age: Int)`), "kotlin");
+});
+
+test("kotlin: each signal answers on its own, with no other one in the block", () => {
+  // Only the object declaration: no `fun`, no `val`, no Kotlin modifier.
+  assert.equal(detectLanguage(`object Registry {\n    private var count = 0\n}`), "kotlin");
+  // Only the companion declaration. It carries a name because the rule requires
+  // one after `object`, and an anonymous `companion object {` inside a class has
+  // no Kotlin signal left, so the enclosing `class X {` line reads as Java.
+  assert.equal(
+    detectLanguage(`class Composer {\n    companion object Registry {\n        private var count = 0\n    }\n}`),
+    "kotlin",
+  );
+  // Only `val` declarations: no `fun`, no type keyword.
+  assert.equal(detectLanguage(`val items = listOf(1, 2, 3)\nval total = items.size`), "kotlin");
+  // Only the enum declaration. Java writes `enum Color`, so `enum class` is
+  // Kotlin's own shape and the modifier list is what carries it.
+  assert.equal(detectLanguage(`enum class Color {\n    RED, GREEN\n}`), "kotlin");
+  assert.equal(detectOutputLanguage(`enum class Color {\n    RED, GREEN\n}`), "kotlin");
+});
+
+test("kotlin: a val with no scala signal reads as kotlin, deliberately", () => {
+  // Deliberate accepted ambiguity: `val items = List(1, 2, 3)` is also a Scala
+  // declaration, but the Scala detector asks for `object ... extends`,
+  // `case class` or `def ... : T =`, and none of them is in this block. Two
+  // lines, so the short-input gate is not what answers here.
+  assert.equal(detectLanguage(`val items = List(1, 2, 3)\nval total = items.size`), "kotlin");
+});
+
+test("java: a class line with no Kotlin signal stays java", () => {
+  // `public` is a modifier in both languages, so the precedence must not hand the
+  // shared shape to Kotlin.
+  assert.equal(detectLanguage(`public class Main {\n  public static void main(String[] a) {\n  }\n}`), "java");
+  // No modifier and no Kotlin word either: a bare declaration with java members.
+  assert.equal(
+    detectLanguage(`class Main {\n  private int count;\n\n  public int get() {\n    return count;\n  }\n}`),
+    "java",
+  );
+});
+
+test("maven output is not java", () => {
+  assert.equal(
+    detectOutputLanguage(
+      `[INFO] --- maven-compiler-plugin:3.11.0:compile (default-compile) @app ---\n[ERROR] /home/pi/src/App.java:[12,8] not a statement`,
+    ),
+    undefined,
+  );
+});
+
+test("scala: an object with extends, a case class, or an expression-bodied def", () => {
+  assert.equal(detectOutputLanguage(`object Main extends App {\n  println("hi")\n}`), "scala");
+  assert.equal(detectLanguage(`case class Point(x: Int, y: Int)\ncase class Line(a: Point, b: Point)`), "scala");
+  assert.equal(detectLanguage(`def add(a: Int, b: Int): Int = a + b\nval x = add(1, 2)`), "scala");
+  // `class X extends Y` is the shape groovy and java share, so a bare class body
+  // is not scala.
+  assert.notEqual(detectLanguage(`class Box extends Object {\n  private int x;\n}`), "scala");
+});
+
+test("groovy: a class with extends, or def next to a groovy-only signal", () => {
+  assert.equal(
+    detectOutputLanguage(`class Greeter extends Object {\n  String greet(String name) {\n    "hi \${name}"\n  }\n}`),
+    "groovy",
+  );
+  assert.equal(detectLanguage(`def x = 1\nprintln "value"`), "groovy");
+  // `def x = 1` is an assignment in any language without the second signal.
+  assert.equal(detectLanguage(`def x = 1\ndef y = 2`), undefined);
+});
+
+test("lua: a declared function or a require, javascript functions stay javascript", () => {
+  const script = `local M = {}\n\nfunction M.greet(name)\n  print("hi " .. name)\nend\n\nreturn M`;
+  assert.equal(detectLanguage(script), "lua");
+  assert.equal(detectOutputLanguage(script), "lua");
+  assert.equal(detectLanguage(`local function add(a, b)\n  return a + b\nend`), "lua");
+  assert.equal(detectLanguage(`local json = require("json")\nprint(json.encode({}))`), "lua");
+  // The brace that closes the parameter list is what keeps JavaScript out: the
+  // rule only accepts the end of the line there.
+  assert.equal(detectLanguage(`function f(a) {\n  return a;\n}`), "javascript");
+});
+
+test("css, scss and less: one stylesheet family, told apart by its variable syntax", () => {
+  const css = `body {\n  color: red;\n  margin: 0;\n}\nnav {\n  color: blue;\n}`;
+  assert.equal(detectLanguage(css), "css");
+  assert.equal(detectOutputLanguage(css), "css");
+  const scss = `$primary: #333;\n.button {\n  color: $primary;\n  padding: 2px;\n}`;
+  assert.equal(detectLanguage(scss), "scss");
+  assert.equal(detectOutputLanguage(scss), "scss");
+  const less = `@primary: #333;\n@radius: 4px;\n.button {\n  color: @primary;\n}`;
+  assert.equal(detectLanguage(less), "less");
+  assert.equal(detectOutputLanguage(less), "less");
+  // One variable is enough: the terminator and the missing brace are the signal.
+  const oneVariable = `@primary: #333;\n\n.button {\n  color: @primary;\n  padding: 2px;\n}\n\n.nav {\n  color: @primary;\n}`;
+  assert.equal(detectLanguage(oneVariable), "less");
+  // A single `@name:` line is a decorator, not a less variable.
+  assert.notEqual(detectLanguage(`@Component({\n  selector: "app"\n})`), "less");
+});
+
+test("less: a declaration needs its terminator, so annotations and at-rules are not less", () => {
+  // `@Override` carries neither a colon nor a `;`, which keeps java annotations
+  // out of the preprocessor answer.
+  assert.equal(
+    detectLanguage(`public class Main {\n  @Override\n  public String toString() {\n    return "x";\n  }\n}`),
+    "java",
+  );
+  // `@media (min-width: 768px) {` opens a block instead of terminating a
+  // declaration, so the sheet keeps the plain css reading.
+  const responsive = `@media (min-width: 768px) {\n  .grid {\n    display: grid;\n    gap: 8px;\n  }\n}\n\n.card {\n  color: red;\n}`;
+  assert.equal(detectLanguage(responsive), "css");
+});
+
+test("detectOutputLanguage: lowercase HTTP headers under a status line are not yaml", () => {
+  const headers = `HTTP/2 200\ncontent-type: text/html; charset=utf-8\ndate: Mon, 01 Jan 2024 12:00:00 GMT\nserver: nginx\ncache-control: max-age=60`;
+  // The fence detector still reads the lowercase keys as a document; the guard in
+  // the output path is what notices the status line on top.
+  assert.equal(detectLanguage(headers), "yaml");
+  assert.equal(detectOutputLanguage(headers), undefined);
 });
