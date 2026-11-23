@@ -46,7 +46,7 @@ back to `/tmp/pi/session/<PI_SESSION_ID>`.
   do and which artifacts it will write (`goal.md` + the first `decisions.md`
   entry).
 - [DO NOT] run the grilling when a confirmed `goal.md` already exists for
-  this work - that is `pablo-code-planning`'s entry condition.
+  this work - `pablo-code-planning` reads it from its dispatch task.
 
 ## Step 0 - quick scan (pre-round)
 

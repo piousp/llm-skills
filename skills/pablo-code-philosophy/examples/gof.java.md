@@ -7,10 +7,10 @@ public interface DiscountStrategy { BigDecimal apply(BigDecimal price); }
 public class StandardDiscount implements DiscountStrategy {
     public BigDecimal apply(BigDecimal price) { return price; }
 }
-// One implementation, no plan for a second.
+// One implementation, no second one in the code.
 ```
 
-### Earns its keep - real, growing variation
+### Earns its keep - real, existing variation
 
 ```java
 public interface DiscountStrategy { BigDecimal apply(BigDecimal price); }
@@ -29,7 +29,7 @@ Function<BigDecimal, BigDecimal> loyalty = price -> price.subtract(BigDecimal.va
 ```
 
 Reach for the interface + implementing classes only when a variant needs to carry state or
-there are real, growing implementations - otherwise a `Function` is the natural Strategy.
+there are real, existing implementations - otherwise a `Function` is the natural Strategy.
 
 ### Builder earning its keep vs. ceremony
 

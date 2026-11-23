@@ -1,0 +1,30 @@
+[
+  {
+    "id": "trigger_write_new_service",
+    "prompt": "Write a new TypeScript service from scratch that exposes an endpoint to create users.",
+    "should_trigger": true,
+    "seed": "empty",
+    "expected_checks": ["tests_planned", "asks_seam_confirmation", "no_test_files_written"]
+  },
+  {
+    "id": "trigger_suggest_tests",
+    "prompt": "Suggest which tests I should add for the change I just made in messy_module.py.",
+    "should_trigger": true,
+    "seed": "python_repo",
+    "expected_checks": ["mentions_keywords:boundar|branch|edge case|null", "no_test_files_written"]
+  },
+  {
+    "id": "trigger_implement_scala_function",
+    "prompt": "Implement a Scala function that validates whether a date range is correct.",
+    "should_trigger": true,
+    "seed": "empty",
+    "expected_checks": ["no_test_files_written"]
+  },
+  {
+    "id": "edge_changed_behavior_red_first",
+    "prompt": "In calc.py, make divide(x, y) raise ValueError instead of ZeroDivisionError when y is 0. The seam is divide in calc.py and it is confirmed; its tests are in test_calc.py and run with python3 -m unittest.",
+    "should_trigger": true,
+    "seed": "python_repo",
+    "expected_checks": ["ran_tests_before_prod_edit", "ran_tests_after_prod_edit", "new_behavior_asserted"]
+  }
+]

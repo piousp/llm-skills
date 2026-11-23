@@ -11,8 +11,9 @@
   a function; it becomes a problem when the mutation is observable outside that scope.
 - [ALWAYS] encode expected failure (not found, invalid input) in the return type (`Either`,
   `Option`) instead of throwing. Reserve exceptions for truly unrecoverable conditions.
-- [ALWAYS] compose behavior from small functions (`map`, `filter`, `andThen`) only when the
-  composition has more than two steps and genuinely benefits from being pipelined.
+- [NEVER] build a composed pipeline (`map`, `filter`, `andThen`) for two or fewer pure steps; two
+  plain statements read better. Chained `Option`/`Either` steps are the exception: a `for`/`flatMap`
+  chain is how typed errors short-circuit, at any length.
 - [NEVER] treat FP as a mandate to eliminate every loop or every `var`. A three-line loop with
   one obvious side effect is clearer as a loop.
 - [ALWAYS] reach for composition when it replaces real duplication or a real nested-conditional
@@ -78,7 +79,7 @@ See [`../../examples/fp.java.md`](../../examples/fp.java.md) and [`../../example
 
 - [NEVER] treat immutability as a religion. A mutable accumulator inside a single function's
   scope is not a violation.
-- [NEVER] assume `.map().flatMap()` chains are automatically more readable than an imperative
+- [NEVER] assume `.map().filter()` chains are automatically more readable than an imperative
   sequence; see the anti-pattern table in [../fp/mechanics.md](../fp/mechanics.md) for when composition hurts.
 - [ALWAYS] reserve typed error handling (`Either`/`Option`) for *expected* failure. Don't wrap
   genuine bugs or unrecoverable I/O errors in `Either` just to avoid throwing.

@@ -1,17 +1,17 @@
 # When to Mock
 
-[ALWAYS] mock at **system boundaries** only:
+[ALWAYS] mock at **system boundaries** only. A boundary is the project's adapter to something outside the process; mock the adapter, never what sits behind it:
 
-- External APIs (payment, email, etc.)
-- Databases (sometimes; prefer a test database)
-- Time and randomness
-- File system (sometimes)
+- External APIs: the HTTP or SDK client (payment, email, etc.)
+- Databases: the repository or DAO; the repository's own tests run against a test database, following the repo's integration-test conventions
+- Time and randomness: the clock and the random source
+- File system: the wrapper that reads or writes files, when a temp directory won't do
 
 [DO NOT] mock:
 
-- The project's own classes or modules
+- The project's own classes or modules (domain logic, services), except the adapters listed above
 - Internal collaborators
-- Anything under the project's control
+- Anything else under the project's control
 
 ## Designing for Mockability
 

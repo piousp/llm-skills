@@ -4,7 +4,7 @@ Each category pairs a good and a bad snippet with the reasoning: what the good o
 
 ## Testing boundaries
 
-Boundaries are the limit values of the inputs: for `divide`, null, zero, and sign changes on each operand. Every parameter gets its boundary values asserted.
+Boundaries are the limit values of the inputs: for `divide`, null, zero, and sign changes on each operand, plus the extreme `Integer.MIN_VALUE / -1`. Every parameter gets its boundary values asserted.
 
 ### Good
 
@@ -71,6 +71,16 @@ void divideHandlesNegativeNumerator() {
 ```
 
 Negative numerator asserts sign handling on the first operand, the same boundary shape as the denominator: both parameters get their sign boundary covered.
+
+```java
+// this divide throws on overflow instead of wrapping
+@Test
+void divideRejectsOverflow() {
+    assertThrows(ArithmeticException.class, () -> divide(Integer.MIN_VALUE, -1));
+}
+```
+
+`Integer.MIN_VALUE / -1` is the one `int` division that overflows: plain `/` silently returns `Integer.MIN_VALUE`. The test pins the contract this `divide` chooses, an exception, so an implementation that wraps fails it.
 
 ### Bad
 
@@ -211,4 +221,4 @@ void checkoutCallsPaymentServiceProcess() {
 }
 ```
 
-Asserts HOW the checkout delegates instead of WHAT it produces, coupling the test to the internal call graph. Any refactor that keeps the behavior identical breaks the test, and the actual outcome, a confirmed checkout, is never checked.
+`PaymentService` is the project's own service in front of `PaymentGateway`, the boundary adapter: the external-effect exception in SKILL.md covers a charge verified on the gateway mock, never a call on `PaymentService`. The test asserts HOW the checkout delegates instead of WHAT it produces, coupling the test to the internal call graph. Any refactor that keeps the behavior identical breaks the test, and the actual outcome, a confirmed checkout, is never checked.

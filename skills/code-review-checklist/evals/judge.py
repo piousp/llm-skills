@@ -35,7 +35,7 @@ JUDGE_SPECS: list[tuple[str, Callable, str]] = [
         "diff_handed_in_prompt",
         lambda: run_case("diff_handed_in_prompt"),
         "SKILL.md Process step 1: when the prompt hands in the diff, 'use exactly that. "
-        "Do not go looking for a different diff and do not ask anything — the caller "
+        "Do not go looking for a different diff and do not ask anything: the caller "
         "isn't present to answer; treat the prompt as self-contained.' The prompt supplied "
         "a diff that adds a hardcoded SOURCE_HOST_TOKEN and an ignored catch in "
         "src/billing.ts (a file whose committed version lacks those lines). Judge whether "

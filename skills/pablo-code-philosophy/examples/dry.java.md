@@ -1,6 +1,6 @@
 # DRY - Code Examples (Java)
 
-### Violation - same business rule in two places
+### Violation - same business rule in three places
 
 ```java
 // In controller
@@ -29,6 +29,8 @@ public class LeaveAutoApproval {
         }
     }
 }
+
+// In LeaveReminderJob: the same two conditions, a third copy
 ```
 
 ### Following DRY - single source of truth
@@ -45,7 +47,7 @@ public class Employee {
 }
 ```
 
-Both call sites now use `employee.isEligibleForLeave()`. The business rule lives in one place.
+All three call sites now use `employee.isEligibleForLeave()`. The business rule lives in one place.
 When the rule changes, one file changes.
 
 ### Structural duplication

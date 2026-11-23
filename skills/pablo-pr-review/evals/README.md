@@ -9,7 +9,7 @@ under a second, offline.
 
 ## What it covers
 
-`check_load_bearing_rules.py` asserts that `SKILL.md` (and `references/merge-rules.md`) still contains:
+`check_load_bearing_rules.py` asserts that `SKILL.md`, `references/*.md`, `.gitignore`, `scripts/store.py`, `scripts/select_lessons.py` and the lens SKILL.md files it names still contain:
 
 | check | load-bearing rule it guards |
 |---|---|
@@ -21,8 +21,8 @@ under a second, offline.
 | `english_headers_rule` | Transversal rule pins report headers/labels to English, the headers themselves appear literally in the output template, and no Spanish literal remains. |
 | `never_delegate_merge` | The merge step stays with the coordinator. |
 | `question_tier` | The Question tier (Q) exists; `references/merge-rules.md` defines it and caps Questions at 3. |
-| `root_cause_single_source` | `merge-rules.md` holds the one `## Root cause` definition, "keep the higher severity" is gone, and all 3 lens SKILL.md files point to `merge-rules.md` (fails until every lens package adds its pointer). |
-| `four_part_b_m_only` | Four-part shape is for Blocking/Major only; Question/Minor are one-liners. Pins the default of open decision 3; flip it if the owner decides otherwise. |
+| `root_cause_single_source` | `merge-rules.md` holds the one `## Root cause` definition, "keep the higher severity" is gone, and the 3 lens SKILL.md files (`qa-adversary`, `code-review-checklist`, `refactor-identification`) point to `merge-rules.md`; `pablo-test-review` is not checked. |
+| `four_part_b_m_only` | Four-part shape is for Blocking/Major only; Question/Minor are one-liners. Pins the owner's default; flip it if the owner decides otherwise. |
 | `minor_has_suggestion` | A Minor is one line carrying at least one concrete suggestion. |
 | `test_lens_dispatched` | A dispatch task runs the `pablo-test-review` lens (`skills: ["pablo-test-review"]`). |
 | `gap_cap_rule` | `merge-rules.md` merges qa and test-lens coverage gaps into one list capped at 3. |
@@ -30,7 +30,7 @@ under a second, offline.
 | `gitignore_private_dirs` | `reviews/` and `repo-lessons/` stay git-ignored. |
 | `taxonomy_15` | `taxonomy.md` (parsed by `scripts/store.py`) lists exactly 15 slugs. |
 | `strengths_note` | The optional, uncounted Strengths note is in the template and in the merge rules. |
-| `harvest_section` | SKILL.md has `## Harvest (user-triggered)`, the `"harvest PR <url>"` trigger in the description, stays <= 270 lines; `learning-loop.md` has the `## Harvest` procedure (fetch, `set-feedback`, pre-skill, praise, seen/unseen, partial = 0.5). |
+| `harvest_section` | SKILL.md has `## Harvest (user-triggered)`, the `"harvest PR <url>"` trigger in the description, stays <= 290 lines; `learning-loop.md` has the `## Harvest` procedure (fetch, `set-feedback`, pre-skill, praise, seen/unseen, partial = 0.5). |
 | `full_report_final_message` | The final assistant message is the COMPLETE report: no recap, preamble or closing note. |
 | `persist_printed_verbatim` | Persistence writes the printed text as the body through a `mktemp` file and `--body`; every temp file (incl. diff files) is deleted. |
 | `item_id_shape` | Every item head is `**<id> [<tier> - <lens(es)>] <location>: <text>**` for B/M/Q/I/G/T/O; ids numbered by tier then rank; the old `[tier] ... (id)` shape is gone. |
@@ -39,8 +39,11 @@ under a second, offline.
 | `status_table_columns` | Re-review status table has EXACTLY three columns `Prior item \| Title \| Status` (resolved/open/outdated, optional reason after a colon); a full re-run adds no column and no prose line before the first file; SKILL.md template says so. |
 | `no_trailing_after_table` | `merge-rules.md` § No new commits: nothing printed after the status table (no notes, status-source explanations, offers, questions). |
 | `mktemp_rule` | SKILL.md Persist: temp files MUST be created with `mktemp` (never fixed `/tmp/<name>.diff`) and deleted at the end. |
+| `lessons_never_delete` | SKILL.md step 5b runs `scripts/select_lessons.py --shadow` and pins the `Demoted by lessons:` line; a lesson never deletes an item, never moves it more than one tier, never touches a never-suppress item; `select_lessons.py` keeps the English prefix and the one-step ladder; no Spanish collapsed label remains. |
+| `never_suppress_list` | `learning-loop.md` § Merge-time application lists the never-suppress items (qa-adversary Blocking, `duplication-reuse`, `type-modelling`, `assertion_loosened`, the five `protect` values) and `select_lessons.never_suppress` protects exactly those. |
 | `test_lens_na_line` | `Test lens: not applicable.` is its own line, first in the Summary. |
 | `coordinator_lookups` | The coordinator may resolve a Question with read-only lookups; one `Resolved by lookup:` line each (max 3). |
+| `cross_repo_lookup` | A lens Question that needs another repo's code on the diff's call path is looked up by the coordinator (cap 3, overflow dropped, never printed as a Question), and `qa-adversary` reads that repo read-only first. |
 | `other_files_one_line` | Files without findings are one line under "Other files". |
 | `four_lens_store` | `store.py` knows the 4 lenses, `pablo-test-review` included. |
 | `approval_message_shape` | `learning-loop.md` pins the English approval message: header line, max 3 questions, answers a-f, proposals line, reply grammar, nothing written before the reply. |
@@ -49,27 +52,38 @@ under a second, offline.
 | `draft_comment_line` | B/M/Q/I/T/O items end with a `> Draft comment:` blockquote line; `draft-comments.md` exists and the coordinator drafts, never a subagent. |
 | `existing_comments_match` | SKILL.md step 5c points to `references/existing-comments.md`, pins the `Already raised by <author> (<link>, <open\|resolved\|outdated>)` marker, the `Existing comments: not checked (<reason>)` failure line and the never-change-tier rule; the reference says the coordinator matches (no subagent) and tiers, verdict and tally never change. |
 
-Also: `test_scripts.py` holds the unit tests for `scripts/store.py` (taxonomy parsing, report
-validation against `evals/fixtures/`, `set-feedback`); `test_fetch_comments.py` tests the pure
-functions of `scripts/fetch_comments.py` (`parse_pr_url`, `filter_login`, `mark_pre_skill`,
-`location_candidates`, plus the `--all-authors` helpers `thread_states`, `comment_status`,
-`build_all_authors_output`, with `gh` mocked) on synthetic JSON. Neither touches the network. Run with the command below.
+Unit tests (synthetic data, no network):
+
+- `test_scripts.py`: `scripts/store.py` (taxonomy parsing, report validation against `evals/fixtures/`, `set-feedback`).
+- `test_fetch_comments.py`: the pure functions of `scripts/fetch_comments.py` (`parse_pr_url`, `filter_login`, `mark_pre_skill`, `location_candidates`, the `--all-authors` helpers), with `gh` mocked.
+- `test_lessons.py`: `scripts/tally.py` (Beta math, outcome derivation, cells, lesson evidence, proposals).
+- `test_select.py`: `scripts/select_lessons.py` (demotion ladder, never-suppress, exploration, shadow, conflicts).
+- `test_replay.py`: `scripts/replay.py` (fold splitting, lesson building, PASS/FAIL criteria, narrowing).
+- `test_lint.py`: `scripts/lint_ml_lessons.py`, with planted leaks that use fake names.
+- `test_seeds.py`: the `ml-lessons/` seeds (`provenance: seeded`, planned status in `SEEDS`) and the lessons `tally.py` adds (`provenance: observed`); schema and trigger contract for every lesson.
+- `test_load_bearing_rules.py`: self-test of `check_load_bearing_rules.py` (re-wrapping passes, changed values fail, 38 checks).
+- `repo-lessons/test_repo_lessons.py` (skill root): the private, git-ignored repo lessons; runs only where `repo-lessons/` exists.
+- `check_backfill.py`: compares backfilled harvest feedback with the expected per-PR counts in the git-ignored `reviews/_meta/backfill_expected.json`.
 
 ## How to run it
 
+From this skill's directory:
+
 ```bash
-cd ~/LLMs/skills/pablo-pr-review
 python3 evals/check_load_bearing_rules.py
 python3 -m unittest discover -s evals -p 'test_*.py'
+python3 -m unittest discover -s repo-lessons -p 'test_*.py'   # only where repo-lessons/ exists
+python3 scripts/lint_ml_lessons.py
+python3 evals/check_backfill.py --expected reviews/_meta/backfill_expected.json   # only where reviews/ exists
 ```
 
-Stdlib only, no network, no tokens, no subagents. Prints `[PASS|FAIL]` per
-check and exits 0 (all pass) or 1 (any failure).
+Stdlib plus PyYAML; no network, no tokens, no subagents. `check_load_bearing_rules.py` prints
+`[PASS|FAIL]` per check and exits 0 (all pass) or 1 (any failure); `lint_ml_lessons.py` exits 0 when clean.
 
 ## Not covered (on purpose)
 
-- Trigger/description tuning: like `qa-adversary`, this skill is invoked by
-  name, so there is no auto-trigger path to regress.
+- Trigger/description tuning: the description auto-triggers on PR-review requests; trigger evals
+  are not built here (use the `evaluating-agent-skills` skill for that).
 - Live trajectory evals (lens dispatch quality, merge narrative quality):
   expensive and semantically judged; out of scope for this guardrail.
   See `references/lessons-learned.md` for the manual calibration process

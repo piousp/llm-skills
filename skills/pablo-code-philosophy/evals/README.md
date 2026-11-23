@@ -7,8 +7,7 @@ keeps the judgment layer (pipeline, precedence, conflict matrix, surgical change
 `pablo-tdd` absorbed `tdd` and owns test knowledge (what a good test is, seams,
 anti-patterns, the red → green loop, the bare-snippet exception); `pablo-code-planning`
 owns strict plans (analysis, decisions, contracts). All three skills carry
-auto-trigger-capable frontmatter descriptions per OQ2: an explicit "Trigger when:"
-clause, a negative case with [DO NOT], and enforcement keys ([ALWAYS]/[DO NOT]) per
+auto-trigger-capable frontmatter descriptions per OQ2, written per
 `writing-agent-skills` §2/§3. The philosophy's "Tests are part of the deliverable"
 bullet is now a pointer to `pablo-tdd`.
 
@@ -83,6 +82,8 @@ per OQ2.
 > demand real evidence of pipeline application (YAGNI by name; an explicit
 > precedence/conflict-matrix reference). Prior pass counts involving these
 > checks are **not comparable** with post-tightening results.
+> The tightened file did not parse as JSON until its regex escapes were doubled (`\\b`, `\\s`); no valid post-tightening run predates that fix.
+> 2026-11-23: `core_conflict_matrix_resolution` was tightened the same way; its old terms (`srp|dry|kiss|reason|change`) passed on an echo of the prompt's "reasons each one changes". Its earlier pass counts are **not comparable** either.
 
 All 10 prompts are written in English. They were originally Spanish while
 `mentions_keywords` matched English substrings only (`yagni`, `premature`,
@@ -108,9 +109,14 @@ the skill's load forced - none of them test discovery):
   (`\byagni\b|you ain't gonna need it` - echoing the prompt's generic
   "pattern" no longer passes), and `core_precedence_kiss_dry_solid` now
   requires an explicit precedence/conflict-matrix reference
-  (`\bprecedence\b|takes precedence|conflict matrix|conflict
-  resolution|kiss > dry` - a generic "simpl..." echo of "simple" no
-  longer passes).
+  (`\bprecedence\b|takes precedence|conflict[ -]matrix|conflict
+  resolution|kiss\s*>\s*dry` - a generic "simpl..." echo of "simple" no
+  longer passes). These are the decoded regexes; inside `prompt_set.json`
+  every backslash is doubled (`\\b`, `\\s`).
+  **Tightened 2026-11-23:** `core_conflict_matrix_resolution` now requires
+  SRP by name or its canonical phrasing
+  (`\bsrp\b|single[ -]responsibility|reasons? to change` - echoing the
+  prompt's "reasons each one changes" no longer passes).
 - `no_unrelated_edits[:<file1>,<file2>,...]` - fails if any `edit`/`write`
   tool call targets a file outside the ones named (default:
   `messy_module.py`) - the skill's "Surgical Changes" rule. **Fixed
@@ -121,9 +127,11 @@ the skill's load forced - none of them test discovery):
   `backup/messy_module.py`).
 - `no_file_edits` - for the pure-review prompt: no `edit`/`write` tool call
   should occur at all.
-- `sibling_loaded:<name>` - early `read` of a named sibling skill's
-  `SKILL.md` (still meaningful: forcing *this* skill's load says nothing
-  about whether an unforced sibling also fires for a mixed-topic prompt).
+- `reference_opened:<path-suffix>` - an early `read` of a file whose path
+  ends with the suffix (`references/fp/mechanics.md` in
+  `edge_mixed_philosophy_fp`): FP/GoF mechanics live in this skill's
+  `references/`, so surfacing them shows up as opening that doc, not as
+  loading a sibling skill.
 
 Retired: `skill_loaded` / `skill_not_loaded` (early-read-of-own-SKILL.md
 checks) - meaningless once `--skill` forces the load every time.
@@ -135,6 +143,7 @@ set plans tests, and test-planning behavior itself now belongs to
 
 ```bash
 cd <this-skill-dir>
+python3 -c 'import json;json.load(open("evals/prompt_set.json"))'  # must succeed first
 PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py
 ```
 

@@ -42,7 +42,7 @@ The SDK approach means:
 
 ## Mocking at the boundary
 
-[ALWAYS] mock at system boundaries only, the external dependency, not the project's own code:
+[ALWAYS] mock at system boundaries only, the project's adapter to the external system, never its domain logic:
 
 ```scala
 // GOOD: mock the external gateway, assert the service's behavior
@@ -50,25 +50,28 @@ test("checkout confirms when gateway charges") {
   val gateway = mock[PaymentGateway]
   when(gateway.charge(cart.total)).thenReturn(ChargeResult.success())
 
-  val service = CheckoutService(gateway)
+  val service = CheckoutService(gateway, CartValidator())
   val result = service.checkout(cart)
 
   assert(result.status == CheckoutStatus.Confirmed)
 }
 ```
 
-The mock stands at the system boundary (external payment gateway), exactly where references/mocking.md draws the line. The test asserts observable behavior with a controlled external dependency, not the service's internals.
+The mock stands at the system boundary (external payment gateway), exactly where references/mocking.md draws the line; `CartValidator`, the project's own domain rule, runs for real. The test asserts observable behavior with a controlled external dependency, not the service's internals.
 
 ```scala
-// BAD: mock of the project's own collaborator
-test("checkout mocks internal cart repository") {
-  val repo = mock[CartRepository]
-  val service = CheckoutService(repo)
+// BAD: mock of the project's own domain logic
+test("checkout mocks internal cart validator") {
+  val gateway = mock[PaymentGateway]
+  when(gateway.charge(cart.total)).thenReturn(ChargeResult.success())
+  val validator = mock[CartValidator]
+  when(validator.isValid(cart)).thenReturn(true)
 
+  val service = CheckoutService(gateway, validator)
   val result = service.checkout(cart)
 
   assert(result.status == CheckoutStatus.Confirmed)
 }
 ```
 
-The repository is the project's own class, under the project's control; references/mocking.md: [DO NOT] mock the project's own classes or modules. The test now couples to internal wiring and breaks on refactors that change nothing observable.
+`CartValidator` is the project's own domain rule, under the project's control; references/mocking.md: [DO NOT] mock the project's own classes or modules. Stubbed to `true`, the rule never runs: the test stays green when validation breaks, and it couples to the service's internal wiring. The gateway mock is still right: the gateway is the boundary.

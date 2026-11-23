@@ -1,0 +1,38 @@
+[
+  {
+    "id": "positive_qa_this_change",
+    "prompt": "QA this change before I merge it: will it break anything?\n\n```diff\n--- a/cart.py\n+++ b/cart.py\n@@ -7,5 +7,3 @@\n-        entry = price_lookup.get(sku)\n-        if entry is None:\n-            continue\n+        entry = price_lookup[sku]\n         total += entry[\"price\"]\n```\n\nAnswer in your response only; do not modify any files.",
+    "should_trigger": true,
+    "expected_checks": ["reads_qa_adversary_skill_md"]
+  },
+  {
+    "id": "positive_find_bugs_in_diff",
+    "prompt": "Find bugs in this diff:\n\n```diff\n--- a/shipping.py\n+++ b/shipping.py\n@@ -6,1 +6,1 @@\n-    return order.subtotal > 75.00 and order.country == \"US\"\n+    return order.subtotal >= 75.00 and order.country == \"US\"\n```\n\nAnswer in your response only; do not modify any files.",
+    "should_trigger": true,
+    "expected_checks": ["reads_qa_adversary_skill_md"]
+  },
+  {
+    "id": "negative_debug_stack_trace",
+    "prompt": "Debug this stack trace from last night's billing job and tell me the most likely cause:\n\n```\nTraceback (most recent call last):\n  File \"jobs/billing.py\", line 42, in run\n    total = total_price(cart, price_lookup)\n  File \"cart.py\", line 7, in total_price\n    entry = price_lookup[sku]\nKeyError: 'SKU-9981'\n```\n\nAnswer in your response only; do not modify any files.",
+    "should_trigger": false,
+    "expected_checks": ["first_skill_read_is_not_qa_adversary"]
+  },
+  {
+    "id": "negative_style_checklist",
+    "prompt": "Run the code review checklist on this diff: naming, complexity and style only.\n\n```diff\n--- a/invoice.py\n+++ b/invoice.py\n@@ -5,4 +5,1 @@\n-    total = 0\n-    for line in order[\"lines\"]:\n-        total = total + line[\"amount\"]\n-    return total\n+    return sum(line[\"amount\"] for line in order[\"lines\"])\n```\n\nAnswer in your response only; do not modify any files.",
+    "should_trigger": false,
+    "expected_checks": ["first_skill_read_is_not_qa_adversary"]
+  },
+  {
+    "id": "negative_test_review",
+    "prompt": "Review the tests in this diff: can they still fail?\n\n```diff\n--- a/tests/test_cart.py\n+++ b/tests/test_cart.py\n@@ -10,1 +10,1 @@\n-    assert total_price(cart, prices) == 30.0\n+    assert total_price(cart, prices) > 0\n```\n\nAnswer in your response only; do not modify any files.",
+    "should_trigger": false,
+    "expected_checks": ["first_skill_read_is_not_qa_adversary"]
+  },
+  {
+    "id": "negative_review_pr_url",
+    "prompt": "Review this PR: https://github.com/example-org/example-repo/pull/1. Do not run commands or write files; say how you would review it.",
+    "should_trigger": false,
+    "expected_checks": ["first_skill_read_is_not_qa_adversary"]
+  }
+]

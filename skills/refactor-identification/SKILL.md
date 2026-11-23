@@ -1,7 +1,7 @@
 ---
 name: refactor-identification
 description: >-
-  Finds refactor candidates in the current branch diff (Java, Scala, JS, TS): missing abstractions, weak encapsulation, poor data types, flags or enums that model variants. Every finding needs file:line evidence. Use for "refactor candidates". [DO NOT] use for renames, applying fixes, or whole-repo scans.
+  Finds refactor candidates in the current branch diff (Java, Scala, JS, TS): missing abstractions, weak encapsulation, poor data types, flags or enums that model variants. Use for "refactor candidates" or "is a refactor worth it in this branch". [DO NOT] use for renames, applying fixes, a simplification or cleanup plan (use pablo-code-simplify), bugs (use qa-adversary), a full branch or PR review (use pablo-code-review or pablo-pr-review), or whole-repo scans.
 ---
 
 # Refactor Identification: Branch-Scoped Structural Candidates
@@ -9,8 +9,7 @@ description: >-
 Use this skill for a deep, quantified dive on exactly 4 structural categories, when the question
 is not "does this diff pass review" but "is there a structural refactor worth investing in here".
 Do not use it as a substitute for a broader code-review checklist pass: that pass already covers
-part of A1 superficially (its "Abstractions" section and the SRP/OCP portion of "Structural
-Code Smells") as part of a broad, fast merge gate; reach for this skill only when that
+part of A1 superficially (its "Abstractions" section and the "God object" item of "Structural Code Smells") as part of a broad, fast merge gate; reach for this skill only when that
 surface-level pass isn't enough. See Boundaries below for the exact split. Identify candidates only; never execute a refactor and never explain *how* to apply a
 pattern once one is chosen. Route the "how" to `pablo-code-philosophy`'s `references/gof/`
 (pattern catalog) and `references/fp/` (FP mechanics); route the cut-off criterion (when NOT to
@@ -21,11 +20,16 @@ bother) to that same skill.
 This skill never scans a whole repository. It only looks at what the current branch changed.
 
 1. **Derive the diff** (the same first step as any diff-scoped review):
-   - If the caller's prompt already hands you a diff (a path, a commit range, or diff content),
-     use exactly that. Do not go looking for a different diff and do not ask anything.
+   - If the caller's prompt already hands you a diff (a path to a diff file, a commit range, or
+     diff content), use exactly that. Do not go looking for a different diff and do not ask
+     anything. Content the caller declares as "the diff in full" makes every line an added line.
+     A file, function, or directory handed over without that declaration is not a diff: derive
+     the diff as below; its lines outside that diff anchor nothing (N4).
    - Otherwise, derive it yourself: `git diff` (unstaged), `git diff --cached` (staged),
      `git diff main...HEAD` (full branch). Ask for the parent branch only if invoked standalone
      and it isn't obvious.
+   - If the diff cannot be derived (a supplied path, range, or base ref does not exist, or git
+     fails), emit the Blocked form (Output format) and stop; never substitute another base.
 2. **Anchoring rule**: every finding needs at least one `file:line` inside a changed hunk, or on
    a symbol the branch changed. A finding with no such anchor does not exist for this skill.
 3. **1-hop context rule**: you may read (a) the full contents of every changed file, (b)
@@ -37,14 +41,16 @@ This skill never scans a whole repository. It only looks at what the current bra
    repo-wide grep is allowed *solely* to count how many total occurrences exist, because the DRY
    thresholds below (2 for both structural and business duplication) count all
    occurrences, not just the ones inside the diff. This exception never originates a new
-   candidate; it only measures one already anchored in step 2. A zero-hit grep outside the diff
+   candidate; it only measures one already anchored in step 2. Exclude generated, vendored, and
+   build-output paths; record the exact search command and its hit count in the measure. A count
+   without its command is not a measure, and it covers only what the command matches. A zero-hit grep outside the diff
    establishes local absence only, never runtime unreachability (see rule 5).
 5. **Evidence ceiling rule**: code/config read within the 1-hop radius, and tests that exercise
    it, are what settle a candidate. Documentation, wikis, comments, and domain knowledge may
    only motivate a hypothesis; [NEVER] let them decide a gate row or a finding by themselves.
    If adjudicating a candidate needs a fact beyond the 1-hop radius or outside this repo (including a fact only documentation claims), do not infer or derive it: name the exact
-   lookup that would resolve it (repo, symbol/path, what to check) and mark the candidate
-   N9/Unresolved. The radius never widens; the verdict is suspended.
+   lookup that would resolve it (repo, symbol/path, what to check) and route the candidate per the
+   N9 row (Unresolved, or one Filtered out line). The radius never widens.
 
 ## The four categories
 
@@ -52,7 +58,7 @@ This skill never scans a whole repository. It only looks at what the current bra
 |---|---|---|---|
 | A1 | Missing or misplaced abstractions | SRP/OCP violated, the same structural/business logic duplicated, inheritance used for reuse rather than variation, or mixed-phase functions | Duplication ≥2, structural or business (owner's review rule: extract at 2 copies unless very expensive; overrides `pablo-code-philosophy` DRY Three Strikes here) |
 | A2 | Weak encapsulation | Mutable state exposed, invariants unprotected or checked by callers instead of the object, mixed query/mutation, hidden ambient dependencies, or read-through delegate chains | 1 occurrence anchored in the diff, unless noted otherwise |
-| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow; redundant derived fields; mutable references used as values | Varies per smell, see the A3 table below |
+| A3 | Poor data types | Primitives/data clumps standing in for a domain type; null or exceptions used for expected control flow; redundant derived fields; mutable references used as values; untyped TS values crossing a boundary | Varies per smell, see the A3 table below |
 | A4 | Flag/enum-modeled variants | A discriminator (boolean/enum/string) drives dispatch that a sealed ADT + pattern matching would express directly | Varies per smell, see the A4 table below |
 
 ## A1: Missing or misplaced abstractions
@@ -61,9 +67,7 @@ A class or function carries more than one reason to change, the same shape of lo
 copy-pasted with only the types or literals differing, it inherits for reuse rather than
 variation, or it mixes separable phases in one body.
 
-**2-copy override of DRY**: `pablo-code-philosophy` DRY.md (Three Strikes) waits for 3 copies. In this
-lens the owner's review rule wins: duplication is a candidate at 2 copies, structural or business,
-unless the extraction is very expensive (N3 and P3 still apply). DRY.md itself is unchanged.
+**2-copy override of DRY**: `pablo-code-philosophy` DRY.md already abstracts structural duplication at 2 copies and waits for 3 copies of business logic (Three Strikes). In this lens the owner's review rule wins: business duplication is also a candidate at 2 copies, unless the extraction is very expensive (N3 and P3 still apply). DRY.md itself is unchanged.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
@@ -72,7 +76,7 @@ unless the extraction is very expensive (N3 and P3 still apply). DRY.md itself i
 | Business-rule duplication | Same domain decision (same predicate over the same domain fields) encoded in multiple places; literals/field names match even if syntax differs. | All `file:line` sites + the rule in one sentence | ≥2 occurrences, ≥1 touched by the branch; N3 still applies; an extraction that crosses a module boundary or public contract is P3 |
 | SRP violation in a touched class | Diff adds methods/fields serving a second axis of change: new imports/collaborators from an unrelated domain; methods that share no fields with the rest of the class. Does not count: an injected collaborator with 0 in-repo readers is dead code (code-review-checklist Abstractions), not an axis. | Class `file:line` + list of the ≥2 axes of change + the added members' lines | ≥2 distinct reasons-to-change, ≥1 introduced/extended by the branch |
 | OCP violation (dispatch modified, not extended) | The branch ADDS a case/branch to an existing `switch`/`if-else` chain selecting behavior, instead of extending via a new implementation. | Chain `file:line`, the added branch's hunk lines, chain length after change | Chain length ≥3 after the change |
-| Misplaced logic (feature envy) | Touched method calls ≥3 getters/fields of one foreign type and ≤1 of its own class; the computation belongs on the foreign type. | Method `file:line` + count "N foreign accessor calls vs M own" | ≥3 foreign accessor calls (calibratable) |
+| Misplaced logic (feature envy) | Touched method calls ≥3 getters/fields of one foreign type and ≤1 of its own class; the computation belongs on the foreign type. | Method `file:line` + count "N foreign accessor calls vs M own" | ≥3 foreign accessor calls |
 | Inheritance used for reuse, not variation§ | A subclass shares fields/methods of its parent with no behavioral variation: it overrides a method only to leave it empty/pass-through, or never overrides anything: composition would carry the same state without the "is-a" claim. Does not count: a subclass required by a framework/language (`extends Exception`, a framework base class), a sealed hierarchy (that's A4), or a base class holding only fields and getters. | Subclass `file:line` + the parent member it reuses/leaves empty | 1 occurrence, ≥1 touched by the branch |
 | Mixed-phase function (no Split Phase) | A touched method does two genuinely separable jobs end to end in one body (e.g. parse/validate raw input, then compute a business result from it), with no named structure between the phases; phase-1 locals feed phase-2 logic across a long body. | Method `file:line` + the two phase line-ranges, named in one sentence each | ≥2 independently nameable phases |
 
@@ -103,18 +107,20 @@ reaches through a delegate chain.
 ## A3: Poor data types
 
 Domain concepts are carried by bare primitives or `null`, expected outcomes are signaled by
-throwing instead of by the return type, a field stores a value it could derive instead, or a
-mutable value is aliased where it should be copied.
+throwing instead of by the return type, a field stores a value it could derive instead, a
+mutable value is aliased where it should be copied, or a TS value with a known domain shape
+crosses a boundary as `any`.
 
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
-| Primitive obsession | `String`/`int`/`long`/`double` carrying domain meaning (id, ISO code, currency, email, status) crossing method signatures; or the same primitive format-validated in multiple places. Does not count: an opaque identifier (id, key, token) the branch only passes, stores or compares without adding parsing, validation or formatting; never suggest an id wrapper type for it. | Each signature `file:line` + the domain concept name | Crosses ≥3 signatures in scope, OR validated in ≥2 places (calibratable) |
+| Primitive obsession | `String`/`int`/`long`/`double` carrying domain meaning (id, ISO code, currency, email, status) crossing method signatures; or the same primitive format-validated in multiple places. Does not count: an opaque identifier (id, key, token) the branch only passes, stores or compares without adding parsing, validation or formatting; never suggest an id wrapper type for it. | Each signature `file:line` + the domain concept name | Crosses ≥3 signatures in scope, OR validated in ≥2 places |
 | Stringly-typed state | Field compared against string literals to branch (`"Active".equals(status)` / `status == "Active"`); or a set of ≥2 string constants declared as the allowed values of one field. | Each comparison `file:line` + the literal set observed | ≥2 distinct literal comparisons on the same field; or 1 declaration in the diff of ≥2 string constants that are the allowed values of one field |
 | null as domain absence | Java: method returns `null` for an expected "not found"/"missing" outcome; callers null-check. Scala: any `null`, `Option.get`, `.getOrElse(null)`. JS/TS: return of null/undefined for an expected "not found", callers guarding with ?./??/!x; TS: also optional ? members and non-null assertions | Producer `file:line` + each null-checking caller `file:line` | Java: ≥2 null-checks on the same value; Scala: 1; JS/TS: ≥2 guards, or 1 for a ! assertion |
 | Exceptions as control flow | `throw` for an expected domain outcome (validation failed, not found) with a caller that catches to branch on it. | `throw` `file:line` + catching caller `file:line` | 1 (throw+catch pair present) |
 | Data clump | The same group of ≥3 parameters traveling together through multiple signatures (same names/types in the same order). | Each signature `file:line` + the clump members | Group of ≥3 params in ≥2 touched signatures (an interface method, its implementations and overloads count as one signature) |
 | Redundant derived field | A field stores a value already derivable from another field the same object holds, at the point of use; the invariant that makes the derivation total is visible in the same file. | Field `file:line` + the field it duplicates | 1 occurrence, derivation invariant visible locally; else N9 |
 | Shared mutable reference used as a value | An object with no identity meaning (an amount, a range, a coordinate) is passed/stored by mutable reference and aliased across ≥2 owners, so mutating one silently affects the other. | Alias site `file:line` + mutation site `file:line` | 1 occurrence of aliasing + mutation on the same reference |
+| Untyped boundary value | TS: `any` or unbounded `unknown` on a touched signature, field, or generic argument that crosses a module or I/O boundary, where the value has a known domain shape. | Each `file:line` + what the value actually is | 1 occurrence; local to one function and crossing no signature: N7 |
 
 ## A4: Flag/enum-modeled variants
 
@@ -124,18 +130,19 @@ matching would express more directly and exhaustively.
 | Smell | Detection cue (language-neutral) | Evidence to record | Threshold |
 |---|---|---|---|
 | Duplicated dispatch over the same enum/flag | ≥2 `switch`/`match`/if-else chains over the same enum/int-flag/string discriminator, where variants carry different data or behavior → sealed ADT candidate. Count extra dispatch sites repo-wide once anchored. | Each dispatch `file:line` + the discriminator + variant count | ≥2 dispatch sites (structural-dup-at-2 rule) |
-| Type-check cascade on unsealed hierarchy | Java: `instanceof` chains. Scala: `isInstanceOf`/`case x: T` matches on a non-sealed trait/class. JS/TS: typeof/instanceof/Array.isArray cascades, or a union with no discriminant and no never check | Cascade `file:line` + branch count + "hierarchy not sealed: `<root>`" | ≥2 branches |
+| Type-check cascade on unsealed hierarchy | Java: `instanceof` chains. Scala: `isInstanceOf`/`case x: T` matches on a non-sealed trait/class. JS/TS: typeof/instanceof/Array.isArray cascades, or a union dispatched with no discriminant or with no `never` check | Cascade `file:line` + branch count + "hierarchy not sealed: `<root>`" | ≥2 branches |
 | Mode field checked across methods | A status/mode field checked at the top of several methods of a touched class (State candidate, direction only). | Field `file:line` + each checking method `file:line` | ≥3 methods check the same field |
 | Nullable-fields-as-variants | Class where certain fields are only meaningful for some values of a discriminator (null-guards conditioned on it; comments like "only set when..."). | Class `file:line` + discriminator + the conditional fields' lines | 1 class with ≥2 discriminator-dependent fields |
 
 ## When NOT to report (gate)
 
-Every candidate must pass through every row below before it becomes a finding. Check every row
-against every candidate: at most one row applies (the most specific match, never stacked as
-rhetorical reinforcement), and a candidate with no matching row passes to Findings. A candidate
-matching N9 moves to Unresolved or Filtered out as the N9 row says; a candidate matching any other row moves to Filtered out with
-that row's ID. No candidate is silently dropped; record the row checked in the finding's gate
-note.
+Check every candidate against the rows below in this order and stop at the first row that
+applies: N4, N10, N8, N1, N2, N5, N6, N7, N3. Cite only that row, never stacked rows as
+rhetorical reinforcement. If the fact that decides a row lies outside the 1-hop radius or this
+repo, stop at N9 instead. A candidate matching N9 moves to Unresolved or Filtered out as the N9
+row says; a candidate matching any other row moves to Filtered out with that row's ID; a
+candidate no row applies to passes to Findings. No candidate is silently dropped. A passing
+candidate's gate note names the closest row and the fact that rules it out.
 
 "Filtered out" describes why this lens doesn't surface the item as a structural refactor
 candidate in this branch. [NEVER] treat it, or cite a row ID, as a claim that the change is
@@ -155,7 +162,7 @@ re-derive.
 | N4 | No evidence line falls inside a changed hunk or on a symbol the branch changed | Scope law, branch work only | Filtered out |
 | N5 | Flag/mode has exactly 2 simple states with trivial behavior difference | State pattern only earns its cost past this | Filtered out (A4) |
 | N6 | Single failure point already handled inline by the immediate caller | Either/Option is ceremony here | Filtered out (A3) |
-| N7 | Primitive/clump stays local: crosses no signature boundary and is validated in <2 places | KISS, a domain type adds ceremony | Filtered out (A3) |
+| N7 | Primitive, clump or untyped value stays local: crosses no signature boundary and is validated in <2 places | KISS, a domain type adds ceremony | Filtered out (A3) |
 | N8 | The "finding" is really a rename, formatting, or trivial extract-method in disguise; extracting a helper that removes a duplicate copy is never N8 | Skill boundary, non-structural | Filtered out |
 | N9 | The candidate's disposition depends on a fact outside 1-hop context or outside this repo (reachability, another service's behavior, runtime data layout) | Scope law, cannot be adjudicated here | Unresolved only if the answer could make it P1/P2; otherwise, including a candidate rooted in another repo, one Filtered out line naming the repo or fact |
 | N10 | Every evidence line lives in test, spec, fixture, or test-helper code (including the main sources of a dedicated integration-test repo/module) | Test duplication is often deliberate clarity; test-structure quality is out of scope for this family (see pablo-test-review Scope law) | Filtered out |
@@ -167,34 +174,40 @@ different rules and N2 does not apply.
 ‡ N3 check: "harder to read" explicitly includes hiding an effect. If the abstraction that
 removes the duplication would fold a mutation, a metric, a log, or any other side effect that
 each duplicated site currently performs in plain sight into a single method's body, N3 applies:
-a few duplicated, explicit lines beat one abstraction with hidden effects (KISS > DRY). Name
-this check in the gate note of every A1 structural-duplication candidate whose refactor
-direction merges call sites that mutate state.
+a few duplicated, explicit lines beat one abstraction with hidden effects (KISS > DRY). In the
+gate note of every A1 structural-duplication candidate whose refactor direction merges call
+sites that mutate state, name N3 as the closest row.
 
 ## Priority assignment
 
-Assign strictly by this table; no judgment outside it.
+Assign strictly by this cascade: check the rows in order and stop at the first match. No
+judgment outside it.
 
-| Priority | Mechanical rule (all conditions checkable) |
-|---|---|
-| P1 | The smell's root-cause line (the declaration, definition, or dispatch site actually being flagged, not merely a call site or check site referencing it) is ADDED or MODIFIED by the branch (the branch introduces or worsens the smell itself) AND the fix stays within files the branch already changed → do it in this branch |
-| P2 | The smell's root-cause line pre-exists untouched; the branch only adds a new occurrence, case, or call site that references it (e.g. a second null-check on an existing nullable producer); the fix stays within changed files + 1-hop context → candidate for this branch or an immediate follow-up |
-| P3 | Anchored in changed code, but the fix exceeds 1-hop context, touches a public contract, or crosses module boundaries → follow-up ticket material, never inline |
+| Order | Priority | Mechanical rule (all conditions checkable) |
+|---|---|---|
+| 1 | P3 | The fix exceeds 1-hop context, crosses a module boundary, or changes a public contract that already exists on the base ref (an API, endpoint, or message/DB schema consumed outside its module) → follow-up material (a separate task), never inline |
+| 2 | P1 | The branch adds or worsens the smell's root-cause line (the declaration, definition, or dispatch site actually being flagged, not merely a call site or check site referencing it; a duplicate copy the branch adds counts; for A4 "Duplicated dispatch over the same enum/flag", the discriminator's declaration is the root-cause line and each dispatch site is an occurrence) AND the fix stays within files the branch already changed → do it in this branch |
+| 3 | P2 | Any other anchored candidate: the root-cause line pre-exists and the branch only adds a new occurrence, case, or call site that references it (e.g. a second null-check on an existing nullable producer), or the fix also touches an unchanged 1-hop file → candidate for this branch or an immediate follow-up |
 
-Tie-break: if a candidate has multiple evidence lines spanning both a pre-existing root cause and
-branch-added occurrences, priority follows the root cause, not the occurrence count: P2, not P1. Exception: a copy the branch ADDS next to an untouched one is P1 when the fix stays within files the branch changed (`references/examples.md` A1); an in-place retype of a pre-existing line stays P2.
+A root-cause line the branch edits without introducing or worsening the smell (e.g. retyping a
+pre-existing `String id` parameter to `long id`) counts as pre-existing, and so does a line the
+branch only moves or renames with unchanged content. Mixed evidence, a pre-existing root cause
+plus branch-added occurrences, follows the root cause: P2, not P1 (`references/examples.md` A3).
+The copy the branch adds in `references/examples.md` A1 is itself a root-cause line, so A1 is P1.
+`references/examples.md` A4 is P3: its fix edits a dispatch site that only the occurrence count
+(Scope law 4) reached, outside the 1-hop radius.
 
 ## Step-by-step process
 
 ```
-1. Derive the scope. If the caller's prompt hands you a diff (path, range, or content), use
-   exactly that; do not ask. Otherwise: `git diff` (unstaged), `git diff --cached` (staged),
-   `git diff main...HEAD` (full branch); ask for the parent branch only if invoked standalone
-   and it isn't obvious.
+1. Derive the scope per Scope law 1: a supplied diff exactly as given, otherwise the derived
+   diff; on failure, emit the Blocked form (Output format) and stop.
    Verify: you can list every changed file with its hunks.
 2. Build the scope table: one row per changed file, with its path, language
-   (Java/Scala/JavaScript/TypeScript), and changed line ranges. A file in any other language
-   gets language `out of language scope` and yields no candidates.
+   (Java/Scala/JavaScript/TypeScript), and changed line ranges. A file in any other language,
+   or a generated, vendored, or build-output file (a `@Generated` or "do not edit" header,
+   `target/`, `build/`, `dist/`, `node_modules/`, `vendor/`), gets language
+   `out of language scope` and yields no candidates.
    Verify: row count == changed-file count.
 3. Expand context, 1 hop max: for each changed symbol you may read (a) its full containing
    file, (b) files that directly define or use it (a code-navigation/indexing tool if the repo
@@ -207,20 +220,26 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
 6. Detection pass A3, same procedure.
 7. Detection pass A4, same procedure.
 8. Count occurrences for threshold-based candidates: grep repo-wide for the anchored
-   pattern; update each candidate's measure. Drop candidates below threshold.
-   Verify: every surviving candidate's measure meets its row's threshold.
+   pattern (Scope law 4); update each candidate's measure. [NEVER] drop a below-threshold
+   candidate: if the caller's prompt or code in scope points to a copy outside this repo,
+   carry it to step 9 (N9 decides); otherwise move it to Filtered out as below threshold.
+   Verify: every candidate carried to step 9 meets its row's threshold or points to an
+   out-of-repo copy; every repo-wide count shows its command and hit count.
 8b. Merge candidates that share a root-cause line into one RF (one root cause = one fix;
     definition: `pablo-pr-review` `references/merge-rules.md` § Root cause); name the
     merged ones in its Evidence line as "also: A<n> <smell row>".
     Verify: no two candidates share a root-cause line.
-9. Gate every candidate through N1–N10. Name the one fact that decides the row before picking
-   it. If that fact requires evidence outside the 1-hop radius or this repo, stop at N9; never approximate with the closest-looking row. Passing candidates get a one-line gate
-   note naming the rows checked; failing candidates move to Filtered out with the failing
-   row ID; N9 candidates move to Unresolved or Filtered out as the N9 row says, with the missing fact named.
+9. Gate every candidate through the rows in the gate's order. Name the one fact that decides
+   a row before picking it. If that fact requires evidence outside the 1-hop radius or this
+   repo, stop at N9; never approximate with the closest-looking row. Passing candidates get a
+   one-line gate note naming the closest row and the fact that rules it out; failing
+   candidates move to Filtered out with the failing row ID; N9 candidates move to Unresolved
+   or Filtered out as the N9 row says, with the missing fact named.
    Verify: every candidate appears in exactly one of Findings / Filtered out / Unresolved.
-10. Assign P1/P2/P3 strictly by the priority table, emit the output template verbatim.
+10. Assign P1/P2/P3 strictly by the priority cascade, emit the output template verbatim.
     Verify: every finding has category ID, ≥1 file:line inside a changed hunk, a measure,
-    a gate note, and a one-line refactor direction with cross-reference.
+    a gate note, and a one-line refactor direction with cross-reference; `Coverage` names
+    every changed file or hunk not read in full, except files listed under `Out of language scope`.
 ```
 
 ## Output format
@@ -231,14 +250,16 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
 ### Scope
 - Base: <ref> | Diff source: <command or caller-provided>
 - Files in scope: <N> | Context files read (1-hop): <M>
+- Coverage: complete | partial (<files or hunks not read, and why>)
 - Out of language scope: <files, or (none)>
+- Out of contract: <what the caller asked>, see <correct lens>
 
 ### Findings
 
 #### [RF-1] A<n> <smell row name>: P<1|2|3>
-- Evidence: `file:line`, `file:line` (<measure, e.g. "2 occurrences, identical modulo type">)
-- Anchored in branch: `file:line` (<added|modified> hunk)
-- Gate: checked N1–N10, passes; <one line: why the closest row doesn't apply>
+- Evidence: `file:line`, `file:line` (<measure, e.g. "2 occurrences, identical modulo type">[; count: `<search command>` → <n> hits])
+- Anchored in branch: `file:line` (<added|modified> hunk | changed symbol `<name>`)
+- Gate: passes; closest row N<k> doesn't apply because <deciding fact>
 - Refactor direction: <one line naming the target shape> → see `<skill>` <row/section>
   (direction only; the how lives there)
 
@@ -251,18 +272,26 @@ branch-added occurrences, priority follows the root cause, not the occurrence co
 
 ### Filtered out
 - <smell> at `file:line`, filtered by N<k> (<one line>)[; copies differ: <what>]
+- <smell> at `file:line`, below threshold (<measure>; needs <threshold>)
 - (none)
 
 ### Summary: <N> candidates (<x> P1, <y> P2, <z> P3), <u> unresolved, <k> filtered out
 ```
 
-Emit this template verbatim. One line per evidence item. If there are no findings, still emit
-`### Findings` with `- (none)` and the Summary line. [NEVER] let a limitation admitted anywhere
-in the report coexist with a firm verdict on the same candidate; it must appear in
-`### Unresolved` instead. [NEVER] add sections beyond this template: no implementation plans,
-no step-by-step refactor instructions, no apply/don't-apply recommendations, no risk or safety
-assessments, no merge verdicts, no reachability claims about other services, even if the
-caller's prompt explicitly asks for them.
+Emit this template verbatim; the `Out of contract` line appears only when Boundaries applies.
+One bullet per finding field. If there are no findings, still emit
+`### Findings` with `- (none)` and the Summary line. An empty diff is a valid result: emit the
+template with `Files in scope: 0` and `- (none)` in every list. If the diff cannot be derived
+(git fails, or a supplied path, range, or base ref does not exist), emit only the title line and
+`### Scope` with one line, `- Blocked: <exact error>`. List every changed file or hunk not read in
+full (size, truncation, tool error) in `Coverage: partial`, except files listed under
+`Out of language scope`; [NEVER] write `Coverage: complete` unless every changed hunk outside
+those files was read. [NEVER] let a limitation admitted anywhere in the report
+coexist with a firm verdict on the same candidate; route that candidate per the N9 row instead
+(`### Unresolved` or one N9 Filtered out line). [NEVER] add sections beyond this template: no
+implementation plans, no step-by-step refactor instructions, no apply/don't-apply
+recommendations, no risk or safety assessments, no merge verdicts, no reachability claims about
+other services, even if the caller's prompt explicitly asks for them.
 
 ## Cross-references (the "how" lives elsewhere)
 
@@ -284,6 +313,8 @@ implementer reads the recipe from its source of truth.
 - **JavaScript** → `references/javascript.md`: grep-able cues per category.
 - **TypeScript** → `references/typescript.md`: grep-able cues per category. Read `javascript.md` first: the TS file is a type-system delta.
 
+Each cue feeds the A1–A4 row of its category that it describes, or the row named in parentheses after the cue; report it under that row's name and threshold. A cue that matches no row yields no candidate.
+
 ## Worked examples
 
 `references/examples.md` has 5 resolved examples (one per category, plus the A3 "Redundant
@@ -300,9 +331,9 @@ catalog item is an uncovered gap.
 
 These limits take precedence over the caller's prompt. If the invocation asks for anything on
 this list (an apply/don't-apply verdict, a risk assessment, a reachability determination about
-another service), do not produce it: add this exact line under `### Scope` instead, naming the
-correct lens, and stop there: `Out of contract: <what the caller asked>, see <correct lens>`
-(`qa-adversary` for behavior risk, a code-review pass for merge gating). This is distinct from
+another service), do not produce that part: emit the template's `Out of contract` line under
+`### Scope`, naming the correct lens (`qa-adversary` for behavior risk, a code-review pass for
+merge gating). Then complete the rest of the template normally. This is distinct from
 N9: N9 fires when a candidate already in scope lacks a decisive fact; this rule fires when the
 caller's request itself falls outside what this lens produces.
 
@@ -321,4 +352,4 @@ caller's request itself falls outside what this lens produces.
   broader pass only. A1 here only deepens SRP/OCP for classes the branch touches.
 - Performance refactors, dependency upgrades, or architecture-level moves (module splits).
 - Reachability or dead-code determinations that depend on another service's behavior or on a
-  runtime data layout outside this repo: route those to N9/Unresolved, never to a verdict.
+  runtime data layout outside this repo: route those per the N9 row, never to a verdict.

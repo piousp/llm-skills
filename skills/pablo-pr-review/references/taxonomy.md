@@ -66,6 +66,7 @@ Tie-break order (first match wins; apply it only when two or more rules fit):
 
 - `code_kind`: `prod` | `test` | `build` | `script` | `dev-tool`. By path: `src/test`,
   `*Test`/`*Spec`, an integration-test module → test; pom/sbt/CI files, and `.tf` files → build;
-  `*.py`/`*.sh` → script; QA or developer tooling → dev-tool; everything else prod.
+  `*.py`/`*.sh` outside the repo's main language → script (in a Python or shell repo they are
+  prod); QA or developer tooling → dev-tool; everything else prod.
 - `premise`: `in-diff` | `1-hop` | `external-unverified` (where the evidence for the item lives).
 - `kind`: `finding` | `question` | `gap` | `nit`.

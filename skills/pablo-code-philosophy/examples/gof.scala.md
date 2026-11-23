@@ -7,7 +7,7 @@ trait DiscountStrategy { def apply(price: BigDecimal): BigDecimal }
 class StandardDiscount extends DiscountStrategy {
   def apply(price: BigDecimal): BigDecimal = price
 }
-// One implementation, no plan for a second.
+// One implementation, no second one in the code.
 ```
 
 ### FP subsumes GoF - no shared state, a function replaces the hierarchy

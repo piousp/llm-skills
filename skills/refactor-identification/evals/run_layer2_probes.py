@@ -12,7 +12,9 @@ the checks):
   - Output follows the mandatory template verbatim: Scope / Findings /
     Unresolved / Filtered out / Summary sections.
   - Every finding has file:line evidence anchored in the diff.
-  - Every finding carries a gate note (checked N1–N10).
+  - Every finding's gate note names the closest row and why it doesn't apply.
+  - `### Scope` carries a `Coverage:` line.
+  - A base ref that does not exist yields the Blocked form, never Findings.
   - A genuine structural duplicate is correctly categorized A1.
   - A speculative single-implementation "candidate" is correctly filtered by
     N1 in Filtered out, not reported as a Finding (the skill's own worked
@@ -78,18 +80,19 @@ def _git(repo: Path, *args: str) -> None:
 
 def seed_structural_duplication_repo(tmp: Path) -> Path:
     """main has computeRefundTotal; feature branch adds a near-identical
-    computeInvoiceTotal — the skill's own A1 worked example, reproduced as a
-    live fixture."""
+    computeInvoiceTotal; the two differ only in their line type
+    (RefundLine vs InvoiceLine). The skill's own A1 worked example, reproduced
+    as a live fixture."""
     repo = tmp / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q")
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
     (repo / "InvoiceService.java").write_text(
         "class InvoiceService {\n"
-        "    double computeRefundTotal(java.util.List<LineItem> items) {\n"
+        "    double computeRefundTotal(java.util.List<RefundLine> lines) {\n"
         "        double total = 0;\n"
-        "        for (LineItem i : items) { total += i.getAmount() * i.getQuantity(); }\n"
+        "        for (RefundLine l : lines) { total += l.getAmount() * l.getQuantity(); }\n"
         "        return total;\n"
         "    }\n"
         "}\n"
@@ -99,14 +102,14 @@ def seed_structural_duplication_repo(tmp: Path) -> Path:
     _git(repo, "checkout", "-q", "-b", "feature")
     (repo / "InvoiceService.java").write_text(
         "class InvoiceService {\n"
-        "    double computeRefundTotal(java.util.List<LineItem> items) {\n"
+        "    double computeRefundTotal(java.util.List<RefundLine> lines) {\n"
         "        double total = 0;\n"
-        "        for (LineItem i : items) { total += i.getAmount() * i.getQuantity(); }\n"
+        "        for (RefundLine l : lines) { total += l.getAmount() * l.getQuantity(); }\n"
         "        return total;\n"
         "    }\n\n"
-        "    double computeInvoiceTotal(java.util.List<LineItem> items) {\n"
+        "    double computeInvoiceTotal(java.util.List<InvoiceLine> lines) {\n"
         "        double total = 0;\n"
-        "        for (LineItem i : items) { total += i.getAmount() * i.getQuantity(); }\n"
+        "        for (InvoiceLine l : lines) { total += l.getAmount() * l.getQuantity(); }\n"
         "        return total;\n"
         "    }\n"
         "}\n"
@@ -121,7 +124,7 @@ def seed_single_implementation_repo(tmp: Path) -> Path:
     implementation planned — the skill's own N1-rejected worked example."""
     repo = tmp / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q")
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
     (repo / "README.md").write_text("placeholder\n")
@@ -147,7 +150,7 @@ def seed_cross_repo_duplicate_repo(tmp: Path) -> Path:
     The prompt states another copy may live in a repo the agent cannot check."""
     repo = tmp / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q")
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
     (repo / "README.md").write_text("placeholder\n")
@@ -171,7 +174,7 @@ def seed_python_only_repo(tmp: Path) -> Path:
     outside the lens scope, so no candidates may be produced."""
     repo = tmp / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q")
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
     (repo / "README.md").write_text("placeholder\n")
@@ -196,11 +199,43 @@ def seed_python_only_repo(tmp: Path) -> Path:
     return repo
 
 
+def seed_repo_without_main(tmp: Path) -> Path:
+    """The default branch is `trunk`, so no `main` ref exists; the prompt names
+    `main` as base. The skill must answer with the Blocked form."""
+    repo = tmp / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "trunk")
+    _git(repo, "config", "user.email", "eval@example.com")
+    _git(repo, "config", "user.name", "eval")
+    (repo / "README.md").write_text("placeholder\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "InvoiceService.java").write_text(
+        "class InvoiceService {\n"
+        "    double computeRefundTotal(java.util.List<RefundLine> lines) {\n"
+        "        double total = 0;\n"
+        "        for (RefundLine l : lines) { total += l.getAmount() * l.getQuantity(); }\n"
+        "        return total;\n"
+        "    }\n\n"
+        "    double computeInvoiceTotal(java.util.List<InvoiceLine> lines) {\n"
+        "        double total = 0;\n"
+        "        for (InvoiceLine l : lines) { total += l.getAmount() * l.getQuantity(); }\n"
+        "        return total;\n"
+        "    }\n"
+        "}\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "add InvoiceService")
+    return repo
+
+
 SEED_REGISTRY = {
     "detects_a1_structural_duplication": seed_structural_duplication_repo,
     "rejects_single_implementation_by_n1": seed_single_implementation_repo,
     "routes_cross_repo_duplicate_to_filtered_out": seed_cross_repo_duplicate_repo,
     "ignores_out_of_language_files": seed_python_only_repo,
+    "blocks_when_base_ref_missing": seed_repo_without_main,
 }
 
 
@@ -230,7 +265,19 @@ def finding_has_file_line_evidence(tool_calls, final_text, **ctx) -> bool:
 
 
 def gate_note_present(tool_calls, final_text, **ctx) -> bool:
-    return "N1" in final_text and "N10" in final_text
+    """The gate note names a row and why it does not apply."""
+    return bool(re.search(
+        r"Gate:[^\n]*\bN(?:10|[1-9])\b[^\n]*doesn['\u2019]t apply because", final_text))
+
+
+def scope_has_coverage_line(tool_calls, final_text, **ctx) -> bool:
+    return bool(re.search(r"Coverage:\s*(complete|partial)", final_text, re.IGNORECASE))
+
+
+def reports_blocked_without_findings(tool_calls, final_text, **ctx) -> bool:
+    """A missing base ref yields the Blocked form: no Findings section, no RF ids."""
+    low = final_text.lower()
+    return "blocked:" in low and "### findings" not in low and "[rf-" not in low
 
 
 def identifies_a1_category(tool_calls, final_text, **ctx) -> bool:
@@ -299,6 +346,8 @@ CHECK_REGISTRY = {
     "routes_cross_repo_duplicate_to_filtered_out": routes_cross_repo_duplicate_to_filtered_out,
     "a1_added_copy_is_p1": a1_added_copy_is_p1,
     "lists_out_of_language_scope": lists_out_of_language_scope,
+    "scope_has_coverage_line": scope_has_coverage_line,
+    "reports_blocked_without_findings": reports_blocked_without_findings,
 }
 
 

@@ -1,7 +1,7 @@
 
 # GoF Design Patterns: Curated Catalog
 
-Apply the "Don't reinvent the wheel: follow known design patterns" principle from the philosophy
+Apply the "Don't reinvent the wheel" principle from the philosophy
 skill, using the recognition heuristics, per-language idioms, and worked pattern catalog below
 to choose and implement the right pattern in Java and Scala service code.
 
@@ -15,7 +15,7 @@ abstractions" principle for patterns exactly as for any other abstraction.
 
 Use the 12 patterns below, the ones that recur in typical Java/Scala service code, rather than
 reaching for the full 23-pattern catalog. Skip the other 11: they're either redundant given
-Scala's language features, ceremony for problems these codebases don't have, or simply haven't come
+Scala's language features, ceremony for problems service code rarely has, or simply haven't come
 up; see "Boundaries" at the end for the full list and reasoning. If a real need for one of them
 arises, raise it as an explicit design decision, the same way the FP mechanics' Boundaries section (`../fp/mechanics.md`)
 treats adding an FP library.
@@ -34,7 +34,7 @@ first, then reach for the name.
 
 | Code smell | Pattern | Why |
 |---|---|---|
-| A switch/if-else chain selects among several interchangeable algorithms or behaviors, and the set is expected to grow | Strategy | Encapsulating each algorithm behind a shared interface replaces branching with substitution; each variant becomes independently testable and addable without touching the others. |
+| A switch/if-else chain selects among several interchangeable algorithms or behaviors that already exist in the code | Strategy | Encapsulating each algorithm behind a shared interface replaces branching with substitution; each variant becomes independently testable and addable without touching the others. |
 | A constructor takes many optional parameters, and callers assemble the object via telescoping constructors or a long argument list where most calls only set a few fields | Builder | A builder makes required-vs-optional assembly explicit and lets you validate the combination before `build()`, instead of relying on argument position or overload resolution. |
 | A method decides which concrete subclass to instantiate based on a parameter/config, and that decision is duplicated at several call sites | Factory Method | Centralizing construction means callers depend on the abstraction, not on `new ConcreteX()` scattered through the codebase; one place to change when a new variant is added. |
 | Behavior needs to be layered onto an object at runtime (logging, caching, retrying) without an explosion of subclasses for every combination | Decorator | Wrapping the base implementation with same-interface layers composes behaviors instead of requiring one subclass per combination. |
@@ -55,13 +55,13 @@ for a pattern above.
 
 | Situation | Why the pattern hurts here |
 |---|---|
-| Only one implementation exists, with no concrete plan for a second one | Strategy, Factory Method, and Template Method all add an interface and indirection for a variation that doesn't exist yet; this is exactly the "no imaginary flexibility" case in `pablo-code-philosophy`. |
+| Only one implementation exists in the code today; a planned second one fails the real-variation test in `../principles/YAGNI.md` | Strategy, Factory Method, and Template Method all add an interface and indirection for a variation that doesn't exist yet; this is exactly the "no imaginary flexibility" case in `pablo-code-philosophy`. |
 | The object has 2-3 required constructor parameters and no optional/conditional assembly logic | A Builder is ceremony over a plain constructor, or, in Scala, over a case class with named/default parameters; see `scala.md`. |
 | The "family of algorithms" is really just a couple of pure functions with no shared state or lifecycle | A Strategy class hierarchy is heavier than passing a function value directly. This is the FP mechanics' higher-order-function case (see `../fp/mechanics.md`): don't build a class where a `Function<A,B>`/`A => B` parameter suffices. |
 | The tree/hierarchy is already modeled in Scala as a `sealed trait` + case classes | Visitor's double-dispatch machinery reproduces what `match` over a sealed hierarchy already gives you, with the compiler's exhaustiveness check as a bonus; see `scala.md`. Don't layer a Visitor on top of an ADT that already pattern-matches cleanly. |
 | State transitions are simple and few (one boolean flag, two states) | A full State-pattern class-per-state adds more boilerplate than a plain enum/sealed trait with a `match`/`switch`. Reserve State for when per-state behavior and transition logic have genuinely grown complex. |
-| A single listener reacts to a single event with no plan for a second listener | Observer's subject/listener registration machinery is unneeded indirection over a direct method call. |
-| Wrapping only ever happens one layer deep, with no plan to compose further decorators | A plain wrapper method or class is as clear as a Decorator interface for one fixed wrapping; the pattern earns its cost only when layers actually combine. |
+| A single listener reacts to a single event | Observer's subject/listener registration machinery is unneeded indirection over a direct method call. |
+| Wrapping happens only one layer deep today | A plain wrapper method or class is as clear as a Decorator interface for one fixed wrapping; the pattern earns its cost only when layers actually combine. |
 
 If a smell from the recognition table is present but the situation also matches a row here,
 default to the simpler code, don't apply a pattern reflexively. This mirrors
@@ -96,16 +96,16 @@ This reference covers 12 of the 23 GoF patterns. The remaining 11 are deliberate
 | Pattern | Why excluded |
 |---|---|
 | Singleton | DI (Spring beans in Java services, composition-root wiring in Scala services) or a plain Scala `object` already meets the "shared instance" need; a hand-rolled Singleton adds global-state risk (`pablo-code-philosophy`'s "Scientific code") for no benefit. |
-| Abstract Factory | Only worth it when whole *families* of related objects must vary together as a unit; no codebase here has that shape; plain Factory Method covers today's construction-indirection need. |
-| Prototype | Solves a cost-of-construction problem these codebases don't have; a constructor or Builder is simpler when construction is cheap. |
+| Abstract Factory | Only worth it when whole *families* of related objects must vary together as a unit; service code rarely has that shape; plain Factory Method covers today's construction-indirection need. |
+| Prototype | Solves a cost-of-construction problem service code rarely has; a constructor or Builder is simpler when construction is cheap. |
 | Bridge | Real complexity-management for GUI toolkit-style variation, not service/data-pipeline code; introducing it speculatively is "imaginary flexibility". |
 | Facade | A well-named service class wrapping a subsystem already gives you this: any "orchestrator method sequencing N steps" already is one. |
-| Flyweight | Memory-optimization for very large numbers of fine-grained objects; no data volume in this codebase makes this a real constraint today. |
+| Flyweight | Memory-optimization for very large numbers of fine-grained objects; service-code data volumes rarely make this a real constraint. |
 | Proxy | The lazy-loading/access-control/remote-object need is already met by a client class, a caching layer, or framework-level AOP (e.g., Spring); a hand-rolled Proxy duplicates existing infrastructure. |
-| Interpreter | For building little languages/expression evaluators; no repo here defines or evaluates its own grammar. |
+| Interpreter | For building little languages/expression evaluators; service code rarely defines or evaluates its own grammar. |
 | Iterator | Fully subsumed by Java's enhanced `for`/`Iterable` and Scala's collections library; a custom `Iterator` is essentially never justified in either language. |
-| Mediator | Many-to-many object communication is already handled at the architecture level by the messaging/queue infrastructure these services use; a Mediator *class* rarely adds value inside a single service. |
-| Memento | Undo/snapshot-restore for long-lived, user-undoable in-memory state; none of these services hold that kind of state. |
+| Mediator | Many-to-many object communication is already handled at the architecture level by messaging/queue infrastructure when the system has one; a Mediator *class* rarely adds value inside a single service. |
+| Memento | Undo/snapshot-restore for long-lived, user-undoable in-memory state; service code rarely holds that kind of state. |
 
 Don't introduce one of these 11 to reach for a shape covered in this reference; if a real need for one
 surfaces, raise it explicitly as a design decision rather than reaching for it silently mid-task.

@@ -1,4 +1,4 @@
-"""Tests for the seed lessons in ml-lessons/ (and, when present, the git-ignored repo-lessons/).
+"""Tests for ml-lessons/ (seeds and the lessons tally.py adds) and, when present, the git-ignored repo-lessons/.
 
 They check the schema and the trigger/action contract select_lessons.py relies on, never the ledger
 counts (those move with every harvest). Run: cd pablo-pr-review && python3 -m unittest discover -s evals -p 'test_*.py'
@@ -17,7 +17,7 @@ import store  # noqa: E402
 import tally  # noqa: E402
 
 ROOT = store.SKILL_DIR
-SEEDS = {  # plan section 4.1 (+ postable-suggestion, decision 32)
+SEEDS = {  # seed lessons and their expected status (postable-suggestion included)
     "premise-external": "codified", "test-oracle-abstract": "codified", "test-assert-concrete": "candidate",
     "gap-volume": "codified", "oq-standalone": "codified", "scenario-boost": "approved",
     "question-form": "codified", "volume": "retired", "dup-reuse": "codified", "refactor-only": "codified",
@@ -77,9 +77,10 @@ class LessonShape:
 class TestMlSeeds(unittest.TestCase, LessonShape):
     def setUp(self):
         self.ml = lessons("ml")
+        self.seeds = {i: l for i, l in self.ml.items() if l["fm"]["provenance"] == "seeded"}
 
     def test_exactly_the_fifteen_seeds_with_planned_status(self):
-        self.assertEqual({i: l["fm"]["status"] for i, l in self.ml.items()}, SEEDS)
+        self.assertEqual({i: l["fm"]["status"] for i, l in self.seeds.items()}, SEEDS)
 
     def test_file_name_matches_id(self):
         for i, l in self.ml.items():
@@ -92,7 +93,7 @@ class TestMlSeeds(unittest.TestCase, LessonShape):
     def test_provenance_seeded_and_codified_pointer(self):
         for i, l in self.ml.items():
             fm = l["fm"]
-            self.assertEqual(fm["provenance"], "seeded", i)
+            self.assertEqual(fm["provenance"], "seeded" if i in SEEDS else "observed", i)
             self.assertEqual(bool(fm["codified_in"]), fm["status"] == "codified", i)
             self.assertNotIn("/", str(fm["codified_in"]), i)
 

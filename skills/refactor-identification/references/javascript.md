@@ -13,7 +13,7 @@ well.
 |---|---|---|
 | Duplicate pipeline shape | `grep -n "\.map(\|\.filter(\|\.reduce("` in changed files; compare chains across functions; same op order, only the callback's field or literal differs | Both `file:line`, the differing field/literal |
 | Duplicate predicate | Same domain condition in an `if`, ternary, or `.filter()` callback across files (same field names, same literals) | All `file:line`, the shared rule in one sentence |
-| Duplicate async orchestration | Two functions with the same `await` / `try` / retry / `Promise.all` sequence, only the called API differs | Both `file:line`, the differing call target |
+| Duplicate async orchestration (Structural duplication) | Two functions with the same `await` / `try` / retry / `Promise.all` sequence, only the called API differs | Both `file:line`, the differing call target |
 | New unrelated import in a touched module | `git diff` on the import block; new `import`/`require` from a folder unrelated to the module's domain | Module `file:line`, new import lines |
 | Added switch/else-if branch | `grep -n "case \|else if"` inside a chain the diff touches; count branches after the change | Chain `file:line`, added hunk lines, branch count |
 | Feature envy | In a touched function, count property reads on one foreign object (`obj.a`, `obj.getX()`) vs `this.`/own params | Function `file:line`, "N foreign vs M own" |
@@ -45,7 +45,7 @@ well.
 | Data clump | Same 3+ params, or the same ad-hoc object-literal shape, repeated in order across ≥2 touched signatures | Each signature `file:line`, clump members |
 | Redundant derived field | A property assigned once from another field the object already holds, instead of a getter deriving it at point of use | Field `file:line`, the field it duplicates |
 | Shared mutable reference as a value | A mutable object with value semantics (amount, range) assigned (not spread-copied) to ≥2 owners, mutated through one | Alias `file:line`, mutation `file:line` |
-| Untyped boundary payload | `JSON.parse` / `res.json()` / `req.body` consumed field-by-field with inline guards in ≥2 places, no single parse-into-domain-object step | Each consumption `file:line`, the fields read |
+| Untyped boundary payload (Primitive obsession; in TS, Untyped boundary value) | `JSON.parse` / `res.json()` / `req.body` consumed field-by-field with inline guards in ≥2 places, no single parse-into-domain-object step | Each consumption `file:line`, the fields read |
 
 ## A4: Flag/enum-modeled variants
 
@@ -55,7 +55,6 @@ well.
 | typeof / instanceof cascade | `grep -n "typeof \|instanceof \|Array.isArray"`; ≥2 branches distinguishing shapes of one conceptual input | Cascade `file:line`, branch count, the shapes distinguished |
 | Mode field checked across methods | Same `this.<mode>` field in a guard at the top of ≥3 methods of a touched class | Field `file:line`, each method `file:line` |
 | Optional-fields-as-variants | Object or class where ≥2 fields are meaningful only for some values of a `type`/`kind` field (guards on it, JSDoc "only when…") | Shape `file:line`, discriminator, conditional field lines |
-| Dispatch with no closed-set default | `switch` over a fixed literal set with no `default`, or a silent one; an unknown variant passes unnoticed | Dispatch `file:line`, literal set, missing-default line |
 
 ## Notes
 

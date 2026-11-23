@@ -14,8 +14,8 @@
   twice, still leave it. See it a third time, consider an abstraction.
 - [NEVER] abstract business rules before the third occurrence; premature abstraction creates
   false coupling between use cases that should evolve independently.
-- Before extracting, ask: "if I change this, do both places change?" Yes → extract. "Maybe" or
-  "depends on context" → leave the duplication.
+- [ALWAYS] ask before extracting: "if I change this rule, must every copy change with it?" Yes →
+  extract, once Three Strikes allows it. "Maybe" or "depends on context" → leave the duplication.
 
 ### Structural duplication (exception)
 

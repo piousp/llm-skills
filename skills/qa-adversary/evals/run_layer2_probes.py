@@ -417,7 +417,7 @@ def fixture_smoke_test() -> list[str]:
         ("seed_inline_data_handling", "cart.py", "price_lookup[sku]"),
         ("seed_inline_business_rule", "shipping.py", "order.subtotal >= 75.00"),
         ("seed_inline_clean_control", "invoice.py", 'sum(line["amount"] for line in order["lines"])'),
-        ("seed_inline_snapshot_bump", "pom.xml", "2.4.0-PROJ-42-SNAPSHOT"),
+        ("seed_inline_snapshot_bump", "pom.xml", "2.4.0-feature-x-SNAPSHOT"),
         ("seed_inline_tf_concurrency", "infra/lambda.tf", "reserved_concurrent_executions = 5"),
         ("seed_inline_test_wait", "tests/integration/test_replay_guard.py", "within_s=3"),
     ]

@@ -3,8 +3,7 @@
 Layer 2 (outcome) probes for `pablo-code-philosophy`.
 
 Post-split state (OQ2, 2025-08-08): the skill's frontmatter description is
-auto-trigger-capable ("Trigger when:" clause, [DO NOT] negative case,
-[ALWAYS]/[DO NOT] enforcement keys), like its two new siblings
+auto-trigger-capable, like its two new siblings
 `pablo-tdd` and `pablo-code-planning`. Empirical validation of the
 auto-trigger and the corresponding eval updates are deferred to a separate
 step (explicit deferral) -- this harness adds no trigger probes.
@@ -77,7 +76,7 @@ def run_pi(cwd: Path, prompt: str, timeout: int = 240) -> tuple[list[dict], str]
 
 def seed_env(tmp: Path) -> Path:
     """Fixture repo shared by every trial. Fully isolated inside tmp -- never
-    a real skill or real repo file (SKILL.md step 5). Each fixture is coherent
+    a real skill or real repo file. Each fixture is coherent
     with the prompt that uses it -- prior N=1 run flagged fixture/prompt
     mismatches as noise (an existing-API prompt with no API, a diff over a
     nonexistent file, an FP/Scala prompt with no .scala file)."""

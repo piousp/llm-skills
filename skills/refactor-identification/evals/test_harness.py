@@ -3,20 +3,24 @@
 Layer 1 (offline, free) regression guard for this eval suite's own harness —
 not for a skill script (refactor-identification ships no scripts/*.py, it's
 pure markdown, so there is nothing else to unit-test here). Confirms every
-script imports cleanly, both prompt sets have the required schema, and both
+script imports cleanly, both prompt sets have the required schema, all three
 live-gated scripts respect the PI_LIVE_EVAL skip convention (evaluating-agent-skills
-SKILL.md step 5)
-without needing to actually invoke `pi`.
+SKILL.md step 5), and the trigger fixture creates `main` whatever git's default
+branch is, without needing to actually invoke `pi`.
 
 Run directly, no env var gate:
     cd <this-skill-dir>
     python3 -m unittest evals.test_harness -v
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 EVALS_DIR = Path(__file__).resolve().parent
 REQUIRED_KEYS = {"id", "prompt", "should_trigger", "expected_checks"}
@@ -61,6 +65,76 @@ class CheckIdCoverageTest(unittest.TestCase):
         for case in cases:
             for check_id in case["expected_checks"]:
                 self.assertIn(check_id, trig.CHECK_REGISTRY, f"unregistered check {check_id}")
+
+
+class CheckFunctionTest(unittest.TestCase):
+    """Seams: the CHECK_REGISTRY functions, fed literal transcripts."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(EVALS_DIR))
+        import run_layer2_probes as l2  # noqa: E402
+        cls.l2 = l2
+
+    def _check(self, name, text):
+        return self.l2.CHECK_REGISTRY[name]([], text, repo=Path("/nonexistent"))
+
+    def test_gate_note_rejects_boilerplate_phrase(self):
+        self.assertFalse(self._check(
+            "gate_note_present", "- Gate: checked N1–N10, passes; N3 is fine"))
+
+    def test_gate_note_accepts_closest_row_with_reason(self):
+        self.assertTrue(self._check(
+            "gate_note_present",
+            "- Gate: passes; closest row N2 doesn't apply because both apply the same rule"))
+
+    def test_gate_note_accepts_curly_apostrophe(self):
+        self.assertTrue(self._check(
+            "gate_note_present",
+            "- Gate: passes; closest row N2 doesn\u2019t apply because both apply the same rule"))
+
+    def test_scope_has_coverage_line(self):
+        self.assertTrue(self._check(
+            "scope_has_coverage_line", "### Scope\n- Coverage: complete"))
+        self.assertTrue(self._check(
+            "scope_has_coverage_line", "- Coverage: partial (Big.java: truncated)"))
+        self.assertFalse(self._check(
+            "scope_has_coverage_line", "### Scope\n- Files in scope: 1"))
+
+    def test_reports_blocked_without_findings(self):
+        blocked = ("## Refactor Candidates: feature\n\n### Scope\n"
+                   "- Blocked: fatal: ambiguous argument 'main...HEAD'")
+        self.assertTrue(self._check("reports_blocked_without_findings", blocked))
+        self.assertFalse(self._check(
+            "reports_blocked_without_findings", blocked + "\n### Findings\n- (none)"))
+
+
+class TriggerFixtureTest(unittest.TestCase):
+    """The trigger fixture must create `main` whatever git's default branch is."""
+
+    @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+    def test_trigger_fixture_has_main_even_when_git_defaults_to_master(self) -> None:
+        env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch",
+               "GIT_CONFIG_VALUE_0": "master"}
+        sys.path.insert(0, str(EVALS_DIR))
+        try:
+            import run_trigger_probes as trig
+        finally:
+            sys.path.remove(str(EVALS_DIR))
+        with mock.patch.dict(os.environ, env), tempfile.TemporaryDirectory() as tmp:
+            repo, _ = trig.seed_branch_with_real_diff(Path(tmp), "{FIXTURE_WRITE_TARGET}")
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), *args],
+                                      capture_output=True, text=True)
+
+            has_main = git("rev-parse", "--verify", "--quiet", "refs/heads/main")
+            self.assertEqual(has_main.returncode, 0,
+                             "trigger fixture has no main branch; "
+                             "its docstring promises a diff against main")
+            diff = git("diff", "--name-only", "main...feature")
+            self.assertEqual(diff.returncode, 0, diff.stderr)
+            self.assertIn("PaymentService.java", diff.stdout)
 
 
 class LiveGateSkipTest(unittest.TestCase):

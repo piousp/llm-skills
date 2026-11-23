@@ -44,7 +44,7 @@ These are the concepts this reference assumes and applies. Boundaries are listed
 - **Typed error handling**: when a failure is an expected outcome of the domain (validation failed,
   record not found), encode it in the return type (`Either<Error, T>`, `Option<T>`) instead of
   throwing. Reserve exceptions for truly exceptional, unrecoverable conditions (bugs, I/O failures
-  the caller can't reasonably handle). See `patterns.md` for the accumulating-errors
+  the caller can't reasonably handle). See `patterns.md`, Pattern 4, for the accumulating-errors
   pattern (the "Validated" use case) built on stdlib types.
 
 ## Recognition heuristic: code smell → FP principle
@@ -71,7 +71,7 @@ a pattern above.
 |---|---|
 | A simple 3-4 line loop with one clear side effect (logging, a single print, a single mutation of a local counter) | `fold`/`reduce` adds a layer of indirection over something already obvious; a plain loop is more legible. |
 | A single failure point that the immediate caller already handles inline | `Either`/`Option` here is ceremony for its own sake; a direct null-check or a simple thrown exception is enough. |
-| A chain of two transformations | `.map().flatMap()` doesn't read better than two straightforward statements; save composition for chains that actually grow. |
+| A chain of two pure transformations (not an `Option`/`Either` chain) | `.map().filter()` doesn't read better than two straightforward statements; save composition for chains that actually grow. |
 | Code whose imperative form already matches how a domain expert would describe the steps out loud | Rewriting it as a point-free composition can *reduce* readability for the next maintainer who thinks procedurally about this specific domain. |
 | A one-off script or a genuinely single-use transformation with no reuse in sight | The payoff of composability (reuse, isolated testability) doesn't materialize if there's nothing to compose with or test against. |
 
@@ -92,25 +92,23 @@ language you're touching:
 
 ## Pattern catalog
 
-`patterns.md` has worked before/after examples, in both languages, for the recurring
-implementation patterns: a validation pipeline built on `Either`, folding vs. a mutable-accumulator
-loop, and function composition vs. method-chaining. Read it when implementing one of these shapes
-rather than re-deriving the pattern from principles each time.
+`patterns.md` has worked examples for the recurring implementation patterns: a validation pipeline
+built on `Either`, folding vs. a mutable-accumulator loop, function composition vs.
+method-chaining, and accumulating errors without a library. Read it when implementing one of these
+shapes rather than re-deriving the pattern from principles each time.
 
 ## Boundaries (explicitly out of scope)
 
 This reference stops at stdlib-only, intermediate FP. It deliberately does not cover:
 
-- **Monad transformers** (`EitherT`, `OptionT`): not needed for the two-level nesting these
-  codebases actually have; if you find yourself wanting one, the simpler fix is usually flattening
-  the pipeline, not adding a transformer.
-- **Tagless final / typeclass-polymorphic effect systems**: no repo here uses this style; don't
-  introduce it.
-- **FP libraries not already a dependency**: Cats, Vavr, and ZIO are not declared dependencies in
-  any repo in this codebase as of this writing (verified against the build files). A Cats type such
-  as `cats.effect.IO` may still show up transitively (e.g., pulled in by a library like
-  `scanamo-cats-effect`), treat that as incidental, not as license to write idiomatic Cats. Don't
-  add one of these libraries to
-  reach for a pattern in this reference; every pattern here is expressible in stdlib `Optional`/`Option`/
-  `Either`/`Stream`. If a real need for one of these libraries arises, that's a dependency decision to
+- **Monad transformers** (`EitherT`, `OptionT`): not needed for two-level nesting; if you find
+  yourself wanting one, the simpler fix is usually flattening the pipeline, not adding a transformer.
+- **Tagless final / typeclass-polymorphic effect systems**: [NEVER] introduce this style into a
+  repo that doesn't already use it.
+- **FP libraries not already a dependency**: [ALWAYS] check the target repo's build file
+  (`pom.xml`, `build.sbt`) for Cats, Vavr or ZIO before writing; if one is declared, follow the
+  repo's existing usage. A Cats type that only arrives transitively (e.g., via
+  `scanamo-cats-effect`) is incidental, not license to write idiomatic Cats. [NEVER] add one of
+  these libraries to reach for a pattern in this reference; every pattern here is expressible in
+  stdlib `Optional`/`Option`/`Either`/`Stream`. A real need for one is a dependency decision to
   raise explicitly, not something to introduce silently while implementing a feature.

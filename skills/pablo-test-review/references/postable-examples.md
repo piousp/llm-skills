@@ -63,36 +63,46 @@ The diff adds `widget.batch.size` to `src/main/resources/application.yaml`.
    Evidence: the new `@Value("${widget.batch.size}")` has no default and no test-side value.
 ```
 
+### 7. Only test of a changed line cannot fail (R2, M)
+
+The diff changes `RoundingMode.HALF_EVEN` to `RoundingMode.HALF_UP` in `InvoiceTotals.compute` and adds `computesTotal`, which totals lines that sum to 10.125 and asserts only `assertNotNull(total)`. No other test calls `compute`.
+
+```
+1. [M] InvoiceTotalsTest.java:27: Could we assert the rounded amount? This test passes with either rounding mode.
+   Change: `assertEquals(new BigDecimal("10.13"), total.amount())`
+   Evidence: reverting `HALF_UP` to `HALF_EVEN` in InvoiceTotals.compute (line 31) keeps this test green, and no other test reaches that line.
+```
+
 ## Silent
 
-### 7. Smoke test, behavior covered elsewhere (G-C)
+### 8. Smoke test, behavior covered elsewhere (G-C)
 
 `builderCreatesClient` asserts only `assertNotNull(client)`. Another test in the file asserts the client's retry count and endpoint. No changed production line depends on this test alone. Silent: G-C.
 
-### 8. Reflection and real-method mocks (G-C)
+### 9. Reflection and real-method mocks (G-C)
 
 A test sets a private field by reflection and mocks a collaborator with `CALLS_REAL_METHODS`. No named mutation of a changed line escapes it. Silent: G-C.
 
-### 9. Polling in a unit spec (G-C, waits rule)
+### 10. Polling in a unit spec (G-C, waits rule)
 
 A Scala spec wraps an assertion in `eventually { ... }` to wait for an actor message. Unit-test waits are never reported. Silent: G-C.
 
-### 10. Pattern copied from the same file (G-D)
+### 11. Pattern copied from the same file (G-D)
 
 The new test uses `assertThrows(Exception.class, ...)`; five older tests in the file do the same. Silent: G-D.
 
-### 11. Negative wait in a unit test (G-C)
+### 12. Negative wait in a unit test (G-C)
 
 `verify(handler, after(2000).never()).accept(any())` in a unit test. Silent: G-C. (In an integration test, a changed window that is the only guard of the changed behavior would be a Question, never M.)
 
-### 12. Production style issue with fine tests (lane discipline)
+### 13. Production style issue with fine tests (lane discipline)
 
 The diff has a poorly named local variable in production code and a test that asserts the new boundary exactly. The naming issue belongs to `code-review-checklist`. Silent: outside this lens.
 
-### 13. Tooling script not run in CI (G-E)
+### 14. Tooling script not run in CI (G-E)
 
 A helper script under `tools/` has no test and no CI entry. Silent: G-E.
 
-### 14. Seven untested paths, one kept (G-G)
+### 15. Seven untested paths, one kept (G-G)
 
-A new class has seven public methods and no test class. Print 1 gap, chosen by the Gap ranking keys: a method with zero tests beats a partly tested one; ties go to the earliest changed line. The rest are dropped without a "filtered" section.
+A new class has seven public methods and no test class. Print 1 gap, chosen by the Gap ranking keys: all seven have zero tests, so they tie on key 1 and the earliest changed line in diff order wins. The rest are dropped without a "filtered" section.

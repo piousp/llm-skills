@@ -8,12 +8,12 @@ transcript for tool calls, and grade the response against deterministic
 checks from CHECK_REGISTRY (dispatch pattern: check-registry-pattern.md).
 
 The offline `--validate` mode re-seeds every fixture and asserts: the exact
-`git diff` file set per case (unstaged / --cached / main...HEAD), that every
+`git diff` file set per case (unstaged / --cached / main...HEAD / untracked), that every
 planted token (or one of its alternatives) appears in the working file (or
 in the prompt-embedded diff for the self-contained case), that fixture A's
 src/orders.ts really contains
 a >25-line processOrders, that every expected_checks id exists in
-CHECK_REGISTRY, and runs synthetic-transcript smoke tests for six checks.
+CHECK_REGISTRY, and runs synthetic-transcript smoke tests for the key checks.
 No LLM tokens are spent in --validate.
 
 Live runs are gated behind PI_LIVE_EVAL=1 (costs real LLM tokens) and are
@@ -247,9 +247,8 @@ def check_planted_bool_param_tagged_data(tool_calls, final_text, **ctx) -> bool:
 
 
 def check_clean_diff_all_pass(tool_calls, final_text, **ctx) -> bool:
-    """A clean diff must yield no violations (Blocker/Major/Nit) and no FAIL
-    section; Question/FYI are informational, not violations. Verdict must be
-    READY (zero violations is what the skill maps to READY)."""
+    """A clean diff yields no Blocker/Major/Minor/Nit line and no FAIL section
+    (Question and FYI lines are allowed); Verdict READY."""
     return (
         re.search(r"- \[(Blocker|Major|Minor|Nit)\]", final_text) is None
         and re.search(r"### .+: FAIL", final_text) is None
@@ -294,6 +293,38 @@ def check_no_diff_graceful_base(tool_calls, final_text, **ctx) -> bool:
     )
 
 
+_SECTION_HEADER_RE = re.compile(r"^### (?!Verdict)(.+): (pass|FAIL)\s*$")
+_BLOCKER_OR_MAJOR_RE = re.compile(r"^\s*- \[(Blocker|Major)\]")
+
+
+def check_section_fail_iff_blocker_or_major(tool_calls, final_text, **ctx) -> bool:
+    """A section is FAIL iff it lists at least one Blocker or Major line."""
+    blocks: list[tuple[str, bool]] = []
+    for line in final_text.splitlines():
+        header = _SECTION_HEADER_RE.match(line)
+        if header:
+            blocks.append((header.group(2), False))
+        elif line.startswith("### "):
+            blocks.append(("", False))  # non-section header (Verdict): closes the block
+        elif blocks and _BLOCKER_OR_MAJOR_RE.match(line):
+            blocks[-1] = (blocks[-1][0], True)
+    return all((status == "FAIL") == has_major for status, has_major in blocks if status)
+
+
+_FYI_RE = re.compile(r"^\s*- \[FYI\]")
+
+
+def check_fyi_after_verdict(tool_calls, final_text, **ctx) -> bool:
+    """Every [FYI] line comes after the first line containing `Verdict:`."""
+    verdict_seen = False
+    for line in final_text.splitlines():
+        if "Verdict:" in line:
+            verdict_seen = True
+        elif _FYI_RE.match(line) and not verdict_seen:
+            return False
+    return True
+
+
 def check_negative_control_no_review(tool_calls, final_text, **ctx) -> bool:
     if "## Review:" in final_text or "Verdict:" in final_text:
         return False
@@ -324,6 +355,8 @@ CHECK_REGISTRY = {
     "negative_control_no_review": check_negative_control_no_review,
     "minor_has_suggestion": check_minor_has_suggestion,
     "planted_bool_param_tagged_data": check_planted_bool_param_tagged_data,
+    "section_fail_iff_blocker_or_major": check_section_fail_iff_blocker_or_major,
+    "fyi_after_verdict": check_fyi_after_verdict,
 }
 for _planted_name in (
     "secret", "mutable_let", "swallowed_catch", "bool_param", "complexity",
@@ -397,6 +430,7 @@ _DIFF_EXPECTATIONS: dict[str, tuple[str, set[str]]] = {
     "nit_only_ready": ("unstaged", {"src/user.ts", "tests/user.test.ts"}),
     "negative_internal_snapshot_bump": ("unstaged", {"pom.xml"}),
     "negative_small_growth_long_method": ("unstaged", {"src/report.ts", "tests/report.test.ts"}),
+    "untracked_file_included": ("untracked", {"src/flags.ts"}),
 }
 
 
@@ -446,6 +480,17 @@ def _validate_fixture(case_id: str, case: dict, fixture: Fixture) -> list[str]:
                     f"{case_id}: git diff --cached files {sorted(actual)} != expected {sorted(expected)}")
             if unstaged:
                 problems.append(f"{case_id}: expected clean working tree, unstaged diff has {sorted(unstaged)}")
+        elif mode == "untracked":
+            actual = set(_git_names(repo, "ls-files", "--others", "--exclude-standard"))
+            tracked_diff = set(_git_names(repo, "diff", "--name-only"))
+            staged_diff = set(_git_names(repo, "diff", "--cached", "--name-only"))
+            if actual != expected:
+                problems.append(
+                    f"{case_id}: untracked files {sorted(actual)} != expected {sorted(expected)}")
+            if tracked_diff:
+                problems.append(f"{case_id}: expected empty git diff, has {sorted(tracked_diff)}")
+            if staged_diff:
+                problems.append(f"{case_id}: expected empty git diff --cached, has {sorted(staged_diff)}")
         elif mode == "branch":
             actual = set(_git_names(repo, "diff", "main...HEAD", "--name-only"))
             if actual != expected:
@@ -507,7 +552,7 @@ def _smoke_fixture(tmp: Path) -> Fixture:
 
 
 def _run_smoke_tests() -> list[str]:
-    """Synthetic-transcript smoke tests for six checks: one expected-pass and
+    """Synthetic-transcript smoke tests for the key checks: one expected-pass and
     one expected-fail pair per check (more for no_code_mutation)."""
     problems: list[str] = []
     with tempfile.TemporaryDirectory() as tmp_str:
@@ -600,6 +645,33 @@ def _run_smoke_tests() -> list[str]:
             problems.append("smoke planted_bool_param_tagged_data: untagged Minor accepted")
         if _bp([], "- [Minor] [KISS] orders.ts:12: boolean param `verbose`; split it", fixture=_bp_fx):
             problems.append("smoke planted_bool_param_tagged_data: wrong tag accepted")
+
+        # --- section_fail_iff_blocker_or_major
+        _sec = check_section_fail_iff_blocker_or_major
+        _sec_cases = [
+            ("### Red Flags: FAIL\n- [Blocker] a.ts:2: secret\n### Naming clarity: pass\n"
+             "- [Nit] a.ts:1: rename `x`\n"
+             "### Verdict: NEEDS WORK (1 blockers, 0 major, 0 minor, 1 nits, 0 questions)", True),
+            ("### Naming clarity: FAIL\n- [Nit] a.ts:1: rename `x`\n### Verdict: READY", False),
+            ("### Red Flags: pass\n- [Blocker] a.ts:2: secret\n### Verdict: NEEDS WORK", False),
+            ("plain text", True),
+        ]
+        for _text, _want in _sec_cases:
+            if _sec([], _text) != _want:
+                problems.append(f"smoke section_fail_iff_blocker_or_major: expected {_want} for {_text!r}")
+
+        # --- fyi_after_verdict
+        _fyi = check_fyi_after_verdict
+        _fyi_cases = [
+            ("### Config vs Code: pass\n### Verdict: READY (0 blockers, 0 major, 0 minor, 0 nits, 0 questions)\n"
+             "- [FYI] pom.xml:11: acme-commons bumped", True),
+            ("### Verdict: READY", True),
+            ("### Config vs Code: pass\n- [FYI] pom.xml:11: acme-commons bumped\n### Verdict: READY", False),
+            ("- [FYI] pom.xml:11: x", False),
+        ]
+        for _text, _want in _fyi_cases:
+            if _fyi([], _text) != _want:
+                problems.append(f"smoke fyi_after_verdict: expected {_want} for {_text!r}")
 
         # --- clean_diff_all_pass counts Minor as a violation
         if check_clean_diff_all_pass([], "- [Minor] a.ts:1: x; use y\nREADY"):

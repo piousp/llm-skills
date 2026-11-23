@@ -1,0 +1,34 @@
+{
+  "format": "pi-simple-sri/case-bank@1",
+  "description": "Spanish prose quality: complete ideas, punctuation cuts that follow meaning, no one-word fragments, no em dash.",
+  "rubric": "The text is written in natural Spanish. Each sentence expresses a complete idea and can be understood without the previous one. There are no truncated fragments, no one- or two-word sentences used as a rhetorical punch, and no ideas left half-finished. Punctuation and sentence length vary, but the breaks fall where the meaning falls: no period, comma, or semicolon separates a subject from its verb or splits an idea in half. The text does not end with a generic closing line. It fails if any of these conditions is not met.",
+  "cases": [
+    {
+      "id": "comentario-pr",
+      "prompt": "Escribe en español un comentario de PR de 4 a 6 frases sobre una función `reintentar()` que no usa backoff exponencial.",
+      "checks": [
+        { "kind": "not-contains", "value": "—" },
+        { "kind": "not-regex", "pattern": "(^|[.!?]\\s)[A-Za-zÁÉÍÓÚáéíóúñÑ]+\\.(\\s|$)", "flags": "" },
+        { "kind": "regex", "pattern": "[.!?)\"»]\\s*$", "flags": "" }
+      ]
+    },
+    {
+      "id": "email-retraso",
+      "prompt": "Redacta en español un email breve para avisar que el deploy se retrasó un día por un test inestable.",
+      "checks": [
+        { "kind": "not-contains", "value": "—" },
+        { "kind": "not-regex", "pattern": "(^|[.!?]\\s)[A-Za-zÁÉÍÓÚáéíóúñÑ]+\\.(\\s|$)", "flags": "" },
+        { "kind": "regex", "pattern": "[.!?)\"»]\\s*$", "flags": "" }
+      ]
+    },
+    {
+      "id": "parrafo-explicativo",
+      "prompt": "Explica en español, en un solo párrafo de unas 6 oraciones, qué es un cache LRU y cuándo conviene usarlo.",
+      "checks": [
+        { "kind": "not-contains", "value": "—" },
+        { "kind": "not-regex", "pattern": "(^|[.!?]\\s)[A-Za-zÁÉÍÓÚáéíóúñÑ]+\\.(\\s|$)", "flags": "" },
+        { "kind": "regex", "pattern": "[.!?)\"»]\\s*$", "flags": "" }
+      ]
+    }
+  ]
+}

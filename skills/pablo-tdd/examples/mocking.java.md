@@ -46,7 +46,7 @@ The SDK approach means:
 
 ## Mocking at the boundary
 
-[ALWAYS] mock at system boundaries only, the external dependency, not the project's own code:
+[ALWAYS] mock at system boundaries only, the project's adapter to the external system, never its domain logic:
 
 ```java
 // GOOD: mock the external gateway, assert the service's behavior
@@ -55,26 +55,29 @@ void checkoutConfirmsWhenGatewayCharges() {
     PaymentGateway gateway = mock(PaymentGateway.class);
     when(gateway.charge(cart.total())).thenReturn(ChargeResult.success());
 
-    CheckoutService service = new CheckoutService(gateway);
+    CheckoutService service = new CheckoutService(gateway, new CartValidator());
     CheckoutResult result = service.checkout(cart);
 
     assertEquals(CheckoutStatus.CONFIRMED, result.status());
 }
 ```
 
-The mock stands at the system boundary (external payment gateway), exactly where references/mocking.md draws the line. The test asserts observable behavior with a controlled external dependency, not the service's internals.
+The mock stands at the system boundary (external payment gateway), exactly where references/mocking.md draws the line; `CartValidator`, the project's own domain rule, runs for real. The test asserts observable behavior with a controlled external dependency, not the service's internals.
 
 ```java
-// BAD: mock of the project's own collaborator
+// BAD: mock of the project's own domain logic
 @Test
-void checkoutMocksInternalCartRepository() {
-    CartRepository repo = mock(CartRepository.class);
-    CheckoutService service = new CheckoutService(repo);
+void checkoutMocksInternalCartValidator() {
+    PaymentGateway gateway = mock(PaymentGateway.class);
+    when(gateway.charge(cart.total())).thenReturn(ChargeResult.success());
+    CartValidator validator = mock(CartValidator.class);
+    when(validator.isValid(cart)).thenReturn(true);
 
+    CheckoutService service = new CheckoutService(gateway, validator);
     CheckoutResult result = service.checkout(cart);
 
     assertEquals(CheckoutStatus.CONFIRMED, result.status());
 }
 ```
 
-The repository is the project's own class, under the project's control; references/mocking.md: [DO NOT] mock the project's own classes or modules. The test now couples to internal wiring and breaks on refactors that change nothing observable.
+`CartValidator` is the project's own domain rule, under the project's control; references/mocking.md: [DO NOT] mock the project's own classes or modules. Stubbed to `true`, the rule never runs: the test stays green when validation breaks, and it couples to the service's internal wiring. The gateway mock is still right: the gateway is the boundary.

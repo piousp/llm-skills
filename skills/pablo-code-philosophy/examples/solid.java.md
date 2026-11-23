@@ -28,9 +28,9 @@ public double calculate(Order o, String type) {
 }
 
 // Better: extend via strategy
-interface ShippingStrategy { double calculate(Order o); }
-class CreditShipping implements ShippingStrategy { }
-class PayPalShipping implements ShippingStrategy { }
+interface PaymentStrategy { double calculate(Order o); }
+class CreditPayment implements PaymentStrategy { }
+class PayPalPayment implements PaymentStrategy { }
 ```
 
 ### L - Liskov Substitution: Bird hierarchy

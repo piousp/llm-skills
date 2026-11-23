@@ -28,9 +28,9 @@ def calculate(o: Order, kind: String): Double = kind match {
 }
 
 // Better: extend via strategy
-trait ShippingStrategy { def calculate(o: Order): Double }
-class CreditShipping extends ShippingStrategy { def calculate(o: Order) = ??? }
-class PayPalShipping extends ShippingStrategy { def calculate(o: Order) = ??? }
+trait PaymentStrategy { def calculate(o: Order): Double }
+class CreditPayment extends PaymentStrategy { def calculate(o: Order) = ??? }
+class PayPalPayment extends PaymentStrategy { def calculate(o: Order) = ??? }
 ```
 
 ### L - Liskov Substitution: Bird hierarchy

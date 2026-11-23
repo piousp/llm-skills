@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 DISCOUNTS_BUGGY = '''\
-"""Loyalty discount rules. Ticket QA-117: members with at least 90 days of
+"""Loyalty discount rules. The ticket says members with at least 90 days of
 tenure get the loyalty discount on orders of $50 or more."""
 
 
@@ -50,7 +50,7 @@ def total_price(cart, price_lookup):
 '''
 
 SHIPPING_BUGGY = '''\
-"""Shipping rules. Ticket SHIP-204: free shipping for orders strictly over
+"""Shipping rules. The ticket says free shipping for orders strictly over
 $75 (subtotal > 75.00) in the contiguous US."""
 
 
@@ -127,7 +127,7 @@ POM_SNAPSHOT_BUMP = '''\
       <artifactId>acme-commons</artifactId>
       <!-- bumped by the change under review -->
       <scope>compile</scope>
-      <version>2.4.0-PROJ-42-SNAPSHOT</version>
+      <version>2.4.0-feature-x-SNAPSHOT</version>
     </dependency>
   </dependencies>
 </project>

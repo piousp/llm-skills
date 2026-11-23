@@ -516,7 +516,7 @@ def fixture_smoke_test() -> list[str]:
 
 
 GOOD_REPORT = """## Test review: feature/widget
-Read: 1 changed tests; production 1-hop: WidgetMapper.java
+Read: 1 changed test methods; production 1-hop: WidgetMapper.java
 
 ### Comments
 1. [M] WidgetMapperTest.java:12: Should we keep asserting the status?

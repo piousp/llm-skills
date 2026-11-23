@@ -13,7 +13,7 @@ problem / metamorphic testing). Citations at the bottom of SKILL.md.*
 - Silently swallowed or broadened exceptions; a domain error path that no longer fires.
 - **Constraint-inversion probe**: assume the opposite of each of the author's implicit assumptions
   (reversed input order, flipped polarity, event-driven instead of polled) and check whether the
-  logic still holds under that inversion. An inversion whose premise the diff does not show is an Open Question, not a Finding.
+  logic still holds under that inversion. An inversion whose premise breaks the premise rule (SKILL.md Scope law) is an Open Question, not a Finding.
 
 ### Lens 2: Data-handling bugs
 - **Null / empty / absent**: null vs empty collection vs missing optional field; `Optional.get`
@@ -43,10 +43,10 @@ problem / metamorphic testing). Citations at the bottom of SKILL.md.*
 - Which existing behaviors does this change alter? For each, is there a test asserting the *old*
   behavior that will now fail?
 - Whether a test can fail at all (weakened assertions, mutation-style adequacy) belongs to `pablo-test-review`.
-- Cross-service ripple: changed DTO/contract/payload consumed by another service (trace it).
+- Cross-service ripple: changed DTO/contract/payload consumed by another service (trace it). A consumer in another repo stays an Open Question even when a read confirms it; cite that read.
 
 ### Lens 5: Concurrency & state
-- New shared mutable state, race conditions, non-atomic read-modify-write, ordering assumptions.
+- New shared mutable state, race conditions, non-atomic read-modify-write, ordering assumptions. Name the concurrent caller (diff or 1 hop, read); without one the race is an Open Question.
 - Idempotency: does re-delivery / retry / replay now double-apply or corrupt state?
 - Non-determinism (uncontrolled time/random/iteration order) affecting outputs.
 

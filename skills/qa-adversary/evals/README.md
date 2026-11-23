@@ -5,18 +5,20 @@ Testing Agent Skills"](https://www.philschmid.de/testing-skills) and
 Anthropic's ["Demystifying evals for AI
 agents"](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents)
 — the same two sources the `evaluating-agent-skills` skill builds on.
-`qa-adversary` is a **preference/process lens** skill: a read-only analysis
-lens that is *always invoked by name* (or handed to a read-only analysis
-agent as its lens). The harness loads it explicitly with `--skill <dir>`, so
-`should_trigger`/description tuning — the axis those articles emphasize for
-capability skills — is moot here: the skill cannot fail to load, there is no
-auto-trigger path to regress, and every probe in this suite is
-`should_trigger: true` with no negative-trigger controls. What the eval
-grades instead is **process fidelity**: with the lens loaded, does the agent
-actually behave like qa-adversary — read-only, no test execution, findings
-with concrete reproducible scenarios anchored to `file:line`, a verdict
-consistent with its own findings, integration coverage assessed by reading
-tests, and strict lane discipline?
+`qa-adversary` is a **process lens**: a read-only analysis skill that a caller
+names ("Apply the qa-adversary skill", or a `Lens:` line handed to a read-only
+analysis agent). L2, L3 and L2b pass `--skill <dir>` (or the `Lens:` line) and
+name the skill in every prompt, so they grade **process fidelity**, not
+triggering. The skill is also auto-discoverable: pi lists every skill under
+`~/.pi/agent/skills/` by name and description at startup, and the description
+carries trigger phrases ("QA this", "find bugs in this change"). A separate
+trigger layer (`run_trigger_probes.py`, bare `pi -ne` with no `--skill`)
+checks that the description fires on QA prompts and stays silent on the
+neighbours' prompts. Process fidelity means: with the lens loaded, does the
+agent behave like qa-adversary (read-only, no test execution, findings with
+concrete reproducible scenarios anchored to `file:line`, a verdict consistent
+with its own findings, integration coverage assessed by reading tests, strict
+lane discipline)?
 
 ## Success criteria (defined before any check was written)
 
@@ -55,6 +57,8 @@ not from what the report *claims*.
   handler behind an infra config change, and a test-only wait-window change
   produce no inflated findings (`negative_snapshot_bump`,
   `negative_absent_handler_concurrency`, `negative_test_wait_shortening`).
+- **O7: trigger routing.** Positive cases in `trigger_prompt_set.json` read
+  `qa-adversary/SKILL.md`; negative cases never read it first.
 
 **Style & instructions**
 
@@ -63,10 +67,10 @@ not from what the report *claims*.
   — as a finding, recommendation, or aside. That lane belongs to
   `code-review-checklist`.
 - **S2 — reporting standard.** Every finding = anchor + failure scenario +
-  lens + severity; doubts go to Open Questions, not Findings; no
+  premises + lens + severity; doubts go to Open Questions, not Findings; no
   manufactured findings.
-- **S3 — intent source stated and matching the probe.** Ticket QA-117 /
-  SHIP-204 for P1/P3; the pre-change baseline shown in the diff for P2/P5;
+- **S3 — intent source stated and matching the probe.** The ticket or task description
+  for P1/P3; the pre-change baseline shown in the diff for P2/P5;
   the git diff for P4.
 - **S4 — verdict semantics.** A business-rule violation forces BLOCK (P3);
   PASS is only legitimate with residual risk and NOT COVERED paths stated.
@@ -84,19 +88,19 @@ not from what the report *claims*.
 
 ## Classification and scope decisions
 
-- **Preference/process lens ⇒ no trigger probes.** Invoked by name (or
-  handed to a read-only agent as a lens), loaded via `--skill <dir>`:
-  `should_trigger` cannot regress, so Schmid's "fix the description first"
-  advice for auto-triggered skills does not apply. All probes are
-  `should_trigger: true`; negative-trigger controls are omitted by design
-  (documented, not an oversight).
-- **L1 skipped.** The skill ships no `scripts/` with real logic — only
-  `SKILL.md` and two markdown reference files
-  (`references/findings-examples.md`, `references/bad-findings-examples.md`).
+- **Two prompt sets.** `prompt_set.json` (L2/L3) holds only
+  `should_trigger: true` cases: those prompts name the skill and pass
+  `--skill <dir>`, so they test the process, not routing.
+  `trigger_prompt_set.json` holds the routing cases, positive and negative,
+  run without `--skill` through real discovery; the description is the fix
+  axis only for failures there.
+- **L1 skipped.** The skill ships no `scripts/` with real logic: only
+  `SKILL.md` and three markdown reference files (`references/lenses.md`,
+  `references/findings-examples.md`, `references/bad-findings-examples.md`).
   There is no code to unit-test offline.
-- **L2b — analyst-carrier path, live-gated.** The lens's documented usage
-  includes "hand it to a read-only analysis agent (e.g. `analyst`) as its
-  lens" — a *caller-side* choice the skill itself never makes internally.
+- **L2b: analyst-carrier path, live-gated.** A caller can hand the lens to
+  a read-only analysis agent (e.g. `analyst`) through a `Lens:` line, since
+  SKILL.md opens with "Applying this lens"; the skill never does it itself.
   `run_layer2b_pipeline.py` tests that path through a real `subagent`
   extension: a generic coordinator delegates the QA review to the `analyst`
   subagent, with a `Lens: <SKILL_DIR>/SKILL.md` line as the contract.
@@ -111,7 +115,7 @@ not from what the report *claims*.
 
 ### Layer 2 — trajectory/tool-call probes, live-gated
 
-`run_layer2_probes.py`: for each of the 5 prompt cases, seeds a fresh temp
+`run_layer2_probes.py`: for each of the 8 prompt cases, seeds a fresh temp
 repo (`fixtures.py`), runs `pi -ne --skill <this dir> --mode json -p
 <prompt>`, parses the NDJSON transcript for tool calls, and grades the
 report against the case's `expected_checks` from `prompt_set.json` — all
@@ -130,8 +134,8 @@ PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --trials 5
 
 ### Layer 2b — real analyst delegation, live-gated
 
-`run_layer2b_pipeline.py`: exercises the skill's documented
-"hand it to a read-only analysis agent as its lens" usage through a real
+`run_layer2b_pipeline.py`: exercises the caller-side lens handoff (a
+`Lens:` line to a read-only analysis agent) through a real
 `subagent` tool. Seeds the probe-4 fixture (git repo with the unstaged
 `paging.py` off-by-one diff and an integration suite that does not cover the
 changed path), runs `pi -ne -e <subagent extension> --mode json` as a
@@ -171,6 +175,24 @@ cd <this-skill-dir>
 PI_LIVE_EVAL=1 python3 evals/judge.py
 ```
 
+### Layer T: trigger probes, live-gated
+
+`run_trigger_probes.py`: for each case in `trigger_prompt_set.json`, runs
+bare `pi -ne --mode json -p <prompt>` (no `--skill`: real discovery from
+`~/.pi/agent/skills/`) in a fresh temp dir and reads the transcript's tool
+calls. Trigger signal: a `read` of `qa-adversary/SKILL.md` (the proxy
+confirmed in `evaluating-agent-skills/evals/README.md`, "Feasibility
+finding"). Positive cases pass on `reads_qa_adversary_skill_md`; negative
+cases pass on `first_skill_read_is_not_qa_adversary` (a later read reached
+through another skill, e.g. a review coordinator, does not fail it). Needs
+the skill installed under `~/.pi/agent/skills/`.
+
+```bash
+cd <this-skill-dir>
+python3 evals/run_trigger_probes.py --check          # offline: prompt set + check self-test
+PI_LIVE_EVAL=1 python3 evals/run_trigger_probes.py   # live, one trial per case
+```
+
 ## Prompt set
 
 Eight probe cases (`prompt_set.json`). `<repo>` is a runtime placeholder the
@@ -180,14 +202,25 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 
 | id | Planted bug | Fixture kind | Ticket / intent source | Expected checks |
 |---|---|---|---|---|
-| `logic_change_inverted_condition` | tenure check `>= 90` → `> 90`; a member with exactly 90 days is wrongly denied the loyalty discount | inline diff (`discounts.py`) | QA-117 — inclusive threshold | 6 common + `found_planted_bug_logic_01` |
+| `logic_change_inverted_condition` | tenure check `>= 90` → `> 90`; a member with exactly 90 days is wrongly denied the loyalty discount | inline diff (`discounts.py`) | ticket text — inclusive threshold | 6 common + `found_planted_bug_logic_01` |
 | `data_handling_missing_key` | `price_lookup.get(sku)` + None-skip → `price_lookup[sku]`; KeyError on any SKU missing from the catalog | inline diff (`cart.py`) | none — pre-change baseline is the regression baseline | 6 common + `found_planted_bug_data_02` |
-| `business_rule_threshold_vs_ticket` | `> 75.00` → `>= 75.00`; an order of exactly $75 gets free shipping | inline diff (`shipping.py`) | SHIP-204 — strict "over $75" | 6 common + `found_planted_bug_rule_03` |
+| `business_rule_threshold_vs_ticket` | `> 75.00` → `>= 75.00`; an order of exactly $75 gets free shipping | inline diff (`shipping.py`) | ticket text — strict "over $75" | 6 common + `found_planted_bug_rule_03` |
 | `repo_git_diff_coverage` | `start + size` → `start + size + 1`; one extra element whenever the slice extends past the page boundary; seeded integration tests do not cover that path | seeded git repo, unstaged working-tree diff (`paging.py`) | none — `git diff` | 6 common + `found_planted_bug_repo_04` |
 | `clean_negative_control_refactor` | none — behavior-preserving loop → `sum(...)` | inline diff (`invoice.py`) | none — pre-change baseline | 6 common + `clean_control_only` |
 | `negative_snapshot_bump` | none — dependency bumped to a ticket-qualified SNAPSHOT (build metadata, not behavior) | inline diff (`pom.xml`, line 14) | prompt says the dependency ships with this service | 6 common + `no_findings` + `clean_control_only` |
 | `negative_absent_handler_concurrency` | none — concurrency cap added in infra config whose handler code is in another repo | inline diff (`infra/lambda.tf`) | prompt says the handler is unavailable | 6 common + `no_findings` + `open_question_mentions_token` |
 | `negative_test_wait_shortening` | none — negative-wait window in a test shortened 10 → 3 | inline diff (`tests/integration/test_replay_guard.py`) | prompt says test-only change | 6 common + `no_block_high_medium` (passes whether the skill reports a coverage line, a doubt, or a LOW finding) |
+
+Trigger cases (`trigger_prompt_set.json`):
+
+| id | should_trigger | Must route to |
+|---|---|---|
+| `positive_qa_this_change` | true | qa-adversary |
+| `positive_find_bugs_in_diff` | true | qa-adversary |
+| `negative_debug_stack_trace` | false | not qa-adversary (debugging) |
+| `negative_style_checklist` | false | code-review-checklist |
+| `negative_test_review` | false | pablo-test-review |
+| `negative_review_pr_url` | false | pablo-pr-review |
 
 ## Check registry
 
@@ -204,6 +237,8 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 | `no_findings` | No numbered `[SEV]` finding line anywhere in the report (O6). |
 | `no_block_high_medium` | No finding line rated BLOCK, HIGH or MEDIUM (O6). |
 | `open_question_mentions_token` | The text from the first "open questions" heading onward mentions at least one `ctx` token (O6). |
+| `reads_qa_adversary_skill_md` | Trigger layer: some `read` tool call's path ends with `qa-adversary/SKILL.md`. |
+| `first_skill_read_is_not_qa_adversary` | Trigger layer: the first `read` of any `*/SKILL.md` is not qa-adversary's; true when no SKILL.md is read. |
 
 **Brittleness notes (accepted, deliberate):**
 
@@ -256,26 +291,29 @@ harness replaces with the seeded temp repo path. "Six common checks" =
 
 ```bash
 cd <this-skill-dir>
-python3 -m py_compile evals/run_layer2_probes.py evals/judge.py evals/fixtures.py evals/run_layer2b_pipeline.py
+python3 -m py_compile evals/run_layer2_probes.py evals/judge.py evals/fixtures.py evals/run_layer2b_pipeline.py evals/run_trigger_probes.py
 python3 evals/run_layer2_probes.py --check      # offline: registry + fixtures smoke test
 python3 evals/judge.py --check                  # offline: spec/probe wiring
 python3 evals/run_layer2b_pipeline.py --check   # offline: LENS_PATH + git fixture smoke
+python3 evals/run_trigger_probes.py --check     # offline: trigger prompt set + check self-test
 python3 evals/run_layer2_probes.py --trials 3   # dry-run: "Skipped…", exit 0
 python3 evals/judge.py --trials 3               # dry-run: "Skipped…", exit 0
 PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --trials 5   # live L2, 5 trials per case
 PI_LIVE_EVAL=1 python3 evals/judge.py --trials 3               # live L3, 3 trials per spec
+PI_LIVE_EVAL=1 python3 evals/run_trigger_probes.py             # live trigger probes, real discovery
 export PI_SUBAGENT_EXTENSION_PATH=/path/to/pi-simple-agents/extensions
 PI_LIVE_EVAL=1 python3 evals/run_layer2b_pipeline.py           # live L2b (N=1, multi-minute)
+rm -rf evals/__pycache__                        # generated by the commands above
 ```
 
 (Adjust the `cd` path if the skill lives elsewhere — `SKILL_DIR`/`EVALS_DIR`
 in the code derive from `__file__`, so the harness itself is path-agnostic.)
 
-**What a FAIL means — and what to fix first.** `qa-adversary` is a
-preference skill invoked by name, so **trigger-tuning is not the fix axis**
-(there is no trigger to tune). If a probe fails, suspect the harness/probe
-first — a brittle check, fixture state, or prompt ambiguity — fix that,
-confirm with the L3 judge, and re-run once *before* touching `SKILL.md`.
+**What a FAIL means, and what to fix first.** For L2, L3 and L2b the
+skill is named in the prompt, so **trigger-tuning is not the fix axis**:
+suspect the harness/probe first (a brittle check, fixture state, or prompt
+ambiguity), fix that, confirm with the L3 judge, and re-run once *before*
+touching `SKILL.md`. For a trigger-probe FAIL, fix the `description` first.
 Record any failure in the Results section below; never silently re-run to
 force a pass.
 
@@ -304,8 +342,21 @@ force a pass.
   left to the clean-honesty judge.
 - **No commit step.** The skills directory is not a git repo, so eval
   results are recorded in this README rather than committed.
+- **Trigger layer needs the installed skill.** `run_trigger_probes.py`
+  relies on real discovery from `~/.pi/agent/skills/`; a copy elsewhere is
+  not discovered. One trial per case; widen to 3 once the harness is trusted.
+- **Newer SKILL.md rules have no check.** No deterministic check and no
+  judge spec covers the `Premises:` line, the NEEDS CLARIFICATION > PASS
+  precedence or the "No diff to review." case (`verdict_valid` only
+  forces BLOCK on `[BLOCK]`/`[HIGH]`); S2's premises part is not graded.
 
 ## Results (live run, 2026-08-14)
+
+Not covered by this run (added later, no live result recorded yet):
+`negative_snapshot_bump`, `negative_absent_handler_concurrency`,
+`negative_test_wait_shortening`, and every case in `trigger_prompt_set.json`.
+The run also predates the 2026-11-23 SKILL.md rewrite (premise rule,
+`Premises:` line, verdict precedence); its results describe the earlier text.
 
 All runs with `PI_LIVE_EVAL=1`, `pi -ne --mode json`. Three live phases:
 N=1 (initial, one harness finding fixed), N=5/N=3 (canonical widened run), and
@@ -364,10 +415,11 @@ transcript shows a single `subagent` tool call and no mutation.
 ### Fixes applied during this session (all harness, none skill)
 
 1. **Section headers** — run 1 of probe 4 emitted a report in another
-   language; header matching was broadened (the harness is now English-only
-   and the skill's report headers are English).
+   language; header matching was broadened, later narrowed back to English:
+   SKILL.md keeps headers, tags and labels in English and lets only the
+   prose follow the conversation language.
 2. **Scenario-line variants** — the failure-scenario regex was widened
-   (since removed with the English-only policy).
+   (since removed: SKILL.md keeps headers and labels in English).
 3. **Planted-bug tokens** — non-English reports missed EN-only tokens
    (~20% of P3 trials); variants were added (since removed).
 4. **Verdict extraction vs bold formatting** — `**Verdict:** **BLOCK**`
@@ -388,8 +440,8 @@ transcript shows a single `subagent` tool call and no mutation.
   occurrence. Open question, not a skill defect.
 - **`verdict_valid`: ~5% intermittent on `data_handling_missing_key`**
   (2 in ~40 trials). Likely causes: the agent occasionally hedges a
-  confirmed HIGH finding to a NEEDS CLARIFICATION verdict (the skill's
-  semantics say a HIGH finding with a reproducible scenario forces BLOCK)
+  confirmed HIGH finding to a NEEDS CLARIFICATION verdict (SKILL.md states
+  the precedence BLOCK > NEEDS CLARIFICATION > PASS, so a HIGH finding forces BLOCK)
   or formats the verdict line oddly (now mitigated by item 4). The L3
   judge is the arbiter for these cases and passed them.
 
@@ -403,9 +455,9 @@ headers. Per the runbook (fix the harness before the skill), the checks were
 broadened and a single re-run passed 7/7. A second independent run of the
 same probe also passed 7/7. Cause: harness brittleness; the skill itself
 behaved correctly in all runs (bug always found, BLOCK verdict, concrete
-scenarios, no test execution, no mutation). The skill family is now
-English-only, so the broadened non-English variants were removed from the
-harness.
+scenarios, no test execution, no mutation). SKILL.md keeps headers, tags
+and labels in English, so the broadened non-English variants were removed
+from the harness and from `prompt_set.json`.
 
 ## Sources
 

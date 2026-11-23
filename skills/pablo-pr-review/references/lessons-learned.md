@@ -124,8 +124,8 @@ relative size rule, scope as one question, no "less specific exception type" rul
 English throughout (the skills are public); positives go in an uncounted Strengths note.
 
 **Supersedes:** the 2026 session-mining format (lines 9-12, 38-43): the four-part structure
-with ≥2 examples now applies to Blocking/Major only; Question and Minor are one line (default
-for open decision 3). Rejection #3 (lines 33-35) still holds as the N3 hidden-side-effect
+with ≥2 examples now applies to Blocking/Major only; Question and Minor are one line (the
+owner's default). Rejection #3 (lines 33-35) still holds as the N3 hidden-side-effect
 exception, although duplication is now extracted at 2 copies.
 
 **Limitation:** one reviewer, 18 PRs, implicit labels; ignored ≠ wrong. Every edit is a

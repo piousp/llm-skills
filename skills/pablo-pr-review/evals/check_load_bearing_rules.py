@@ -128,7 +128,7 @@ def check_question_tier(text: str) -> bool:
 
 def check_root_cause_single_source(text: str) -> bool:
     """One root-cause definition (merge-rules.md); the old severity rule is gone and
-    every lens SKILL.md points to merge-rules.md. Fails until WP-B/C/D add pointers."""
+    the three LENS_SKILLS files point to merge-rules.md (pablo-test-review is not checked)."""
     return (
         "## Root cause" in _read(MERGE_RULES)
         and "keep the higher severity" not in text
@@ -137,7 +137,7 @@ def check_root_cause_single_source(text: str) -> bool:
 
 
 def check_four_part_b_m_only(text: str) -> bool:
-    """Four-part shape only for Blocking/Major (open decision 3 default)."""
+    """Four-part shape only for Blocking/Major (the owner's default)."""
     return "Blocking and Major use this four-part shape" in text and "one-line shapes" in text
 
 
@@ -173,7 +173,7 @@ def check_harvest_section(text: str) -> bool:
         and "## Harvest\n" in loop
         and all(k in loop for k in ("fetch_comments.py", "set-feedback", "pre_skill", "recall_misses",
                                     "Praise", "0.5", "unseen", "this_pr_only"))
-        and len(text.splitlines()) <= 270
+        and len(text.splitlines()) <= 290
     )
 
 

@@ -19,7 +19,8 @@
       "found_planted_bool_param",
       "found_planted_scope_violation",
       "minor_has_suggestion",
-      "no_praise"
+      "no_praise",
+      "section_fail_iff_blocker_or_major"
     ]
   },
   {
@@ -84,7 +85,8 @@
       "blocker_forces_needs_work",
       "has_file_line_refs",
       "found_planted_secret",
-      "no_praise"
+      "no_praise",
+      "section_fail_iff_blocker_or_major"
     ]
   },
   {
@@ -152,7 +154,8 @@
       "found_planted_naming_nit",
       "found_planted_redundant_comment",
       "no_blocker_or_major_tags",
-      "no_praise"
+      "no_praise",
+      "section_fail_iff_blocker_or_major"
     ]
   },
   {
@@ -166,7 +169,8 @@
       "verdict_present",
       "verdict_ready",
       "no_blocker_or_major_tags",
-      "no_praise"
+      "no_praise",
+      "fyi_after_verdict"
     ]
   },
   {
@@ -179,6 +183,23 @@
       "review_format_present",
       "verdict_present",
       "no_blocker_or_major_tags",
+      "no_praise"
+    ]
+  },
+  {
+    "id": "untracked_file_included",
+    "prompt": "Review my changes with the checklist.",
+    "should_trigger": true,
+    "expected_checks": [
+      "no_code_mutation",
+      "derived_diff_via_git",
+      "review_format_present",
+      "verdict_present",
+      "verdict_needs_work",
+      "severity_tagged",
+      "blocker_forces_needs_work",
+      "has_file_line_refs",
+      "found_planted_secret",
       "no_praise"
     ]
   }

@@ -1,7 +1,8 @@
 # Pattern Catalog
 
-Worked before/after examples for the recurring implementation shapes referenced from `mechanics.md`.
-Each pattern shows the imperative/OOP starting point and its FP equivalent, in both Java and Scala.
+Worked examples for the recurring implementation shapes referenced from `mechanics.md`. Patterns 1-3
+show the imperative/OOP starting point and its FP equivalent, in both Java and Scala; Pattern 4 shows
+the Scala target shape and describes the Java one in prose.
 Read the "when this is worth it" note before applying: none of these are worth doing unconditionally
 (see the anti-pattern table in `mechanics.md`).
 
@@ -187,3 +188,38 @@ val result = pipeline(rawInput)
 Same tradeoff as the Java case: worth it when the composed pipeline is a reusable, nameable concept;
 not worth it for a single inline call where a flat sequence of `val`s is equally readable and easier
 to step through in a debugger.
+
+## Pattern 4: Accumulating errors (the "Validated" use case)
+
+Collect *all* validation failures instead of stopping at the first one, with a stdlib-only
+accumulating result type (no Cats `Validated`; see "Boundaries" in `mechanics.md`). If the target
+repo already has an accumulating result type, follow it.
+
+**When it's worth it:** a caller genuinely benefits from seeing every error at once (e.g., form-like
+validation with several independent fields). A single-field validation doesn't need it; Pattern 1's
+short-circuiting chain is simpler and correct there.
+
+### Java
+
+Extend the `Err` case of the `Result<T>` type defined in `java.md`
+("Records and sealed interfaces: version-gated") to hold a `List<String>` of messages instead of a
+single `String`, and provide a way to combine two `Result`s that merges their error lists. That's
+the whole pattern; no library needed.
+
+### Scala
+
+Built on the `Result`/`Ok`/`Err` ADT in `scala.md` ("Pattern matching and case classes"), whose
+`Err` already holds a `List[String]`:
+
+```scala
+def combine[A, B](ra: Result[A], rb: Result[B]): Result[(A, B)] =
+  (ra, rb) match {
+    case (Ok(a), Ok(b))       => Ok((a, b))
+    case (Err(e1), Err(e2))   => Err(e1 ++ e2)
+    case (Err(e), _)          => Err(e)
+    case (_, Err(e))          => Err(e)
+  }
+```
+
+`combine` inspects *both* sides before short-circuiting, so two independent field validations both
+get reported even if both fail; a plain `Either`/for-comprehension chain stops at the first `Left`.

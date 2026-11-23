@@ -6,12 +6,12 @@ Unlike Layer 2 (run_layer2_probes.py), where the qa-adversary lens is
 applied directly in bare `pi -ne --skill <dir>`, Layer 2b loads a real
 `subagent` tool via an explicit `-e <path>` to a pi extension and drives a
 coordinator that delegates the QA review to the `analyst` subagent, with
-the qa-adversary skill handed over as the analyst's lens — the skill's
-documented "hand it to a read-only analysis agent (e.g. analyst) as its
-lens" usage. The contract is a `Lens: <SKILL_DIR>/SKILL.md` line inside the
-analyst's task: the analyst agent has native lens-mode support and is
-configured with `skills: ["qa-adversary"]` in this machine's settings.json,
-but the harness must not hardcode that — the Lens line is the contract.
+the qa-adversary skill handed over as the analyst's lens (a caller-side
+handoff: SKILL.md opens with "Applying this lens" and never delegates
+itself). The contract is a `Lens: <SKILL_DIR>/SKILL.md` line inside the
+analyst's task: the analyst agent has native lens-mode support, and the
+harness must not depend on any skills list in a local agent configuration;
+the Lens line is the contract.
 
 Documented limitation: the analyst's internal tool calls are NOT visible in
 the coordinator's transcript. The analyst is read-only by its agent

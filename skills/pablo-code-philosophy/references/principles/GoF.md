@@ -5,10 +5,9 @@
 
 ## Rules
 
-- [ALWAYS] apply a pattern only when the variation it manages is real and current - a second
-  implementation that exists today, not one anticipated for later. Strategy manages multiple
-  algorithms, Builder/Factory Method manage multiple construction paths, Decorator manages
-  behaviors layered at runtime.
+- [ALWAYS] apply a pattern only when the variation it manages passes the real-variation test in
+  [YAGNI.md](YAGNI.md). Strategy manages multiple algorithms, Builder/Factory Method manage
+  multiple construction paths, Decorator manages behaviors layered at runtime.
 - [NEVER] apply a pattern to a problem with only one variant; an interface, abstract class, and
   factory for something that will only ever have one shape is ceremony, the same failure mode
   YAGNI names for any other abstraction.

@@ -23,7 +23,7 @@ candidates still live in `SKILL.md`'s A1-A4 tables and in `pablo-code-simplify`'
 | Extract Superclass | Excluded outside a sealed ADT (SOLID.md, composition over inheritance) |
 | Extract Variable | `pablo-code-simplify` gate, mechanical |
 | Hide Delegate | A2 "Read-through delegate chain" |
-| Inline Class | `pablo-code-simplify` gate, mechanical ("inline a non-exported class") |
+| Inline Class | `pablo-code-simplify` gate, mechanical (non-exported target) |
 | Inline Function | `pablo-code-simplify` gate, mechanical |
 | Inline Variable | `pablo-code-simplify` gate, mechanical (precondition: expression is pure and cheap) |
 | Introduce Assertion | Excluded: not mechanically behavior-preserving; a proposed one is "Not mechanical" in simplify |
@@ -42,7 +42,7 @@ candidates still live in `SKILL.md`'s A1-A4 tables and in `pablo-code-simplify`'
 | Push Down Method | A1 "Inheritance used for reuse, not variation" |
 | Remove Dead Code | `code-review-checklist` Abstractions (detection: zero callers → Question); `pablo-code-simplify` (removal) |
 | Remove Flag Argument | `code-review-checklist` Data Shape (boolean parameter) |
-| Remove Middle Man | `pablo-code-simplify` gate, mechanical + philosophy axis-list (over-abstraction) |
+| Remove Middle Man | `pablo-code-simplify` gate, mechanical (non-exported target; a middle man only forwards) |
 | Remove Setting Method | A2 (invariant rows) |
 | Remove Subclass | A1 "Inheritance used for reuse, not variation" |
 | Rename Field | `pablo-code-simplify` gate, mechanical (non-exported); N8 if proposed to refid directly |

@@ -1,10 +1,10 @@
 # Red Flags examples: TypeScript / JavaScript
 
-Run this code twice. Does it always do the same thing? These two blockers fail the
-review outright: **non-deterministic code** (uncontrolled randomness, race conditions)
-and **hidden mutable shared state added**. Test-side flakiness is covered by
-`concurrency.*`. Each example pairs a change the review should flag with the fix that
-satisfies the checklist.
+Run this code twice. Does it always do the same thing? This file covers two Red Flags items,
+tiered by the evidence rules of the Red Flags section: **non-deterministic code**
+(uncontrolled randomness, race conditions) and **hidden mutable shared state added**.
+Test-side flakiness is out of scope here (gate G1). Each example pairs a change the review
+should flag with the fix that satisfies the checklist.
 
 ### 1. Uncontrolled randomness in business logic
 

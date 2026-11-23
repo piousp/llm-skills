@@ -6,7 +6,7 @@
 --root holds ml-lessons/ and, when present, reviews/ and repo-lessons/ (default: this skill). Exit 0
 when clean, 1 with one `file:line: reason` per finding, 2 when ml-lessons/ does not exist.
 
-Checks (references/learning-loop.md, plan section 4.5):
+Checks (references/learning-loop.md § Consolidation):
   - repo names (reviews/ and repo-lessons/ directory names, report `repo`), report `org` and `host`
     values: read at RUNTIME from the git-ignored ledger, never hard-coded here;
   - a '/' inside any whitespace-delimited token (paths, urls; write "or", not "a/b");

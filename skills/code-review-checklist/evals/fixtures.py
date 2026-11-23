@@ -313,7 +313,7 @@ POM_BASE = """<project>
   </dependencies>
 </project>
 """
-POM_WORK = POM_BASE.replace("<version>2.3.0</version>", "<version>2.4.0-PROJ-42-SNAPSHOT</version>")
+POM_WORK = POM_BASE.replace("<version>2.3.0</version>", "<version>2.4.0-feature-x-SNAPSHOT</version>")
 
 _REPORT_COLS = [f"c{i}" for i in range(1, 37)]
 _REPORT_PUSHES = "\n".join(f'  lines.push("{c}=" + row["{c}"]);' for c in _REPORT_COLS)
@@ -624,6 +624,27 @@ def build_negative_small_growth_long_method(tmp: Path) -> Fixture:
     return {"cwd": repo, "planted": {}, "test_files": ["report.test.ts"], "branch": None}
 
 
+FLAGS_UNTRACKED = 'export const FEATURE_FLAGS_TOKEN = "dev-flags-token-4b8c";\n'
+
+
+def build_untracked_file_included(tmp: Path) -> Fixture:
+    """U — one new untracked file with a hardcoded token; git diff and --cached
+    empty; git ls-files --others: {src/flags.ts}.
+    """
+    repo = tmp / "repo"
+    git_init(repo)
+    write(repo / "package.json", PACKAGE_JSON)
+    write(repo / "src/config.ts", CONFIG_BASE)
+    commit_all(repo, "base")
+    write(repo / "src/flags.ts", FLAGS_UNTRACKED)  # deliberately not `git add`ed
+    return {
+        "cwd": repo,
+        "planted": {"secret": (["dev-flags-token-4b8c", "FEATURE_FLAGS_TOKEN"], "flags.ts")},
+        "test_files": [],
+        "branch": None,
+    }
+
+
 FIXTURE_BUILDERS: dict[str, Callable[[Path], Fixture]] = {
     "dirty_diff_unstaged": build_dirty_diff_unstaged,
     "clean_diff_all_pass": build_clean_diff_all_pass,
@@ -637,4 +658,5 @@ FIXTURE_BUILDERS: dict[str, Callable[[Path], Fixture]] = {
     "nit_only_ready": build_nit_only_ready,
     "negative_internal_snapshot_bump": build_negative_internal_snapshot_bump,
     "negative_small_growth_long_method": build_negative_small_growth_long_method,
+    "untracked_file_included": build_untracked_file_included,
 }

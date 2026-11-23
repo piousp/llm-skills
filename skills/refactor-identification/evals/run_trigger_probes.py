@@ -3,9 +3,7 @@
 Layer 2a (trigger-only) probes for refactor-identification.
 
 Classification (evaluating-agent-skills SKILL.md step 1): this skill has a
-real "when" clause plus explicit negative cases in its description (TRIGGER:
-"deciding if a refactor belongs in this branch"... SKIP: "renames, trivial
-extraction, executing fixes, whole-repo scans, merge gating"). Unlike a
+real "when" clause plus explicit negative cases in its description (Use for "refactor candidates", "is a refactor worth it in this branch"; [DO NOT] for renames, applying fixes, cleanup plans, bugs, full reviews, whole-repo scans). Unlike a
 name-only-invoked skill (iterative-design), should_trigger is a real,
 checkable axis here — this probe set is the highest-value first layer
 (evaluating-agent-skills SKILL.md step 4).
@@ -124,7 +122,7 @@ def seed_branch_with_real_diff(tmp: Path, prompt_template: str) -> tuple[Path, s
     before ever considering which skill applies."""
     repo = tmp / "repo"
     repo.mkdir()
-    _git(repo, "init", "-q")
+    _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "eval@example.com")
     _git(repo, "config", "user.name", "eval")
     (repo / "OrderService.java").write_text(

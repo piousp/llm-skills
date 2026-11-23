@@ -13,8 +13,9 @@ Behavioral (Strategy, Template Method, Observer, Chain of Responsibility, State,
 ### Factory Method
 
 **When it's worth it:** the decision of which concrete type to construct is duplicated at more
-than one call site, or is expected to grow a new case. For a single call site with a fixed, stable
-type, a direct constructor call is simpler.
+than one call site today; an expected new case fails the real-variation test in
+`../principles/YAGNI.md`. For a single call site with a fixed, stable type, a direct constructor
+call is simpler.
 
 Java, before (the decision is inline, and will be copy-pasted at the next call site):
 
@@ -201,8 +202,8 @@ the trait only once several call sites duplicate the same `match`, not on the fi
 
 ### Strategy
 
-**When it's worth it:** more than one interchangeable algorithm exists today, or the set is
-concretely expected to grow, not "might grow" speculatively.
+**When it's worth it:** more than one interchangeable algorithm exists in the code today (the
+real-variation test in `../principles/YAGNI.md`); an expected new algorithm doesn't count.
 
 Java, before (branching on a type/enum to select behavior):
 
@@ -291,8 +292,8 @@ runIngest(fetchJson, validateJson)
 
 ### Observer
 
-**When it's worth it:** more than one independent listener needs to react to the same event, and
-that set of listeners is expected to change.
+**When it's worth it:** more than one independent listener needs to react to the same event today
+(the real-variation test in `../principles/YAGNI.md`).
 
 Java, before (the subject calls each interested party directly, coupling it to all of them):
 

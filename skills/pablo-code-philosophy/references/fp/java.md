@@ -59,8 +59,7 @@ record Ok<T>(T value) implements Result<T> {}
 record Err<T>(String message) implements Result<T> {}
 ```
 
-Pattern-match with `instanceof` (Java 17) or a `switch` pattern (Java 21+ preview features aside,
-17's `instanceof` pattern matching is the safe baseline):
+Pattern-match with `instanceof` (Java 17+); `switch` patterns need Java 21+:
 
 ```java
 if (result instanceof Ok<T> ok) {
@@ -68,6 +67,7 @@ if (result instanceof Ok<T> ok) {
 } else if (result instanceof Err<T> err) {
     throw new IllegalStateException(err.message());
 }
+throw new IllegalStateException("unreachable: Result is sealed");
 ```
 
 **Java 8/11**: no `record`, no `sealed`. The equivalent immutable data carrier is a `final` class
@@ -112,8 +112,8 @@ check.
 
 ## Typed error handling in Java
 
-Java's stdlib has no `Either`. Given no FP library is a dependency in these repos (see "Boundaries"
-in `mechanics.md`), two patterns cover what's needed:
+Java's stdlib has no `Either`. When the target repo declares no FP library (see "Boundaries" in
+`mechanics.md`), two patterns cover what's needed:
 
 - **`Optional<T>`** when the only information needed is "found" vs. "not found": no error detail to
   carry.
@@ -121,7 +121,4 @@ in `mechanics.md`), two patterns cover what's needed:
   needs to carry a reason. Keep it generic and reusable across the module rather than inventing a new
   one-off result type per method.
 
-For accumulating multiple validation errors (the "Validated" use case, see `patterns.md` for the
-worked example), extend the `Err` case to hold a `List<String>` of messages instead of a single
-`String`, and provide a way to combine two `Result`s that merges their error lists. That's the whole
-pattern; no library needed.
+For accumulating multiple validation errors (the "Validated" use case), see `patterns.md`, Pattern 4.

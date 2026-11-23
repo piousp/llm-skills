@@ -15,7 +15,7 @@ directive. Where two principles genuinely conflict, see the Conflict matrix in
 | **FP vs SOLID** | Allies. ISP is natural with functional interfaces/typeclasses; DIP is trivial when the dependency is a passed parameter. |
 | **FP vs UNIX** | Allies (strongest pair). Function composition is pipeline composition in another paradigm; immutability reinforces Least Surprise. |
 | **FP vs KISS** | Allies. Composition and immutability are usually more concise, not less - but if composition adds indirection without reducing real complexity, KISS wins. |
-| **FP vs YAGNI** | Orthogonal, with a YAGNI gate: don't build a composable pipeline for a two-step chain nobody will extend. |
+| **FP vs YAGNI** | Orthogonal, with a YAGNI gate: don't build a composed pipeline for two or fewer pure steps; the threshold and its typed-error exception live in [FP.md](principles/FP.md). |
 | **GoF vs DRY** | Allies. Template Method and Strategy remove duplicated skeleton/branching - a DRY mechanism. |
 | **GoF vs SOLID** | Allies. GoF patterns implement SOLID concretely (Strategy → OCP, Adapter → DIP); they don't duplicate it. |
 | **GoF vs UNIX** | Allies. Composition-of-handlers (Chain of Responsibility, Composite) is the OO echo of pipeline composition. |

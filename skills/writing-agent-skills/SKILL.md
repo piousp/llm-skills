@@ -58,14 +58,10 @@ body; the description then only needs to be accurate, not optimized for triggeri
     transformative, pivotal, robust, seamless, invaluable, moreover, additionally,
     notably, crucially, "not only... but also", "in conclusion", "in summary",
     "paving the way", "shed light on"
-  - ES: cabe destacar, es importante señalar, en el panorama actual, juega un
-    papel fundamental, sin lugar a dudas, no obstante, asimismo, por otra parte,
-    en conclusión, en resumen, en definitiva, desafíos, perspectivas futuras,
-    multifacético, transformador
 - [NEVER] use em-dashes as an emphasis shortcut; connect ideas with periods,
   commas, or semicolons.
-- [NEVER] close with formula phrases ("in conclusion", "en conclusión") or add
-  meta-comments about the text itself ("as a language model", "espero que esto sirva").
+- [NEVER] close with formula phrases ("in conclusion", "to conclude") or add
+  meta-comments about the text itself ("as a language model", "I hope this helps").
 
 ## 4. Keep it lean
 

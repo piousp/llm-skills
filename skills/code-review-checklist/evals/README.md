@@ -6,8 +6,8 @@ Anthropic's ["Demystifying evals for AI
 agents"](https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents).
 `code-review-checklist` is a **process lens invoked explicitly**: the skill
 is a read-only review methodology, not a base-model capability gap. It IS
-auto-discovered from its description — the trigger phrases ("checklist",
-"code review checklist") live there, and trigger probes
+auto-discovered from its description: the trigger phrases ("code review checklist",
+"review my changes with the checklist", "checklist review of this diff", "quality and style review of this diff") live there, and trigger probes
 (negative control, English trigger phrase) plus L3 LLM-judge specs verify
 that discovery and post-trigger behavior. What the eval does NOT tune is the
 description text itself; it adapts the articles' method: define success
@@ -21,7 +21,7 @@ For a review lens, "success" is **fidelity to the output contract plus
 correct defect detection**:
 
 - *Outcome*: the review is derived from the real diff (`git diff` /
-  `git diff --cached` / `git diff main...HEAD`, or from a diff handed in the
+  `git diff --cached` / `git diff main...HEAD` / untracked files, or from a diff handed in the
   prompt) and the planted defects are found: hardcoded secret, mutable `let`,
   swallowed catch, boolean parameter, over-complex function, scope violation,
   naming nit, redundant comment.
@@ -42,18 +42,27 @@ correct defect detection**:
 The skill is 100% markdown (SKILL.md + `references/*.md`); there is no
 `scripts/*` with real logic to unit-test offline. Layer 1 does not apply.
 
+### Offline rule guard: `check_load_bearing_rules.py`
+
+No model calls, standard library only. Whitespace-insensitive string checks on `SKILL.md` and
+`references/redflags.*.md` confirm three load-bearing rules are still in place: the secrets Red
+Flag covers untracked files under review; greps and 1-hop reads on a handed-in diff run only in
+a repo that matches the diff (each modified file present with its first hunk's context lines);
+test-side flakiness stays out of scope (G1 and the three `redflags` files). It prints one
+PASS/FAIL line per check and `N/N passed`, and exits 1 if any check fails.
+
 ### Layer 2: trajectory/tool-call probes, live-gated (central)
 
 `run_layer2_probes.py` + `fixtures.py` + `prompt_set.json`: each probe seeds
-a temp git repo (12 fixture builders: git init/commit, unstaged edits,
-staged-only changes, a two-commit feature branch, a clean tree), runs bare
+a temp git repo (13 fixtures, one builder each: git init/commit, unstaged edits,
+staged-only changes, an untracked new file, a two-commit feature branch, a clean tree), runs bare
 `pi -ne --skill <this dir> --mode json -p <prompt>`, parses the NDJSON
-transcript for tool calls, and grades the response against 25 deterministic
+transcript for tool calls, and grades the response against 28 deterministic
 checks in `CHECK_REGISTRY` (dispatch pattern per
-`evaluating-agent-skills/references/check-registry-pattern.md`). Twelve prompts
+`evaluating-agent-skills/references/check-registry-pattern.md`). Fourteen prompts
 cover the skill's main paths and edge cases:
 
-1. `dirty_diff_unstaged`: unstaged diff with 7 planted defects (secret,
+1. `dirty_diff_unstaged`: unstaged diff with 6 planted defects (secret,
    mutable let, swallowed catch, complexity, bool param, scope violation).
 2. `clean_diff_all_pass`: tests-only change (no production edits),
    must come back READY.
@@ -76,23 +85,26 @@ cover the skill's main paths and edge cases:
 12. `negative_small_growth_long_method` (C16): a 3-line guard added to an
     existing 40-line linear function, with its test; no Complexity finding,
     no Blocker/Major tag.
+13. `untracked_file_included`: a new untracked `src/flags.ts` with a hardcoded token; the
+    review must include it (SKILL.md Process step 1) and return NEEDS WORK.
 
 The offline safety net is built into the same script: `--validate` re-seeds
 every fixture and asserts the exact `git diff` file set per case (unstaged /
-`--cached` / `main...HEAD`), that every planted token is present in the
+`--cached` / `main...HEAD` / untracked), that every planted token is present in the
 working files (or in the prompt-embedded diff for the self-contained case),
 that fixture A's `src/orders.ts` really contains an over-complex (>25-line) `processOrders`,
 that every `expected_checks` id exists in `CHECK_REGISTRY`, and runs
 synthetic-transcript smoke tests for the key checks, including
-`minor_has_suggestion` and `planted_bool_param_tagged_data` (expected-pass / expected-fail pairs). No LLM tokens are spent.
+`minor_has_suggestion`, `planted_bool_param_tagged_data`, `section_fail_iff_blocker_or_major` and `fyi_after_verdict` (expected-pass / expected-fail pairs). No LLM tokens are spent.
 
 Live runs cost real LLM tokens and are gated behind `PI_LIVE_EVAL=1`, not
 part of any default/offline suite:
 
 ```bash
 cd <this-skill-dir>
+python3 -B evals/check_load_bearing_rules.py       # offline, free
 python3 evals/run_layer2_probes.py --validate      # offline, free
-PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py  # live, all 12 prompts
+PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py  # live, all 13 prompts
 ```
 
 ### Layer 3: LLM-as-judge, live-gated
@@ -125,20 +137,20 @@ pointed at a subagent extension would be the next addition.
 
 ## Prompt language
 
-All prompts and judge specs are in English (the skill is public). One prompt
-(`english_trigger_phrase`) locks in the description's trigger phrase ("Run the
-code review checklist"). The checks grade the
-*response* against SKILL.md's English output contract (`## Review:`,
-`Verdict:`): the lens's output format is
-the contract. `minor_has_suggestion` enforces that every `[Minor]` line
-carries at least one concrete suggestion.
+All prompts and judge specs are in English (the skill is public).
+`english_trigger_phrase` locks in the English one ("Run the code review checklist"). The
+checks grade the *response* against SKILL.md's English output contract (`## Review:`,
+`Verdict:`) whatever the prompt language: the lens's output format is the contract.
+`minor_has_suggestion` enforces that every `[Minor]` line carries at least one concrete
+suggestion.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `python3 -B evals/check_load_bearing_rules.py` | Offline string checks: the load-bearing rules are still in SKILL.md and references/redflags.*.md. No tokens, no gate |
 | `python3 evals/run_layer2_probes.py --validate` | Offline validation: fixtures, planted tokens, diff sets, registry coverage, smoke checks. No tokens, no gate |
-| `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py` | Live Layer 2, all 12 prompts |
+| `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py` | Live Layer 2, all 13 prompts |
 | `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --only <id1,id2>` | Live Layer 2, subset (comma- or space-separated) |
 | `PI_LIVE_EVAL=1 python3 evals/run_layer2_probes.py --save-out <DIR>` | Live Layer 2, saving per-probe JSON results to DIR |
 | `PI_LIVE_EVAL=1 python3 evals/judge.py` | Live Layer 3: 2 LLM-judge specs |
@@ -163,7 +175,7 @@ carries at least one concrete suggestion.
 
 First live run, N=1 per prompt (all layers, `PI_LIVE_EVAL=1`):
 
-**Layer 2 (first run, before the 3 C16 negative probes and `minor_has_suggestion` were added): 10/10 probes passed, 94/94 checks.**
+**Layer 2 (first run, before the 2 C16 negative probes and `minor_has_suggestion` were added): 10/10 probes passed, 94/94 checks.**
 
 | Probe | Result | n_tool_calls |
 |---|---|---|
@@ -199,8 +211,8 @@ defects):**
    branch untested, so a compliant reviewer returned two Majors. Redesigned
    as a tests-only diff, nothing left to criticize.
 2. Fixture NIT ("nit-only") v1 exported a new function with no call sites,
-   which is a legitimate YAGNI Major under the skill's Abstractions
-   section. Redesigned so the defects are a snake_case local and a
+   which the skill's Abstractions section flags (today a zero-callers
+   Question, "who uses this?"). Redesigned so the defects are a snake_case local and a
    redundant comment inside a mechanical refactor of existing code, no
    new public API.
 3. `no_code_mutation` had a false positive: `git stash list` (read-only)
@@ -215,6 +227,6 @@ defects):**
 No skill defects surfaced: every planted Major/Blocker that was reported
 was reported correctly per SKILL.md. Two behaviors of note: the reviewer
 flagged that the planted gateway key is a clearly fake dev value
-(and still tagged it Blocker, per the skill's "Secrets, credentials, or
-tokens in tracked files" rule), and it answered the handed-in-diff probe
+(and still tagged it Blocker, per the skill's Red Flags secrets rule), and it
+answered the handed-in-diff probe
 without reading the repo's committed files for a different diff.

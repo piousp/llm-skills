@@ -1,8 +1,8 @@
 # Scala FP Mechanics
 
-Idiom-level guidance for applying the principles in `mechanics.md` to Scala code. These repos use
-**stdlib-only** functional types: no Cats, no ZIO (see "Boundaries" in `mechanics.md`). For worked
-before/after examples, see `patterns.md`.
+Idiom-level guidance for applying the principles in `mechanics.md` to Scala code, with
+**stdlib-only** functional types unless the target repo already declares Cats or ZIO (see
+"Boundaries" in `mechanics.md`). For worked before/after examples, see `patterns.md`.
 
 ## `Option`
 
@@ -63,9 +63,9 @@ def process(input: RawInput): Either[String, Output] =
 - **`sealed trait` + case classes/objects** is Scala's algebraic data type: the direct analogue of
   Java 17's `sealed interface` + `record`, but available regardless of Scala version and checked for
   exhaustiveness by the compiler (with `-Xfatal-warnings` or equivalent, a non-exhaustive `match` on a
-  sealed hierarchy is a compile-time signal, not a runtime surprise). This is the shape used by the
-  existing `DomainResult`-style sealed hierarchy elsewhere in the codebase; follow that precedent
-  rather than inventing a new result-type shape per module.
+  sealed hierarchy is a compile-time signal, not a runtime surprise). If the target repo already has
+  a sealed result hierarchy (e.g. a `DomainResult`), follow it rather than inventing a new
+  result-type shape per module; otherwise use the `Result` shape below.
 - **Match on the shape, not on a type tag/`isInstanceOf` chain.** Pattern matching against a sealed
   hierarchy is what gives you the compiler's exhaustiveness check; an `if`/`isInstanceOf` chain
   achieves the same runtime behavior without that safety net.
@@ -83,26 +83,4 @@ result match {
 
 ## Accumulating multiple errors (the "Validated" use case)
 
-No Cats `Validated` here; none of these repos depend on Cats (see "Boundaries" in `mechanics.md`). The
-same effect, collecting *all* validation failures instead of stopping at the first one, is built with
-a stdlib-only accumulating result type, following whatever `DomainResult`-style accumulating ADT
-precedent already exists in the codebase (e.g., a result type with a dedicated case for surfacing
-warnings alongside a value):
-
-```scala
-final case class Err(messages: List[String]) extends Result[Nothing]
-
-def combine[A, B](ra: Result[A], rb: Result[B]): Result[(A, B)] =
-  (ra, rb) match {
-    case (Ok(a), Ok(b))       => Ok((a, b))
-    case (Err(e1), Err(e2))   => Err(e1 ++ e2)
-    case (Err(e), _)          => Err(e)
-    case (_, Err(e))          => Err(e)
-  }
-```
-
-The key difference from a plain `Either`/for-comprehension chain: `combine` inspects *both* sides
-before short-circuiting, so two independent field validations both get reported even if both fail.
-Reach for this only when a caller genuinely benefits from seeing every error at once (e.g., form-like
-validation with several independent fields); a single-field validation doesn't need it; a
-`for`-comprehension short-circuiting on the first `Left` is simpler and correct there.
+See `patterns.md`, Pattern 4.

@@ -12,9 +12,9 @@
 - [ALWAYS] treat planning as cheap and code as expensive. A feature's cost isn't the time to
   write it - it's the ongoing cognitive load on every reader, the maintenance burden, the test
   surface, and the risk of coupling things that shouldn't be coupled.
-- [ALWAYS] add a feature only if it's confidently needed soon (e.g. next sprint). [NEVER] add it
-  for "maybe next quarter" or "sometime in the future" - trust your ability to add it when the
-  time comes.
+- [ALWAYS] build only the behavior the request asks for; "needed next sprint" justifies planning
+  it, not coding it now. Trust your ability to add it when the time comes. Abstractions follow the
+  real-variation test below.
 
 ### Speculative interface vs. current need
 
@@ -24,7 +24,10 @@ planned.
 is real.
 
 - [NEVER] add an interface, abstract class, or plugin point before a second concrete case exists.
-- [ALWAYS] wait for the second real implementation to justify the abstraction.
+- **Real-variation test**, the one test for every abstraction and design pattern in this skill:
+  variation is real only when a second concrete case exists in the code today. [NEVER] count
+  "expected to grow", "planned" or "next sprint" as real; that is anticipated variation, and
+  YAGNI wins.
 
 ## Code Examples
 

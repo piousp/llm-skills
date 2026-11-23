@@ -42,7 +42,7 @@ BUG_CORRECTNESS_INSTRUCTIONS = {
     "logic_change_inverted_condition": (
         "The planted bug is in discounts.py: can_discount() changed the tenure check "
         "from member_since.days >= 90 to member_since.days > 90, so a member with exactly "
-        "90 days of tenure is wrongly denied the loyalty discount although ticket QA-117 "
+        "90 days of tenure is wrongly denied the loyalty discount although the ticket "
         "states the threshold is inclusive ('at least 90 days')."
     ),
     "data_handling_missing_key": (
@@ -53,7 +53,7 @@ BUG_CORRECTNESS_INSTRUCTIONS = {
     "business_rule_threshold_vs_ticket": (
         "The planted bug is in shipping.py: free_shipping() changed order.subtotal > 75.00 "
         "to order.subtotal >= 75.00, so an order with subtotal exactly 75.00 gets free "
-        "shipping although ticket SHIP-204 requires strictly over $75 ('subtotal must be "
+        "shipping although the ticket requires strictly over $75 ('subtotal must be "
         "greater than 75.00')."
     ),
     "repo_git_diff_coverage": (

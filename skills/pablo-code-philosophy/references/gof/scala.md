@@ -239,6 +239,6 @@ call site.
 Don't introduce Cats' `Free` monad, tagless-final effect encodings, or a typeclass-heavy
 reimplementation of any pattern above as a way to make it "more functional": that's out of scope
 for the same reason `../fp/mechanics.md`'s Boundaries section excludes monad transformers and
-tagless final: no repo here depends on Cats/ZIO, and every idiom above is expressible in stdlib
+tagless final: every idiom above is expressible in stdlib
 Scala. If a real need for one of those surfaces, raise it as a dependency decision, not something
 introduced silently while implementing a pattern from this catalog.

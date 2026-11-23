@@ -10,7 +10,7 @@ How to read a row:
 
 | # | Rule | Report when | Tier | Silent when | `Change:` must contain | Calibration |
 |---|---|---|---|---|---|---|
-| R1 | Oracle removed or loosened | The diff deletes or weakens an assertion (exact → contains, specific exception → generic, value → not-null, count → non-empty) and no equivalent assertion appears elsewhere in the diff | M | The PR objective declares the behavior removed; an equivalent assertion is added elsewhere; the production method the assertions exercised is deleted from this repo in the same diff (moved to a library or another repo: its tests move with it, and cross-repo coverage is qa-adversary's lane) | The assertion to keep or restore, e.g. `assertEquals(Status.ARCHIVED, dto.status())` | Posted: "Should we also assert the status field?" on a deleted status assertion. Posted as a question: a loosened equality. Left unposted: the same pattern buried in a 22-item report |
+| R1 | Oracle removed or loosened | The diff deletes or weakens an assertion (exact → contains, specific exception → generic, value → not-null, count → non-empty) and no equivalent assertion appears elsewhere in the diff | M | The PR objective (the caller's `Objective:` line, else the PR title or description, else the commit subjects; never inferred from the code; with none of these, this exemption does not apply) declares the behavior removed; an equivalent assertion is added elsewhere; the production method the assertions exercised is deleted from this repo in the same diff (moved to a library or another repo: its tests move with it, and cross-repo coverage is qa-adversary's lane) | The assertion to keep or restore, e.g. `assertEquals(Status.ARCHIVED, dto.status())` | Posted: "Should we also assert the status field?" on a deleted status assertion. Posted as a question: a loosened equality. Left unposted: the same pattern buried in a 22-item report |
 | R2 | Claim not checked, or test cannot fail | A test added or changed whose name or description claims a behavior no assertion checks, **or** the G-C exception holds (a named mutation of a changed production line passes, and this test is its only coverage) | M if it is the only coverage of a changed production line and the mutation is named; else I | No production mutation can be named | The exact assertion, e.g. `assertEquals(123L, event.getDereferencedAt())` | Partially posted: a test named for a timestamp that asserts only the status. Left unposted: smoke tests whose behavior another test covers |
 | R3 | Assertion the sibling tests make | A new test in a group omits the assertion or helper its siblings use for the same guarantee | I (question form) | The siblings differ in intent | The helper call, e.g. `assertSourceUntouched(source)` | Posted: "Should this also call the helper the other copy tests use?" |
 | R4 | Brittle literal | The test asserts exact text or JSON owned by another module or a serializer, and a typed or structural drop-in exists | I | No drop-in exists. A wire format the diff introduces is still R4 when its type has a codec the test can decode into (e.g. `responseAs[T] shouldEqual T(...)`) | The drop-in, e.g. `assertThrows(ParseException.class, ...)` plus `contains("3.0.0")`; or `responseAs[T] shouldEqual T(...)` | Posted twice, each time with a drop-in |
@@ -22,13 +22,6 @@ How to read a row:
 | R10 | Fixture and test-data hygiene | A shared fixture, constant set or validation helper changes meaning for other tests; or a constant set omits a member its production counterpart has | Question; name the other test or constant | Fixture naming; relative paths | The constant or fixture plus the affected test | Posted: a fixture identifier that changes meaning ("just noting"); a constant set missing a member |
 | R11 | Naming | A name that contradicts its assertions goes to R2; any other case is a pure rename | Nit, max 1 | Everything else | The new name | Naming remarks were ignored |
 | R12 | Determinism | The diff introduces time, random or iteration-order dependence, or removes serial execution, **and** two runs that diverge can be named | Question | Anything else; deploy-order or version dependence: if the two runs diverge only while another service's change is undeployed or older, it is not this lens, however it is phrased | The two runs and the fix point | One case, not posted |
-
-## Tier rules
-
-- M needs R1, or R2 with a named mutation of a changed line. Everything else tops out at I or Question.
-- Waits, fixtures, config and determinism are Question only.
-- A Question names the lookup or the value that would settle it, inside the comment.
-- Overflow past the caps is dropped (gate G-G), never summarized.
 
 ## Gap ranking (R5)
 
@@ -45,5 +38,5 @@ Still tied: the candidate anchored on the earliest changed line in diff order (f
 
 - Comment line: the sentence to post, question form preferred.
 - `Change:`: backticked code (an assertion, helper call, value or rename).
-- `Evidence:`: one of: the mutation of a changed production line that passes today, the sibling test that already does it, the value with no calibration.
+- `Evidence:`: the fact the rule needs. R1: the production mutation the remaining assertions no longer catch. R2: the production mutation that passes today (of a changed line when the item is M). R3: the sibling tests that already do it. R4: the upgrade or rewording that fails the test with the code unchanged. R6: the changed value with no calibration. R9: the production key with no test-side value. R10: the other test or constant the change affects. R11: what the test actually asserts. R12: the two runs that diverge.
 - Gap lines carry `Test:` with a backticked test name, input → expected.

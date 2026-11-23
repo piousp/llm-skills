@@ -20,6 +20,8 @@ What each skill does and when to use it. Each one is a `<name>/SKILL.md`; copy o
 
 `qa-adversary`: assumes the change is broken and looks for logic bugs, bad data handling and regressions. Reads tests, never runs them, never edits code.
 
+`pablo-clueless-user`: reviews a diff the way an honest but confused user would use it: steps out of order or abandoned, carrying on after an error, another entity's id, defaults that mislead. Skips anything `qa-adversary` already covers. Standalone for now, not one of the four lenses. Read-only.
+
 `code-review-checklist`: checks a diff against the quality checklist. Style and structure, not correctness. Read-only.
 
 `pablo-test-review`: checks whether the changed tests can fail and flags brittle or missing assertions. Read-only.
@@ -35,6 +37,8 @@ FP and GoF mechanics live inside `pablo-code-philosophy`, in `references/fp/` an
 ## Skill authoring
 
 `writing-agent-skills`: how to write a SKILL.md, its frontmatter, and a trigger description tight enough to fire at the right time.
+
+`trimming-agent-skills`: shortens an existing skill without losing rules. Inventories every directive, condition and literal first, cuts only filler, then returns a diff plus a coverage table. Proposes, never edits.
 
 `evaluating-agent-skills`: how to build an eval suite for a finished skill, with offline tests, live probes and LLM-as-judge checks.
 

@@ -1,7 +1,7 @@
 [
   {
     "id": "logic_change_inverted_condition",
-    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/discounts.py\n+++ b/discounts.py\n@@ -6,1 +6,1 @@\n-    return order.total >= 50 and member_since.days >= 90\n+    return order.total >= 50 and member_since.days > 90\n```\n\nTicket: QA-117 — Loyalty discount: members with at least 90 days of tenure get 15% off orders of $50 or more. The threshold is inclusive: exactly 90 days qualifies.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/discounts.py\n+++ b/discounts.py\n@@ -6,1 +6,1 @@\n-    return order.total >= 50 and member_since.days >= 90\n+    return order.total >= 50 and member_since.days > 90\n```\n\nTicket description: Loyalty discount: members with at least 90 days of tenure get 15% off orders of $50 or more. The threshold is inclusive: exactly 90 days qualifies.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
     "should_trigger": true,
     "seed": "seed_inline_logic_change",
     "ctx": {
@@ -46,7 +46,7 @@
   },
   {
     "id": "business_rule_threshold_vs_ticket",
-    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/shipping.py\n+++ b/shipping.py\n@@ -6,1 +6,1 @@\n-    return order.subtotal > 75.00 and order.country == \"US\"\n+    return order.subtotal >= 75.00 and order.country == \"US\"\n```\n\nTicket: SHIP-204 — Free shipping for orders over $75 in the contiguous US. \"Over $75\" is strict: subtotal must be greater than 75.00; a subtotal of exactly 75.00 ships at the standard rate.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/shipping.py\n+++ b/shipping.py\n@@ -6,1 +6,1 @@\n-    return order.subtotal > 75.00 and order.country == \"US\"\n+    return order.subtotal >= 75.00 and order.country == \"US\"\n```\n\nTicket description: Free shipping for orders over $75 in the contiguous US. \"Over $75\" is strict: subtotal must be greater than 75.00; a subtotal of exactly 75.00 ships at the standard rate.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
     "should_trigger": true,
     "seed": "seed_inline_business_rule",
     "ctx": {
@@ -54,10 +54,7 @@
       "tokens": [
         ">= 75.00",
         ">= 75",
-        "exactly 75",
-        "exactamente 75",
-        "mayor o igual",
-        "75,00"
+        "exactly 75"
       ]
     },
     "expected_checks": [
@@ -111,7 +108,7 @@
   },
   {
     "id": "negative_snapshot_bump",
-    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/pom.xml\n+++ b/pom.xml\n@@ -14,1 +14,1 @@\n-      <version>2.3.0</version>\n+      <version>2.4.0-PROJ-42-SNAPSHOT</version>\n```\n\nThe dependency is built by the same organization; ticket PROJ-42 changes acme-commons and this service together.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
+    "prompt": "Apply the qa-adversary skill and QA this change. Produce the QA report in the skill's output format.\n\nThe change (inline diff):\n```diff\n--- a/pom.xml\n+++ b/pom.xml\n@@ -14,1 +14,1 @@\n-      <version>2.3.0</version>\n+      <version>2.4.0-feature-x-SNAPSHOT</version>\n```\n\nThe dependency is built by the same organization; the task description says acme-commons and this service change together.\n\nThe repo at <repo> contains the current code; use it for line numbers and callers.",
     "should_trigger": true,
     "seed": "seed_inline_snapshot_bump",
     "ctx": {},

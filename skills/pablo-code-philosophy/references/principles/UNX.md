@@ -47,7 +47,7 @@ behavior.
 {BAD} repeating the same manual workaround for a recurring task.
 {GOOD} a temporary, disposable script that automates it.
 
-- [ALWAYS] build a tool when a task recurs, even if temporary, ugly, or single-use.
+- [ALWAYS] build a tool once a manual task comes up a second time, even if the tool is temporary or ugly.
 - [ALWAYS] spend programmer time freely on automation; it's the expensive resource to save.
 
 ### Least Surprise

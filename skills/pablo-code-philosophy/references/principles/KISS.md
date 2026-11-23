@@ -81,7 +81,7 @@ See [`../../examples/kiss.java.md`](../../examples/kiss.java.md) and [`../../exa
 ## Related Principles
 
 - **YAGNI** → See [YAGNI.md](YAGNI.md). Covered by the decision pipeline in [SKILL.md](../../SKILL.md): YAGNI gates everything, phase 1 precedes phase 2.
-- **DRY** → See [DRY.md](DRY.md). Covered by the `KISS vs DRY` row in the conflict matrix, [SKILL.md](../../SKILL.md), and by the KISS > DRY precedence in the pipeline section.
+- **DRY** → See [DRY.md](DRY.md). Covered by the `KISS vs DRY` row in the conflict matrix, [SKILL.md](../../SKILL.md), and by the KISS > DRY precedence in Principle Interactions.
 - **SOLID** → See [SOLID.md](SOLID.md). Covered by the `KISS vs SOLID` row in the conflict matrix, [SKILL.md](../../SKILL.md).
 - **GoF** → See [GoF.md](GoF.md). Covered by the `GoF vs KISS` row in the conflict matrix, [SKILL.md](../../SKILL.md).
 - **FP** → See [FP.md](FP.md). Covered by the `FP vs KISS` row in [references/interactions.md](../interactions.md).
