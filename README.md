@@ -40,7 +40,7 @@ Each skill is described in [skills/README.md](skills/README.md).
 | `worker` | Executes delegated tasks: code, writing, research, shell. |
 | `scout` | Fast read-only recon of files, symbols and references. |
 | `web-scout` | Fast web search with parallel queries. |
-| `code-implementer` | Writes source and test files under a caller-supplied lens. |
+| `code-implementer` | Implements one named slice through a persisted S0-S9 TDD state machine with fixed evidence. |
 | `critical-thinker` | Challenges another agent's decisions and hidden assumptions. |
 
 All agents also work standalone in chat.

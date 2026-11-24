@@ -9,9 +9,9 @@ description: >
   agent or that need a clean, independent context.
   Accepts an optional lens (`Lens: <path>` or `Lens: <skill-name>`) that
   overrides its default method and output contract.
-  [DO NOT] use for builds/tests (use builder), code changes with TDD or a
-  mode lens (use code-implementer), read-only analysis (use analyst), recon
-  (use scout or web-scout), or anything needing the web (use web-scout).
+  [DO NOT] use for builds/tests (use builder), code changes through the fixed
+  S0-S9 slice flow (use code-implementer), read-only analysis (use analyst),
+  recon (use scout or web-scout), or anything needing the web (use web-scout).
 tools: read, write, edit, bash, grep, find, ls, codemode, mcp__*
 systemPromptMode: replace
 inheritProjectContext: false
